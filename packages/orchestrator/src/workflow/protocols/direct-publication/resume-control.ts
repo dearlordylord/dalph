@@ -15,9 +15,7 @@ import {
   StartedIntegrationResponsibility
 } from "../integration-admission/responsibility.js"
 import { deriveCurrentIntegratorState, integratorRunQualifiedCandidateFromState } from "../integrator/state.js"
-import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
-import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
-import { targetPromotionCorrelationFor } from "../target-promotion/events.js"
+import { isIntegrationFinalitySettledForCandidate } from "../integration-finality/settled-candidate.js"
 import {
   RemotePublicationRequestId,
   RemotePublicationResumeRequest,
@@ -86,19 +84,6 @@ const responsibilityMatchesRequest = (
   responsibility.plannedAttempt.runId === request.runId &&
   responsibility.plannedAttempt.runId === request.responsibility.runId &&
   responsibility.queuedAt === request.responsibility.queuedAt
-
-const publicationFinalityIsSettledFor = (
-  source: JournalHistorySource,
-  candidate: IntegratorRunQualifiedCandidate
-): boolean => {
-  const promotionRequestId = targetPromotionCorrelationFor(candidate).requestId
-  return journalRecordsOfKind(source, "IntegrationFinalitySettled").some(
-    ({ event }) =>
-      event._tag === "IntegrationFinalitySettled" &&
-      event.claim.promotionCorrelation.requestId === promotionRequestId &&
-      deriveIntegrationFinalityStateFor(source, event.claim)?._tag === "IntegrationFinalitySettled"
-  )
-}
 
 const workflowRunIsTerminated = (source: JournalHistorySource): boolean =>
   journalRecordsOfKind(source, "WorkflowRunTerminated").some(({ event }) => event._tag === "WorkflowRunTerminated")
@@ -178,7 +163,7 @@ export const applyRemotePublicationResumeWithAdmission = (
       const state = yield* validateRemotePublicationState(prefix, correlation)
       const continueProvedFinality =
         state._tag === "PublicationSucceeded" &&
-        !publicationFinalityIsSettledFor(prefix, candidate) &&
+        !isIntegrationFinalitySettledForCandidate(prefix, candidate) &&
         !workflowRunIsTerminated(prefix)
       if (
         !continueProvedFinality &&

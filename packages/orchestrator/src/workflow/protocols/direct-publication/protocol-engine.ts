@@ -3,8 +3,7 @@ import type { RemotePublicationTarget } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { integrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
-import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
-import { targetPromotionCorrelationFor } from "../target-promotion/events.js"
+import { isIntegrationFinalitySettledForCandidate } from "../integration-finality/settled-candidate.js"
 import {
   isJournalRecordEvidence,
   journalEvidenceBefore,
@@ -102,19 +101,6 @@ const resumeOutcomeNeedsContinuation = (state: RemotePublicationStateType): bool
   (state._tag === "PublicationRetained" && state.cause._tag === "CompatibleCompetingHead")
 
 const lastElementOffset = -1
-
-const publicationFinalityIsSettledFor = (
-  source: Parameters<typeof deriveIntegrationFinalityStateFor>[0],
-  candidate: IntegratorRunQualifiedCandidate
-): boolean => {
-  const promotionRequestId = targetPromotionCorrelationFor(candidate).requestId
-  return Array.from(journalRecordsOfKind(source, "IntegrationFinalitySettled")).some(
-    ({ event }) =>
-      event._tag === "IntegrationFinalitySettled" &&
-      event.claim.promotionCorrelation.requestId === promotionRequestId &&
-      deriveIntegrationFinalityStateFor(source, event.claim)?._tag === "IntegrationFinalitySettled"
-  )
-}
 
 /** Exit authority around each publication phase that can start new Git work. */
 export interface RemotePublicationPhaseBoundary {
@@ -400,7 +386,7 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
       if (recordedState._tag === "PublicationSucceeded") {
         return {
           state: recordedState,
-          activated: !publicationFinalityIsSettledFor(recordedResultSource, recordedCandidate)
+          activated: !isIntegrationFinalitySettledForCandidate(recordedResultSource, recordedCandidate)
         }
       }
       if (recordedState._tag === "PublicationResumeReady" && recordedState.request.requestId === request.requestId) {
@@ -438,7 +424,7 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     const state = yield* validateRemotePublicationState(source, correlation)
     const events = remotePublicationEventsFor(source, correlation)
     if (state._tag === "PublicationSucceeded")
-      return { state, activated: !publicationFinalityIsSettledFor(source, candidate) }
+      return { state, activated: !isIntegrationFinalitySettledForCandidate(source, candidate) }
     if (state._tag !== "PublicationRetained") return { state, activated: false }
     const priorAttemptCount = events.filter((event) => event._tag === "RemotePublicationAttemptIntended").length
     if (!remotePublicationRetainedCauseIsResumable(state.cause) || priorAttemptCount >= remotePublicationAttemptLimit)
