@@ -23,6 +23,7 @@ import {
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { TargetLineageObservation, GitTargetLineageReadFailure } from "../../authorities/git/target-lineage.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
@@ -114,7 +115,6 @@ import {
 import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { invalidIntegrationOccurrenceRelationship, projectIntegrationOccurrence } from "./integration-occurrence.js"
-import { GitTargetLineageReadFailure } from "../../authorities/git/target-lineage.js"
 import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ActiveTaskClaim, TaskClaimRelease, UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
@@ -182,6 +182,16 @@ import {
   IntegratorRunOrdinal,
   firstFullRerunSuccessorGeneration
 } from "../protocols/integrator/events.js"
+import {
+  LocalTargetCatchUpIntendedEvent,
+  LocalTargetCatchUpObservedEvent,
+  LocalTargetCatchUpResult,
+  RemoteBaselineObservation,
+  RemoteBaselineObservedEvent,
+  RemoteBaselineRound,
+  RemoteBaselineReadIntendedEvent,
+  automaticCompetingHeadRemoteBaselineCorrelationFor
+} from "../protocols/direct-publication/baseline-events.js"
 import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../protocols/integrator/automatic-successor-session.js"
 import {
   TargetPromotionAttemptIntendedEvent,
@@ -2322,6 +2332,163 @@ it.effect("projects the historical #81 preservation variants and the #82 success
       )
     const missingRetainedFailure = yield* projectWorkflowOccurrences(withoutS1RetainedHead).pipe(Effect.flip)
     expect(missingRetainedFailure._tag).toBe("HistoricalOutcomeWithoutInitiatingAction")
+  })
+)
+
+it.effect("projects an H2-ready automatic successor refresh through H3 catch-up and fresh fixation", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const authorization = fixture
+      .records()
+      .find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+    const firstRead = fixture.records().find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+    if (
+      authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+      firstRead?.event._tag !== "RemoteBaselineReadIntended"
+    ) {
+      return yield* Effect.die("accepted H2 prefix must contain its exact authorization and ready baseline")
+    }
+    const h2 = authorization.event.remoteHead
+    const h3 = GitCommitSha.make("8".repeat(40))
+    const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+      fixture.runId,
+      firstRead.event.correlation.responsibility,
+      firstRead.event.correlation.localTarget,
+      firstRead.event.correlation.remoteTarget,
+      authorization.position,
+      RemoteBaselineRound.make(2)
+    )
+    fixture.append(
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: roundTwo,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    fixture.append(
+      RemoteBaselineObservedEvent.make({
+        correlation: roundTwo,
+        observation: RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: h2, remoteHead: h3 }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+    )
+    fixture.append(
+      LocalTargetCatchUpIntendedEvent.make({
+        correlation: roundTwo,
+        expectedLocalHead: h2,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        remoteHead: h3,
+        version: workflowJournalEventVersion
+      })
+    )
+    fixture.append(
+      LocalTargetCatchUpObservedEvent.make({
+        correlation: roundTwo,
+        expectedLocalHead: h2,
+        occurrenceClassification: "NonActionOccurrence",
+        remoteHead: h3,
+        result: LocalTargetCatchUpResult.cases.Applied.make({ newHead: h3 }),
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const previousLineage = fixture.records().find(({ position }) => position === fixture.input.targetLineageObservedAt)
+    if (previousLineage?.event._tag !== "TargetLineageObserved") {
+      return yield* Effect.die("ready H2 prefix must retain the exact lineage observation for its refresh")
+    }
+    const freshLineageOperation = makeTargetLineageObservationOperation({
+      integrationTarget: fixture.accepted.integrationTarget,
+      operationId: OperationId.make("occurrence-projection-fresh-h3-lineage"),
+      plannedAttempt: fixture.input.predecessor.plannedAttempt,
+      predecessorOperationIds: [previousLineage.event.operationId]
+    })
+    const freshLineage = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: fixture.input.predecessor.plannedAttempt.baseSha,
+      targetHeadSha: h3
+    })
+    fixture.append(
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: freshLineageOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    const freshLineageRecord = fixture.append(
+      TargetLineageObservedEvent.make({
+        observation: freshLineage,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: freshLineageOperation.operationId,
+        plannedAttempt: fixture.input.predecessor.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const refreshedInput = {
+      authorizationAt: fixture.input.authorizationAt,
+      predecessor: fixture.input.predecessor,
+      targetLineage: freshLineage,
+      targetLineageObservedAt: freshLineageRecord.position
+    }
+    const history = reduceWorkflowJournalHistory(fixture.runId, fixture.records())
+    if (history._tag === "InvalidWorkflowJournalHistory") {
+      return yield* Effect.die(`accepted H3 refresh chronology must reduce: ${JSON.stringify(history.issues)}`)
+    }
+    const fixed = yield* prepareIntegratorAutomaticSuccessorSessionAppend(refreshedInput, history.prefix)
+    if (fixed._tag !== "Append") return yield* Effect.die("fresh H3 lineage must authorize the same S2 fixation")
+    fixture.append(fixed.event)
+
+    const projection = yield* projectWorkflowOccurrences(fixture.records())
+    const reads = projection.occurrences.flatMap((occurrence) =>
+      occurrence._tag === "RemoteBaselineReadInitiated" &&
+      occurrence.correlation._tag === "AutomaticCompetingHead" &&
+      occurrence.correlation.authorizationAt === authorization.position
+        ? [Number(occurrence.correlation.baselineRound)]
+        : []
+    )
+    expect(reads).toEqual([1, 2])
+    expect(
+      projection.occurrences.filter(
+        (occurrence) =>
+          occurrence._tag === "RemoteBaselineObserved" &&
+          occurrence.correlation._tag === "AutomaticCompetingHead" &&
+          occurrence.correlation.authorizationAt === authorization.position
+      )
+    ).toMatchObject([
+      { correlation: { baselineRound: 1 }, observation: { _tag: "LocalAncestor", remoteHead: h2 } },
+      { correlation: { baselineRound: 2 }, observation: { _tag: "LocalAncestor", localHead: h2, remoteHead: h3 } }
+    ])
+    expect(
+      projection.occurrences.filter(
+        (occurrence) =>
+          occurrence._tag === "LocalTargetCatchUpObserved" &&
+          occurrence.correlation._tag === "AutomaticCompetingHead" &&
+          occurrence.correlation.authorizationAt === authorization.position
+      )
+    ).toMatchObject([
+      { correlation: { baselineRound: 1 }, result: { _tag: "Applied", newHead: h2 } },
+      { correlation: { baselineRound: 2 }, result: { _tag: "Applied", newHead: h3 } }
+    ])
+    expect(projection.occurrences).toContainEqual(
+      expect.objectContaining({
+        _tag: "TargetLineageObserved",
+        recordedAt: freshLineageRecord.position,
+        observation: freshLineage
+      })
+    )
+    const fixations = projection.occurrences.filter(({ _tag }) => _tag === "IntegratorAutomaticSuccessorSessionFixed")
+    expect(fixations).toHaveLength(1)
+    expect(fixations[0]).toMatchObject({
+      _tag: "IntegratorAutomaticSuccessorSessionFixed",
+      authorizationAt: authorization.position,
+      predecessor: fixture.input.predecessor,
+      successor: fixed.event.successor,
+      successorGeneration: 2
+    })
   })
 )
 

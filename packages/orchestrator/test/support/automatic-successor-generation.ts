@@ -34,6 +34,7 @@ import {
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
   IntegratorResult,
+  integratorRunCorrelationsEqual,
   maximumIntegratorSessionsPerResponsibility,
   type IntegratorAutomaticSuccessorGeneration,
   type IntegratorSessionCorrelation
@@ -69,7 +70,13 @@ export const appendAutomaticSuccessorGeneration = (
     `refs/heads/dalph/automatic-successor-candidate-${generationNumber}`
   )
   const candidateCommit = sha(String(automaticSuccessorCandidateCommitDigitOffset + generationNumber))
-  fixture.append(IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
+  if (
+    !fixture
+      .records()
+      .some(({ event }) => event._tag === "IntegratorRunStarted" && integratorRunCorrelationsEqual(event.run, run))
+  ) {
+    fixture.append(IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
+  }
   fixture.append(
     IntegratorRunResultRecordedEvent.make({
       result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run }),
