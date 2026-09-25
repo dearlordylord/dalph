@@ -317,7 +317,7 @@ export const RemotePublicationRetainedEvent = Schema.TaggedStruct("RemotePublica
 })
 export type RemotePublicationRetainedEvent = typeof RemotePublicationRetainedEvent.Type
 
-/** Durable receipt precedes activation; replay of this exact identity cannot authorize another attempt. */
+/** Durable exact Run receipt either resumes a retained publication or continues its proved finality. */
 export const RemotePublicationResumeRequestedEvent = Schema.TaggedStruct("RemotePublicationResumeRequested", {
   correlation: RemotePublicationCorrelation,
   initiatedBy: WorkflowActor.cases.Operator,

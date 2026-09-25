@@ -1,10 +1,15 @@
+/* eslint-disable max-lines -- Publication execution and reconciliation stay adjacent at one auditable protocol boundary. */
 import type { RemotePublicationTarget } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { integrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
 import { targetPromotionCorrelationFor } from "../target-promotion/events.js"
-import { journalRecordsOfKind } from "../../../workflow-journal/record-evidence.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordsOfKind
+} from "../../../workflow-journal/record-evidence.js"
 import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationAttemptAuthorization,
@@ -368,43 +373,70 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
 
     const correlation = remotePublicationCorrelationFor(candidate, target)
     const source = yield* readEvidence(expectedRunId)
+    const recordedReceipt = journalRecordsOfKind(source, "RemotePublicationResumeRequested").find(
+      ({ event }) => event.request.requestId === request.requestId
+    )
+    if (recordedReceipt !== undefined && recordedReceipt.event._tag === "RemotePublicationResumeRequested") {
+      const sameRequest = Schema.toEquivalence(RemotePublicationResumeRequest)(recordedReceipt.event.request, request)
+      if (!sameRequest) return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
+
+      const recordedCorrelation = recordedReceipt.event.correlation
+      const laterReceipt = journalRecordsOfKind(source, "RemotePublicationResumeRequested").find(
+        (record) =>
+          record.position > recordedReceipt.position &&
+          record.event._tag === "RemotePublicationResumeRequested" &&
+          record.event.request.responsibility.runId === request.responsibility.runId &&
+          record.event.request.responsibility.queuedAt === request.responsibility.queuedAt
+      )
+      const recordedResultSource =
+        laterReceipt === undefined
+          ? source
+          : isJournalRecordEvidence(source)
+            ? journalEvidenceBefore(source, laterReceipt.position)
+            : source.filter((record) => record.position < laterReceipt.position)
+      const recordedCandidate = recordedCorrelation.qualifiedCandidate
+      const recordedState = yield* validateRemotePublicationState(recordedResultSource, recordedCorrelation)
+      if (laterReceipt !== undefined) return { state: recordedState, activated: false }
+      if (recordedState._tag === "PublicationSucceeded") {
+        return {
+          state: recordedState,
+          activated: !publicationFinalityIsSettledFor(recordedResultSource, recordedCandidate)
+        }
+      }
+      if (recordedState._tag === "PublicationResumeReady" && recordedState.request.requestId === request.requestId) {
+        return {
+          state: yield* runRemotePublication(recordedCandidate, recordedCorrelation.target, phaseBoundary),
+          activated: true
+        }
+      }
+      if (
+        recordedState._tag === "PublicationRetained" &&
+        recordedState.cause._tag === "CompatibleCompetingHead" &&
+        recordedState.authorization._tag === "ResumeRequest" &&
+        recordedState.authorization.requestId === request.requestId
+      ) {
+        return { state: recordedState, activated: true }
+      }
+      const recordedEvents = remotePublicationEventsFor(recordedResultSource, recordedCorrelation)
+      const latestRecordedEvent = recordedEvents.at(recordedEvents.length - 1)
+      if (
+        recordedState._tag === "PublicationPending" &&
+        recordedState.authorization._tag === "ResumeRequest" &&
+        recordedState.authorization.requestId === request.requestId &&
+        latestRecordedEvent?._tag === "RemotePublicationAttemptIntended" &&
+        latestRecordedEvent.attemptOrdinal ===
+          recordedState.attemptOrdinals.at(recordedState.attemptOrdinals.length - 1)
+      ) {
+        return {
+          state: yield* runRemotePublication(recordedCandidate, recordedCorrelation.target, phaseBoundary),
+          activated: true
+        }
+      }
+      return { state: recordedState, activated: false }
+    }
+
     const state = yield* validateRemotePublicationState(source, correlation)
     const events = remotePublicationEventsFor(source, correlation)
-    const recordedRequest = events.find(
-      (event) => event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
-    )
-    if (recordedRequest?._tag === "RemotePublicationResumeRequested") {
-      const sameRequest = Schema.toEquivalence(RemotePublicationResumeRequest)(recordedRequest.request, request)
-      if (!sameRequest) return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
-      if (state._tag === "PublicationSucceeded")
-        return { state, activated: !publicationFinalityIsSettledFor(source, candidate) }
-      if (state._tag === "PublicationResumeReady" && state.request.requestId === request.requestId) {
-        return { state: yield* runRemotePublication(candidate, target, phaseBoundary), activated: true }
-      }
-      if (
-        state._tag === "PublicationRetained" &&
-        state.cause._tag === "CompatibleCompetingHead" &&
-        state.authorization._tag === "ResumeRequest" &&
-        state.authorization.requestId === request.requestId
-      ) {
-        // The retained event is the durable handoff payload. A crash after its
-        // append but before the existing owner ran must replay that same handoff.
-        return { state, activated: true }
-      }
-      const latestEvent = events.at(events.length - 1)
-      if (
-        state._tag === "PublicationPending" &&
-        state.authorization._tag === "ResumeRequest" &&
-        state.authorization.requestId === request.requestId &&
-        latestEvent?._tag === "RemotePublicationAttemptIntended" &&
-        latestEvent.attemptOrdinal === state.attemptOrdinals.at(state.attemptOrdinals.length - 1)
-      ) {
-        // An acknowledged attempt intent without an outcome is still ambiguous. Re-enter the ordinary
-        // owner so it proves sender custody and reads the pinned head before it can issue another push.
-        return { state: yield* runRemotePublication(candidate, target, phaseBoundary), activated: true }
-      }
-      return { state, activated: false }
-    }
     if (state._tag === "PublicationSucceeded")
       return { state, activated: !publicationFinalityIsSettledFor(source, candidate) }
     if (state._tag !== "PublicationRetained") return { state, activated: false }

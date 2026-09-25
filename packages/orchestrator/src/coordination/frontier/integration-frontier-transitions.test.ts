@@ -1281,11 +1281,7 @@ it("reselects receipt-authorized compatible publication and reconciles unmatched
         RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
       )
     ),
-    record(
-      14,
-      resumeReceipt,
-      remotePublicationResumeRequestedRecordKey(publicationCorrelation.requestId, resumeRequestId)
-    ),
+    record(14, resumeReceipt, remotePublicationResumeRequestedRecordKey(resumeRequestId)),
     record(
       15,
       resumedCompatibleRetained,

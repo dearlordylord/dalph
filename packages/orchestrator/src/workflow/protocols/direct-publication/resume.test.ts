@@ -6,15 +6,16 @@ import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import { integratorCorrelationFor } from "../integrator/session.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
-import { journalLayer, type JournalStorageBoundary } from "../../../coordination/delivery/journal.js"
+import { Journal, journalLayer, type JournalStorageBoundary } from "../../../coordination/delivery/journal.js"
 import { RunReactivationHint } from "../../../coordination/run/run-reactivation-owner.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import { deriveIntegrationFrontier } from "../../../coordination/frontier/integration-frontier.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journal/identity.js"
+import { remotePublicationResumeRequestedRecordKey } from "../../../workflow-journal/record-key.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
-import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { JournalStore, JournalStoreContradiction, type JournalRecord } from "../../../workflow-journal/store.js"
 import { IntegrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { deriveRemotePublicationState } from "./state.js"
@@ -48,10 +49,14 @@ import {
   RemotePublicationPushResult,
   RemotePublicationResumeRequest,
   RemotePublicationResumeRequestId,
+  RemotePublicationResumeRequestedEvent,
   PublishedIntegratorRunQualifiedCandidate,
+  remotePublicationCorrelationFor,
   type RemotePublicationAttemptOrdinal,
   type RemotePublicationGitService
 } from "./events.js"
+import { IntegratorCandidateText, IntegratorRunQualifiedCandidate } from "../integrator/events.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   resumeRemotePublicationAndDispatch,
   resumeRemotePublication,
@@ -60,6 +65,7 @@ import {
   type RemotePublicationPhaseBoundary
 } from "./protocol-engine.js"
 import { resumeRemotePublicationInRuntime, type RemotePublicationResumeRuntimeOwners } from "./resume-runtime.js"
+import { applyRemotePublicationResume } from "./resume-control.js"
 
 const fixture = integrationFinalityFixture
 const specification = makeTaskWorkSpecification({
@@ -280,6 +286,23 @@ const invoke = Effect.fn("DirectPublicationResume.invoke")(function* (
   )
 })
 
+const admitResumeRequest = Effect.fn("DirectPublicationResume.admitResumeRequest")(function* (
+  store: JournalStore["Service"],
+  request: unknown,
+  crashAfterReceipt = false
+) {
+  const records = yield* store.read(runId)
+  const history = reduceWorkflowJournalHistory(runId, records)
+  if (history._tag === "InvalidWorkflowJournalHistory") {
+    return yield* Effect.die(`invalid resume-control prefix: ${JSON.stringify(history.issues)}`)
+  }
+  const storage = crashAfterReceipt ? boundaryWithReceiptCrash(store) : store
+  return yield* Journal.pipe(
+    Effect.flatMap((journal) => applyRemotePublicationResume(runId, journal, request)),
+    Effect.provide(journalLayer(runId, fixture.target, history, storage))
+  )
+})
+
 const recordTags = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> =>
   records.map(({ event }) => event._tag)
 
@@ -332,12 +355,9 @@ const exerciseReceiptRecovery = (process: StoreProcess): Effect.Effect<void, unk
     const first = yield* makeGit("denied")
     expect((yield* process((store) => invoke(store, first.git, "run")))._tag).toBe("PublicationRetained")
     const before = yield* process((store) => store.read(runId))
-    const receiptCrash = yield* makeGit("applied")
-    const failedActivation = yield* Effect.exit(
-      process((store) => invoke(store, receiptCrash.git, { request: requestFor("resume-receipt-recovery") }, "receipt"))
-    )
+    const request = requestFor("resume-receipt-recovery")
+    const failedActivation = yield* Effect.exit(process((store) => admitResumeRequest(store, request, true)))
     expect(failedActivation._tag).toBe("Failure")
-    expect(yield* Ref.get(receiptCrash.calls)).toEqual(emptyCalls())
 
     const afterReceipt = yield* process((store) => store.read(runId))
     expect(recordTags(afterReceipt).at(-1)).toBe("RemotePublicationResumeRequested")
@@ -360,10 +380,9 @@ const exerciseReceiptRecovery = (process: StoreProcess): Effect.Effect<void, unk
     expect(recoveredRecords.some(({ event }) => event._tag === "IntegratorSessionFixed")).toBe(true)
 
     const redelivery = yield* makeGit("applied")
-    expect(
-      (yield* process((store) => invoke(store, redelivery.git, { request: requestFor("resume-receipt-recovery") })))
-        ._tag
-    ).toBe("PublicationSucceeded")
+    const receiptResult = yield* process((store) => admitResumeRequest(store, request))
+    expect(receiptResult).toMatchObject({ _tag: "RemotePublicationResumeReceipt", requestId: request.requestId })
+    expect((yield* process((store) => invoke(store, redelivery.git, "run")))._tag).toBe("PublicationSucceeded")
     expect(yield* Ref.get(redelivery.calls)).toEqual(emptyCalls())
     expect(
       (yield* process((store) => store.read(runId))).filter(
@@ -948,6 +967,93 @@ it.effect("deduplicates one resume identity and allows a later distinct repair r
       yield* sqliteFresh(exerciseDistinctResumeRequests)
     })
   )
+)
+
+const exerciseOlderResumeRedeliveryAfterLaterSuccess = (process: StoreProcess): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const initialDenial = yield* makeGit("denied")
+    yield* process((store) => invoke(store, initialDenial.git, "run"))
+    const firstRequest = requestFor("resume-older-result-after-success")
+    const firstReceipt = yield* process((store) => admitResumeRequest(store, firstRequest))
+    const firstDenial = yield* makeGit("denied")
+    const firstRequestResult = yield* process((store) => invoke(store, firstDenial.git, "run"))
+    expect(firstRequestResult._tag).toBe("PublicationRetained")
+
+    const laterSuccess = yield* makeGit("applied")
+    expect(
+      (yield* process((store) => invoke(store, laterSuccess.git, { request: requestFor("resume-later-success") })))._tag
+    ).toBe("PublicationSucceeded")
+    const beforeRedelivery = yield* process((store) => store.read(runId))
+
+    const duplicate = yield* makeGit("applied")
+    expect(yield* process((store) => admitResumeRequest(store, firstRequest))).toEqual(firstReceipt)
+    expect(yield* process((store) => invoke(store, duplicate.git, { request: firstRequest }))).toEqual(
+      firstRequestResult
+    )
+    expect(yield* Ref.get(duplicate.calls)).toEqual(emptyCalls())
+    expect(recordTags(yield* process((store) => store.read(runId)))).toEqual(recordTags(beforeRedelivery))
+  })
+
+it.effect("returns the first exact request result after a later distinct resume succeeds", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* memoryFresh(exerciseOlderResumeRedeliveryAfterLaterSuccess)
+      yield* sqliteFresh(exerciseOlderResumeRedeliveryAfterLaterSuccess)
+    })
+  )
+)
+
+const exerciseRunWideResumeIdentityAcrossCandidateCorrelation = (process: StoreProcess): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const initialDenial = yield* makeGit("denied")
+    yield* process((store) => invoke(store, initialDenial.git, "run"))
+    const request = requestFor("resume-run-wide-candidate-identity")
+    const originalReceipt = yield* process((store) => admitResumeRequest(store, request))
+    const original = yield* process((store) => store.read(runId))
+
+    const differentCandidate = IntegratorRunQualifiedCandidate.make({
+      ...candidate,
+      candidateCommit: GitCommitSha.make("4444444444444444444444444444444444444444"),
+      candidateText: IntegratorCandidateText.make("refs/heads/successor-candidate")
+    })
+    const differentCorrelation = remotePublicationCorrelationFor(differentCandidate, target)
+    const conflictingReceipt = RemotePublicationResumeRequestedEvent.make({
+      correlation: differentCorrelation,
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      request,
+      version: workflowJournalEventVersion
+    })
+    const duplicateWrite = yield* Effect.flip(
+      process((store) =>
+        store.append(runId, remotePublicationResumeRequestedRecordKey(request.requestId), conflictingReceipt)
+      )
+    )
+    expect(duplicateWrite).toEqual(
+      new JournalStoreContradiction({
+        existingPosition: originalReceipt.acceptedAt,
+        key: remotePublicationResumeRequestedRecordKey(request.requestId),
+        runId
+      })
+    )
+    expect(yield* process((store) => store.read(runId))).toEqual(original)
+    expect(yield* process((store) => admitResumeRequest(store, request))).toEqual(originalReceipt)
+    expect(
+      (yield* process((store) => store.read(runId))).filter(
+        ({ event }) => event._tag === "RemotePublicationResumeRequested"
+      )
+    ).toHaveLength(1)
+  })
+
+it.effect(
+  "keeps resume request identity Run-wide across a different candidate correlation in memory and reopened SQLite",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* memoryFresh(exerciseRunWideResumeIdentityAcrossCandidateCorrelation)
+        yield* sqliteFresh(exerciseRunWideResumeIdentityAcrossCandidateCorrelation)
+      })
+    )
 )
 
 it.effect("keeps unchanged incompatible lineage retained with no push in memory and reopened SQLite", () =>

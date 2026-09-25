@@ -454,6 +454,11 @@ export {
   type RemotePublicationResumeDispatchBoundary
 } from "./workflow/protocols/direct-publication/protocol-engine.js"
 export * from "./workflow/protocols/direct-publication/resume-runtime.js"
+export {
+  RemotePublicationResumeReceipt,
+  RemotePublicationResumeStatus,
+  type RemotePublicationResumeControlResult
+} from "./workflow/protocols/direct-publication/resume-control.js"
 export { RemotePublicationAdmissionRejected } from "./workflow/protocols/direct-publication/admission.js"
 export {
   RemotePublicationHistoryContradiction,

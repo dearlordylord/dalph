@@ -98,6 +98,10 @@ import { ApplicationExitDrainFailure, type ApplicationExitShellService } from ".
 import { suspendExecutingExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
 import { admitRemotePublicationTarget } from "../../workflow/protocols/direct-publication/admission.js"
 import { RemotePublicationGit } from "../../workflow/protocols/direct-publication/events.js"
+import {
+  applyRemotePublicationResumeWithAdmission,
+  type RemotePublicationResumeAdmission
+} from "../../workflow/protocols/direct-publication/resume-control.js"
 
 import {
   AppliedRunCancellation,
@@ -1053,7 +1057,36 @@ export const journaledRunBootstrapLayer = (
           return yield* new JournaledRunNotActive()
         })
 
+      const notifyAcceptedRemotePublicationResume = (admission: RemotePublicationResumeAdmission) =>
+        admission._tag === "NewlyRecordedResumeReceipt"
+          ? Ref.get(acceptedRunReactivationObservers).pipe(
+              Effect.flatMap((observer) =>
+                Option.match(observer, {
+                  onNone: () => Effect.void,
+                  onSome: ({ acceptedFactPublication }) =>
+                    acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
+                })
+              )
+            )
+          : Effect.void
+
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
+        applyRemotePublicationResume: (input) => {
+          const applyTo = (journal: Journal["Service"]) =>
+            applyRemotePublicationResumeWithAdmission(expectedRunId, journal, input).pipe(
+              Effect.tap(notifyAcceptedRemotePublicationResume),
+              Effect.map(({ result }) => result)
+            )
+          return withRuntimeControls(({ journal }) => applyTo(journal)).pipe(
+            Effect.catchTag("JournaledRunNotActive", () =>
+              Effect.gen(function* () {
+                const holder = yield* establishStoredJournal()
+                if (Option.isNone(holder)) return yield* new WorkflowRunNotBegan({ runId: expectedRunId })
+                return yield* withJournalControl(applyTo(holder.value.journal))
+              })
+            )
+          )
+        },
         applyRunCancellation: (input) =>
           Effect.gen(function* () {
             const request = yield* Schema.decodeUnknownEffect(ApplyRunCancellationRequest, {

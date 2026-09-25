@@ -54,7 +54,7 @@ import {
   type JournalRecord
 } from "../../../orchestrator/src/workflow-journal/store.js"
 import type { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
-import type { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
 import {
@@ -148,6 +148,7 @@ import {
   RemotePublicationResumeRequestId,
   remotePublicationCorrelationFor
 } from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
+import { applyRemotePublicationResume } from "../../../orchestrator/src/workflow/protocols/direct-publication/resume-control.js"
 import {
   remotePublicationEventsFor,
   validateRemotePublicationState
@@ -155,7 +156,7 @@ import {
 import { admitRemotePublicationTarget } from "../../../orchestrator/src/workflow/protocols/direct-publication/admission.js"
 import {
   makeRemotePublicationEngine,
-  resumeRemotePublication
+  runRemotePublication
 } from "../../../orchestrator/src/workflow/protocols/direct-publication/protocol-engine.js"
 import { integrationResponsibilityIdentity } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
 
@@ -1618,6 +1619,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     observePublicationInsufficientOne: {},
     observePublicationDeniedOne: {},
     resumeDeniedPublicationOne: {},
+    recordProvedPublicationResumeRequestOne: {},
     observePublicationThrottledOne: {},
     observePublicationCompetingHeadOne: {},
     observePublicationIncompatibleOne: {},
@@ -3016,26 +3018,46 @@ const acceptedResultIntegrationDriver = defineDriver(
             return rejectImpossibleTransition("runtime resume receipt does not bind the exact Run and responsibility")
           }
           const requestOffset = publicationEvents.indexOf(receipt)
-          const priorRetained = publicationEvents
-            .slice(0, requestOffset)
-            .findLast((event) => event._tag === "RemotePublicationRetained")
-          if (priorRetained?._tag !== "RemotePublicationRetained" || priorRetained.cause._tag !== "PolicyDenied") {
-            return rejectImpossibleTransition("resume projection lacks the exact prior policy-denial receipt")
-          }
           if (!/^[0-9]+$/.test(receipt.request.requestId)) {
             return rejectImpossibleTransition("model request identity must be numeric for the Quint projection")
           }
-          const dispatchedAttempt = publicationEvents
-            .slice(requestOffset + 1)
-            .some((event) => event._tag === "RemotePublicationAttemptIntended")
+          const priorProof = publicationEvents
+            .slice(0, requestOffset)
+            .findLast((event) => event._tag === "RemotePublicationSucceeded")
+          const priorRetained = publicationEvents
+            .slice(0, requestOffset)
+            .findLast((event) => event._tag === "RemotePublicationRetained")
+          const priorPhase =
+            priorProof?._tag === "RemotePublicationSucceeded" ? "PublicationProved" : "PublicationDenied"
+          const priorObservation =
+            priorProof?._tag === "RemotePublicationSucceeded"
+              ? priorProof.proof._tag === "PushApplied"
+                ? "PublicationApplied"
+                : priorProof.proof._tag === "PushUpToDate"
+                  ? "PublicationUpToDate"
+                  : priorProof.proof._tag === "ReconciledCandidateCurrent"
+                    ? "PublicationRemoteCandidateCurrent"
+                    : "PublicationRemoteCandidateAncestor"
+              : "PublicationRemoteDenied"
+          if (
+            priorProof?._tag !== "RemotePublicationSucceeded" &&
+            (priorRetained?._tag !== "RemotePublicationRetained" || priorRetained.cause._tag !== "PolicyDenied")
+          ) {
+            return rejectImpossibleTransition("resume projection lacks its exact retained or proved prior result")
+          }
+          const dispatchedAttempt = publicationEvents.some(
+            (event, index) =>
+              event._tag === "RemotePublicationAttemptIntended" &&
+              publicationEvents.slice(0, index).some((prior) => prior._tag === "RemotePublicationResumeRequested")
+          )
           projectedResume = {
             publicationResumeRequestRecorded: true,
             publicationResumeRequestRunIdentity: model.runIdentity,
             publicationResumeRequestResponsibilityIdentity: model.integrationResponsibilityIdentity,
             publicationResumeRequestIdentity: BigInt(receipt.request.requestId),
             publicationResumeSchemaVersion: BigInt(receipt.request.schemaVersion),
-            publicationResumePriorPhase: "PublicationDenied",
-            publicationResumePriorObservation: "PublicationRemoteDenied",
+            publicationResumePriorPhase: priorPhase,
+            publicationResumePriorObservation: priorObservation,
             publicationResumeFactsRefreshed: false,
             publicationResumeDispatchCount: dispatchedAttempt ? 1n : 0n,
             publicationResumeActive: publication._tag === "PublicationResumeReady"
@@ -3607,11 +3629,20 @@ const acceptedResultIntegrationDriver = defineDriver(
           const beforeIntegratorCalls = runtime.integratorCallCount()
           const passthrough = <A, E, R>(phase: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => phase
           const boundary = { runObservation: passthrough, runSender: passthrough }
+          const accept = () =>
+            Effect.gen(function* () {
+              const journal = yield* Journal
+              return yield* applyRemotePublicationResume(runId, journal, request)
+            }).pipe(runtime.provideJournal)
           const execute = () =>
-            resumeRemotePublication(candidate, remotePublicationTarget, request, boundary).pipe(
+            runRemotePublication(candidate, remotePublicationTarget, boundary).pipe(
               runtime.provideJournal,
               Effect.provideService(RemotePublicationGit, git)
             )
+          const receipt = yield* accept()
+          if (receipt._tag !== "RemotePublicationResumeReceipt") {
+            return rejectImpossibleTransition("core Operator admission did not record a resume receipt")
+          }
           const resumed = yield* execute()
           if (
             resumed._tag !== "PublicationSucceeded" ||
@@ -3636,6 +3667,8 @@ const acceptedResultIntegrationDriver = defineDriver(
             return rejectImpossibleTransition("production resume lacks a durable receipt before its resumed attempt")
           }
           const firstCallCount = calls.length
+          const redeliveredReceipt = yield* accept()
+          expect(redeliveredReceipt).toEqual(receipt)
           const replay = yield* execute()
           if (calls.length !== firstCallCount || runtime.integratorCallCount() !== beforeIntegratorCalls) {
             return rejectImpossibleTransition(
@@ -3653,6 +3686,55 @@ const acceptedResultIntegrationDriver = defineDriver(
           modelPublicationProof(1n, "PushApplied", "PublicationApplied", model.submittedCandidate)
           updateModelResult(1n, (result) => ({
             ...result,
+            publicationResumeFactsRefreshed: false,
+            publicationResumeActive: false
+          }))
+        }),
+      recordProvedPublicationResumeRequestOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          if (model.phase !== "PublicationProved" || !model.publicationProofRecorded) {
+            return rejectImpossibleTransition("proved-publication resume requires the retained exact proof")
+          }
+          const responsibility = responsibilityFor(1n)
+          const request = RemotePublicationResumeRequest.make({
+            requestId: RemotePublicationResumeRequestId.make("78"),
+            responsibility: integrationResponsibilityIdentity(responsibility),
+            runId,
+            schemaVersion: 1
+          })
+          const before = runtime.readRecords()
+          const attemptCountBefore = before.filter(
+            ({ event }) => event._tag === "RemotePublicationAttemptIntended"
+          ).length
+          const beforeIntegratorCalls = runtime.integratorCallCount()
+          const accept = () =>
+            Effect.gen(function* () {
+              const journal = yield* Journal
+              return yield* applyRemotePublicationResume(runId, journal, request)
+            }).pipe(runtime.provideJournal)
+          const receipt = yield* accept()
+          if (receipt._tag !== "RemotePublicationResumeReceipt") {
+            return rejectImpossibleTransition("proved-publication continuation lacks its durable core receipt")
+          }
+          expect(yield* accept()).toEqual(receipt)
+          const after = runtime.readRecords()
+          if (
+            after.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended").length !==
+              attemptCountBefore ||
+            runtime.integratorCallCount() !== beforeIntegratorCalls
+          ) {
+            return rejectImpossibleTransition("proved-publication receipt minted another attempt or Integrator call")
+          }
+          updateModelResult(1n, (result) => ({
+            ...result,
+            publicationResumeRequestRecorded: true,
+            publicationResumeRequestRunIdentity: result.runIdentity,
+            publicationResumeRequestResponsibilityIdentity: result.integrationResponsibilityIdentity,
+            publicationResumeRequestIdentity: 78n,
+            publicationResumeSchemaVersion: 1n,
+            publicationResumePriorPhase: "PublicationProved",
+            publicationResumePriorObservation: result.publicationObservation,
             publicationResumeFactsRefreshed: false,
             publicationResumeActive: false
           }))
@@ -4302,7 +4384,7 @@ it.effect(
 )
 
 it.effect(
-  "maps the retained publication resume endpoint and exact replay into Quint fields",
+  "maps core resume admission receipt and exact redelivery into Quint fields",
   () =>
     Effect.gen(function* () {
       const driver = yield* acceptedResultIntegrationDriver.create()
@@ -4325,7 +4407,8 @@ it.effect(
         "observeInitialPublicationRemoteAncestorOfCandidateOne",
         "sendPublicationAttemptOne",
         "observePublicationDeniedOne",
-        "resumeDeniedPublicationOne"
+        "resumeDeniedPublicationOne",
+        "recordProvedPublicationResumeRequestOne"
       ] as const) {
         const action = driver.actions[actionName]
         if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
@@ -4341,10 +4424,10 @@ it.effect(
         publicationResumeRequestRecorded: true,
         publicationResumeRequestRunIdentity: 9000n,
         publicationResumeRequestResponsibilityIdentity: 8001n,
-        publicationResumeRequestIdentity: 77n,
+        publicationResumeRequestIdentity: 78n,
         publicationResumeSchemaVersion: 1n,
-        publicationResumePriorPhase: "PublicationDenied",
-        publicationResumePriorObservation: "PublicationRemoteDenied",
+        publicationResumePriorPhase: "PublicationProved",
+        publicationResumePriorObservation: "PublicationApplied",
         publicationResumeFactsRefreshed: false,
         publicationResumeDispatchCount: 1n,
         publicationResumeActive: false,

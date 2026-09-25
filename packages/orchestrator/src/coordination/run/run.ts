@@ -34,6 +34,12 @@ import {
 } from "../../workflow/protocols/direct-publication/events.js"
 import type { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import type { RemotePublicationAdmissionRejected } from "../../workflow/protocols/direct-publication/admission.js"
+import type { RemotePublicationResumeControlResult } from "../../workflow/protocols/direct-publication/resume-control.js"
+import type {
+  RemotePublicationHistoryContradiction,
+  RemotePublicationResumeRequestConflict,
+  RemotePublicationResumeSubjectMismatch
+} from "../../workflow/protocols/direct-publication/errors.js"
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import type { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { Journal, type JournalInitialHistoryInvalid } from "../delivery/journal.js"
@@ -142,6 +148,9 @@ export type JournaledRunBootstrapError =
   | WorkflowRunTargetMismatch
   | RemotePublicationObservationFailure
   | RemotePublicationAdmissionRejected
+  | RemotePublicationHistoryContradiction
+  | RemotePublicationResumeRequestConflict
+  | RemotePublicationResumeSubjectMismatch
 
 /** A fixed production composition was asked to begin a different Run identity. */
 export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRunIdentityMismatch>()(
@@ -201,6 +210,16 @@ export interface JournaledRunBootstrapService {
     observers: AcceptedRunReactivationObservers
   ) => Effect.Effect<void, JournaledRunReactivationObserverAlreadyRegistered>
   readonly operatorControl: {
+    readonly applyRemotePublicationResume: (
+      input: unknown
+    ) => Effect.Effect<
+      RemotePublicationResumeControlResult,
+      | Schema.SchemaError
+      | JournaledRunBootstrapError
+      | JournaledRunIdentityMismatch
+      | JournaledRunNotActive
+      | ApplicationExiting
+    >
     readonly applyRunCancellation: (
       input: unknown
     ) => Effect.Effect<

@@ -182,11 +182,7 @@ export const appendRemotePublicationResumeRequest = Effect.fn("RemotePublication
     request,
     version: workflowJournalEventVersion
   })
-  yield* appendRemotePublicationEvent(
-    correlation,
-    remotePublicationResumeRequestedRecordKey(correlation.requestId, request.requestId),
-    event
-  )
+  yield* appendRemotePublicationEvent(correlation, remotePublicationResumeRequestedRecordKey(request.requestId), event)
   return event
 })
 

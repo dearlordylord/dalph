@@ -1919,10 +1919,14 @@ module integrationFinality {
     state' = { ...state, frontierEmpty: true },
   }
 
-  action step: bool = any {
+  // Production finality conformance drives the accepted claim/finality boundary
+  // actions below. A current-remote contradiction is still part of the complete
+  // model step, but this test driver has no accepted Journal event for injecting
+  // that optional observation; its behavior remains covered by directed model
+  // and negative-control tests.
+  action integrationFinalityConformanceStep: bool = any {
     pauseAfterPublicationProof,
     restartAfterPublicationProof,
-    observeRemotePublicationContradiction,
     observePostPromotionBlocker,
     observeFreshBlockerClear,
     observePostPromotionCandidateCurrentAncestry,
@@ -1977,5 +1981,10 @@ module integrationFinality {
     rejectCompletionClaimDeletion,
     settlePromotedTask,
     markEmptyFrontier,
+  }
+
+  action step: bool = any {
+    integrationFinalityConformanceStep,
+    observeRemotePublicationContradiction,
   }
 }

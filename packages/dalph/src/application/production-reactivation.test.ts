@@ -189,6 +189,7 @@ it.effect("reports both recoverable and unhandled non-retryable production activ
         readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
         registerAcceptedRunReactivationObservers: () => Effect.void,
         operatorControl: {
+          applyRemotePublicationResume: () => Effect.die("unused"),
           applyRunCancellation: () => Effect.die("unused"),
           applyIntegrationQuarantineDirection: () => Effect.die("unused"),
           applyAttemptChoice: () => Effect.die("unused"),
@@ -299,6 +300,7 @@ const makeTerminalBootstrap = (
       ),
     registerAcceptedRunReactivationObservers: (_observers) => Effect.void,
     operatorControl: {
+      applyRemotePublicationResume: () => Effect.die("unused"),
       applyRunCancellation: () => Effect.die("unused"),
       applyIntegrationQuarantineDirection: () => Effect.die("unused"),
       applyAttemptChoice: () => Effect.die("unused"),
@@ -495,6 +497,7 @@ it.effect("production composition wires current-first tracker notifications and 
           ),
         registerAcceptedRunReactivationObservers: (observers) => Ref.set(registeredObservers, observers),
         operatorControl: {
+          applyRemotePublicationResume: () => Effect.die("unused"),
           applyRunCancellation: () => Effect.die("unused"),
           applyIntegrationQuarantineDirection: () => Effect.die("unused"),
           applyAttemptChoice: () => Effect.die("unused"),

@@ -74,6 +74,14 @@ type ReductionPhase =
 const contradiction = (detail: string): RemotePublicationState =>
   RemotePublicationState.cases.PublicationContradiction.make({ detail })
 
+const resumeRequestMatchesCorrelation = (
+  correlation: RemotePublicationCorrelation,
+  request: RemotePublicationResumeRequest
+): boolean =>
+  request.runId === correlation.qualifiedCandidate.run.session.plannedAttempt.runId &&
+  request.responsibility.runId === request.runId &&
+  request.responsibility.queuedAt === correlation.qualifiedCandidate.run.session.queuedAt
+
 /** Reduces one request's durable events without inferring a result from process loss or a missing record. */
 export const deriveRemotePublicationState = (
   events: ReadonlyArray<RemotePublicationJournalEvent>
@@ -132,7 +140,17 @@ export const deriveRemotePublicationState = (
   for (const [index, event] of events.entries()) {
     if (index === 0) continue
     if (phase._tag === "Succeeded") {
-      return contradiction("publication history contains an event after terminal proof")
+      if (event._tag !== "RemotePublicationResumeRequested") {
+        return contradiction("publication history contains an event after terminal proof")
+      }
+      if (!resumeRequestMatchesCorrelation(event.correlation, event.request)) {
+        return contradiction("publication resume receipt does not identify the exact Run responsibility")
+      }
+      if (seenResumeRequestIds.has(event.request.requestId)) {
+        return contradiction("publication resume request identity is duplicated")
+      }
+      seenResumeRequestIds.add(event.request.requestId)
+      continue
     }
     if (event._tag === "RemotePublicationIntended") {
       return contradiction("publication history has more than one outer intent")
@@ -186,12 +204,8 @@ export const deriveRemotePublicationState = (
       if (phase._tag !== "Retained" || previous?._tag !== "RemotePublicationRetained") {
         return contradiction("publication resume receipt must immediately follow an exact retained outcome")
       }
-      const { correlation, request } = event
-      if (
-        request.runId !== correlation.qualifiedCandidate.run.session.plannedAttempt.runId ||
-        request.responsibility.runId !== request.runId ||
-        request.responsibility.queuedAt !== correlation.qualifiedCandidate.run.session.queuedAt
-      ) {
+      const { request } = event
+      if (!resumeRequestMatchesCorrelation(event.correlation, request)) {
         return contradiction("publication resume receipt does not identify the exact Run responsibility")
       }
       if (seenResumeRequestIds.has(request.requestId)) {

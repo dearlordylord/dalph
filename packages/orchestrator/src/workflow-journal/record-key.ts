@@ -408,11 +408,10 @@ export const remotePublicationRetainedRecordKey = (
       : `remote-publication:${requestId}:retained-after-resume:${authorization.requestId}`
   )
 
-/** Stable key for one exact operator resume receipt of one retained candidate publication. */
+/** Stable Run-wide key for one exact Operator resume receipt, across candidate successors. */
 export const remotePublicationResumeRequestedRecordKey = (
-  publicationRequestId: RemotePublicationRequestId,
   resumeRequestId: RemotePublicationResumeRequestId
-): JournalRecordKey => JournalRecordKey.make(`remote-publication:${publicationRequestId}:resume:${resumeRequestId}`)
+): JournalRecordKey => JournalRecordKey.make(`remote-publication-resume:${resumeRequestId}`)
 
 const targetPromotionRecordKeyPrefix = (requestId: TargetPromotionRequestId): string => `target-promotion:${requestId}`
 

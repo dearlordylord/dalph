@@ -3160,9 +3160,11 @@ module acceptedResultIntegration {
     requestIdentity: int,
   ): bool = {
     val result = state.results.get(id)
+    val continuesProvedFinality =
+      result.phase == PublicationProved and result.publicationProofRecorded
     all {
       RESULT_IDS.contains(id),
-      publicationRetainedWaitPhase(result.phase),
+      publicationRetainedWaitPhase(result.phase) or continuesProvedFinality,
       not(result.publicationResumeRequestRecorded),
       requestedSchemaVersion == PUBLICATION_RESUME_SCHEMA_VERSION,
       requestedRunIdentity == result.runIdentity,
@@ -3172,13 +3174,55 @@ module acceptedResultIntegration {
         ...state,
         results: state.results.put(id, {
           ...result,
-          phase: PublicationResumeRecorded,
+          // A proved publication resumes local completion work in the same
+          // phase. The durable receipt wakes the ordinary Run owner without
+          // authorizing another publication attempt.
+          phase: if (continuesProvedFinality) PublicationProved else PublicationResumeRecorded,
           publicationResumeRequestRecorded: true,
           publicationResumeRequestRunIdentity: requestedRunIdentity,
           publicationResumeRequestResponsibilityIdentity: requestedResponsibilityIdentity,
           publicationResumeRequestIdentity: requestIdentity,
           publicationResumeSchemaVersion: requestedSchemaVersion,
           publicationResumePriorPhase: result.phase,
+          publicationResumePriorObservation: result.publicationObservation,
+          publicationResumeFactsRefreshed: false,
+          publicationResumeActive: false,
+        }),
+      },
+    }
+  }
+
+  // After publication proof, a distinct exact receipt wakes the ordinary Run
+  // owner to continue local promotion/finality. It preserves P and consumes
+  // neither publication allowance nor Integrator work.
+  action recordProvedPublicationResumeRequest(
+    id: int,
+    requestedSchemaVersion: int,
+    requestedRunIdentity: int,
+    requestedResponsibilityIdentity: int,
+    requestIdentity: int,
+  ): bool = {
+    val result = state.results.get(id)
+    all {
+      RESULT_IDS.contains(id),
+      result.phase == PublicationProved,
+      result.publicationProofRecorded,
+      requestedSchemaVersion == PUBLICATION_RESUME_SCHEMA_VERSION,
+      requestedRunIdentity == result.runIdentity,
+      requestedResponsibilityIdentity == result.integrationResponsibilityIdentity,
+      requestIdentity > 0,
+      requestIdentity != result.publicationResumeRequestIdentity,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationProved,
+          publicationResumeRequestRecorded: true,
+          publicationResumeRequestRunIdentity: requestedRunIdentity,
+          publicationResumeRequestResponsibilityIdentity: requestedResponsibilityIdentity,
+          publicationResumeRequestIdentity: requestIdentity,
+          publicationResumeSchemaVersion: requestedSchemaVersion,
+          publicationResumePriorPhase: PublicationProved,
           publicationResumePriorObservation: result.publicationObservation,
           publicationResumeFactsRefreshed: false,
           publicationResumeActive: false,
@@ -4237,6 +4281,8 @@ module acceptedResultIntegration {
   action observePublicationNonConvergenceOne: bool = observePublicationNonConvergence(1)
   action recordPublicationResumeRequestOne: bool =
     recordPublicationResumeRequest(1, PUBLICATION_RESUME_SCHEMA_VERSION, 9000, 8001, 77)
+  action recordProvedPublicationResumeRequestOne: bool =
+    recordProvedPublicationResumeRequest(1, PUBLICATION_RESUME_SCHEMA_VERSION, 9000, 8001, 78)
   action resumeDeniedPublicationOne: bool = resumeDeniedPublication(1)
   action redeliverPublicationResumeRequestOne: bool =
     redeliverPublicationResumeRequest(1, PUBLICATION_RESUME_SCHEMA_VERSION, 9000, 8001, 77)
@@ -4336,6 +4382,7 @@ module acceptedResultIntegration {
     observePublicationCompetingHeadOne,
     observePublicationNonConvergenceOne,
     recordPublicationResumeRequestOne,
+    recordProvedPublicationResumeRequestOne,
     resumeDeniedPublicationOne,
     redeliverPublicationResumeRequestOne,
     activatePublicationResumeOne,

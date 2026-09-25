@@ -89,6 +89,7 @@ import {
   IntegratorCandidateText,
   IntegratorBoundaryUnavailable,
   IntegrationResponsibilityIdentity,
+  journalStoreCapabilities,
   isExactTaskClaim,
   makeFocusedTaskClaimFactsObserved,
   makeTargetLineageObservationOperation,
@@ -3380,7 +3381,10 @@ it.effect("retains Pause and Exit delivery and quiesces on a compatible-head wai
 )
 
 it.effect.each([
-  { name: "ordinary production Run retries resumed finality after a lost completion response", premise: "unchanged" },
+  {
+    name: "ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination",
+    premise: "unchanged"
+  },
   {
     name: "ordinary production Run retains resumed finality when a dependency becomes unfinished",
     premise: "dependency"
@@ -3566,6 +3570,10 @@ it.effect.each([
       })
       const currentSpecification = yield* Ref.make(specification)
       const currentPrerequisites = yield* Ref.make<ReadonlyArray<TaskId>>([])
+      const finalitySettlementAppended = yield* Ref.make(false)
+      const finalityGraphReadReached = yield* Deferred.make<void>()
+      const continueFinalityGraphRead = yield* Deferred.make<void>()
+      const finalityGraphReadGateConsumed = yield* Ref.make(false)
       const completionMarker = yield* Ref.make<Option.Option<CompletionTaskClaim>>(Option.none())
       const completionRequest = published.completionRequest
       const completionRequestResult = yield* Ref.make<Option.Option<typeof completionRequest>>(Option.none())
@@ -3859,6 +3867,31 @@ it.effect.each([
         outcome: "Accepted",
         predecessor: null
       })
+      const observedJournalRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(resumedRecords)
+      const observeJournalRecord = (record: JournalRecord) =>
+        Ref.update(observedJournalRecords, (records) =>
+          records.some(({ position }) => position === record.position) ? records : [...records, record]
+        ).pipe(
+          Effect.andThen(
+            record.event._tag === "IntegrationFinalitySettled" ? Ref.set(finalitySettlementAppended, true) : Effect.void
+          )
+        )
+      const journalStoreLayer = journalStoreCapabilities(
+        Layer.effect(
+          JournalStore,
+          JournalStore.pipe(
+            Effect.map((storage) =>
+              JournalStore.of({
+                ...storage,
+                append: (requestedRunId, key, event) =>
+                  storage.append(requestedRunId, key, event).pipe(Effect.tap(observeJournalRecord)),
+                terminateRun: (requestedRunId, disposition, evidence) =>
+                  storage.terminateRun(requestedRunId, disposition, evidence).pipe(Effect.tap(observeJournalRecord))
+              })
+            )
+          )
+        ).pipe(Layer.provide(sqliteJournalTestLayer({ filename })))
+      )
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
@@ -3875,6 +3908,7 @@ it.effect.each([
           completionTask,
           integrationFinality: completionClaim,
           integrator,
+          journalStoreLayer,
           remotePublicationGitLayer: Layer.succeed(RemotePublicationGit, remoteGit),
           remotePublicationTarget: remotePublicationTargetForTest,
           targetPromotion: { git: targetPromotion },
@@ -3886,32 +3920,39 @@ it.effect.each([
             TrackerGraphReader,
             TrackerGraphReader.of({
               read: () =>
-                Ref.update(trackerReads, (count) => count + 1).pipe(
-                  Effect.andThen(
-                    Effect.all({ currentLifecycle: Ref.get(lifecycle), prerequisites: Ref.get(currentPrerequisites) })
-                  ),
-                  Effect.flatMap(({ currentLifecycle, prerequisites }) => {
-                    const graph = projectTrackerSnapshot({
-                      revision: `resumed-finality:${currentLifecycle}`,
-                      rootTaskId: taskId,
-                      tasks: [
-                        {
-                          id: taskId,
-                          lifecycle: { _tag: currentLifecycle },
-                          parentTaskId: null,
-                          prerequisiteIds: prerequisites
-                        },
-                        ...prerequisites.map((id) => ({
-                          id,
-                          lifecycle: { _tag: "Open" as const },
-                          parentTaskId: null,
-                          prerequisiteIds: []
-                        }))
-                      ]
-                    })
-                    return graph._tag === "Valid" ? Effect.succeed(graph.snapshot) : Effect.die("tracker graph invalid")
+                Effect.gen(function* () {
+                  yield* Ref.update(trackerReads, (count) => count + 1)
+                  const settlementWasAppended = yield* Ref.get(finalitySettlementAppended)
+                  const gateWasConsumed = yield* Ref.get(finalityGraphReadGateConsumed)
+                  if (premise === "unchanged" && settlementWasAppended && !gateWasConsumed) {
+                    // Hold the real final tracker observation so Operator admission sees settled, active Run history.
+                    yield* Ref.set(finalityGraphReadGateConsumed, true)
+                    yield* Deferred.succeed(finalityGraphReadReached, undefined)
+                    yield* Deferred.await(continueFinalityGraphRead)
+                  }
+                  const currentLifecycle = yield* Ref.get(lifecycle)
+                  const prerequisites = yield* Ref.get(currentPrerequisites)
+                  const graph = projectTrackerSnapshot({
+                    revision: `resumed-finality:${currentLifecycle}`,
+                    rootTaskId: taskId,
+                    tasks: [
+                      {
+                        id: taskId,
+                        lifecycle: { _tag: currentLifecycle },
+                        parentTaskId: null,
+                        prerequisiteIds: prerequisites
+                      },
+                      ...prerequisites.map((id) => ({
+                        id,
+                        lifecycle: { _tag: "Open" as const },
+                        parentTaskId: null,
+                        prerequisiteIds: []
+                      }))
+                    ]
                   })
-                ),
+                  if (graph._tag !== "Valid") return yield* Effect.die("tracker graph invalid")
+                  return graph.snapshot
+                }),
               readTaskWorkSpecification: () => Ref.get(currentSpecification)
             })
           )
@@ -3942,13 +3983,91 @@ it.effect.each([
           PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("resumed finality must not plan another attempt") })
         )
       )
-      yield* run.pipe(
+      const capturedAfter = yield* Effect.gen(function* () {
+        if (premise !== "unchanged") {
+          yield* run
+          return yield* Ref.get(observedJournalRecords)
+        }
+
+        const bootstrap = yield* JournaledRunBootstrap
+        const activeRun = yield* run.pipe(Effect.forkChild)
+        yield* Deferred.await(finalityGraphReadReached)
+        expect(yield* Ref.get(finalitySettlementAppended)).toBe(true)
+        expect(yield* Ref.get(finalityGraphReadGateConsumed)).toBe(true)
+        const ownerWakes = yield* Ref.make(0)
+        yield* bootstrap.registerAcceptedRunReactivationObservers({
+          control: () => Effect.void,
+          acceptedFactPublication: () => Ref.update(ownerWakes, (count) => count + 1)
+        })
+
+        const beforeSettledStatus = yield* Ref.get(observedJournalRecords)
+        const settlementBeforeStatus = beforeSettledStatus.filter(
+          ({ event }) => event._tag === "IntegrationFinalitySettled"
+        )
+        expect(settlementBeforeStatus).toHaveLength(1)
+        expect(settlementBeforeStatus[0]?.event).toMatchObject({
+          claim: { promotionCorrelation: { qualifiedCandidate: { candidateCommit } } }
+        })
+        expect(beforeSettledStatus.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(0)
+        const postSettlementRequest = RemotePublicationResumeRequest.make({
+          ...request,
+          requestId: RemotePublicationResumeRequestId.make("resumed-finality-after-settlement")
+        })
+        const wakesBeforeSettledStatus = yield* Ref.get(ownerWakes)
+        const remoteCallsBeforeSettledStatus = yield* Ref.get(remoteCalls)
+        const integratorCallsBeforeSettledStatus = yield* Ref.get(integratorCalls)
+        const executorCommandsBeforeSettledStatus = yield* Ref.get(executorCommands)
+        const promotionCallsBeforeSettledStatus = yield* Ref.get(promotionCalls)
+        const completionAttemptsBeforeSettledStatus = yield* Ref.get(completionAttempts)
+        const settledStatus = yield* bootstrap.operatorControl.applyRemotePublicationResume(postSettlementRequest)
+        expect(settledStatus).toMatchObject({
+          _tag: "RemotePublicationResumeStatus",
+          state: { _tag: "PublicationSucceeded", correlation: oldProof.correlation, proof: resumedProof.proof }
+        })
+        const afterSettledStatus = yield* Ref.get(observedJournalRecords)
+        expect(afterSettledStatus).toEqual(beforeSettledStatus)
+        expect(yield* Ref.get(ownerWakes)).toBe(wakesBeforeSettledStatus)
+        expect(yield* Ref.get(remoteCalls)).toEqual(remoteCallsBeforeSettledStatus)
+        expect(yield* Ref.get(integratorCalls)).toEqual(integratorCallsBeforeSettledStatus)
+        expect(yield* Ref.get(executorCommands)).toEqual(executorCommandsBeforeSettledStatus)
+        expect(yield* Ref.get(promotionCalls)).toEqual(promotionCallsBeforeSettledStatus)
+        expect(yield* Ref.get(completionAttempts)).toBe(completionAttemptsBeforeSettledStatus)
+
+        yield* Deferred.succeed(continueFinalityGraphRead, undefined)
+        yield* Fiber.join(activeRun)
+        const afterTermination = yield* Ref.get(observedJournalRecords)
+        expect(afterTermination.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(1)
+        const postTerminationRequest = RemotePublicationResumeRequest.make({
+          ...request,
+          requestId: RemotePublicationResumeRequestId.make("resumed-finality-after-termination")
+        })
+        const wakesBeforeTerminatedStatus = yield* Ref.get(ownerWakes)
+        const remoteCallsBeforeTerminatedStatus = yield* Ref.get(remoteCalls)
+        const integratorCallsBeforeTerminatedStatus = yield* Ref.get(integratorCalls)
+        const executorCommandsBeforeTerminatedStatus = yield* Ref.get(executorCommands)
+        const promotionCallsBeforeTerminatedStatus = yield* Ref.get(promotionCalls)
+        const completionAttemptsBeforeTerminatedStatus = yield* Ref.get(completionAttempts)
+        const terminatedStatus = yield* bootstrap.operatorControl.applyRemotePublicationResume(postTerminationRequest)
+        expect(terminatedStatus).toMatchObject({
+          _tag: "RemotePublicationResumeStatus",
+          state: { _tag: "PublicationSucceeded", correlation: oldProof.correlation, proof: resumedProof.proof }
+        })
+        expect(yield* Ref.get(observedJournalRecords)).toEqual(afterTermination)
+        expect(yield* Ref.get(ownerWakes)).toBe(wakesBeforeTerminatedStatus)
+        expect(yield* Ref.get(remoteCalls)).toEqual(remoteCallsBeforeTerminatedStatus)
+        expect(yield* Ref.get(integratorCalls)).toEqual(integratorCallsBeforeTerminatedStatus)
+        expect(yield* Ref.get(executorCommands)).toEqual(executorCommandsBeforeTerminatedStatus)
+        expect(yield* Ref.get(promotionCalls)).toEqual(promotionCallsBeforeTerminatedStatus)
+        expect(yield* Ref.get(completionAttempts)).toBe(completionAttemptsBeforeTerminatedStatus)
+        return afterTermination
+      }).pipe(
         Effect.provide(application),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
       )
       const after = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+      expect(after).toEqual(capturedAfter)
       expect(reduceWorkflowJournalHistory(runId, after)._tag).toBe("ValidWorkflowJournalHistory")
       const promotions = after.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
       const completions = after.filter(({ event }) => event._tag === "CompletionTaskAcknowledged")

@@ -2,7 +2,8 @@ import {
   GitCommitSha,
   RemotePublicationBranchRef,
   RemotePublicationEndpoint,
-  RemotePublicationTarget
+  RemotePublicationTarget,
+  RunId
 } from "@dalph/contracts"
 import { Schema } from "effect"
 import { expect, it } from "vitest"
@@ -99,6 +100,67 @@ it("derives exact publication proof only after its numbered intent", () => {
       })
     ])
   ).toEqual({ _tag: "PublicationSucceeded", correlation, proof })
+})
+
+it("preserves publication proof when a new exact resume receipt continues pending finality", () => {
+  const runId = correlation.qualifiedCandidate.run.session.plannedAttempt.runId
+  const request = RemotePublicationResumeRequest.make({
+    requestId: RemotePublicationResumeRequestId.make("resume-after-publication-proof"),
+    responsibility: IntegrationResponsibilityIdentity.make({
+      queuedAt: correlation.qualifiedCandidate.run.session.queuedAt,
+      runId
+    }),
+    runId,
+    schemaVersion: 1
+  })
+  const receipt = RemotePublicationResumeRequestedEvent.make({
+    correlation,
+    initiatedBy: WorkflowActor.cases.Operator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    request,
+    version: workflowJournalEventVersion
+  })
+  const proof = RemotePublicationProofBasis.cases.PushApplied.make({
+    attemptOrdinal: attempt.attemptOrdinal,
+    remoteHead: correlation.qualifiedCandidate.candidateCommit
+  })
+  const success = RemotePublicationSucceededEvent.make({
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    proof,
+    version: workflowJournalEventVersion
+  })
+
+  expect(deriveRemotePublicationState([outerIntent, attempt, success, receipt])).toEqual({
+    _tag: "PublicationSucceeded",
+    correlation,
+    proof
+  })
+  expect(deriveRemotePublicationState([outerIntent, attempt, success, receipt, receipt])).toMatchObject({
+    _tag: "PublicationContradiction",
+    detail: "publication resume request identity is duplicated"
+  })
+  expect(
+    deriveRemotePublicationState([
+      outerIntent,
+      attempt,
+      success,
+      RemotePublicationResumeRequestedEvent.make({
+        ...receipt,
+        request: RemotePublicationResumeRequest.make({
+          ...request,
+          responsibility: IntegrationResponsibilityIdentity.make({
+            queuedAt: request.responsibility.queuedAt,
+            runId: RunId.make("foreign-publication-resume-run")
+          }),
+          runId: RunId.make("foreign-publication-resume-run")
+        })
+      })
+    ])
+  ).toMatchObject({
+    _tag: "PublicationContradiction",
+    detail: "publication resume receipt does not identify the exact Run responsibility"
+  })
 })
 
 it("accepts only exact reconciled proof from the active resume receipt and its latest retained attempt", () => {
