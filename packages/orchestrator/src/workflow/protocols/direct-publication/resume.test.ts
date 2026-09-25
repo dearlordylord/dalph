@@ -1,7 +1,7 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { AcceptedResultEvidenceManifest, GitCommitSha, makeTaskWorkSpecification, RunId } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
-import { Context, Effect, FileSystem, Layer, Option, Path, Ref, type Scope } from "effect"
+import { Context, Deferred, Effect, FileSystem, Layer, Option, Path, Ref, type Scope } from "effect"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import { integratorCorrelationFor } from "../integrator/session.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
@@ -19,6 +19,7 @@ import { JournalStore, JournalStoreContradiction, type JournalRecord } from "../
 import { IntegrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { deriveRemotePublicationState } from "./state.js"
+import { RemotePublicationResumeRequestConflict, RemotePublicationResumeSubjectMismatch } from "./errors.js"
 import { EvidenceStore } from "../evidence-store.js"
 import {
   CompletionTaskAcknowledgement,
@@ -115,10 +116,11 @@ const requestFor = (id: string): ResumeRequest =>
     schemaVersion: 1
   })
 
-const seedQualifiedHistory = Effect.fn("DirectPublicationResume.seedQualifiedHistory")(function* (
-  store: JournalStore["Service"]
+const seedHistory = Effect.fn("DirectPublicationResume.seedHistory")(function* (
+  store: JournalStore["Service"],
+  historyRecords: ReadonlyArray<JournalRecord>
 ) {
-  const [beginning, ...records] = qualified.qualifiedRecords
+  const [beginning, ...records] = historyRecords
   if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("qualified history must begin the Run")
   yield* store.beginRun(
     runId,
@@ -133,6 +135,8 @@ const seedQualifiedHistory = Effect.fn("DirectPublicationResume.seedQualifiedHis
     yield* store.append(runId, record.key, record.event)
   }
 })
+
+const seedQualifiedHistory = (store: JournalStore["Service"]) => seedHistory(store, qualified.qualifiedRecords)
 
 type GitBehavior = "denied" | "applied" | "throttled" | "uncertain" | "competing" | "incompatible" | "candidate-current"
 type GitCalls = Readonly<{
@@ -329,6 +333,16 @@ const memoryFresh: FreshLane = (use) =>
       const context = yield* Layer.build(memoryJournalStoreLayer)
       const store = Context.get(context, JournalStore)
       yield* seedQualifiedHistory(store)
+      return yield* use((process) => process(store))
+    })
+  )
+
+const memoryFromHistory = (records: ReadonlyArray<JournalRecord>, use: StoreProcess) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(memoryJournalStoreLayer)
+      const store = Context.get(context, JournalStore)
+      yield* seedHistory(store, records)
       return yield* use((process) => process(store))
     })
   )
@@ -834,6 +848,210 @@ it.effect("rejects resume schema and exact Run or responsibility mismatches befo
   )
 )
 
+it.effect("rejects a queued responsibility before IntegrationStarted without writing a resume receipt", () => {
+  const queuedPosition = accepted.records.findIndex(({ event }) => event._tag === "IntegrationResponsibilityBegan")
+  const queuedHistory = accepted.records.slice(0, queuedPosition + 1)
+  return memoryFromHistory(queuedHistory, (process) =>
+    Effect.gen(function* () {
+      expect(queuedHistory.at(-1)?.event._tag).toBe("IntegrationResponsibilityBegan")
+      const before = yield* process((store) => store.read(runId))
+      const request = requestFor("resume-before-integration-start")
+      const mismatch = yield* Effect.flip(process((store) => admitResumeRequest(store, request)))
+      expect(mismatch).toEqual(new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId }))
+      const wrongQueue = RemotePublicationResumeRequest.make({
+        ...requestFor("resume-before-integration-start-wrong-queue"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: JournalPosition.make(Number(request.responsibility.queuedAt) + 1),
+          runId
+        })
+      })
+      expect(yield* Effect.flip(process((store) => admitResumeRequest(store, wrongQueue)))).toEqual(
+        new RemotePublicationResumeSubjectMismatch({ requestId: wrongQueue.requestId, runId })
+      )
+      const wrongRunId = RunId.make("foreign-resume-control-run")
+      const wrongRun = RemotePublicationResumeRequest.make({
+        ...requestFor("resume-before-integration-start-wrong-run"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: request.responsibility.queuedAt,
+          runId: wrongRunId
+        }),
+        runId: wrongRunId
+      })
+      expect(yield* Effect.flip(process((store) => admitResumeRequest(store, wrongRun)))).toEqual(
+        new RemotePublicationResumeSubjectMismatch({ requestId: wrongRun.requestId, runId })
+      )
+      expect(yield* process((store) => store.read(runId))).toEqual(before)
+    })
+  )
+})
+
+it.effect("returns PublicationAbsent status without a receipt before an Integrator candidate exists", () =>
+  memoryFromHistory(accepted.records, (process) =>
+    Effect.gen(function* () {
+      const before = yield* process((store) => store.read(runId))
+      const request = requestFor("resume-before-integrator-candidate")
+      expect(yield* process((store) => admitResumeRequest(store, request))).toEqual({
+        _tag: "RemotePublicationResumeStatus",
+        state: { _tag: "PublicationAbsent" }
+      })
+      expect(yield* process((store) => store.read(runId))).toEqual(before)
+      expect(
+        before.filter(
+          ({ event }) =>
+            event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
+        )
+      ).toEqual([])
+    })
+  )
+)
+
+it.effect("records a fresh control receipt after publication proof while finality remains unsettled", () =>
+  memoryFresh((process) =>
+    Effect.gen(function* () {
+      const denied = yield* makeGit("denied")
+      yield* process((store) => invoke(store, denied.git, "run"))
+      const publicationRequest = requestFor("resume-control-post-proof-prior")
+      const published = yield* makeGit("candidate-current")
+      expect((yield* process((store) => invoke(store, published.git, { request: publicationRequest })))._tag).toBe(
+        "PublicationSucceeded"
+      )
+
+      const before = yield* process((store) => store.read(runId))
+      expect(before.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(false)
+      expect(before.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+      const proof = before.find(({ event }) => event._tag === "RemotePublicationSucceeded")
+      expect(proof?.event._tag).toBe("RemotePublicationSucceeded")
+
+      const continuationRequest = requestFor("resume-control-post-proof-finality-continuation")
+      const receipt = yield* process((store) => admitResumeRequest(store, continuationRequest))
+      expect(receipt).toMatchObject({
+        _tag: "RemotePublicationResumeReceipt",
+        publicationRequestId:
+          proof?.event._tag === "RemotePublicationSucceeded" ? proof.event.correlation.requestId : "",
+        requestId: continuationRequest.requestId
+      })
+
+      const after = yield* process((store) => store.read(runId))
+      expect(after).toHaveLength(before.length + 1)
+      expect(after.slice(0, before.length)).toEqual(before)
+      expect(after.at(-1)?.event).toMatchObject({
+        _tag: "RemotePublicationResumeRequested",
+        request: continuationRequest
+      })
+      expect(publicationOrdinals(after)).toEqual([1])
+      expect(after.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(
+        before.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+      )
+      expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(
+        before.filter(({ event }) => event._tag === "WorkflowRunBegan").length
+      )
+      expect(after.find(({ event }) => event._tag === "RemotePublicationSucceeded")).toEqual(proof)
+      expect(deriveRemotePublicationState(publicationEvents(after))).toEqual(
+        deriveRemotePublicationState(publicationEvents(before))
+      )
+      expect(yield* Ref.get(published.calls)).toMatchObject({ preparations: [], pushes: [] })
+    })
+  )
+)
+
+it.effect("rejects a conflicting control replay without changing the accepted receipt", () =>
+  memoryFresh((process) =>
+    Effect.gen(function* () {
+      const denied = yield* makeGit("denied")
+      yield* process((store) => invoke(store, denied.git, "run"))
+      const request = requestFor("resume-control-conflicting-redelivery")
+      const receipt = yield* process((store) => admitResumeRequest(store, request))
+      const before = yield* process((store) => store.read(runId))
+      const conflict = RemotePublicationResumeRequest.make({
+        ...request,
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: JournalPosition.make(Number(request.responsibility.queuedAt) + 1),
+          runId
+        })
+      })
+      expect(yield* Effect.flip(process((store) => admitResumeRequest(store, conflict)))).toEqual(
+        new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
+      )
+      expect(yield* process((store) => store.read(runId))).toEqual(before)
+      expect(receipt._tag).toBe("RemotePublicationResumeReceipt")
+    })
+  )
+)
+
+it.effect("revalidates the prefix after a concurrent resume receipt wins conditional append", () =>
+  memoryFresh((process) =>
+    Effect.gen(function* () {
+      const denied = yield* makeGit("denied")
+      yield* process((store) => invoke(store, denied.git, "run"))
+      const requestA = requestFor("resume-prefix-race-a")
+      const requestB = requestFor("resume-prefix-race-b")
+      const outcomes = yield* process((store) =>
+        Effect.gen(function* () {
+          const records = yield* store.read(runId)
+          const history = reduceWorkflowJournalHistory(runId, records)
+          if (history._tag === "InvalidWorkflowJournalHistory") {
+            return yield* Effect.die(`invalid resume-race prefix: ${JSON.stringify(history.issues)}`)
+          }
+          const conditionalResults = yield* Ref.make<ReadonlyArray<string>>([])
+          const initialReaders = yield* Ref.make(0)
+          const bothReadInitialPrefix = yield* Deferred.make<void>()
+          const races = Effect.gen(function* () {
+            const journal = yield* Journal
+            const state = {
+              ...journal.state,
+              get: Effect.gen(function* () {
+                const snapshot = yield* journal.state.get
+                const readers = yield* Ref.updateAndGet(initialReaders, (count) => count + 1)
+                if (readers === 2) yield* Deferred.succeed(bothReadInitialPrefix, undefined)
+                yield* Deferred.await(bothReadInitialPrefix)
+                return snapshot
+              })
+            }
+            const racingJournal = Journal.of({
+              ...journal,
+              state,
+              appendIfAcceptedPrefixCurrent: (...args) =>
+                journal
+                  .appendIfAcceptedPrefixCurrent(...args)
+                  .pipe(Effect.tap((result) => Ref.update(conditionalResults, (seen) => [...seen, result._tag])))
+            })
+            return yield* Effect.all(
+              [
+                applyRemotePublicationResume(runId, racingJournal, requestA),
+                applyRemotePublicationResume(runId, racingJournal, requestB)
+              ],
+              { concurrency: 2 }
+            )
+          }).pipe(Effect.provide(journalLayer(runId, fixture.target, history, store)))
+          const result = yield* races
+          return { conditionalResults: yield* Ref.get(conditionalResults), result }
+        })
+      )
+      const receipts = outcomes.result.filter((result) => result._tag === "RemotePublicationResumeReceipt")
+      const statuses = outcomes.result.filter((result) => result._tag === "RemotePublicationResumeStatus")
+      expect(receipts).toHaveLength(1)
+      expect(statuses).toHaveLength(1)
+      expect(outcomes.conditionalResults).toContain("PrefixAdvanced")
+      expect(outcomes.conditionalResults).toContain("Appended")
+
+      const records = yield* process((store) => store.read(runId))
+      const receiptEvents = records.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")
+      expect(receiptEvents).toHaveLength(1)
+      if (receiptEvents[0]?.event._tag !== "RemotePublicationResumeRequested") {
+        return yield* Effect.die("the winning concurrent control must retain its exact receipt")
+      }
+      expect(receipts[0]?.requestId).toBe(receiptEvents[0].event.request.requestId)
+      const status = statuses[0]
+      if (status?._tag !== "RemotePublicationResumeStatus") {
+        return yield* Effect.die("the stale concurrent control must re-read and return current status")
+      }
+      expect(status.state).toMatchObject({ _tag: "PublicationResumeReady" })
+      expect(status.state).toEqual(deriveRemotePublicationState(publicationEvents(records)))
+      expect(publicationOrdinals(records)).toEqual([1])
+    })
+  )
+)
+
 const exerciseDistinctResumeRequests = (process: StoreProcess): Effect.Effect<void, unknown> =>
   Effect.gen(function* () {
     const initialDenial = yield* makeGit("denied")
@@ -1120,6 +1338,48 @@ it.effect("a persistent denial stops at the accepted attempt limit and cannot be
           ({ event }) => event._tag === "RemotePublicationResumeRequested"
         )
       ).toHaveLength(2)
+    })
+  )
+)
+
+it.effect("resume control returns retained status without a receipt after the attempt limit", () =>
+  memoryFresh((process) =>
+    Effect.gen(function* () {
+      const first = yield* makeGit("denied")
+      yield* process((store) => invoke(store, first.git, "run"))
+      const second = yield* makeGit("denied")
+      yield* process((store) => invoke(store, second.git, { request: requestFor("control-limit-resume-2") }))
+      const third = yield* makeGit("denied")
+      yield* process((store) => invoke(store, third.git, { request: requestFor("control-limit-resume-3") }))
+
+      const before = yield* process((store) => store.read(runId))
+      const state = deriveRemotePublicationState(publicationEvents(before))
+      expect(state._tag).toBe("PublicationRetained")
+      expect(publicationOrdinals(before)).toEqual([1, 2, 3])
+
+      const exhaustedRequest = requestFor("control-limit-resume-4")
+      expect(yield* process((store) => admitResumeRequest(store, exhaustedRequest))).toEqual({
+        _tag: "RemotePublicationResumeStatus",
+        state
+      })
+      expect(yield* process((store) => store.read(runId))).toEqual(before)
+    })
+  )
+)
+
+it.effect("resume control returns a throttled publication status without recording or retrying", () =>
+  memoryFresh((process) =>
+    Effect.gen(function* () {
+      const throttle = yield* makeGit("throttled")
+      expect((yield* process((store) => invoke(store, throttle.git, "run")))._tag).toBe("PublicationRetained")
+      const before = yield* process((store) => store.read(runId))
+      const status = yield* process((store) => admitResumeRequest(store, requestFor("control-throttled-status")))
+      expect(status).toEqual({
+        _tag: "RemotePublicationResumeStatus",
+        state: deriveRemotePublicationState(publicationEvents(before))
+      })
+      expect(yield* process((store) => store.read(runId))).toEqual(before)
+      expect(publicationOrdinals(before)).toEqual([1])
     })
   )
 )

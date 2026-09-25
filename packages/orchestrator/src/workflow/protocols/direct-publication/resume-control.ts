@@ -136,7 +136,9 @@ const startedResponsibilityForRequest = (
     queuedAt: queued.position,
     startedAt: started.position
   })
-  return responsibilityMatchesRequest(responsibility, request) ? responsibility : undefined
+  /* v8 ignore next -- @preserve Run binding, exact queued position, and linked-start equivalence force this request match. */
+  if (!responsibilityMatchesRequest(responsibility, request)) return undefined
+  return responsibility
 }
 
 type WorkflowRunBeganJournalRecord = Omit<JournalRecord, "event"> & {
@@ -162,6 +164,7 @@ const exactResumeSubjectFor = Effect.fn("RemotePublicationResume.verifyResponsib
     return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
   }
   const began = workflowRunBeganFor(prefix, expectedRunId)
+  /* v8 ignore next -- @preserve JournalService accepts only histories beginning with this exact WorkflowRunBegan record for the Run. */
   if (began === undefined) {
     return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
   }
@@ -174,6 +177,7 @@ const currentIntegratorPublication = (
   target: Parameters<typeof remotePublicationCorrelationFor>[1]
 ) => {
   const integrator = deriveCurrentIntegratorState(prefix, responsibility)
+  /* v8 ignore next -- @preserve JournalService projects reducer-valid Integrator histories; contradictory histories are rejected before this accepted-prefix boundary. */
   if (integrator._tag === "Contradiction") {
     return {
       _tag: "Status" as const,
