@@ -6,6 +6,7 @@ import {
   journalRecordsOfKind,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
+import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { remotePublicationResumeRequestedRecordKey } from "../../../workflow-journal/record-key.js"
 import { ExpectedAcceptedPrefixPosition, type JournalService } from "../../../coordination/delivery/journal.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -138,8 +139,18 @@ const startedResponsibilityForRequest = (
   return responsibilityMatchesRequest(responsibility, request) ? responsibility : undefined
 }
 
-const workflowRunBeganFor = (prefix: JournalHistorySource, expectedRunId: RunId) =>
-  Array.from(journalRecordsOfKind(prefix, "WorkflowRunBegan")).find(({ runId }) => runId === expectedRunId)
+type WorkflowRunBeganJournalRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "WorkflowRunBegan" }>
+}
+
+const workflowRunBeganFor = (
+  prefix: JournalHistorySource,
+  expectedRunId: RunId
+): WorkflowRunBeganJournalRecord | undefined =>
+  Array.from(journalRecordsOfKind(prefix, "WorkflowRunBegan")).find(
+    (record): record is WorkflowRunBeganJournalRecord =>
+      record.runId === expectedRunId && record.event._tag === "WorkflowRunBegan"
+  )
 
 const exactResumeSubjectFor = Effect.fn("RemotePublicationResume.verifyResponsibility")(function* (
   prefix: JournalHistorySource,
@@ -151,7 +162,7 @@ const exactResumeSubjectFor = Effect.fn("RemotePublicationResume.verifyResponsib
     return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
   }
   const began = workflowRunBeganFor(prefix, expectedRunId)
-  if (began?.event._tag !== "WorkflowRunBegan") {
+  if (began === undefined) {
     return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
   }
   return { began, responsibility }
