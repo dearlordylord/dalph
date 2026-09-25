@@ -85,10 +85,124 @@ const responsibilityMatchesRequest = (
   responsibility.plannedAttempt.runId === request.responsibility.runId &&
   responsibility.queuedAt === request.responsibility.queuedAt
 
+const decodeResumeRequestForRun = Effect.fn("RemotePublicationResume.decodeRequest")(function* (
+  expectedRunId: RunId,
+  unknownRequest: unknown
+) {
+  const request = yield* Schema.decodeUnknownEffect(RemotePublicationResumeRequest, { onExcessProperty: "error" })(
+    unknownRequest
+  )
+  if (request.runId !== expectedRunId || request.responsibility.runId !== expectedRunId) {
+    return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
+  }
+  return request
+})
+
+const previousResumeAdmission = Effect.fn("RemotePublicationResume.readPreviousReceipt")(function* (
+  prefix: JournalHistorySource,
+  request: RemotePublicationResumeRequestValue
+) {
+  const duplicate = Array.from(journalRecordsOfKind(prefix, "RemotePublicationResumeRequested")).find(
+    ({ event }) => event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
+  )
+  if (duplicate === undefined || duplicate.event._tag !== "RemotePublicationResumeRequested") return undefined
+  if (!resumeRequestEquivalence(duplicate.event.request, request)) {
+    return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
+  }
+  return replayAdmission(duplicate.position, duplicate.event.correlation.requestId, request.requestId)
+})
+
+const startedResponsibilityForRequest = (
+  prefix: JournalHistorySource,
+  expectedRunId: RunId,
+  request: RemotePublicationResumeRequestValue
+): typeof StartedIntegrationResponsibility.Type | undefined => {
+  const queued = journalRecordByPosition(prefix, request.responsibility.queuedAt)
+  if (queued?.event._tag !== "IntegrationResponsibilityBegan" || queued.runId !== expectedRunId) return undefined
+  const started = Array.from(journalRecordsOfKind(prefix, "IntegrationStarted")).find(
+    ({ event }) => event._tag === "IntegrationStarted" && event.responsibilityBeganAt === queued.position
+  )
+  if (
+    started?.event._tag !== "IntegrationStarted" ||
+    !integrationResponsibilityEquivalence(started.event, queued.event)
+  ) {
+    return undefined
+  }
+  const responsibility = StartedIntegrationResponsibility.make({
+    acceptedResult: queued.event.acceptedResult,
+    integrationTarget: queued.event.integrationTarget,
+    plannedAttempt: queued.event.plannedAttempt,
+    queuedAt: queued.position,
+    startedAt: started.position
+  })
+  return responsibilityMatchesRequest(responsibility, request) ? responsibility : undefined
+}
+
+const workflowRunBeganFor = (prefix: JournalHistorySource, expectedRunId: RunId) =>
+  Array.from(journalRecordsOfKind(prefix, "WorkflowRunBegan")).find(({ runId }) => runId === expectedRunId)
+
+const exactResumeSubjectFor = Effect.fn("RemotePublicationResume.verifyResponsibility")(function* (
+  prefix: JournalHistorySource,
+  expectedRunId: RunId,
+  request: RemotePublicationResumeRequestValue
+) {
+  const responsibility = startedResponsibilityForRequest(prefix, expectedRunId, request)
+  if (responsibility === undefined) {
+    return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
+  }
+  const began = workflowRunBeganFor(prefix, expectedRunId)
+  if (began?.event._tag !== "WorkflowRunBegan") {
+    return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
+  }
+  return { began, responsibility }
+})
+
+const currentIntegratorPublication = (
+  prefix: JournalHistorySource,
+  responsibility: typeof StartedIntegrationResponsibility.Type,
+  target: Parameters<typeof remotePublicationCorrelationFor>[1]
+) => {
+  const integrator = deriveCurrentIntegratorState(prefix, responsibility)
+  if (integrator._tag === "Contradiction") {
+    return {
+      _tag: "Status" as const,
+      result: statusAdmission(RemotePublicationState.cases.PublicationContradiction.make({ detail: integrator.detail }))
+    }
+  }
+  if (integrator._tag !== "GitQualifiedPrepared") {
+    return { _tag: "Status" as const, result: statusAdmission(RemotePublicationState.cases.PublicationAbsent.make({})) }
+  }
+  const candidate = integratorRunQualifiedCandidateFromState(integrator)
+  return { _tag: "Prepared" as const, candidate, correlation: remotePublicationCorrelationFor(candidate, target) }
+}
+
 const workflowRunIsTerminated = (source: JournalHistorySource): boolean =>
   Array.from(journalRecordsOfKind(source, "WorkflowRunTerminated")).some(
     ({ event }) => event._tag === "WorkflowRunTerminated"
   )
+
+const resumeStatusIfNotEligible = (
+  prefix: JournalHistorySource,
+  candidate: ReturnType<typeof integratorRunQualifiedCandidateFromState>,
+  correlation: ReturnType<typeof remotePublicationCorrelationFor>,
+  state: typeof RemotePublicationState.Type
+): RemotePublicationResumeAdmission | undefined => {
+  const continueProvedFinality =
+    state._tag === "PublicationSucceeded" &&
+    !isIntegrationFinalitySettledForCandidate(prefix, candidate) &&
+    !workflowRunIsTerminated(prefix)
+  if (
+    !continueProvedFinality &&
+    (state._tag !== "PublicationRetained" || !remotePublicationRetainedCauseIsResumable(state.cause))
+  ) {
+    return statusAdmission(state)
+  }
+  const attempts = remotePublicationEventsFor(prefix, correlation).filter(
+    (event) => event._tag === "RemotePublicationAttemptIntended"
+  ).length
+  if (!continueProvedFinality && attempts >= remotePublicationAttemptLimit) return statusAdmission(state)
+  return undefined
+}
 
 /**
  * Records a transport-neutral resume request against the current retained
@@ -103,85 +217,23 @@ export const applyRemotePublicationResumeWithAdmission = (
   const evaluate = Effect.fn("RemotePublicationResume.evaluateAcceptedPrefix")(function* () {
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- CAS revalidation repeats only when another append advances the prefix.
     while (true) {
-      const request = yield* Schema.decodeUnknownEffect(RemotePublicationResumeRequest, { onExcessProperty: "error" })(
-        unknownRequest
-      )
-      if (request.runId !== expectedRunId || request.responsibility.runId !== expectedRunId) {
-        return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
-      }
+      const request = yield* decodeResumeRequestForRun(expectedRunId, unknownRequest)
 
       const journalState = yield* journal.state.get
       const prefix = journalState.prefix
-      const duplicate = Array.from(journalRecordsOfKind(prefix, "RemotePublicationResumeRequested")).find(
-        ({ event }) =>
-          event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
-      )
-      if (duplicate !== undefined && duplicate.event._tag === "RemotePublicationResumeRequested") {
-        if (!resumeRequestEquivalence(duplicate.event.request, request)) {
-          return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
-        }
-        return replayAdmission(duplicate.position, duplicate.event.correlation.requestId, request.requestId)
-      }
+      const duplicate = yield* previousResumeAdmission(prefix, request)
+      if (duplicate !== undefined) return duplicate
 
-      const queued = journalRecordByPosition(prefix, request.responsibility.queuedAt)
-      if (queued?.event._tag !== "IntegrationResponsibilityBegan" || queued.runId !== expectedRunId) {
-        return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
-      }
-      const started = Array.from(journalRecordsOfKind(prefix, "IntegrationStarted")).find(
-        ({ event }) => event._tag === "IntegrationStarted" && event.responsibilityBeganAt === queued.position
-      )
-      if (
-        started?.event._tag !== "IntegrationStarted" ||
-        !integrationResponsibilityEquivalence(started.event, queued.event)
-      ) {
-        return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
-      }
-      const responsibility = StartedIntegrationResponsibility.make({
-        acceptedResult: queued.event.acceptedResult,
-        integrationTarget: queued.event.integrationTarget,
-        plannedAttempt: queued.event.plannedAttempt,
-        queuedAt: queued.position,
-        startedAt: started.position
-      })
-      if (!responsibilityMatchesRequest(responsibility, request)) {
-        return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
-      }
+      const { began, responsibility } = yield* exactResumeSubjectFor(prefix, expectedRunId, request)
+      const publication = currentIntegratorPublication(prefix, responsibility, began.event.remotePublicationTarget)
+      if (publication._tag === "Status") return publication.result
 
-      const began = Array.from(journalRecordsOfKind(prefix, "WorkflowRunBegan")).find(
-        ({ runId }) => runId === expectedRunId
-      )
-      if (began?.event._tag !== "WorkflowRunBegan") {
-        return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
-      }
-      const integrator = deriveCurrentIntegratorState(prefix, responsibility)
-      if (integrator._tag === "Contradiction") {
-        return statusAdmission(
-          RemotePublicationState.cases.PublicationContradiction.make({ detail: integrator.detail })
-        )
-      }
-      if (integrator._tag !== "GitQualifiedPrepared") {
-        return statusAdmission(RemotePublicationState.cases.PublicationAbsent.make({}))
-      }
-
-      const candidate = integratorRunQualifiedCandidateFromState(integrator)
-      const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
-      const state = yield* validateRemotePublicationState(prefix, correlation)
-      const continueProvedFinality =
-        state._tag === "PublicationSucceeded" &&
-        !isIntegrationFinalitySettledForCandidate(prefix, candidate) &&
-        !workflowRunIsTerminated(prefix)
-      if (
-        !continueProvedFinality &&
-        (state._tag !== "PublicationRetained" || !remotePublicationRetainedCauseIsResumable(state.cause))
-      ) {
-        return statusAdmission(state)
-      }
-      const events = remotePublicationEventsFor(prefix, correlation)
-      const attempts = events.filter((event) => event._tag === "RemotePublicationAttemptIntended").length
-      if (!continueProvedFinality && attempts >= remotePublicationAttemptLimit) return statusAdmission(state)
+      const state = yield* validateRemotePublicationState(prefix, publication.correlation)
+      const status = resumeStatusIfNotEligible(prefix, publication.candidate, publication.correlation, state)
+      if (status !== undefined) return status
 
       const event = RemotePublicationResumeRequestedEvent.make({
-        correlation,
+        correlation: publication.correlation,
         initiatedBy: WorkflowActor.cases.Operator.make({}),
         occurrenceClassification: "InitiatedAction",
         request,
@@ -196,7 +248,7 @@ export const applyRemotePublicationResumeWithAdmission = (
       if (append._tag === "PrefixAdvanced") continue
       return {
         _tag: "NewlyRecordedResumeReceipt",
-        result: receiptResult(append.record.position, correlation.requestId, request.requestId)
+        result: receiptResult(append.record.position, publication.correlation.requestId, request.requestId)
       } satisfies RemotePublicationResumeAdmission
     }
   })

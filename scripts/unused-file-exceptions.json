@@ -1,6 +1,5 @@
 [
   "packages/dalph/bin/codex-integrator-qualification-host.ts",
-  "packages/dalph/bin/git-sender-custody-host-fixture.ts",
   "packages/orchestrator/scripts/clean-build-output.mjs",
   "prototypes/reducer-lab/src/cassette-lab.smoke.ts",
   "scripts/aggregate-hosted-formal-shards.d.mts",

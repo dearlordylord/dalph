@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "d3cf7c66d80f4894112b05796d0dba3cbcdf3736404c488f3e64b582d1ebacad",
+  "digest": "ad090e0913c9edc7831661a0a61943e61643640529f8aa6ee68c252c84363217",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -289,6 +289,7 @@
     "packages/orchestrator/src/workflow/protocols/direct-publication/events.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/historical-occurrence.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.ts",
+    "packages/orchestrator/src/workflow/protocols/direct-publication/resume-control.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/resume-runtime.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/state.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/transition-journal.ts",
@@ -328,6 +329,7 @@
     "packages/orchestrator/src/workflow/protocols/integration-finality/post-promotion-blocker-ancestry.ts",
     "packages/orchestrator/src/workflow/protocols/integration-finality/protocol.ts",
     "packages/orchestrator/src/workflow/protocols/integration-finality/publication-premise.ts",
+    "packages/orchestrator/src/workflow/protocols/integration-finality/settled-candidate.ts",
     "packages/orchestrator/src/workflow/protocols/integration-finality/state.ts",
     "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-lineage.ts",
     "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts",
