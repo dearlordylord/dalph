@@ -1009,6 +1009,9 @@ const exerciseRunWideResumeIdentityAcrossCandidateCorrelation = (process: StoreP
     yield* process((store) => invoke(store, initialDenial.git, "run"))
     const request = requestFor("resume-run-wide-candidate-identity")
     const originalReceipt = yield* process((store) => admitResumeRequest(store, request))
+    if (originalReceipt._tag !== "RemotePublicationResumeReceipt") {
+      return yield* Effect.die("expected resume admission to return its accepted receipt")
+    }
     const original = yield* process((store) => store.read(runId))
 
     const differentCandidate = IntegratorRunQualifiedCandidate.make({

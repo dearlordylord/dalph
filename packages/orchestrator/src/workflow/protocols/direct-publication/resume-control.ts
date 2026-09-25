@@ -86,7 +86,9 @@ const responsibilityMatchesRequest = (
   responsibility.queuedAt === request.responsibility.queuedAt
 
 const workflowRunIsTerminated = (source: JournalHistorySource): boolean =>
-  journalRecordsOfKind(source, "WorkflowRunTerminated").some(({ event }) => event._tag === "WorkflowRunTerminated")
+  Array.from(journalRecordsOfKind(source, "WorkflowRunTerminated")).some(
+    ({ event }) => event._tag === "WorkflowRunTerminated"
+  )
 
 /**
  * Records a transport-neutral resume request against the current retained
@@ -110,8 +112,9 @@ export const applyRemotePublicationResumeWithAdmission = (
 
       const journalState = yield* journal.state.get
       const prefix = journalState.prefix
-      const duplicate = journalRecordsOfKind(prefix, "RemotePublicationResumeRequested").find(
-        ({ event }) => event.request.requestId === request.requestId
+      const duplicate = Array.from(journalRecordsOfKind(prefix, "RemotePublicationResumeRequested")).find(
+        ({ event }) =>
+          event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
       )
       if (duplicate !== undefined && duplicate.event._tag === "RemotePublicationResumeRequested") {
         if (!resumeRequestEquivalence(duplicate.event.request, request)) {
@@ -124,8 +127,8 @@ export const applyRemotePublicationResumeWithAdmission = (
       if (queued?.event._tag !== "IntegrationResponsibilityBegan" || queued.runId !== expectedRunId) {
         return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
       }
-      const started = journalRecordsOfKind(prefix, "IntegrationStarted").find(
-        ({ event }) => event.responsibilityBeganAt === queued.position
+      const started = Array.from(journalRecordsOfKind(prefix, "IntegrationStarted")).find(
+        ({ event }) => event._tag === "IntegrationStarted" && event.responsibilityBeganAt === queued.position
       )
       if (
         started?.event._tag !== "IntegrationStarted" ||
@@ -144,7 +147,9 @@ export const applyRemotePublicationResumeWithAdmission = (
         return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
       }
 
-      const began = journalRecordsOfKind(prefix, "WorkflowRunBegan").find(({ runId }) => runId === expectedRunId)
+      const began = Array.from(journalRecordsOfKind(prefix, "WorkflowRunBegan")).find(
+        ({ runId }) => runId === expectedRunId
+      )
       if (began?.event._tag !== "WorkflowRunBegan") {
         return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
       }

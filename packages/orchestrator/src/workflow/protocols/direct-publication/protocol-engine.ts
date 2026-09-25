@@ -359,15 +359,15 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
 
     const correlation = remotePublicationCorrelationFor(candidate, target)
     const source = yield* readEvidence(expectedRunId)
-    const recordedReceipt = journalRecordsOfKind(source, "RemotePublicationResumeRequested").find(
-      ({ event }) => event.request.requestId === request.requestId
+    const recordedReceipt = Array.from(journalRecordsOfKind(source, "RemotePublicationResumeRequested")).find(
+      ({ event }) => event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
     )
     if (recordedReceipt !== undefined && recordedReceipt.event._tag === "RemotePublicationResumeRequested") {
       const sameRequest = Schema.toEquivalence(RemotePublicationResumeRequest)(recordedReceipt.event.request, request)
       if (!sameRequest) return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
 
       const recordedCorrelation = recordedReceipt.event.correlation
-      const laterReceipt = journalRecordsOfKind(source, "RemotePublicationResumeRequested").find(
+      const laterReceipt = Array.from(journalRecordsOfKind(source, "RemotePublicationResumeRequested")).find(
         (record) =>
           record.position > recordedReceipt.position &&
           record.event._tag === "RemotePublicationResumeRequested" &&
