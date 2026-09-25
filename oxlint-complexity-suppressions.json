@@ -382,7 +382,7 @@
   "packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.ts": {
     "complexity": {
       "count": 4,
-      "justification": "integratorAutomaticSuccessorPreparationIsCurrent proves exact authorization, retained publication, completed baseline, and later lineage intent/observation. fixedSessionIdsFor and exactFixedSessionExists count the distinct exact responsibility sessions; validateAutomaticSuccessorSessionFixedRecord checks the committed event chronology; prepareIntegratorAutomaticSuccessorSessionAppend distinguishes exact idempotent reuse from invalid history, identity collision, and quota exhaustion. These are the evidence phases of one successor-session protocol."
+      "justification": "integratorAutomaticSuccessorPreparationIsCurrent proves exact authorization, retained publication, completed baseline, and later lineage intent/observation. exactFixedSessionExists counts the distinct exact responsibility session; validateAutomaticSuccessorSessionFixedRecord checks the committed event chronology; prepareIntegratorAutomaticSuccessorSessionAppend distinguishes exact idempotent reuse from invalid history, identity collision, and quota exhaustion. These are the evidence phases of one successor-session protocol."
     }
   },
   "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts": {
