@@ -3079,6 +3079,35 @@ it.effect("records a post-proof finality continuation and wakes the owner withou
       expect(yield* Queue.size(ownerSignals)).toBe(0)
       expect(yield* Ref.get(gitCalls)).toEqual({ observations: 1, custody: 1, pushes: 0 })
       const after = yield* storage.read(runId)
+      const projected = yield* projectWorkflowOccurrences(after)
+      const projectedResumePath = projected.occurrences.filter(({ _tag }) =>
+        ["RemotePublicationResumeRequested", "RemotePublicationSucceeded"].includes(_tag)
+      )
+      expect(projectedResumePath.map(({ _tag }) => _tag)).toEqual([
+        "RemotePublicationResumeRequested",
+        "RemotePublicationSucceeded",
+        "RemotePublicationResumeRequested"
+      ])
+      const projectedSuccess = projectedResumePath[1]
+      if (
+        projectedSuccess?._tag !== "RemotePublicationSucceeded" ||
+        proved?.event._tag !== "RemotePublicationSucceeded"
+      ) {
+        return yield* Effect.die("post-proof finality continuation requires its exact projected publication proof")
+      }
+      expect(projectedSuccess.correlation.qualifiedCandidate).toEqual(candidate)
+      expect(projectedSuccess.proof).toEqual(proved.event.proof)
+      const projectedResumeReceipts = projectedResumePath.flatMap((occurrence) =>
+        occurrence._tag === "RemotePublicationResumeRequested" ? [occurrence] : []
+      )
+      expect(projectedResumeReceipts.map(({ request: acceptedRequest }) => acceptedRequest.requestId)).toEqual([
+        request.requestId,
+        requestB.requestId
+      ])
+      expect(projectedResumeReceipts.map(({ correlation }) => correlation.qualifiedCandidate)).toEqual([
+        candidate,
+        candidate
+      ])
       expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(1)
       expect(after.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(
         before.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended").length

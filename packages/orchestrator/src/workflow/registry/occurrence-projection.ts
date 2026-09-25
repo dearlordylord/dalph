@@ -67,7 +67,8 @@ import {
   type RemotePublicationAttemptIntendedEvent,
   type RemotePublicationIntendedEvent,
   type RemotePublicationResumeRequestedEvent,
-  type RemotePublicationRetainedEvent
+  type RemotePublicationRetainedEvent,
+  type RemotePublicationSucceededEvent
 } from "../protocols/direct-publication/events.js"
 import {
   RemoteBaselineCorrelation,
@@ -1235,6 +1236,8 @@ type HistoricalProjectionContext = ProjectionContext & {
   readonly publicationIntents: Map<string, RemotePublicationIntendedEvent>
   readonly publicationAttemptIntents: Map<string, RemotePublicationAttemptIntendedEvent>
   readonly publicationRetained: Map<string, RemotePublicationRetainedEvent>
+  /** Exact proof may precede a finality-only resume receipt after publication has succeeded. */
+  readonly publicationSucceeded: Map<string, HistoricalPublicationSuccess>
   readonly publicationResumeRequests: Map<string, RemotePublicationResumeRequestedEvent>
   readonly publicationAdmissionReadIntents: Map<string, RemotePublicationAdmissionReadIntendedEvent>
   readonly remoteBaselineReadIntents: Map<string, RemoteBaselineReadIntendedEvent>
@@ -1245,6 +1248,8 @@ type HistoricalProjectionContext = ProjectionContext & {
   readonly promotionIntents: Map<string, TargetPromotionIntendedEvent>
   readonly promotionAttemptIntents: Map<string, TargetPromotionAttemptIntendedEvent>
 }
+
+type HistoricalPublicationSuccess = { readonly event: RemotePublicationSucceededEvent; readonly runId: RunId }
 
 const historicalTaskClaimEventKinds = {
   TaskClaimAcquired: true,
@@ -2130,6 +2135,7 @@ const projectHistoricalPublicationSucceeded = (
   if (attempt === undefined || !remotePublicationCorrelationEquals(attempt.correlation, event.correlation)) {
     return historicalFailure(record, "publication proof " + requestId + " has no exact earlier attempt intent")
   }
+  context.publicationSucceeded.set(requestId, { event, runId: record.runId })
   return Effect.succeed(
     RemotePublicationSucceeded.make({
       correlation: event.correlation,
@@ -2175,7 +2181,12 @@ const projectHistoricalPublicationResumeRequested = (
   const receiptId = event.request.requestId
   const intent = context.publicationIntents.get(publicationRequestId)
   const retained = context.publicationRetained.get(publicationRequestId)
+  const succeeded = context.publicationSucceeded.get(publicationRequestId)
   const expectedRunId = remotePublicationRunIdOf(event.correlation)
+  const exactSuccessPredecessor =
+    succeeded !== undefined &&
+    succeeded.runId === expectedRunId &&
+    remotePublicationCorrelationEquals(succeeded.event.correlation, event.correlation)
   if (
     record.runId !== expectedRunId ||
     event.request.runId !== expectedRunId ||
@@ -2186,11 +2197,16 @@ const projectHistoricalPublicationResumeRequested = (
   }
   if (
     intent === undefined ||
-    retained === undefined ||
     !remotePublicationCorrelationEquals(intent.correlation, event.correlation) ||
-    !remotePublicationCorrelationEquals(retained.correlation, event.correlation)
+    !(
+      (retained !== undefined && remotePublicationCorrelationEquals(retained.correlation, event.correlation)) ||
+      exactSuccessPredecessor
+    )
   ) {
-    return historicalFailure(record, "publication resume receipt has no exact retained publication subject")
+    return historicalFailure(
+      record,
+      "publication resume receipt has no exact retained or successful publication subject"
+    )
   }
   if (context.publicationResumeRequests.has(receiptId)) {
     return historicalFailure(record, "duplicate publication resume request identity " + receiptId)
@@ -2991,6 +3007,7 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
     publicationAttemptIntents: new Map<string, RemotePublicationAttemptIntendedEvent>(),
     publicationIntents: new Map<string, RemotePublicationIntendedEvent>(),
     publicationRetained: new Map<string, RemotePublicationRetainedEvent>(),
+    publicationSucceeded: new Map<string, HistoricalPublicationSuccess>(),
     publicationResumeRequests: new Map<string, RemotePublicationResumeRequestedEvent>(),
     remoteBaselineReadIntents: new Map<string, RemoteBaselineReadIntendedEvent>(),
     remoteBaselineObservations: new Map<string, RemoteBaselineObservedEvent>(),

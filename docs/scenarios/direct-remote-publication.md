@@ -466,7 +466,10 @@ authorization.
   read-only. The bootstrap Operator seam
   `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts::records a post-proof finality continuation and wakes the owner without another publication attempt`
   checks the active-owner wake, unchanged publication proof, no push/new
-  attempt/session, and exact replay without a second wake. A matching
+  attempt/session, and exact replay without a second wake. It also projects the
+  accepted history and asserts the exact receipt A → publication proof → receipt
+  B order, with both receipts bound to the same candidate; replay of B adds no
+  third receipt. A matching
   `IntegrationFinalitySettled` makes a later request status-only; a
   `WorkflowRunTerminated` cutoff continues to reject fresh receipts. The
   finality conformance driver remains limited to supported finality actions.
