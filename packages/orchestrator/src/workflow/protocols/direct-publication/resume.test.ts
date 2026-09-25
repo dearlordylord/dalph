@@ -337,7 +337,10 @@ const memoryFresh: FreshLane = (use) =>
     })
   )
 
-const memoryFromHistory = (records: ReadonlyArray<JournalRecord>, use: StoreProcess) =>
+const memoryFromHistory = <A>(
+  records: ReadonlyArray<JournalRecord>,
+  use: (process: StoreProcess) => Effect.Effect<A, unknown>
+): Effect.Effect<A, unknown, Scope.Scope> =>
   Effect.scoped(
     Effect.gen(function* () {
       const context = yield* Layer.build(memoryJournalStoreLayer)
