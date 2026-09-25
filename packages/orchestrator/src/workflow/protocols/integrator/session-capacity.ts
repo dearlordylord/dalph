@@ -2,6 +2,7 @@
 import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import { journalRecordsOfKind } from "../../../workflow-journal/record-evidence.js"
 import {
+  IntegratorAutomaticSuccessorGeneration,
   integratorSuccessorResponsibilityMatches,
   maximumIntegratorSessionsPerResponsibility,
   type IntegratorSessionId,
@@ -21,8 +22,9 @@ export type IntegratorSessionCapacity =
   | {
       readonly _tag: "Available"
       readonly fixedSessionIds: ReadonlySet<IntegratorSessionId>
-      readonly nextGeneration: number
+      readonly nextGeneration: IntegratorAutomaticSuccessorGeneration
     }
+  | { readonly _tag: "NoFixedSession"; readonly fixedSessionIds: ReadonlySet<IntegratorSessionId> }
   | { readonly _tag: "Exhausted"; readonly fixedSessionIds: ReadonlySet<IntegratorSessionId> }
 
 /** Applies one responsibility and identity rule to initial and successor fixations. */
@@ -42,8 +44,13 @@ export const integratorSessionCapacityFor = (
       addIfSameResponsibility(fixation.successor)
     }
   }
+  if (fixedSessionIds.size === 0) return { _tag: "NoFixedSession", fixedSessionIds }
   return fixedSessionIds.size < maximumIntegratorSessionsPerResponsibility
-    ? { _tag: "Available", fixedSessionIds, nextGeneration: fixedSessionIds.size + 1 }
+    ? {
+        _tag: "Available",
+        fixedSessionIds,
+        nextGeneration: IntegratorAutomaticSuccessorGeneration.make(fixedSessionIds.size + 1)
+      }
     : { _tag: "Exhausted", fixedSessionIds }
 }
 

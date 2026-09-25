@@ -98,7 +98,7 @@ it("counts predecessor and successor identities together against the shared sess
   const foreignCapacity = integratorSessionCapacityFor(predecessor, [
     { _tag: "Initial", correlation: foreignResponsibility }
   ])
-  expect(foreignCapacity._tag).toBe("Available")
+  expect(foreignCapacity._tag).toBe("NoFixedSession")
   expect(foreignCapacity.fixedSessionIds.size).toBe(0)
 })
 

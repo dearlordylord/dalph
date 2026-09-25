@@ -26,7 +26,7 @@ import { automaticRemoteBaselineRoundsFor } from "../direct-publication/baseline
 import { remotePublicationCorrelationEquals } from "../direct-publication/events.js"
 import {
   IntegratorCandidateResourceLocator,
-  IntegratorAutomaticSuccessorGeneration,
+  type IntegratorAutomaticSuccessorGeneration,
   IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorSessionCorrelation,
   IntegratorSessionId
@@ -154,13 +154,13 @@ export const integratorAutomaticSuccessorPreparationIsCurrent = (
 const eventFor = (
   input: IntegratorAutomaticSuccessorPreparationInput,
   successor: IntegratorSessionCorrelation,
-  generation: number
+  generation: IntegratorAutomaticSuccessorGeneration
 ) =>
   IntegratorAutomaticSuccessorSessionFixedEvent.make({
     authorizationAt: input.authorizationAt,
     predecessor: input.predecessor,
     successor,
-    successorGeneration: IntegratorAutomaticSuccessorGeneration.make(generation),
+    successorGeneration: generation,
     version: workflowJournalEventVersion
   })
 
@@ -224,7 +224,7 @@ export const validateAutomaticSuccessorSessionFixedRecord = (
   }
   const successor = integratorAutomaticSuccessorCorrelationFor(input)
   const capacity = integratorSessionCapacityForJournal(priorRecords, predecessor)
-  if (capacity._tag === "Exhausted") {
+  if (capacity._tag !== "Available") {
     return { _tag: "Invalid", detail: "automatic successor event exceeds the fixed-session capacity" }
   }
   const expectedEvent = eventFor(input, successor, capacity.nextGeneration)
@@ -263,17 +263,17 @@ export const prepareIntegratorAutomaticSuccessorSessionAppend = Effect.fn(
     )
   }
   const capacity = integratorSessionCapacityForJournal(premiseRecords, predecessor)
+  if (capacity._tag === "Exhausted") {
+    return yield* reject(predecessor, "Integrator responsibility has reached its three-session aggregate bound")
+  }
+  if (capacity._tag === "NoFixedSession") {
+    return yield* reject(predecessor, "automatic successor requires a fixed predecessor session")
+  }
   if (existing._tag === "Found") {
-    if (capacity._tag === "Exhausted") {
-      return yield* reject(predecessor, "Integrator responsibility has reached its three-session aggregate bound")
-    }
     const existingEvent = eventFor(input, successor, capacity.nextGeneration)
     return integratorAutomaticSuccessorAppendRecordMatches(existing.record, key, existingEvent)
       ? ({ _tag: "Existing", record: existing.record } as const)
       : yield* reject(predecessor, "automatic successor key contains a foreign or contradictory fixed event")
-  }
-  if (capacity._tag === "Exhausted") {
-    return yield* reject(predecessor, "Integrator responsibility has reached its three-session aggregate bound")
   }
   const event = eventFor(input, successor, capacity.nextGeneration)
   const predecessorAlreadyHasSuccessor = [

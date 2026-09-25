@@ -383,8 +383,12 @@ const validateSuccessorUniqueness = (
   | { readonly _tag: "Available" }
   | { readonly _tag: "Existing"; readonly record: IntegratorSuccessorSessionFixedRecord }
   | { readonly _tag: "Invalid"; readonly detail: string } => {
-  if (integratorSessionCapacityForJournal(records, input.predecessor)._tag === "Exhausted") {
+  const capacity = integratorSessionCapacityForJournal(records, input.predecessor)
+  if (capacity._tag === "Exhausted") {
     return { _tag: "Invalid", detail: "Integrator responsibility has reached its three-session aggregate bound" }
+  }
+  if (capacity._tag === "NoFixedSession") {
+    return { _tag: "Invalid", detail: "FullRerun successor requires a fixed predecessor session" }
   }
   const [existing, duplicate] = firstTwoSuccessorsFor(records, input.predecessor)
   if (duplicate) {
