@@ -11,7 +11,6 @@ import type { WorkflowJournalEvent } from "../../registry/event.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import {
   IntegratorResponsibilityFacts,
-  integratorSessionCorrelationsEqual,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
@@ -20,10 +19,12 @@ import {
   integratorRetryRunOrdinal,
   maximumIntegratorSessionsPerResponsibility
 } from "./events.js"
+import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
 import { integratorRunTwoAuthorizationIssue } from "./retry-authorization.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
 import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
+export { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
 
@@ -37,20 +38,7 @@ export const integratorResponsibilityFactsFor = (
   startedAt: responsibility.startedAt
 })
 
-export const integratorResponsibilityFactsFromCorrelation = (
-  correlation: IntegratorSessionCorrelation
-): IntegratorResponsibilityFacts => ({
-  acceptedResult: correlation.acceptedResult,
-  integrationTarget: correlation.integrationTarget,
-  plannedAttempt: correlation.plannedAttempt,
-  queuedAt: correlation.queuedAt,
-  startedAt: correlation.startedAt
-})
-
 export const integratorResponsibilityFactsEqual = responsibilityFactsEquivalence
-
-export const integratorCorrelationsEqual = integratorSessionCorrelationsEqual
-
 export const integratorFindEventAtKey = journalRecordByKey
 
 /** Reconstructs run-bound state without upcasting any session-only history. */
@@ -287,6 +275,24 @@ type CurrentRunValidation =
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly run: IntegratorRunCorrelation }
 
+const currentSuccessorRunAuthorizationIssue = (
+  records: JournalHistorySource,
+  successor: ReturnType<typeof activeSuccessorFor>,
+  startedRun: ReturnType<typeof latestStartedRunFor>
+): string | undefined => {
+  if (
+    successor._tag !== "Valid" ||
+    startedRun._tag !== "Valid" ||
+    startedRun.run.ordinal === IntegratorRunOrdinal.make(1)
+  ) {
+    return undefined
+  }
+  if (successor.relation !== "Automatic" || startedRun.run.ordinal !== integratorRetryRunOrdinal) {
+    return "FullRerun successor permits only its initial Integrator run"
+  }
+  return integratorRunTwoAuthorizationIssue(records, startedRun.run, { beforePosition: startedRun.position })
+}
+
 const currentRunFor = (
   records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation
@@ -296,19 +302,8 @@ const currentRunFor = (
   const session = activeSuccessor._tag === "Valid" ? activeSuccessor.successor : predecessor
   const startedRun = latestStartedRunFor(records, session)
   if (startedRun._tag === "Invalid") return startedRun
-  if (
-    activeSuccessor._tag === "Valid" &&
-    startedRun._tag === "Valid" &&
-    startedRun.run.ordinal !== IntegratorRunOrdinal.make(1)
-  ) {
-    if (activeSuccessor.relation !== "Automatic" || startedRun.run.ordinal !== integratorRetryRunOrdinal) {
-      return { _tag: "Invalid", detail: "FullRerun successor permits only its initial Integrator run" }
-    }
-    const authorizationIssue = integratorRunTwoAuthorizationIssue(records, startedRun.run, {
-      beforePosition: startedRun.position
-    })
-    if (authorizationIssue !== undefined) return { _tag: "Invalid", detail: authorizationIssue }
-  }
+  const authorizationIssue = currentSuccessorRunAuthorizationIssue(records, activeSuccessor, startedRun)
+  if (authorizationIssue !== undefined) return { _tag: "Invalid", detail: authorizationIssue }
   const run =
     startedRun._tag === "Valid"
       ? startedRun.run

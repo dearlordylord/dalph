@@ -381,7 +381,7 @@
   },
   "packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.ts": {
     "complexity": {
-      "count": 5,
+      "count": 4,
       "justification": "integratorAutomaticSuccessorPreparationIsCurrent proves exact authorization, retained publication, completed baseline, and later lineage intent/observation. fixedSessionIdsFor and exactFixedSessionExists count the distinct exact responsibility sessions; validateAutomaticSuccessorSessionFixedRecord checks the committed event chronology; prepareIntegratorAutomaticSuccessorSessionAppend distinguishes exact idempotent reuse from invalid history, identity collision, and quota exhaustion. These are the evidence phases of one successor-session protocol."
     }
   },

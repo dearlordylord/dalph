@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "8a992858f17bd3b04effb0cd6053a20143ee304f857ecc5dadc49c7967164f29",
+  "digest": "f7211dabda9c3b9eaa104e7456c84ed3ea3b70ad6e1379c169de2503b71e5c56",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -351,6 +351,8 @@
     "packages/orchestrator/src/workflow/protocols/integrator/protocol.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/run-state.ts",
+    "packages/orchestrator/src/workflow/protocols/integrator/session-capacity.ts",
+    "packages/orchestrator/src/workflow/protocols/integrator/session-correlation.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/session.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/state.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/successor-history.ts",

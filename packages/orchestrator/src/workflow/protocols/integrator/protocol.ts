@@ -277,6 +277,44 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
   return qualifyRunCandidate(result, run, observation)
 })
 
+const automaticSuccessorRetrySessionFor = (
+  records: JournalHistorySource,
+  activeSession: Option.Option<IntegratorSessionCorrelation>,
+  requestedSession: IntegratorSessionCorrelation
+): IntegratorSessionCorrelation | undefined => {
+  if (Option.isNone(activeSession) || !integratorCorrelationsEqual(activeSession.value, requestedSession)) {
+    return undefined
+  }
+  for (const { event } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
+    if (
+      event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(event.successor, activeSession.value)
+    ) {
+      return activeSession.value
+    }
+  }
+  return undefined
+}
+
+const exactRetrySessionForRequestedRun = Effect.fn("IntegratorProtocol.exactRetrySessionForRequestedRun")(function* (
+  request: IntegratorRunPreparationInput,
+  records: JournalHistorySource
+) {
+  const runId = request.preparation.responsibility.plannedAttempt.runId
+  const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)
+  if (Option.isNone(recordedSession)) {
+    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
+  }
+  const activeSession = yield* readActiveIntegratorSession(records, request.preparation.responsibility)
+  const isOriginalSession = integratorCorrelationsEqual(recordedSession.value, request.run.session)
+  const automaticSuccessorSession = automaticSuccessorRetrySessionFor(records, activeSession, request.run.session)
+  const isExactAutomaticSuccessor = automaticSuccessorSession !== undefined
+  if (!isOriginalSession && !isExactAutomaticSuccessor) {
+    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
+  }
+  return automaticSuccessorSession ?? recordedSession.value
+})
+
 const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForRequestedRun")(function* (
   journal: InRunJournal["Service"],
   request: IntegratorRunPreparationInput,
@@ -288,29 +326,7 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
   if (request.run.ordinal !== integratorRetryRunOrdinal) {
     return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
   }
-  const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)
-  if (Option.isNone(recordedSession)) {
-    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
-  }
-  const activeSession = yield* readActiveIntegratorSession(records, request.preparation.responsibility)
-  const isOriginalSession = integratorCorrelationsEqual(recordedSession.value, request.run.session)
-  let exactAutomaticSuccessorSession: IntegratorSessionCorrelation | undefined
-  if (Option.isSome(activeSession) && integratorCorrelationsEqual(activeSession.value, request.run.session)) {
-    for (const { event } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
-      if (
-        event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
-        integratorCorrelationsEqual(event.successor, activeSession.value)
-      ) {
-        exactAutomaticSuccessorSession = activeSession.value
-        break
-      }
-    }
-  }
-  const isExactAutomaticSuccessor = exactAutomaticSuccessorSession !== undefined
-  if (!isOriginalSession && !isExactAutomaticSuccessor) {
-    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
-  }
-  const retrySession = exactAutomaticSuccessorSession ?? recordedSession.value
+  const retrySession = yield* exactRetrySessionForRequestedRun(request, records)
   if (!integratorLineageIsCompatible(request.preparation)) {
     return yield* new IntegratorTargetLineageIncompatible({
       observation: request.preparation.targetLineage,

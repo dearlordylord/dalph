@@ -2020,45 +2020,44 @@ type HistoricalLocalTargetCatchUpObservedEvent = Extract<
 const remoteBaselineCorrelationEquals = (left: RemoteBaselineCorrelation, right: RemoteBaselineCorrelation): boolean =>
   Schema.toEquivalence(RemoteBaselineCorrelation)(left, right)
 
-const remoteBaselineMatchesRun = (
-  correlation: RemoteBaselineCorrelation,
+const initialRemoteBaselineMatchesRun = (
+  correlation: Extract<RemoteBaselineCorrelation, { readonly _tag: "Initial" }>
+): boolean =>
+  remoteBaselineCorrelationEquals(
+    correlation,
+    remoteBaselineCorrelationFor(
+      correlation.runId,
+      correlation.responsibility,
+      correlation.localTarget,
+      correlation.remoteTarget
+    )
+  )
+
+const automaticBaselineAuthorizationMatches = (
+  authorization: HistoricalOccurrence.IntegratorCompetingHeadSuccessorAuthorized | undefined,
+  correlation: Extract<RemoteBaselineCorrelation, { readonly _tag: "AutomaticCompetingHead" }>,
+  record: JournalRecord
+): authorization is HistoricalOccurrence.IntegratorCompetingHeadSuccessorAuthorized =>
+  authorization !== undefined &&
+  authorization.recordedAt < record.position &&
+  sameRemotePublicationTarget(authorization.correlation.target, correlation.remoteTarget) &&
+  integratorResponsibilityFactsEqual(
+    integratorResponsibilityFactsFromCorrelation(authorization.correlation.qualifiedCandidate.run.session),
+    correlation.responsibility
+  )
+
+const automaticRemoteBaselineMatchesRun = (
+  correlation: Extract<RemoteBaselineCorrelation, { readonly _tag: "AutomaticCompetingHead" }>,
   record: JournalRecord,
   context: HistoricalProjectionContext
 ): boolean => {
-  if (
-    correlation.runId !== record.runId ||
-    context.runPublicationTarget === undefined ||
-    !sameRemotePublicationTarget(context.runPublicationTarget, correlation.remoteTarget)
-  )
-    return false
-  if (correlation._tag === "Initial") {
-    return remoteBaselineCorrelationEquals(
-      correlation,
-      remoteBaselineCorrelationFor(
-        correlation.runId,
-        correlation.responsibility,
-        correlation.localTarget,
-        correlation.remoteTarget
-      )
-    )
-  }
-  const authorizationAt = correlation.authorizationAt
   const authorization = context.occurrences.find(
     (occurrence): occurrence is HistoricalOccurrence.IntegratorCompetingHeadSuccessorAuthorized =>
       occurrence._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
-      occurrence.recordedAt === authorizationAt &&
+      occurrence.recordedAt === correlation.authorizationAt &&
       occurrence.runId === record.runId
   )
-  if (
-    authorization === undefined ||
-    authorization.recordedAt >= record.position ||
-    !sameRemotePublicationTarget(authorization.correlation.target, correlation.remoteTarget) ||
-    !integratorResponsibilityFactsEqual(
-      integratorResponsibilityFactsFromCorrelation(authorization.correlation.qualifiedCandidate.run.session),
-      correlation.responsibility
-    )
-  )
-    return false
+  if (!automaticBaselineAuthorizationMatches(authorization, correlation, record)) return false
   return remoteBaselineCorrelationEquals(
     correlation,
     automaticCompetingHeadRemoteBaselineCorrelationFor(
@@ -2070,6 +2069,22 @@ const remoteBaselineMatchesRun = (
       correlation.baselineRound
     )
   )
+}
+
+const remoteBaselineMatchesRun = (
+  correlation: RemoteBaselineCorrelation,
+  record: JournalRecord,
+  context: HistoricalProjectionContext
+): boolean => {
+  if (
+    correlation.runId !== record.runId ||
+    context.runPublicationTarget === undefined ||
+    !sameRemotePublicationTarget(context.runPublicationTarget, correlation.remoteTarget)
+  )
+    return false
+  return correlation._tag === "Initial"
+    ? initialRemoteBaselineMatchesRun(correlation)
+    : automaticRemoteBaselineMatchesRun(correlation, record, context)
 }
 
 const projectHistoricalRemoteBaselineReadIntended = (

@@ -4229,30 +4229,37 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     )
     return positions.length === 0 ? undefined : JournalPosition.make(Math.max(...positions.map(Number)))
   }
-  const activationTargetLineage = Array.from(
+  type TargetLineageEvent = Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
+  type TargetLineageRecord = JournalRecord & { readonly event: TargetLineageEvent }
+  const targetLineageRecords = Array.from(
     journalRecordsOfKind(journalHistoryOf(runState), "TargetLineageObserved")
-  ).flatMap(({ event, position }) => {
-    if (event._tag !== "TargetLineageObserved") return []
+  ).filter((record): record is TargetLineageRecord => record.event._tag === "TargetLineageObserved")
+  const targetLineageReadMatchesAttemptAndTarget = (event: TargetLineageEvent): boolean =>
+    Option.isSome(integrationTarget) &&
+    Array.from(journalRecordsForOperationId(journalHistoryOf(runState), event.operationId)).some(
+      ({ event: intent }) =>
+        intent._tag === "GitReadIntentRecorded" &&
+        intent.operation._tag === "ReadTargetLineage" &&
+        plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.plannedAttempt) &&
+        intent.operation.integrationTarget.repository === integrationTarget.value.repository &&
+        intent.operation.integrationTarget.ref === integrationTarget.value.ref
+    )
+  const activationTargetLineageEntryFor = (record: (typeof targetLineageRecords)[number]) => {
+    const { event, position } = record
     const directionLineage = directionLineageByAttemptId.get(event.plannedAttempt.attemptId)
     const isExactDirectionLineage =
       directionLineage !== undefined &&
       position > directionLineage.directionAt &&
       event.operationId === directionLineage.operationId
-    const operationMatchesAttemptAndTarget =
-      Option.isSome(integrationTarget) &&
-      Array.from(journalRecordsForOperationId(journalHistoryOf(runState), event.operationId)).some(
-        ({ event: intent }) =>
-          intent._tag === "GitReadIntentRecorded" &&
-          intent.operation._tag === "ReadTargetLineage" &&
-          plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.plannedAttempt) &&
-          intent.operation.integrationTarget.repository === integrationTarget.value.repository &&
-          intent.operation.integrationTarget.ref === integrationTarget.value.ref
-      )
     const invalidatedAt = targetLineageInvalidationPositionFor(event.plannedAttempt)
-    return operationMatchesAttemptAndTarget &&
+    return targetLineageReadMatchesAttemptAndTarget(event) &&
       (invalidatedAt === undefined || position > invalidatedAt || isExactDirectionLineage)
-      ? [[event.plannedAttempt.attemptId, event.observation] as const]
-      : []
+      ? ([event.plannedAttempt.attemptId, event.observation] as const)
+      : undefined
+  }
+  const activationTargetLineage = targetLineageRecords.flatMap((record) => {
+    const entry = activationTargetLineageEntryFor(record)
+    return entry === undefined ? [] : [entry]
   })
   const targetLineageByAttemptId = new Map(activationTargetLineage)
   const targetLineageRefreshRequiredAttemptIds = new Set([

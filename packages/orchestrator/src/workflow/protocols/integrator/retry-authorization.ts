@@ -36,7 +36,7 @@ import {
   integratorRunCorrelationsEqual,
   IntegratorRunCorrelation
 } from "./events.js"
-import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
+import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import { validatePromotionStaleQuarantineEvidence } from "../integration-quarantine/promotion-stale-evidence.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
