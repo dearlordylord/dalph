@@ -140,6 +140,20 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
         state.successorStoppedWriterReconciled,
         successorRecoveryReusesOneFixedRun,
       })
+      .then(loseAutomaticSuccessorResponse)
+      .then(crashCoordinator)
+      .then(restartCoordinator)
+      .then(rereadAuthorityFacts)
+      .then(proveAutomaticSuccessorWriterStopped)
+      .then(resumeAutomaticSuccessorSameRun)
+      .expect(and {
+        state.successorResumeCount == MAX_SUCCESSOR_RESUMES,
+        state.successorSession == INITIAL_SESSION + 1,
+        state.successorInvocationCount == 1,
+        state.successorRunOrdinal == 1,
+        state.successorStoppedWriterReconciled,
+        successorRecoveryReusesOneFixedRun,
+      })
       .then(reportAutomaticSuccessorCandidate)
       .expect(and {
         state.phase == AutomaticSuccessorCandidateRecorded,
@@ -276,6 +290,15 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
       .then(recordSuccessorPublicationIntent)
       .then(sendSuccessorPublication)
       .then(outsideAdvanceBeforeSuccessorPushSettles)
+      .expect(and {
+        state.phase == AutomaticSuccessorPushRejected,
+        state.remoteHead == state.successorExpectedHead + 1,
+        state.successorExpectedHead == state.successorFixedRemoteHead,
+        state.successorExpectedHead == state.authorizationRemoteHead,
+        state.publicationAuthorizationRecorded,
+        state.publicationWait == NoPublicationWait,
+        state.sessionCount == INITIAL_SESSION + 1,
+      })
       .then(beginNextActivation)
       .then(rereadAuthorityFacts)
       .then(beginNextAutomaticCompetingHeadCycle)
@@ -288,7 +311,8 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
         state.baselineReadIntentCount == state.baselineReadCountForAuthorization,
         state.catchUpCasCountForAuthorization == 1,
         state.catchUpCasCountForAuthorization <= state.baselineReadCountForAuthorization,
-        state.catchUpCasCountForBaselineRound == 1,
+        not(state.catchUpIntentRecorded),
+        state.catchUpCasCountForBaselineRound == 0,
         state.catchUpCasCount == 1,
       })
       .then(recordAutomaticSuccessorAuthorization)
@@ -331,6 +355,11 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
         state.publicationPushCount == MAX_PUBLICATION_PUSHES,
         state.publicationAuthorizationRecorded,
         state.publicationWait == CompatibleCompetingHeadWait,
+        state.authorizationPublicationOccurrence == state.competitionOccurrence - 1,
+        journalFirstAutomaticAuthorization,
+        automaticAuthorizationIsOccurrenceScoped,
+        successorUsesLatestBaselineRoundUnderOriginalAuthorization,
+        authorizationRequiresCurrentExactAuthority,
         state.currentSession == MAX_SESSIONS,
         state.taskBeginCount == 1,
         state.queuePosition == ORIGINAL_QUEUE_POSITION,
@@ -501,6 +530,9 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
         state.successorExpectedHead == INITIAL_HEAD + 2,
         state.successorSessionCount == 1,
         state.authorizationCount == 1,
+        state.catchUpCasCount == MAX_BASELINE_READS_PER_AUTHORIZATION,
+        state.catchUpCasCount <= MAX_CATCH_UP_CAS,
+        proofStateIsBounded,
         state.store == ReopenedSQLiteJournal,
         successorKeepsAcceptedResultLineage,
         successorUsesLatestBaselineRoundUnderOriginalAuthorization,

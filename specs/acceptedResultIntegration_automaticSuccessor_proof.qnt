@@ -222,6 +222,14 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   pure val INITIAL_RESOURCE = 101
   pure val MAX_SESSIONS = 3
   pure val MAX_PUBLICATION_PUSHES = 3
+  // Each automatic authorization permits an initial baseline plus one
+  // refreshed baseline. Bound cumulative CAS events across the finite set of
+  // successor authorizations represented by this projection.
+  pure val MAX_BASELINE_READS_PER_AUTHORIZATION = 2
+  pure val MAX_CATCH_UP_CAS = (MAX_SESSIONS - 1) * MAX_BASELINE_READS_PER_AUTHORIZATION
+  // Two recovery cycles make the finite projection exercise repeated restart
+  // without defining a runtime limit on retries of the same fixed session.
+  pure val MAX_SUCCESSOR_RESUMES = 2
 
   pure def isRunning(s: State): bool =
     s.lifecycle == Running and s.coordinatorLive
@@ -240,9 +248,14 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   val journalFirstAutomaticAuthorization: bool =
     not(state.publicationAuthorizationRecorded) or and {
       state.authorizationJournalPosition > 0,
-      state.authorizationRemoteHead == state.competingHead,
-      state.authorizationPredecessorSession == state.predecessorSession,
-      state.authorizationPublicationOccurrence == state.competitionOccurrence,
+      state.authorizationPublicationOccurrence > 0,
+      state.authorizationPublicationOccurrence <= state.competitionOccurrence,
+      // The current competing head can move after the authorization remains
+      // durable. Compare event-time authority while that occurrence is current.
+      state.authorizationPublicationOccurrence != state.competitionOccurrence or and {
+        state.authorizationRemoteHead == state.competingHead,
+        state.authorizationPredecessorSession == state.predecessorSession,
+      },
       state.authorizationBaseCommit == BASE_COMMIT,
       state.authorizationTaskCommit == ACCEPTED_TASK_COMMIT,
       state.authorizationTarget == TASK_TARGET,
@@ -256,12 +269,20 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   val authorizationRequiresCurrentExactAuthority: bool =
     not(state.publicationAuthorizationRecorded) or and {
       state.authorizationFactsCurrentWhenRecorded,
-      state.publicationWait == CompatibleCompetingHeadWait,
-      state.competitionOccurrence > 0,
-      state.authorizationRemoteHead == state.competingHead,
-      state.predecessorWriterStopped,
-      state.authorizationPredecessorSession == state.predecessorSession,
-      state.sessionCount < MAX_SESSIONS,
+      // Wait and free capacity authorize this event. The wait can later close,
+      // and the final allowed session consumes that capacity, while the
+      // recorded authorization remains durable.
+      state.phase != AutomaticAuthorizationRecorded or and {
+        state.publicationWait == CompatibleCompetingHeadWait,
+        state.sessionCount < MAX_SESSIONS,
+      },
+      state.authorizationPublicationOccurrence > 0,
+      state.authorizationPublicationOccurrence <= state.competitionOccurrence,
+      state.authorizationPublicationOccurrence != state.competitionOccurrence or and {
+        state.authorizationRemoteHead == state.competingHead,
+        state.predecessorWriterStopped,
+        state.authorizationPredecessorSession == state.predecessorSession,
+      },
       state.authorizationCount <= MAX_SESSIONS - 1,
     }
 
@@ -291,7 +312,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   val successorRefreshRoundsAreBounded: bool = and {
     state.refreshRoundCount >= 0,
     state.refreshRoundCount <= 1,
-    state.baselineReadIntentCount <= 2,
+    state.baselineReadIntentCount <= MAX_BASELINE_READS_PER_AUTHORIZATION,
     not(state.refreshRoundAvailable) or and {
       state.publicationAuthorizationRecorded,
       state.successorSession == 0,
@@ -339,7 +360,10 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
 
   val successorUsesLatestBaselineRoundUnderOriginalAuthorization: bool =
     state.successorSession == 0 or and {
-      state.authorizationRemoteHead == state.competingHead,
+      state.authorizationPublicationOccurrence > 0,
+      state.authorizationPublicationOccurrence <= state.competitionOccurrence,
+      state.authorizationPublicationOccurrence != state.competitionOccurrence or
+        state.authorizationRemoteHead == state.competingHead,
       state.baselineReadRemoteHead >= state.authorizationRemoteHead,
       state.remoteHeadCompatibleWithAuthorization,
       not(state.refreshRoundAvailable),
@@ -365,7 +389,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       state.successorSession != 0,
       state.successorRunOrdinal == 1,
       state.successorInvocationCount == 1,
-      state.successorResumeCount <= 2,
+      state.successorResumeCount <= MAX_SUCCESSOR_RESUMES,
       state.successorStoppedWriterReconciled,
     }
 
@@ -398,7 +422,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.successorSessionCount <= MAX_SESSIONS - 1,
     state.sessionCount == 1 + state.successorSessionCount,
     state.baselineReadIntentCount >= state.baselineReadCountForAuthorization,
-    state.baselineReadIntentCount <= 2,
+    state.baselineReadIntentCount <= MAX_BASELINE_READS_PER_AUTHORIZATION,
       state.publicationPushCount >= 0,
       state.publicationPushCount <= MAX_PUBLICATION_PUSHES,
     state.successorPublicationIntentCount >= 0,
@@ -413,8 +437,13 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       state.authorizationCount > 0,
       state.authorizationCount == state.successorSessionCount
         or state.authorizationCount == state.successorSessionCount + 1,
-      state.authorizationPredecessorSession == state.predecessorSession,
-      state.authorizationPublicationOccurrence == state.competitionOccurrence,
+      state.authorizationPublicationOccurrence > 0,
+      state.authorizationPublicationOccurrence <= state.competitionOccurrence,
+      // A later outside occurrence does not erase the durable authorization
+      // for the earlier one. Compare its predecessor while that occurrence is
+      // still current.
+      state.authorizationPublicationOccurrence != state.competitionOccurrence or
+        state.authorizationPredecessorSession == state.predecessorSession,
     }
 
   val predecessorCleanupRequiresStoppedWriter: bool =
@@ -479,13 +508,13 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.baselineReadCount >= 0,
     state.baselineReadCount <= 8,
     state.catchUpCasCount >= 0,
-    state.catchUpCasCount <= MAX_SESSIONS - 1,
+    state.catchUpCasCount <= MAX_CATCH_UP_CAS,
     state.targetLineageObservationCount >= 0,
     state.targetLineageObservationCount <= 8,
     state.successorInvocationCount >= 0,
     state.successorInvocationCount <= 1,
     state.successorResumeCount >= 0,
-    state.successorResumeCount <= 2,
+    state.successorResumeCount <= MAX_SUCCESSOR_RESUMES,
   }
 
   val competingHeadRetainedReached: bool = state.phase == PublicationCompetingHead
@@ -1319,6 +1348,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.trackerFactsCurrent,
     state.exactClaimCurrent,
     state.controlAllowsProgress,
+    state.successorResumeCount < MAX_SUCCESSOR_RESUMES,
     state' = {
       ...state,
       phase: AutomaticSuccessorInFlight,
@@ -1534,6 +1564,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       catchUpIntentTo: 0,
       catchUpEffectApplied: false,
       catchUpResultRecorded: false,
+      catchUpCasCountForBaselineRound: 0,
       targetLineageObservationCount: 0,
       targetLineageObservedBaseCommit: 0,
       baseAncestorOfSuccessorHead: false,

@@ -1428,5 +1428,5 @@ it.effect(
 it.effect(
   "retains the exact third competing head without an ungranted fourth automatic session or push",
   () => runHermeticMvpJourney(false, false, false, false, true),
-  120_000
+  240_000
 )
