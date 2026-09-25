@@ -1428,5 +1428,7 @@ it.effect(
 it.effect(
   "retains the exact third competing head without an ungranted fourth automatic session or push",
   () => runHermeticMvpJourney(false, false, false, false, true),
+  // The real-Git journey took about 143s with V8 coverage; retain headroom
+  // under the full suite's two-worker load while keeping a finite bound.
   240_000
 )
