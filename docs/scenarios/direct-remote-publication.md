@@ -306,12 +306,23 @@ stable.
 
 The focused implementation evidence currently covers these S2 outcomes:
 
-The canonical automatic-successor proof model is also replayed through the
-production fixation seam: `specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt::automaticSuccessorProductionConformanceTest`
-drives authorization, Ready H2 baseline, exact catch-up, fresh H2 lineage, and
-one S2 fixation; `packages/dalph/test/conformance/automatic-successor.mbt.test.ts::replays the canonical automatic-successor trace through the journal fixation seam`
-compares the model's successor witness to the accepted journal event. This
-maps to `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::beforeDiscoveryCatchesUpExactAncestorAndFixesOneSuccessorTest`
+The canonical automatic-successor proof model is replayed from the accepted
+S1 publication-retained-at-H2 journal prefix. Initial publication intent,
+outside push, and compatible-head discovery are fixture preconditions in this
+adapter; the direct-publication production tests above own those boundaries.
+From automatic authorization onward,
+`specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt::automaticSuccessorProductionConformanceTest`
+is paired action by action with
+`packages/dalph/test/conformance/automatic-successor.mbt.test.ts::replays the canonical automatic-successor trace through the journal fixation seam`:
+authorization and fixation use the production delivery actions; baseline
+intent/observation use the production journal helper and baseline engine;
+catch-up intent/result use the production journal helpers around a deterministic
+Git boundary result; and fresh H2 lineage is appended through the production
+in-Run journal using the accepted fixture observation. The adapter compares
+authorization, baseline, catch-up, lineage, and successor projections after
+each model action, and compares the final successor witness with the accepted
+journal event. Its model path maps to
+`specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::beforeDiscoveryCatchesUpExactAncestorAndFixesOneSuccessorTest`
 and the exact S2 acceptance path below.
 
 - **H2 changes to compatible H3 before fixation:** the first baseline read observes H3 under the original H2 authorization and catches up only its exact local ancestor: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::uses the first automatic-successor baseline read after remote H3 advances under the same authorization`. If round one was Ready before activation entry, the frontier schedules one round two read under that same authorization: `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts::schedules one bounded baseline refresh when Ready H2 predates activation entry`. A compatible H3 refresh catches local H2 up and fixes one successor at H3; it does not schedule a third read in the same activation: `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts::retains the exact compatible-head wait after the third automatic successor` and `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::refreshes Ready H2 to H3 under one authorization and reopens the exact successor in memory and SQLite`. A process that stops after the H3 catch-up CAS reuses the exact round-two intent and authorization in memory and reopened SQLite without another remote read: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::reconciles the same H3 refresh catch-up after memory and reopened SQLite process loss without another read`. A refresh appended after successor fixation is rejected by `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::rejects a fresh automatic-successor baseline round after session fixation`.
