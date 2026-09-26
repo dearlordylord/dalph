@@ -1,3 +1,4 @@
+import { completeFormalChangedPaths } from "./changed-files.mjs"
 import { execFileSync } from "node:child_process"
 import { classifyFormalChangeBetween } from "./classify-docs-only-change.mjs"
 import { executeResumableQualityGate } from "./gate-quality-run.mjs"
@@ -8,7 +9,6 @@ import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-ou
 import {
   boundedQualityGateCommand,
   localQualificationConcurrency,
-  preflightQualityGates,
   qualityGateTestEnvironment,
   fullQualityGateManifest
 } from "./quality-gate-stage-policy.mjs"
@@ -18,7 +18,7 @@ import { qualityVerificationExecutables, stabilizeVerificationEnvironment } from
 
 // Admitted structural checks always inspect formatter inputs without incremental result reuse.
 process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
-
+const context = inheritedCustody()
 const pnpmEntryPoint = process.env.npm_execpath
 const { candidateArgument, purpose, resumeRunId } = parseQualityCommandArguments(process.argv.slice(2))
 // The full gate rebuilds the whole program several times and runs every suite, so it belongs to a frozen candidate and
@@ -56,7 +56,6 @@ const qualityBaseSha = resolveQualityGateBase({
 })
 const testEnvironment = qualityGateTestEnvironment(qualityBaseSha)
 
-const context = inheritedCustody()
 const resumable = purpose === "local-handoff"
 if (resumable && context === undefined) throw new Error("Use the admitted pnpm check:all entry point")
 const candidateHistory = resumable
@@ -84,6 +83,7 @@ if (resumable) {
 const stageManifest = fullQualityGateManifest(qualityBaseSha, {
   nodeExecutable: process.execPath,
   pnpmEntryPoint,
+  changedPaths: completeFormalChangedPaths(qualityBaseSha).changedFiles,
   candidateHeadSha,
   worktree: context?.run.worktree ?? process.cwd()
 })
@@ -120,7 +120,7 @@ if (resumable) {
   )
 } else {
   const preflight = await runPreflightCensus({
-    gates: preflightQualityGates(qualityBaseSha),
+    gates: stageManifest.filter((stage) => stage.boundary === "preflight"),
     runStage: (gate) =>
       runBoundedCommand(boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint }))
   })

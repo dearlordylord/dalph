@@ -1,3 +1,5 @@
+import { selectQualityStages } from "./quality-check-selection.mjs"
+
 const SECOND = 1_000
 const DEFAULT_PROCESS_GROUP_ABSENCE_TIMEOUT = 2 * SECOND
 const DEFAULT_TERMINATION_GRACE = 5 * SECOND
@@ -7,7 +9,7 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 3, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 5, version: 1 })
 
 // Local Vitest-backed obligations are admitted under the highest fixed cap
 // proven safe by the pairwise memory campaign recorded for issue #336.  This
@@ -206,7 +208,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
             ? ["prototypes/reducer-lab/dist"]
             : []
   }))
-  const manifest = [...prefix, ...qualificationQualityGates()]
+  const manifest = selectQualityStages([...prefix, ...qualificationQualityGates()], invocation?.changedPaths)
   return invocation === undefined
     ? manifest
     : manifest.map((stage) => ({

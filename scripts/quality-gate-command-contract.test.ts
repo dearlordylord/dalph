@@ -57,7 +57,8 @@ it("clone/search has no active refs and retains unrelated production memory impl
   const acceptanceTestPath = "scripts/quality-gate-command-contract.test.ts"
   for (const path of trackedPaths) {
     expect(path).not.toMatch(removedToolReference)
-    if (path !== acceptanceTestPath) expect(readRepositoryFile(path), path).not.toMatch(removedToolReference)
+    if (path !== acceptanceTestPath && existsSync(new URL(path, repositoryRoot)))
+      expect(readRepositoryFile(path), path).not.toMatch(removedToolReference)
   }
   for (const path of [
     "packages/orchestrator/src/workflow-journal/adapters/memory-store.ts",

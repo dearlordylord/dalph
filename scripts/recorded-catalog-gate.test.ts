@@ -65,7 +65,7 @@ it("passes the measured recorded-catalog deadline to the process-group-bounded r
   })
 })
 
-it("coverage excludes the monolithic proof while retaining its thresholds and other cassette tests", () => {
+it("coverage excludes the monolithic proof while retaining coverage reports and other cassette tests", () => {
   const ordinary = resolveVitestConfig("test")
   const coverage = resolveVitestConfig("coverage")
 
@@ -85,7 +85,7 @@ it("coverage excludes the monolithic proof while retaining its thresholds and ot
   expect(coverage.test?.exclude?.filter((pattern) => pattern === recordedCatalogTest)).toHaveLength(1)
   expect(coverage.test?.exclude).not.toContain("packages/dalph/test/cassettes/recorded-catalog.test.ts")
   expect(coverage.test?.include).toEqual(ordinary.test?.include)
-  expect(coverage.test?.coverage?.thresholds).toEqual({ branches: 75, functions: 75, lines: 75, statements: 75 })
+  expect(coverage.test?.coverage?.thresholds).toBeUndefined()
 })
 
 it("runs cheap diagnostics before resource-sensitive acceptance and coverage", () => {
@@ -102,8 +102,5 @@ it("runs cheap diagnostics before resource-sensitive acceptance and coverage", (
   expect(manifest.slice(0, firstQualification).every(({ boundary }) => boundary === "preflight")).toBe(true)
   expect(manifest.slice(firstQualification).every(({ boundary }) => boundary === "qualification")).toBe(true)
   expect(coverage.test?.maxWorkers).toBe(2)
-  expect(coverage.test?.coverage).toMatchObject({
-    provider: "v8",
-    thresholds: { branches: 75, functions: 75, lines: 75, statements: 75 }
-  })
+  expect(coverage.test?.coverage).toMatchObject({ provider: "v8" })
 })

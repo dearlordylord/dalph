@@ -18,7 +18,6 @@ import {
   withFileLock
 } from "./gate-custody-records.mjs"
 import { closeAndDigestPreviousBootInventoryLocked, closeAndProveCustodyStopped } from "./gate-registration.mjs"
-
 export const reconcileGateRun = ({ runDirectory, runId }) => {
   const run = validateRun(runDirectory, runId)
   return withFileLock(run.worktreeLock, () =>

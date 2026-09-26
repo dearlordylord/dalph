@@ -1,0 +1,51 @@
+# Candidate validation simplification
+
+The maintainer validates one clean candidate in its exact worktree against Base
+`72c51f1f003b7f9e646a7a290ee76b2ef6b05eaf`. This change implements the independent
+tooling portion of the accepted churn-fixes handoff. It changes no Dalph command,
+provider call, workflow decision, journal event, crash recovery, or cleanup rule:
+all edits are validation scripts, validation tests, configuration, and policy.
+
+The investigation's 4–8 hour complete-delivery target is a forecast, not a result.
+This candidate does not establish that target or replace three future complete
+comparable delivery trials.
+
+## Changes and proof
+
+| Requirement | Implementation | Focused proof |
+| --- | --- | --- |
+| Remove diagnosis/repair permits | Delete permit commands and their implementation; retain stopped-writer custody and historical records | `gate-resume-integration.test.mjs`: a failed full gate retains its failure and accepts actual repaired tests without a permit |
+| Execute one candidate-local command manifest | `check:all` uses `run-candidate-checks.mjs`; no stage resume or formal-reuse credit | `candidate-checks.test.mjs`: same manifest execution, actual failure, smoke command materialization |
+| Preserve candidate immutability | Live input observation, final comparison, completed artifact protection, bounded child cleanup | `candidate-checks.test.mjs`: edit-and-restore; production guard setup and completed artifacts; retained custody tests |
+| Make percentages advisory | Vitest and aggregate/changed-line verifiers retain reports without numeric vetoes | `coverage-advisory.test.mjs`: zero coverage succeeds, uncovered lines remain visible, invalid JSON fails |
+| Select infrastructure controls | Tooling and root/workspace configuration select controls; ordinary product edits omit them | `quality-check-selection.test.mjs`: product, tooling, workspace config, unknown changes |
+| Remove heuristic blockers and duplicate baseline requirement | Complexity, duplication, unused-export diagnostics remain explicit; separate baseline is optional | `quality-lint-census.test.mjs`; affected preflight/complexity command tests |
+| Select Lab/catalog locally | Cassette, contracts, schema, journal/projection, Lab and shared tooling changes retain their unique assertions | `quality-check-selection.test.mjs`: catalog/projection selection |
+| Reduce ordinary local repeat sampling | Three fresh samples; concurrency/workflow/cassette/tooling changes retain twenty | Same complete delivery runner; smoke manifest test |
+
+The standards and specification reviews independently found and closed stale
+policy text, missing workspace configuration selection, observer setup, artifact
+protection, and stale smoke execution fields. Review closure does not substitute
+for the final candidate command.
+
+## Retained and pending boundaries
+
+The local runner still uses live input observation, exact worktree admission,
+clone capacity, bounded subprocess supervision, and durable stopped-writer fences.
+It deliberately discards resume/reuse credit: interrupted checks restart. Lower
+coverage and sampling assurance is explicit; tests and affected formal proofs
+remain authoritative. The standalone formal diagnostics and historical runner
+modules remain available, but do not govern ordinary `check:all`.
+
+Hosted suffix selection, the broad hosted matrix, and affected-model granularity
+remain unchanged. Hosted assurance still runs the full catalog and repetition.
+These parts of the proposed sampling demotion remain outstanding.
+
+The publication decision refactor and small production composition fixture target
+the combined #385/#387 implementation, which is absent from this task's Base.
+The named `automaticSuccessorAuthorizationRetainsTarget` and
+`boundedRetainedWaitFor` functions are not present here. Their governing runtime
+scenarios, known automatic-successor counterexample, R1/receipt/R2 ordering,
+crash/replay and Pause/Exit proof must be preserved when that base is available.
+No runtime refactor, scenario proof, live-host journey, or speedup is claimed by
+this tooling candidate.

@@ -54,6 +54,14 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   fence for explicit reconciliation; a timeout never qualifies the candidate.
   This tooling policy does not change Dalph runtime behavior or accepted task
   execution deadlines.
+- A failed `check:all` retains its actual logs and failed-stage results. Run the
+  failing test directly, repair the cause, and observe it passing before another
+  full qualification. The ordinary runner no longer creates or consumes a
+  diagnosis/repair permit. Existing historical recovery records are preserved;
+  they neither authorize nor obstruct new qualification. The diagnosis/repair
+  commands are retired. Custody fences
+  remain independent: incomplete writers require explicit stopped-process proof.
+  This tooling change affects no Dalph runtime workflow or provider boundary.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
   scenario evidence survives and reproduced accepted-path defects still block
@@ -71,25 +79,34 @@ Choose checks by affected behavior, not by commit or handoff alone:
 - **Runtime/model behavior changes:** use focused acceptance tests and `pnpm check:fast`
   during development; run the full gate before integration. Model or conformance
   changes also require adequacy review and a negative control.
-- **Early task-attempt baseline:** after focused checks settle for an attempt, run
-  `pnpm check:baseline` before expensive formal or delivery-repeatability work. It
-  runs the clone-wide lint census followed by the maintained Reducer Lab evaluation;
-  the complete command takes exact-worktree admission, and it does not expand
-  `check:fast` or replace the frozen-candidate gate. This is qualification tooling
-  only and changes no Dalph runtime behavior.
+- **Baseline:** no separate baseline is mandatory. The final preflight owns
+  its lint pass; run the maintained Lab only when its boundary is affected.
+  `check:baseline` remains an explicit diagnostic convenience, not a prerequisite.
 - **Shared qualification changes:** run the full gate before integration when
   changing shared build/dependency configuration, gate orchestration, or validity of
   qualification evidence. Uncertain impact requires investigation, not exemption.
 
-The local qualification suffix is governed by the checked-in stage algebra and a
-fixed `localQualificationConcurrency = 1`; it is never derived from host cores or
-RAM. Each stage settles its bounded child and proves cleanup before the permit is
-released. Ordinary exit, timeout, and launch-failure results are retained and
-reported in manifest order so independent siblings continue; custody, evidence,
-identity, cancellation, and runner-integrity losses stop admission fail-closed,
-with active work marked unproven and queued work marked not-run. Resume credit is
-still limited to the same-candidate contiguous proven prefix. This scheduler is
-qualification tooling only and does not change Dalph runtime behavior.
+Gate infrastructure controls run for tooling and shared configuration changes;
+ordinary product edits omit them. Missing change evidence retains the controls.
+Lab and catalog checks run for cassette, schema, projection, Lab, and shared
+configuration changes. Selection retains deleted and renamed source paths.
+Complexity, duplication, and unused-export checks are optional trend diagnostics,
+not delivery blockers; `lint` owns formatter and code-lint correctness only.
+This reduces heuristic and sampling assurance without changing application tests.
+Ordinary local candidates use three fresh delivery samples; coordination, workflow,
+execution, cassette, and tooling changes retain twenty. Hosted assurance retains
+the broad sample. Fewer samples reduce the chance of detecting rare races; the
+complete checkpoint order is still asserted in every sample.
+
+The local `check:all` runner requires a clean frozen checkout and an exact Base
+SHA. It writes its chosen command manifest before execution, reads each actual
+child exit, and writes results alongside that same manifest in
+`candidate-checks.json`. A failed stage stops its suffix. The surrounding bounded
+supervisor retains worktree locking, clone capacity, logs, source-change checks,
+and stopped-process fences. There is no second checkout's profile reader, repair
+permit, stage resume, or cross-worktree formal reuse on this ordinary path.
+Interruption costs a rerun after reconciliation; this is an explicit simplicity
+tradeoff. Formal inputs still select exhaustive proof, executed fresh.
 
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
@@ -97,8 +114,8 @@ removal needs consumer evidence and affected type/build checks; changed behavior
 follows the runtime rule.
 
 For a hosted comprehensive qualification handoff, the Integrator first runs the
-focused checks that own the repaired boundary and then `pnpm check:baseline` on
-the candidate attempt before requesting final qualification. Hosted CI runs its
+focused checks that own the repaired boundary before final qualification. A
+separate lint/Lab baseline is not required. Hosted CI runs its
 generated structural preflight before the generated delivery-repeatability,
 recorded-catalog, and coverage suffix cells. Each clean suffix runner installs
 the frozen dependency graph and then runs the bounded `pnpm check:artifacts`
@@ -121,18 +138,6 @@ Their 389.043-second sum is a reference for independent work, not a current
 hosted baseline or a promised parallel saving; compare complete hosted attempts
 with their queue, install, and upload costs.
 
-The local resumable suffix uses the same checked-in stage algebra but a separate
-fixed `localQualificationConcurrency` cap. The measured local cap is one because
-coverage overlap was not proven memory-safe; it is never derived from available
-cores. Proved ordinary exits and timeouts continue through the suffix and appear
-in one canonical manifest-order aggregate. A timeout releases its permit only
-after the bounded child and process-group custody settle. Missing or mismatched
-identity/evidence, an observer or custody loss, and runner defects stop queued
-launches fail-closed. Formal applicability remains outside the credited
-contiguous resume prefix, and a repaired candidate receives no prior-candidate
-qualification credit. This is qualification tooling only and changes no Dalph
-runtime behavior.
-
 Hosted CI keeps its documentation-only quality classification. Its separate
 formal classification compares the exact event base-to-head paths with the
 generated hosted-formal input projection. That projection follows executable
@@ -141,19 +146,14 @@ closure; the non-model workspace source-resolution control remains outside it. U
 required formal check as a lightweight successful not-applicable result.
 
 When required, freeze the candidate and run
-`pnpm check:all --candidate=<base-sha>` with the existing exact-base,
-acknowledgement, admission, and resume rules. Never manually skip stages or
-claim incomplete evidence as qualification. The local runner compares that Base
-with the exact candidate HEAD using the checked-in formal-input projection. An
-affected candidate obtains complete formal verification through fresh execution
-or guarded reuse; an unaffected candidate records an explicit not-applicable
-disposition and starts zero Quint checkers or servers. Missing or ambiguous Git
-or projection evidence fails before qualification. A separate repeated
-`check:quint` is unnecessary. Use focused model/adapter checks during development;
-reserve `pnpm check:quint --force` for fresh reproduction or timing.
+`pnpm check:all --candidate=<base-sha>`. No prior stages are credited. The runner
+uses the candidate's formal-input projection to select fresh formal execution;
+unaffected changes start no formal checkers. Missing Git or projection evidence
+fails before application qualification. Explicit standalone `check:quint`
+remains available for formal diagnostics and historical reuse experiments.
 
-The unused-file/export graph and the project-wide Effect pass build the entire
-program; use repository commands, not per-file substitutes.
+The optional unused-file/export graph and the project-wide Effect pass build the
+entire program; use repository commands, not per-file substitutes.
 
 ## Domain language
 
@@ -187,20 +187,20 @@ All commands below use `pnpm`. Script definitions live in
 | `typecheck` | Strict TypeScript-Go plus Effect errors/warnings; suggestions remain nonfatal. |
 | `typecheck:effect` | Optional standalone Effect diagnostics; errors/warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
-| `lint:code` | Type-aware Oxlint and dprint over repository files, then the Knip unused-export graph check; warnings fail. |
+| `lint:code` | Type-aware Oxlint and dprint over repository files; warnings fail. |
 | `lint:changed` | Oxlint and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback. It does not run the repository graph check. |
 | `check:unused-exports` | Run Knip's repository graph analysis for unused files and value exports. Exact current exceptions are finite and stale exceptions fail. |
-| `check:preflight --candidate=<base sha>` | Pre-freeze census: report typecheck (including Effect), lint/format, maintained Reducer Lab, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog or MBT suites. |
+| `check:preflight --candidate=<base sha>` | Pre-freeze census: report typecheck (including Effect), lint/format, maintained Reducer Lab, cycle, affected infrastructure controls, secrets and artifact failures. Runs no coverage, catalog or MBT suites. |
 | `check:ci:quality:preflight --candidate=<base sha>` | Hosted preflight entry point. It runs the same admitted structural census for one declared Node cell before any hosted qualification stage starts. |
 | `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
 | `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
-| `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Use after focused edits settle and before expensive formal or delivery-repeatability work; this does not change `check:fast`. |
+| `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Optional diagnostic only; never a prerequisite to final qualification. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
-| `test` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
+| `test` | Run tests and report advisory production/evaluation and changed-line coverage; takes an admission slot. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
@@ -213,17 +213,15 @@ All commands below use `pnpm`. Script definitions live in
 | `check:secrets` | Scan Git history with gitleaks. |
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id> [--previous-boot=<recorded boot UUID>]` | Ordinary form closes registration and proves every recorded writer group absent before clearing exact worktree/slot fences. The explicit previous-boot form accepts only a structurally complete no-child/observed inventory from the supplied recorded boot, durably records `UNPROVEN` stopped custody, and clears exact fences without probing or signalling old process groups. |
-| `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command classifies formal relevance against the declared candidate Base, runs or reuses the complete formal workflow once when affected, records not applicable without formal processes when unaffected, runs the maintained non-browser Lab before application checks, and runs those application checks; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:all` | Run the clean frozen candidate’s own selected manifest with its exact Base SHA, fresh affected formal proof, bounded children, and actual exit results. No resume or certification permit. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
 changed files—and no unrelated source file—to Oxlint and dprint. Oxlint rejects
 parameter-property reassignment and direct `delete` or member-update syntax.
 The retired compatibility ESLint rules no longer provide type-aware alias
-analysis, declaration-shape preferences, or tacit-style preferences. Repository
-verification runs `check:unused-exports`, so a graph-only finding can surface at
-candidate qualification rather than during the edit loop.
+analysis, declaration-shape preferences, or tacit-style preferences. Optional `check:unused-exports` reports graph-only findings outside delivery
+qualification.
 `typecheck:effect:changed` remains an optional JSON diagnostic command and retains its
 documented fallback to the whole-project pass when more than twelve files change.
 
@@ -354,15 +352,10 @@ A failed child receipt retains its historical absence observation. If its enclos
 test later stops the group, a separate exact group-absence record can prove stopped
 custody without rewriting that child result. Missing terminal receipts remain
 `UNPROVEN`; successful earlier stages are not a
-final green gate. `check:all --candidate=<base sha> --resume=<run-id>` still
-resumes only a contiguous proven application-gate prefix. It recomputes formal
-relevance for the same exact Base and candidate HEAD. An affected candidate's
-formal profile has its own guarded local success record: a missing or stale
-record executes the profile, while an applicable record can be reused and names
-its original evidence. An unaffected candidate records not applicable without
-reading that record or starting a checker/server. `pnpm check:quint --force` requests fresh formal reproduction or
-timing. Reuse never replaces model-adequacy review. Automatic MBT is temporarily
-excluded pending #363; `test:mbt` remains an explicit manual command.
+final green gate. Interrupted ordinary candidate checks restart from the beginning
+after reconciliation. No stage resume or formal reuse is credited by `check:all`.
+Standalone `check:quint --force` remains available for formal diagnostics.
+Automatic MBT is temporarily excluded pending #363.
 
 A synthetic detached writer can create its fixture readiness file after launch
 while its parent is still publishing the post-spawn process-group observation.
@@ -379,17 +372,12 @@ boundary, journal fact, retry, or cleanup behavior.
 | --- | --- |
 | A detached writer reports fixture readiness before its parent can publish the post-spawn observation; the test waits for the exact observed variant, kills the enclosing observer, and proves corrupting that variant cannot clear either fence | `scripts/gate-custody.test.mjs`: `formal-copy observer death preserves registered detached writer custody before any next launch` |
 
-Fresh dependency setup prepares the patched TypeScript-Go binary before full-gate
-input observation; resume retains changed installation modes and refuses reuse.
-Already prepared binaries are left untouched. Fresh full gates also
-ask pnpm to validate workspace dependencies before observation, failing on an
-outdated installation rather than installing. Its consumed workspace-state file
-remains hashed and watched; resume never refreshes it before checking identity.
-Fresh and resumed full gates require Python 3 with Linux inotify. Before taking
-the complete input snapshot, a per-run observer watches file inodes and directory
-membership. It detects ordinary edit-and-restore and replacement, fails closed on
-queue overflow, watch loss, setup/observer failure, and drains before final hashing.
-It remains in the registered gate process group and exits on control-pipe EOF.
+Bootstrap prepares dependencies before freezing the candidate. Ordinary candidate
+checks retain a live Linux inotify observer and require Python 3. The observer
+watches source, resolved tool and configuration inputs, detects edit-and-restore
+and replacement, and fails on queue overflow, watch loss, or observer failure.
+It drains before the final input comparison and remains in the registered gate
+process group. No observer receipt grants resume or cross-worktree reuse credit.
 Transient memory-mapped mutation is outside the cooperative filesystem guarantee.
 Metadata-only events on a path that is only a strict ancestor of an input do not
 invalidate the run by themselves. Membership, rename, and replacement events on
@@ -444,19 +432,11 @@ identity; behavioral settings such as `DALPH_DIAGNOSTICS_BASE` remain inputs.
 There is no metadata hash cache. Missing stronger identity or observer proof,
 unknown inputs, another worktree/base/mode, or unresolved custody refuses reuse.
 
-Stages have stable IDs and exact bounded contracts. Reuse stops at the first failed
-or unproven stage even if later census checks passed. A passed negative test may
-retain required failing children; its entire terminal subtree must remain valid.
-Package/Lab `dist` trees and consumed TypeScript build information require complete
-membership/mode/content proof and remain watched while credited. Missing or altered
-artifacts refuse reuse. Vite/Vitest `.vite` result/transform caches,
-`.experimental-vitest-cache` persistent transformed modules, and `.vite-temp`
-newly bundled config modules at root and workspace package `node_modules` are
-discarded before observation on both fresh and resumed runs, then excluded as
-disposable outputs. They never receive stage credit. Admitted full/preflight
-lint passes dprint `--incremental=false`; its
-explicit invocation and environment contract permit only incremental result and
-lock bookkeeping to be excluded. Formatter plugin code and metadata remain inputs.
+Stages have exact bounded command contracts. A completed stage's generated
+artifact roots become protected inputs for later stages. Ordinary checks grant
+no reuse credit. Vite/Vitest caches are disposable outputs, not proof of a
+previous stage. Admitted lint passes dprint `--incremental=false`; formatter
+plugin code and metadata remain inputs.
 Normal edit-loop formatting keeps its incremental behavior. Other tool cache state
 is included unless explicitly generated.
 Local full qualification scans the complete ancestry of the exact candidate HEAD
@@ -1174,9 +1154,13 @@ manifest enforces its complete preflight prefix before qualification and
 coverage. `scripts/recorded-catalog-gate.test.ts` proves that ordering and the
 unchanged four-worker V8 policy.
 
-- Enforce 95% production and 75% maintained-evaluation coverage independently
+- Report 95% production and 75% maintained-evaluation goals independently
   for statements, branches, functions, lines, and changed executable lines.
-  Surplus in one bracket cannot cover the other. Maintained cassettes and
+  These goals are advisory and never determine the command exit status.
+  Require explicit tests for changed accepted behavior and review uncovered
+  changed branches, including negative, crash, and replay outcomes. Test failures
+  and unreadable coverage artifacts still fail. This deliberately removes the
+  blanket percentage assurance; no tests are deleted. Maintained cassettes and
   deterministic test-only completion boundaries use evaluation; runtime and
   adapters use production. Mixed production/fixture files remain production
   until split behind a dedicated evaluation seam.
@@ -1226,12 +1210,12 @@ counts, unreachable branches or threshold exemption are inferred.
 Status 0 means complete analysis of an artifact with matching freshness evidence.
 Status 1 means analysis is unproven, stale, incomplete or unavailable. Neither
 status certifies coverage compliance or replaces `test`/`check:all`;
-the production 95% and maintained-evaluation 75% floors remain unchanged.
+the production 95% and maintained-evaluation 75% goals are advisory.
 
 ### Formal reuse and handoff
 
-The local formal command uses one complete profile and one guarded applicability
-boundary. The full gate obtains this result after successful preflight.
+The explicit standalone formal command uses one complete profile and one guarded
+applicability boundary. Ordinary `check:all` does not consume this reuse contract.
 The formal command runs missing or stale work, or reuses
 an applicable local success record while naming that record. A complete changed
 path inventory includes committed, staged, unstaged, deleted, rename-source,
@@ -1332,8 +1316,8 @@ CI installs with `--frozen-lockfile`; pnpm enforces strict peers, allowlisted
 lifecycle scripts (`onlyBuiltDependencies`), and a 24-hour release delay unless
 explicitly excepted. Install gitleaks before committing. The pre-commit hook
 formats and lints staged code and scans staged secrets. `pnpm check:fast`
-includes the workspace typecheck; repository verification runs the unused-export
-graph and cycle check for the frozen candidate.
+includes the workspace typecheck; repository verification runs the cycle check
+for the frozen candidate. Unused-export analysis is an optional diagnostic.
 
 Only exact diffs containing allowlisted documentation paths use the single
 Ubuntu docs gate: whitespace, classifier controls, changed-commit secrets.
@@ -1365,9 +1349,8 @@ exclusions must not hide authored logic.
 - `oxlint-complexity-suppressions.json` counts violations per file, not per
   function/value. A new or increased entry records a concrete `justification`
   for keeping the function cohesive after independent decisions have been
-  extracted. Every full gate resolves the same base used by changed-line
-  coverage—from its explicit candidate, `DALPH_COVERAGE_BASE_SHA`, the merge
-  base with `origin/master`, or `HEAD^`—and passes that exact SHA to this check;
+  extracted. The optional complexity diagnostic can use the same base as changed-line
+  coverage through `--candidate=<base sha>`;
   the base must be an ancestor strictly earlier than candidate `HEAD`. A
   self-resolving fallback tries the verified parent instead; the gate fails if
   no such commit is available. A direct check without
