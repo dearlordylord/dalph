@@ -48,9 +48,18 @@ import {
   RemoteBaselineObservation,
   RemoteBaselineRound
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
-import { integratorCompetingHeadSuccessorAuthorizationIdFor } from "../../workflow/protocols/integrator/automatic-successor-events.js"
+import {
+  integratorCompetingHeadSuccessorAuthorizationIdFor,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent
+} from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import { IntegratorSessionFixedEvent } from "../../workflow/protocols/integrator/events.js"
 import { integratorResponsibilityFactsFor } from "../../workflow/protocols/integrator/state.js"
+import { IntegratorJournalContradiction } from "../../workflow/protocols/integrator/journal-errors.js"
+import {
+  ControlDirectionAppliedEvent,
+  ControlDirectionApplicationOrdinal
+} from "../../workflow/protocols/control-direction-application/events.js"
+import { makeSuccessorPrefix } from "../../../test/support/automatic-successor-history.js"
 
 const target = FixtureTarget.make("integration-adapter-finality-target")
 const responsibility = StartedIntegrationResponsibility.make({
@@ -618,4 +627,249 @@ it.effect(
       expect(yield* Ref.get(staleGitCalls)).toBe(0)
       expect(yield* Ref.get(staleTrace)).toEqual(["stale-prefix"])
     })
+)
+
+it.effect("rejects a foreign S2 authorization record returned by conditional append", () =>
+  Effect.gen(function* () {
+    const correlation = remotePublicationCorrelationFor(fixture.qualifiedCandidate, remotePublicationTargetForTest)
+    const retainedAt = JournalPosition.make(3)
+    const mergeBase = GitCommitSha.make("1111111111111111111111111111111111111111")
+    const remoteHead = GitCommitSha.make("2222222222222222222222222222222222222222")
+    const sessionFixed = IntegratorSessionFixedEvent.make({
+      correlation: fixture.qualifiedCandidate.run.session,
+      version: workflowJournalEventVersion
+    })
+    const retained = RemotePublicationRetainedEvent.make({
+      cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({ mergeBase, remoteHead }),
+      correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+    const initialRecords: ReadonlyArray<JournalRecord> = [
+      makeWorkflowRunBeganRecord(
+        fixture.runId,
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
+      ),
+      {
+        event: sessionFixed,
+        key: describeJournalEvent(sessionFixed).expectedKey,
+        position: JournalPosition.make(2),
+        runId: fixture.runId
+      },
+      { event: retained, key: describeJournalEvent(retained).expectedKey, position: retainedAt, runId: fixture.runId }
+    ]
+    const transition = RunnableFrontierTransition.AuthorizeIntegratorCompetingHeadSuccessor({
+      authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+        correlation.requestId,
+        retainedAt,
+        mergeBase,
+        remoteHead
+      ),
+      correlation,
+      mergeBase,
+      remoteHead,
+      remotePublicationRetainedAt: retainedAt,
+      responsibility
+    })
+    const proposal = proposalFor(transition)
+    if (proposal === undefined) return yield* Effect.die("missing S2 authorization proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+    const records = yield* Ref.make(initialRecords)
+    const appendCalls = yield* Ref.make(0)
+    const observationCalls = yield* Ref.make(0)
+    const catchUpCalls = yield* Ref.make(0)
+    const remoteGit = RemoteBaselineGit.of({
+      observe: () =>
+        Ref.update(observationCalls, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("unexpected baseline observation"))
+        ),
+      catchUp: () =>
+        Ref.update(catchUpCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unexpected catch-up"))),
+      reconcileCatchUp: () =>
+        Ref.update(catchUpCalls, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("unexpected catch-up reconciliation"))
+        )
+    })
+    const journal = Journal.of({
+      ...unusedJournal,
+      appendIfAcceptedPrefixCurrent: (runId, _expectedPosition, key, event) => {
+        const foreignRemoteHead = GitCommitSha.make("3333333333333333333333333333333333333333")
+        const foreignEvent =
+          event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+            ? IntegratorCompetingHeadSuccessorAuthorizedEvent.make({
+                authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+                  event.correlation.requestId,
+                  event.remotePublicationRetainedAt,
+                  event.mergeBase,
+                  foreignRemoteHead
+                ),
+                correlation: event.correlation,
+                initiatedBy: event.initiatedBy,
+                mergeBase: event.mergeBase,
+                occurrenceClassification: event.occurrenceClassification,
+                remoteHead: foreignRemoteHead,
+                remotePublicationRetainedAt: event.remotePublicationRetainedAt,
+                version: event.version
+              })
+            : event
+        return Ref.update(appendCalls, (count) => count + 1).pipe(
+          Effect.as<ConditionalJournalAppendResult>({
+            _tag: "Appended",
+            record: { event: foreignEvent, key, position: JournalPosition.make(4), runId }
+          })
+        )
+      },
+      readAccepted: (runId) =>
+        Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+    })
+    const failure = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      Effect.flip,
+      Effect.provideService(Journal, journal),
+      Effect.provideService(InRunJournal, appendableJournal(records)),
+      Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+      Effect.provideService(RemoteBaselineGit, remoteGit),
+      Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+    )
+
+    expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
+    expect(failure._tag).toBe("IntegratorJournalContradiction")
+    expect(yield* Ref.get(appendCalls)).toBe(1)
+    expect(yield* Ref.get(observationCalls)).toBe(0)
+    expect(yield* Ref.get(catchUpCalls)).toBe(0)
+    const after = yield* Ref.get(records)
+    expect(after).toEqual(initialRecords)
+    expect(after.map(({ event }) => event._tag)).not.toContain("RemoteBaselineReadIntended")
+    expect(after.map(({ event }) => event._tag)).not.toContain("IntegratorAutomaticSuccessorSessionFixed")
+    expect(after.map(({ event }) => event._tag)).not.toContain("IntegratorRunStarted")
+  })
+)
+
+it.effect("replays exact S2 fixation after a lost acknowledgement and defers a concurrent Run Pause prefix", () =>
+  Effect.gen(function* () {
+    const prefix = makeSuccessorPrefix()
+    const acceptedResponsibility = prefix.accepted.responsibility
+    const transition = RunnableFrontierTransition.FixIntegratorAutomaticSuccessorSession({
+      input: prefix.input,
+      responsibility: acceptedResponsibility
+    })
+    const proposals = deliveryProposalsOf({
+      acceptedOperationIds: HashSet.empty(),
+      fresh: [],
+      integrationResponsibilities: [acceptedResponsibility],
+      responsibilities: [],
+      runId: prefix.runId,
+      transitions: [transition]
+    })
+    const proposal = [...proposals.ticketDelivery, ...proposals.deliverySettlement][0]
+    expect(proposal).toBeDefined()
+    if (proposal === undefined || !isIdentityFreeProposal(proposal))
+      return yield* Effect.die("missing S2 fixation proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+
+    const records = yield* Ref.make(prefix.records())
+    const prefixJournal = (append: Journal["Service"]["appendIfAcceptedPrefixCurrent"]) =>
+      Journal.of({
+        ...unusedJournal,
+        appendIfAcceptedPrefixCurrent: append,
+        readAccepted: (runId) =>
+          Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+      })
+    const appendThenLoseAcknowledgement: Journal["Service"]["appendIfAcceptedPrefixCurrent"] = (
+      runId,
+      _expectedPosition,
+      key,
+      event
+    ) =>
+      Ref.modify(records, (current): [JournalRecord, ReadonlyArray<JournalRecord>] => {
+        const record: JournalRecord = { event, key, position: JournalPosition.make(current.length + 1), runId }
+        return [record, [...current, record]]
+      }).pipe(Effect.andThen(Effect.die("fixed-session append committed before its acknowledgement was lost")))
+    const committedButUnacknowledged = yield* Effect.exit(
+      executeIntegrationAction(action, transition, inertLease, prefix.accepted.trackerTarget).pipe(
+        Effect.provideService(Journal, prefixJournal(appendThenLoseAcknowledgement)),
+        Effect.provideService(InRunJournal, appendableJournal(records)),
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit),
+        Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+      )
+    )
+    expect(committedButUnacknowledged._tag).toBe("Failure")
+    const replayed = yield* executeIntegrationAction(
+      action,
+      transition,
+      inertLease,
+      prefix.accepted.trackerTarget
+    ).pipe(
+      Effect.provideService(
+        Journal,
+        prefixJournal(() => unexpectedJournalCall("duplicate fixation append"))
+      ),
+      Effect.provideService(InRunJournal, appendableJournal(records)),
+      Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+      Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit),
+      Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+    )
+    expect(replayed).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+    expect(
+      (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+    ).toHaveLength(1)
+
+    const racingRecords = yield* Ref.make(prefix.records())
+    const runPause = ControlDirectionAppliedEvent.make({
+      direction: "Pause",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      subject: { _tag: "Run", runId: prefix.runId },
+      version: workflowJournalEventVersion
+    })
+    const appendRunPauseBeforeCas: Journal["Service"]["appendIfAcceptedPrefixCurrent"] = (runId, expectedPosition) =>
+      Ref.modify(racingRecords, (current): [ConditionalJournalAppendResult, ReadonlyArray<JournalRecord>] => {
+        const key = describeJournalEvent(runPause).expectedKey
+        const record: JournalRecord = {
+          event: runPause,
+          key,
+          position: JournalPosition.make(current.length + 1),
+          runId
+        }
+        return [{ _tag: "PrefixAdvanced", currentPosition: record.position, expectedPosition }, [...current, record]]
+      })
+    const deferred = yield* executeIntegrationAction(
+      action,
+      transition,
+      inertLease,
+      prefix.accepted.trackerTarget
+    ).pipe(
+      Effect.provideService(
+        Journal,
+        Journal.of({
+          ...unusedJournal,
+          appendIfAcceptedPrefixCurrent: appendRunPauseBeforeCas,
+          readAccepted: (runId) =>
+            Ref.get(racingRecords).pipe(
+              Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current))
+            )
+        })
+      ),
+      Effect.provideService(InRunJournal, appendableJournal(racingRecords)),
+      Effect.provideService(AcceptedJournalReader, acceptedJournal(racingRecords)),
+      Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit),
+      Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+    )
+    expect(deferred).toMatchObject({
+      _tag: "ActionDeferred",
+      proposalId: proposal.id,
+      reason: "ContinuationAuthorizationStale"
+    })
+    const afterRace = yield* Ref.get(racingRecords)
+    expect(
+      afterRace.some(
+        ({ event }) =>
+          event._tag === "ControlDirectionApplied" && event.subject._tag === "Run" && event.direction === "Pause"
+      )
+    ).toBe(true)
+    expect(afterRace.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(0)
+  })
 )

@@ -1132,6 +1132,138 @@ it("schedules one bounded baseline refresh when Ready H2 predates activation ent
   })
 })
 
+it("releases the S2 responsibility after an H3 refresh catch-up CAS observes a changed local ref", () => {
+  const fixture = makeSuccessorPrefix()
+  const records = fixture.records()
+  const authorization = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+  const firstRead = records.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+  if (
+    authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+    firstRead?.event._tag !== "RemoteBaselineReadIntended" ||
+    firstRead.event.correlation._tag !== "AutomaticCompetingHead"
+  ) {
+    throw new Error("S2 H2 prefix must contain its exact authorization and ready baseline")
+  }
+  const runBeginning = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  if (runBeginning?.event._tag !== "WorkflowRunBegan") throw new Error("S2 prefix must retain its pinned Run")
+  const started = deriveIntegrationAdmission(fixture.reduction.prefix).responsibilities.find(
+    (entry): entry is StartedIntegrationResponsibility => entry._tag === "StartedIntegrationResponsibility"
+  )
+  if (started === undefined) throw new Error("S2 prefix must retain its exact started responsibility")
+
+  const remoteHead = sha("8")
+  const observedLocalHead = sha("9")
+  const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    fixture.runId,
+    integratorResponsibilityFactsFor(started),
+    started.integrationTarget,
+    runBeginning.event.remotePublicationTarget,
+    authorization.position,
+    RemoteBaselineRound.make(2)
+  )
+  const roundTwoEvents: Array<JournalRecord> = [...records]
+  const append = (event: JournalRecord["event"], key: string) => {
+    const position = JournalPosition.make(Number(roundTwoEvents.at(-1)?.position ?? 0) + 1)
+    roundTwoEvents.push({ event, key: JournalRecordKey.make(key), position, runId: fixture.runId })
+  }
+  append(
+    RemoteBaselineReadIntendedEvent.make({
+      correlation: roundTwo,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    remoteBaselineReadIntendedRecordKey(roundTwo.baselineId)
+  )
+  append(
+    RemoteBaselineObservedEvent.make({
+      correlation: roundTwo,
+      observation: RemoteBaselineObservation.cases.LocalAncestor.make({
+        localHead: authorization.event.mergeBase,
+        remoteHead
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    }),
+    remoteBaselineObservedRecordKey(roundTwo.baselineId)
+  )
+  append(
+    LocalTargetCatchUpIntendedEvent.make({
+      correlation: roundTwo,
+      expectedLocalHead: authorization.event.mergeBase,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      remoteHead,
+      version: workflowJournalEventVersion
+    }),
+    localTargetCatchUpIntendedRecordKey(roundTwo.baselineId)
+  )
+  append(
+    LocalTargetCatchUpObservedEvent.make({
+      correlation: roundTwo,
+      expectedLocalHead: authorization.event.mergeBase,
+      occurrenceClassification: "NonActionOccurrence",
+      remoteHead,
+      result: LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: observedLocalHead }),
+      version: workflowJournalEventVersion
+    }),
+    localTargetCatchUpObservedRecordKey(roundTwo.baselineId)
+  )
+  const lastPosition = roundTwoEvents.at(-1)?.position
+  if (lastPosition === undefined) throw new Error("S2 catch-up rejection must have a journal position")
+  const runState: ReconstructedRunState = {
+    appliedThrough: lastPosition,
+    controlPolicy: Option.none(),
+    graphKnowledge: { taskTrackerFacts: [] },
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    cancellation: notAppliedCancellation,
+    responsibility: { entries: [] },
+    runId: fixture.runId,
+    workflowHistory: { evidence: journalEvidenceFrom(roundTwoEvents) }
+  }
+  const transitions = deriveStartedIntegrationFrontier(
+    runState,
+    {
+      activeResponsibilities: [],
+      activationBaselinePosition: Option.some(lastPosition),
+      currentTrackerTaskIds: new Set([started.plannedAttempt.taskId]),
+      heldResponsibilities: [
+        IntegrationResponsibilityIdentity.make({ queuedAt: started.queuedAt, runId: fixture.runId })
+      ],
+      integrationTarget: Option.some(started.integrationTarget),
+      remotePublicationConfigured: true,
+      targetLineageByAttemptId: new Map([[started.plannedAttempt.attemptId, fixture.input.targetLineage]]),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
+      targetPromotionConfigured: true,
+      taskClaimAuthorityByAttemptId: new Map([[started.plannedAttempt.attemptId, { _tag: "Exact" as const }]])
+    },
+    [started]
+  ).transitions()
+
+  expect(
+    roundTwoEvents.filter(
+      ({ event }) =>
+        event._tag === "LocalTargetCatchUpObserved" &&
+        event.correlation._tag === "AutomaticCompetingHead" &&
+        Number(event.correlation.baselineRound) === 2
+    )
+  ).toMatchObject([
+    {
+      event: {
+        result: { _tag: "Rejected", observedHead: observedLocalHead },
+        expectedLocalHead: authorization.event.mergeBase,
+        remoteHead
+      }
+    }
+  ])
+  expect(transitions).toEqual([RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: started })])
+  expect(roundTwoEvents.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(
+    0
+  )
+  expect(roundTwoEvents.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+  expect(roundTwoEvents.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")).toHaveLength(2)
+})
+
 it("retains the exact compatible-head wait after the third automatic successor", () => {
   const scenario = unfinishedFirstSessionHistory()
   const candidateObservation = IntegratorGitObservation.cases.Commit.make({
@@ -1245,6 +1377,13 @@ it("retains the exact compatible-head wait after the third automatic successor",
     responsibility
   })
 
+  expect(
+    deriveStartedIntegrationFrontier(
+      runState,
+      { ...runtimeFacts, targetLineageRefreshRequiredAttemptIds: new Set([attemptId]) },
+      [responsibility]
+    ).transitions()
+  ).toEqual([])
   expect(deriveStartedIntegrationFrontier(runState, runtimeFacts, [responsibility]).transitions()).toEqual([expected])
   expect(records.some(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toBe(false)
   const authorizationAt = JournalPosition.make(13)
@@ -1291,7 +1430,7 @@ it("retains the exact compatible-head wait after the third automatic successor",
     RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: automaticBaselineCorrelation, responsibility })
   ])
   const freshLineage = lineageRecords(17, lineage(changedHead), "automatic-successor-fresh-head")
-  const readyBaselineRecords = [
+  const baselineObservedRecords = [
     ...authorizedRecords,
     record(
       14,
@@ -1312,10 +1451,32 @@ it("retains the exact compatible-head wait after the third automatic successor",
         version: workflowJournalEventVersion
       }),
       remoteBaselineObservedRecordKey(automaticBaselineCorrelation.baselineId).toString()
-    ),
-    freshLineage.intent,
-    freshLineage.observation
+    )
   ]
+  const baselineCompleteWithoutFreshLineageRunState = {
+    ...authorizedRunState,
+    appliedThrough: JournalPosition.make(15),
+    workflowHistory: { evidence: journalEvidenceFrom(baselineObservedRecords) }
+  }
+  const lineageWaitingRuntimeFacts = {
+    ...runtimeFacts,
+    targetLineageByAttemptId: new Map([[attemptId, lineage(changedHead)]])
+  }
+  expect(
+    deriveStartedIntegrationFrontier(
+      baselineCompleteWithoutFreshLineageRunState,
+      { ...lineageWaitingRuntimeFacts, targetLineageRefreshRequiredAttemptIds: new Set([attemptId]) },
+      [responsibility]
+    ).transitions()
+  ).toEqual([])
+  expect(
+    deriveStartedIntegrationFrontier(
+      baselineCompleteWithoutFreshLineageRunState,
+      { ...lineageWaitingRuntimeFacts, targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>() },
+      [responsibility]
+    ).transitions()
+  ).toEqual([])
+  const readyBaselineRecords = [...baselineObservedRecords, freshLineage.intent, freshLineage.observation]
   const readyBaselineRunState = {
     ...authorizedRunState,
     appliedThrough: JournalPosition.make(17),
@@ -1401,6 +1562,34 @@ it("retains the exact compatible-head wait after the third automatic successor",
     appliedThrough: JournalPosition.make(23),
     workflowHistory: { evidence: journalEvidenceFrom(secondRoundReadyRecords) }
   }
+  const movedAfterCatchUpHead = sha("c")
+  const movedAfterCatchUpLineage = lineageRecords(
+    26,
+    lineage(movedAfterCatchUpHead),
+    "automatic-successor-head-moved-after-catch-up"
+  )
+  const movedAfterCatchUpRunState = {
+    ...refreshedBaselineRunState,
+    appliedThrough: JournalPosition.make(26),
+    workflowHistory: {
+      evidence: journalEvidenceFrom([
+        ...secondRoundReadyRecords,
+        movedAfterCatchUpLineage.intent,
+        movedAfterCatchUpLineage.observation
+      ])
+    }
+  }
+  expect(
+    deriveStartedIntegrationFrontier(
+      movedAfterCatchUpRunState,
+      {
+        ...runtimeFacts,
+        activationBaselinePosition: Option.some(recoveryEntryPosition),
+        targetLineageByAttemptId: new Map([[attemptId, lineage(movedAfterCatchUpHead)]])
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })])
   const refreshedSuccessorInput = {
     authorizationAt,
     predecessor: scenario.session,

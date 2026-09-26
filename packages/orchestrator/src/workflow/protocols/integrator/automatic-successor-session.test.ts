@@ -1,4 +1,5 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
+import { GitCommitSha } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { Context, Effect, FileSystem, Layer, Path, type Scope } from "effect"
@@ -24,6 +25,8 @@ import {
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
+  IntegratorAutomaticSuccessorGeneration,
+  IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorNotPreparedDetail,
   IntegratorResult,
   IntegratorSessionCorrelation,
@@ -35,12 +38,14 @@ import {
 } from "./events.js"
 import {
   integratorAutomaticSuccessorPreparationIsCurrent,
-  prepareIntegratorAutomaticSuccessorSessionAppend
+  prepareIntegratorAutomaticSuccessorSessionAppend,
+  validateAutomaticSuccessorSessionFixedRecord
 } from "./automatic-successor-session.js"
 import { integratorSessionCapacityFor } from "./session-capacity.js"
 import { evaluateIntegratorRetryAuthorization } from "./retry-authorization.js"
 import { deriveCurrentIntegratorState } from "./state.js"
 import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
+import { appendAutomaticSuccessorGeneration } from "../../../../test/support/automatic-successor-generation.js"
 
 const seedStoreWithPrefix = Effect.fn("AutomaticSuccessorSessionTest.seedStoreWithPrefix")(function* (
   store: JournalStore["Service"],
@@ -176,6 +181,12 @@ it.effect("projects and fixes one automatic successor after the exact competing-
       expect(integratorAutomaticSuccessorPreparationIsCurrent(candidate, input)).toBe(false)
     expect(integratorAutomaticSuccessorPreparationIsCurrent(records, fixture.input)).toBe(true)
 
+    const differentPredecessor = IntegratorSessionCorrelation.make({
+      ...fixture.input.predecessor,
+      candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:wrong-predecessor")
+    })
+    expectNotCurrent(records, { ...fixture.input, predecessor: differentPredecessor })
+
     const withoutAuthorization = records.filter(
       (record) =>
         !(
@@ -201,6 +212,106 @@ it.effect("projects and fixes one automatic successor after the exact competing-
 
     const withoutLineageIntent = records.filter((record) => record.event._tag !== "GitReadIntentRecorded")
     expectNotCurrent(withoutLineageIntent)
+
+    const fixed = records.find(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+    if (fixed?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+      return yield* Effect.die("the accepted successor append must be present for chronology validation")
+    }
+    expect(validateAutomaticSuccessorSessionFixedRecord(records, fixed, fixture.input.predecessor)).toMatchObject({
+      _tag: "Valid"
+    })
+    expect(
+      validateAutomaticSuccessorSessionFixedRecord(
+        records.filter((record) => record.position !== fixed.event.successor.targetLineageObservedAt),
+        fixed,
+        fixture.input.predecessor
+      )
+    ).toMatchObject({ _tag: "Invalid", detail: "automatic successor lacks its exact fresh target-lineage observation" })
+    const unrelatedRecord = records.find(({ event }) => event._tag !== "IntegratorAutomaticSuccessorSessionFixed")
+    if (unrelatedRecord === undefined) return yield* Effect.die("accepted prefix must contain an unrelated record")
+    expect(
+      validateAutomaticSuccessorSessionFixedRecord(records, unrelatedRecord, fixture.input.predecessor)
+    ).toMatchObject({ _tag: "Invalid", detail: "automatic successor predecessor does not match the active session" })
+    expect(
+      validateAutomaticSuccessorSessionFixedRecord(
+        records,
+        { ...fixed, position: fixed.event.successor.targetLineageObservedAt },
+        fixture.input.predecessor
+      )
+    ).toMatchObject({ _tag: "Invalid" })
+  })
+)
+
+it.effect("rejects duplicate and foreign fixed-event keys during automatic successor recovery", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+    if (prepared._tag !== "Append") return yield* Effect.die("valid successor prefix must prepare one append")
+    const fixed = fixture.append(prepared.event)
+    const duplicate = { ...fixed, position: JournalPosition.make(Number(fixed.position) + 1) }
+    const duplicateResult = yield* Effect.exit(
+      prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, [...fixture.records(), duplicate])
+    )
+    expect(duplicateResult._tag).toBe("Failure")
+
+    const foreignSuccessor = IntegratorSessionCorrelation.make({
+      ...prepared.event.successor,
+      candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-fixed-event"),
+      sessionId: IntegratorSessionId.make("integrator-session:foreign-fixed-event")
+    })
+    const foreignEvent = IntegratorAutomaticSuccessorSessionFixedEvent.make({
+      ...prepared.event,
+      successor: foreignSuccessor
+    })
+    const foreign = { ...fixed, event: foreignEvent }
+    const withoutOriginal = fixture.records().filter((record) => record.key !== prepared.key)
+    const foreignResult = yield* Effect.exit(
+      prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, [...withoutOriginal, foreign])
+    )
+    expect(foreignResult._tag).toBe("Failure")
+  })
+)
+
+it.effect("requires the exact fixed predecessor and rejects successor preparation at exhausted capacity", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const withoutAuthorization = fixture.records().filter((record) => record.position !== fixture.input.authorizationAt)
+    const stale = yield* Effect.exit(
+      prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, withoutAuthorization)
+    )
+    expect(stale._tag).toBe("Failure")
+
+    const withoutFixedPredecessor = fixture.records().filter(({ event }) => event._tag !== "IntegratorSessionFixed")
+    const unfixed = yield* Effect.exit(
+      prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, withoutFixedPredecessor)
+    )
+    expect(unfixed._tag).toBe("Failure")
+
+    const second = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+    if (second._tag !== "Append") return yield* Effect.die("the initial authorization must fix the second session")
+    fixture.append(second.event)
+    const thirdPrefix = appendAutomaticSuccessorGeneration(
+      fixture,
+      second.event.successor,
+      GitCommitSha.make("8".repeat(40)),
+      IntegratorAutomaticSuccessorGeneration.make(2)
+    )
+    const third = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      thirdPrefix.input,
+      thirdPrefix.reduction.prefix
+    )
+    if (third._tag !== "Append") return yield* Effect.die("the second authorization must fix the third session")
+    fixture.append(third.event)
+    const fourthPrefix = appendAutomaticSuccessorGeneration(
+      fixture,
+      third.event.successor,
+      GitCommitSha.make("9".repeat(40)),
+      IntegratorAutomaticSuccessorGeneration.make(3)
+    )
+    const exhausted = yield* Effect.exit(
+      prepareIntegratorAutomaticSuccessorSessionAppend(fourthPrefix.input, fourthPrefix.reduction.prefix)
+    )
+    expect(exhausted._tag).toBe("Failure")
   })
 )
 

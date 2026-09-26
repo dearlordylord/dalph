@@ -80,9 +80,12 @@ import {
   type RemotePublicationIntendedEvent
 } from "../protocols/direct-publication/events.js"
 import { type IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../protocols/integrator/automatic-successor-events.js"
+import { integratorAutomaticSuccessorCorrelationFor } from "../protocols/integrator/automatic-successor-session.js"
+import { integratorAutomaticSuccessorSessionFixedRecordKey } from "../../workflow-journal/record-key.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
   initialAutomaticCompetingHeadBaselineRound,
+  maximumAutomaticSuccessorBaselineRound,
   RemoteBaselineCorrelation,
   remoteBaselineCorrelationFor,
   type LocalTargetCatchUpIntendedEvent,
@@ -99,7 +102,6 @@ export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integratio
 export { WorkflowActor } from "./actor.js"
 
 const lastArrayElementOffset = -1
-const automaticSuccessorRefreshRoundNumber = 2
 
 const {
   AttemptImplementationAbandoned,
@@ -1807,14 +1809,25 @@ const projectHistoricalAutomaticSuccessorSession = (
       occurrence.observation.plannedBaseSha === event.successor.plannedAttempt.baseSha &&
       occurrence.observation.plannedBaseIsAncestorOfTargetHead
   )
+  const expectedSuccessor =
+    lineage === undefined
+      ? undefined
+      : integratorAutomaticSuccessorCorrelationFor({
+          authorizationAt: event.authorizationAt,
+          predecessor: event.predecessor,
+          targetLineage: lineage.observation,
+          targetLineageObservedAt: lineage.recordedAt
+        })
   const hasFreshLineageRead =
     completedBaseline !== undefined &&
+    lineage !== undefined &&
     context.occurrences.some(
       (occurrence) =>
         occurrence._tag === "GitReadInitiated" &&
         occurrence.recordedAt > completedBaseline.recordedAt &&
-        occurrence.recordedAt < (lineage?.recordedAt ?? record.position) &&
+        occurrence.recordedAt < lineage.recordedAt &&
         occurrence.operation._tag === "ReadTargetLineage" &&
+        occurrence.operation.operationId === lineage.originatingActionOperationId &&
         plannedTaskAttemptEquivalence(occurrence.operation.plannedAttempt, event.successor.plannedAttempt) &&
         integrationTargetEqual(occurrence.operation.integrationTarget, event.successor.integrationTarget)
     )
@@ -1848,6 +1861,9 @@ const projectHistoricalAutomaticSuccessorSession = (
     !hasFreshLineageRead ||
     event.successor.targetLineageObservedAt <= completedBaseline.recordedAt ||
     event.successor.targetLineageObservedAt >= record.position ||
+    expectedSuccessor === undefined ||
+    !integratorSessionCorrelationsEqual(event.successor, expectedSuccessor) ||
+    record.key !== integratorAutomaticSuccessorSessionFixedRecordKey(event.predecessor, event.authorizationAt) ||
     context.integratorSessions.has(integratorSessionKey(event.successor)) ||
     expectedGeneration === undefined ||
     event.successorGeneration !== expectedGeneration
@@ -2120,13 +2136,13 @@ const projectHistoricalRemoteBaselineReadIntended = (
     if (
       round === Number(initialAutomaticCompetingHeadBaselineRound)
         ? prior !== undefined
-        : round === automaticSuccessorRefreshRoundNumber
+        : round === Number(maximumAutomaticSuccessorBaselineRound)
           ? prior === undefined || Number(prior.baselineRound) !== Number(initialAutomaticCompetingHeadBaselineRound)
           : true
     ) {
       return historicalFailure(record, "automatic successor baseline rounds must be contiguous and bounded to two")
     }
-    if (round === automaticSuccessorRefreshRoundNumber && prior !== undefined) {
+    if (round === Number(maximumAutomaticSuccessorBaselineRound) && prior !== undefined) {
       const priorEvents: ReadonlyArray<RemoteBaselineJournalEvent> = [
         context.remoteBaselineReadIntents.get(prior.baselineId),
         context.remoteBaselineObservations.get(prior.baselineId),

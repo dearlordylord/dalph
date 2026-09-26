@@ -63,10 +63,14 @@ import { deriveRemotePublicationState } from "../../workflow/protocols/direct-pu
 import { remotePublicationEventsFor } from "../../workflow/protocols/direct-publication/transition-journal.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
-  RemoteBaselineRound,
+  initialAutomaticCompetingHeadBaselineRound,
+  maximumAutomaticSuccessorBaselineRound,
   remoteBaselineCorrelationFor
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
-import { deriveRemoteBaselineState } from "../../workflow/protocols/direct-publication/baseline-state.js"
+import {
+  deriveRemoteBaselineState,
+  RemoteBaselineState
+} from "../../workflow/protocols/direct-publication/baseline-state.js"
 import {
   automaticRemoteBaselineRoundsFor,
   remoteBaselineEventsFor
@@ -84,7 +88,6 @@ type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; 
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
 type SucceededPromotion = Extract<PromotionState, { readonly _tag: "PromotionSucceeded" }>
 const lastRecordOffset = -1
-const automaticSuccessorRefreshRoundNumber = 2
 
 const remotePublicationSuccessFor = (
   runState: ReconstructedRunState,
@@ -813,48 +816,48 @@ const qualifiedIntegratorProgressTransitionsFor = (
       responsibility.integrationTarget,
       began.event.remotePublicationTarget,
       authorization.position,
-      RemoteBaselineRound.make(1)
+      initialAutomaticCompetingHeadBaselineRound
     )
     const baselineRounds = automaticRemoteBaselineRoundsFor(source, firstBaselineCorrelation)
-    let baselineRound = baselineRounds.at(lastRecordOffset)
-    if (baselineRound === undefined) return []
+    const latestBaselineRound = baselineRounds.at(lastRecordOffset)
+    if (latestBaselineRound === undefined) return []
+    let baselineRound = latestBaselineRound
     if (
       baselineRound.state._tag === "Ready" &&
-      Number(baselineRound.round) === 1 &&
+      Number(baselineRound.round) === Number(initialAutomaticCompetingHeadBaselineRound) &&
       runtimeFacts.activationBaselinePosition !== undefined &&
       Option.isSome(runtimeFacts.activationBaselinePosition) &&
-      baselineRound.completedAt !== undefined &&
-      baselineRound.completedAt <= runtimeFacts.activationBaselinePosition.value
+      baselineRound.state.completedAt <= runtimeFacts.activationBaselinePosition.value
     ) {
-      baselineRound = baselineRounds.find((round) => Number(round.round) === automaticSuccessorRefreshRoundNumber) ?? {
+      baselineRound = baselineRounds.find(
+        (round) => Number(round.round) === Number(maximumAutomaticSuccessorBaselineRound)
+      ) ?? {
         correlation: automaticCompetingHeadRemoteBaselineCorrelationFor(
           responsibility.plannedAttempt.runId,
           integratorResponsibilityFactsFor(responsibility),
           responsibility.integrationTarget,
           began.event.remotePublicationTarget,
           authorization.position,
-          RemoteBaselineRound.make(automaticSuccessorRefreshRoundNumber)
+          maximumAutomaticSuccessorBaselineRound
         ),
-        completedAt: undefined,
         latestEvidenceAt: undefined,
         readIntentAt: undefined,
-        round: RemoteBaselineRound.make(automaticSuccessorRefreshRoundNumber),
-        state: deriveRemoteBaselineState([])
+        round: maximumAutomaticSuccessorBaselineRound,
+        state: RemoteBaselineState.cases.Absent.make({})
       }
     }
     const baselineCorrelation = baselineRound.correlation
-    const baseline = baselineRound.state
     if (
-      baseline._tag === "Absent" ||
-      baseline._tag === "ReadPending" ||
-      baseline._tag === "CatchUpRequired" ||
-      baseline._tag === "CatchUpPending"
+      baselineRound.state._tag === "Absent" ||
+      baselineRound.state._tag === "ReadPending" ||
+      baselineRound.state._tag === "CatchUpRequired" ||
+      baselineRound.state._tag === "CatchUpPending"
     ) {
       return [RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: baselineCorrelation, responsibility })]
     }
-    if (baseline._tag !== "Ready") return releaseStartedIntegrationTargetFor(responsibility, true)
-    const baselineCompletedAt = baselineRound.completedAt
-    if (baselineCompletedAt === undefined) return []
+    if (baselineRound.state._tag !== "Ready") return releaseStartedIntegrationTargetFor(responsibility, true)
+    const baseline = baselineRound.state
+    const baselineCompletedAt = baseline.completedAt
     const lineage = durableTargetLineageFor(runState, runtimeFacts, responsibility, baselineCompletedAt)
     if (lineage === undefined) return []
     if (

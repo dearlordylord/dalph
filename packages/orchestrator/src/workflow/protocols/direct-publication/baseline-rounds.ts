@@ -3,6 +3,7 @@ import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   type AutomaticCompetingHeadRemoteBaselineCorrelation,
+  maximumAutomaticSuccessorBaselineRound,
   RemoteBaselineCorrelation,
   RemoteBaselineRound,
   initialAutomaticCompetingHeadBaselineRound,
@@ -12,7 +13,6 @@ import {
 import { deriveRemoteBaselineState, RemoteBaselineState } from "./baseline-state.js"
 
 const lastRecordOffset = -1
-const maximumAutomaticSuccessorBaselineRounds = 2
 
 type AutomaticBaselineRecord = { readonly position: JournalPosition; readonly event: RemoteBaselineJournalEvent }
 
@@ -37,13 +37,18 @@ export const remoteBaselineEventsFor = (
         : []
     )
 
+type DerivedRemoteBaselineState = ReturnType<typeof deriveRemoteBaselineState>
+
+export type AutomaticRemoteBaselineRoundState =
+  | (Extract<DerivedRemoteBaselineState, { readonly _tag: "Ready" }> & { readonly completedAt: JournalPosition })
+  | (Exclude<DerivedRemoteBaselineState, { readonly _tag: "Ready" }> & { readonly completedAt?: never })
+
 export interface AutomaticRemoteBaselineRoundEvidence {
   readonly correlation: AutomaticCompetingHeadRemoteBaselineCorrelation
-  readonly completedAt: JournalPosition | undefined
   readonly latestEvidenceAt: JournalPosition | undefined
   readonly readIntentAt: JournalPosition | undefined
   readonly round: RemoteBaselineRound
-  readonly state: ReturnType<typeof deriveRemoteBaselineState>
+  readonly state: AutomaticRemoteBaselineRoundState
 }
 
 const automaticBaselineEventRecordsFor = (source: JournalHistorySource): ReadonlyArray<AutomaticBaselineRecord> =>
@@ -139,20 +144,19 @@ const automaticBaselineRoundEvidenceFor = (
     ordinalSequenceValid,
     latestRoundWithinBound
   )
-  const completedAt =
-    state._tag === "Ready"
-      ? roundRecords
-          .filter(({ event }) => event._tag === "RemoteBaselineObserved" || event._tag === "LocalTargetCatchUpObserved")
-          .at(lastRecordOffset)?.position
-      : undefined
-  return {
-    correlation,
-    completedAt,
-    latestEvidenceAt: roundRecords.at(lastRecordOffset)?.position,
-    readIntentAt,
-    round,
-    state
-  }
+  const fields = { correlation, latestEvidenceAt: roundRecords.at(lastRecordOffset)?.position, readIntentAt, round }
+  if (state._tag !== "Ready") return { ...fields, state }
+  const completedAt = roundRecords
+    .filter(({ event }) => event._tag === "RemoteBaselineObserved" || event._tag === "LocalTargetCatchUpObserved")
+    .at(lastRecordOffset)?.position
+  return completedAt === undefined
+    ? {
+        ...fields,
+        state: RemoteBaselineState.cases.Contradiction.make({
+          detail: "ready automatic-successor baseline round must have an exact completion position"
+        })
+      }
+    : { ...fields, state: { ...state, completedAt } }
 }
 
 const validateAutomaticRoundRefreshOrder = (
@@ -162,14 +166,16 @@ const validateAutomaticRoundRefreshOrder = (
   if (previous === undefined || evidence.state._tag === "Contradiction") return evidence
   if (
     previous.state._tag === "Ready" &&
-    previous.completedAt !== undefined &&
     evidence.readIntentAt !== undefined &&
-    evidence.readIntentAt > previous.completedAt
+    evidence.readIntentAt > previous.state.completedAt
   ) {
     return evidence
   }
   return {
-    ...evidence,
+    correlation: evidence.correlation,
+    latestEvidenceAt: evidence.latestEvidenceAt,
+    readIntentAt: evidence.readIntentAt,
+    round: evidence.round,
     state: RemoteBaselineState.cases.Contradiction.make({
       detail: "automatic-successor baseline refresh must follow the exact ready prior round"
     })
@@ -192,7 +198,8 @@ export const automaticRemoteBaselineRoundsFor = (
   ).sort((left, right) => left - right)
   const contiguousOrdinals = rounds.every((roundNumber, index) => roundNumber === index + 1)
   const latestRoundNumber = rounds.at(lastRecordOffset)
-  const withinBound = latestRoundNumber !== undefined && latestRoundNumber <= maximumAutomaticSuccessorBaselineRounds
+  const withinBound =
+    latestRoundNumber !== undefined && latestRoundNumber <= Number(maximumAutomaticSuccessorBaselineRound)
   return rounds
     .map((roundNumber) =>
       automaticBaselineRoundEvidenceFor(

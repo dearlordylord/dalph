@@ -6404,6 +6404,26 @@ it("keeps paused-task boundaries fail-closed while admitting only safe reconcili
   ).toEqual([prePauseIntegration.transitions[0]])
 })
 
+it("allows an already-held integration promotion to finish after Run Pause", () => {
+  const integration = pausedIntegrationScenario("held-run-pause", 3)
+  const pause = coverageRecord(5, runPause(1))
+  const runPausedState: ReconstructedRunState = {
+    ...coverageRunState([pause]),
+    pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "NoTaskPauses" } }
+  }
+  const promotion = integration.transitions[0]
+  const frontier = { explanations: [], transitions: [promotion] }
+
+  expect(promotion._tag).toBe("RunTargetPromotion")
+  expect(
+    filterFrontierForActivePauses(frontier, runPausedState, undefined, new Set(), new Set([coverageAttempt.taskId]))
+      .transitions
+  ).toEqual([promotion])
+  expect(filterFrontierForActivePauses(frontier, runPausedState, undefined, new Set(), new Set()).transitions).toEqual(
+    []
+  )
+})
+
 it("uses the later of Pause and cancellation as the integration reconciliation boundary", () => {
   const integration = pausedIntegrationScenario("pause-cancel-boundary", 8)
   const after = pausedIntegrationScenario("pause-cancel-after", 12)

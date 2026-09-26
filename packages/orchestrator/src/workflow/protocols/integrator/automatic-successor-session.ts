@@ -34,20 +34,12 @@ import {
 import { integratorSessionCapacityForJournal } from "./session-capacity.js"
 import type { IntegratorAutomaticSuccessorPreparationInput } from "./session.js"
 import { IntegratorJournalContradiction } from "./journal-errors.js"
+import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 
 const runIdFor = (session: IntegratorSessionCorrelation) => session.plannedAttempt.runId
 const lastElementOffset = -1
 const eventEquivalence = Schema.toEquivalence(IntegratorAutomaticSuccessorSessionFixedEvent)
 const lineageEquivalence = Schema.toEquivalence(TargetLineageObservation)
-const integratorCorrelationsEqual = Schema.toEquivalence(IntegratorSessionCorrelation)
-
-const integratorResponsibilityFactsFromCorrelation = (correlation: IntegratorSessionCorrelation) => ({
-  acceptedResult: correlation.acceptedResult,
-  integrationTarget: correlation.integrationTarget,
-  plannedAttempt: correlation.plannedAttempt,
-  queuedAt: correlation.queuedAt,
-  startedAt: correlation.startedAt
-})
 
 const correlationKeyMaterial = (input: IntegratorAutomaticSuccessorPreparationInput): string =>
   [
@@ -125,8 +117,7 @@ export const integratorAutomaticSuccessorPreparationIsCurrent = (
   )
   const latestBaselineRound = automaticRemoteBaselineRoundsFor(records, baselineCorrelation).at(lastElementOffset)
   if (latestBaselineRound === undefined || latestBaselineRound.state._tag !== "Ready") return false
-  const completedAt = latestBaselineRound.completedAt
-  if (completedAt === undefined) return false
+  const completedAt = latestBaselineRound.state.completedAt
   const lineageRecord = journalRecordByPosition(records, input.targetLineageObservedAt)
   if (
     lineageRecord?.event._tag !== "TargetLineageObserved" ||

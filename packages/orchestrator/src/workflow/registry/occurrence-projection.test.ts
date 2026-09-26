@@ -66,7 +66,8 @@ import {
   workflowRunTerminatedRecordKey,
   controlDirectionAppliedRecordKey,
   attemptChoiceAppliedRecordKey,
-  taskClaimReacquisitionDirectedRecordKey
+  taskClaimReacquisitionDirectedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
@@ -176,6 +177,7 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionFixedEvent,
   IntegratorSuccessorSessionFixedEvent,
+  IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorAutomaticSuccessorGeneration,
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
@@ -192,7 +194,11 @@ import {
   RemoteBaselineReadIntendedEvent,
   automaticCompetingHeadRemoteBaselineCorrelationFor
 } from "../protocols/direct-publication/baseline-events.js"
-import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../protocols/integrator/automatic-successor-session.js"
+import {
+  integratorAutomaticSuccessorCorrelationFor,
+  prepareIntegratorAutomaticSuccessorSessionAppend
+} from "../protocols/integrator/automatic-successor-session.js"
+import { describeJournalEvent } from "./event-descriptor.js"
 import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
@@ -1166,32 +1172,36 @@ it.effect("rejects focused task-work facts attached to a graph read or the wrong
   })
 )
 
-it.effect("projects a large journal without rescanning each retained prefix", () =>
-  Effect.gen(function* () {
-    const pairCount = 3_000
-    const records = Array.from({ length: pairCount }, (_, index) => {
-      const pairOperation = makeTrackerGraphObservationOperation(
-        { _tag: "WorkflowEstablishment" },
-        OperationId.make(`large-journal-read-${index}`),
-        FixtureTarget.make("large-journal-fixture")
-      )
-      const intentPosition = index * 2 + 1
-      return [
-        record(intentPosition, taskTrackerReadIntent(pairOperation)),
-        record(
-          intentPosition + 1,
-          taskTrackerGraphFactsObserved(pairOperation, {
-            revision: TrackerRevision.make(`large-journal-revision-${index}`),
-            taskIds: []
-          })
+// V8 coverage instrumentation slows this synthetic 6,000-event projection past Vitest's default timeout.
+it.effect(
+  "projects a large journal without rescanning each retained prefix",
+  () =>
+    Effect.gen(function* () {
+      const pairCount = 3_000
+      const records = Array.from({ length: pairCount }, (_, index) => {
+        const pairOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make(`large-journal-read-${index}`),
+          FixtureTarget.make("large-journal-fixture")
         )
-      ]
-    }).flat()
+        const intentPosition = index * 2 + 1
+        return [
+          record(intentPosition, taskTrackerReadIntent(pairOperation)),
+          record(
+            intentPosition + 1,
+            taskTrackerGraphFactsObserved(pairOperation, {
+              revision: TrackerRevision.make(`large-journal-revision-${index}`),
+              taskIds: []
+            })
+          )
+        ]
+      }).flat()
 
-    const projection = yield* projectWorkflowOccurrences(records)
+      const projection = yield* projectWorkflowOccurrences(records)
 
-    expect(projection.occurrences).toHaveLength(pairCount * 2)
-  })
+      expect(projection.occurrences).toHaveLength(pairCount * 2)
+    }),
+  30_000
 )
 
 it.effect("does not infer a tracker-edit action from changed observed facts", () =>
@@ -2489,6 +2499,243 @@ it.effect("projects an H2-ready automatic successor refresh through H3 catch-up 
       successor: fixed.event.successor,
       successorGeneration: 2
     })
+  })
+)
+
+it.effect("rejects a delayed lineage result when only an unrelated later read follows H3 catch-up", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const originalRecords = fixture.records()
+    const authorization = originalRecords.find(
+      ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+    )
+    const firstRead = originalRecords.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+    const originalLineageResult = originalRecords.find(
+      ({ position }) => position === fixture.input.targetLineageObservedAt
+    )
+    const originalLineageIntent = originalRecords.find(
+      ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
+    )
+    if (
+      authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+      firstRead?.event._tag !== "RemoteBaselineReadIntended" ||
+      originalLineageResult?.event._tag !== "TargetLineageObserved" ||
+      originalLineageIntent?.event._tag !== "GitReadIntentRecorded" ||
+      originalLineageIntent.event.operation._tag !== "ReadTargetLineage" ||
+      originalLineageResult.position !== originalRecords.at(-1)?.position
+    ) {
+      return yield* Effect.die("accepted H2 prefix must end in its exact lineage intent/result pair")
+    }
+
+    const lineageOperationA = originalLineageIntent.event.operation
+    const h2 = authorization.event.remoteHead
+    const h3 = GitCommitSha.make("8".repeat(40))
+    const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+      fixture.runId,
+      firstRead.event.correlation.responsibility,
+      firstRead.event.correlation.localTarget,
+      firstRead.event.correlation.remoteTarget,
+      authorization.position,
+      RemoteBaselineRound.make(2)
+    )
+    const records = originalRecords.filter((item) => item.position !== originalLineageResult.position)
+    const append = (event: JournalRecord["event"]): JournalRecord => {
+      const recordPosition = JournalPosition.make(records.length + 1)
+      const recordValue = {
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: recordPosition,
+        runId: fixture.runId
+      }
+      records.push(recordValue)
+      return recordValue
+    }
+
+    append(
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: roundTwo,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    append(
+      RemoteBaselineObservedEvent.make({
+        correlation: roundTwo,
+        observation: RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: h2, remoteHead: h3 }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+    )
+    append(
+      LocalTargetCatchUpIntendedEvent.make({
+        correlation: roundTwo,
+        expectedLocalHead: h2,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        remoteHead: h3,
+        version: workflowJournalEventVersion
+      })
+    )
+    append(
+      LocalTargetCatchUpObservedEvent.make({
+        correlation: roundTwo,
+        expectedLocalHead: h2,
+        occurrenceClassification: "NonActionOccurrence",
+        remoteHead: h3,
+        result: LocalTargetCatchUpResult.cases.Applied.make({ newHead: h3 }),
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const unrelatedOperationB = makeTargetLineageObservationOperation({
+      integrationTarget: fixture.accepted.integrationTarget,
+      operationId: OperationId.make("occurrence-projection-unrelated-lineage-read-b"),
+      plannedAttempt: fixture.input.predecessor.plannedAttempt,
+      predecessorOperationIds: [lineageOperationA.operationId]
+    })
+    append(
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: unrelatedOperationB,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const delayedAObservation = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: fixture.input.predecessor.plannedAttempt.baseSha,
+      targetHeadSha: h3
+    })
+    const delayedAResult = append(
+      TargetLineageObservedEvent.make({
+        observation: delayedAObservation,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: lineageOperationA.operationId,
+        plannedAttempt: fixture.input.predecessor.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const expectedSuccessor = integratorAutomaticSuccessorCorrelationFor({
+      authorizationAt: fixture.input.authorizationAt,
+      predecessor: fixture.input.predecessor,
+      targetLineage: delayedAObservation,
+      targetLineageObservedAt: delayedAResult.position
+    })
+    const fixedEvent = IntegratorAutomaticSuccessorSessionFixedEvent.make({
+      authorizationAt: fixture.input.authorizationAt,
+      predecessor: fixture.input.predecessor,
+      successor: expectedSuccessor,
+      successorGeneration: IntegratorAutomaticSuccessorGeneration.make(2),
+      version: workflowJournalEventVersion
+    })
+    records.push({
+      event: fixedEvent,
+      key: integratorAutomaticSuccessorSessionFixedRecordKey(fixture.input.predecessor, fixture.input.authorizationAt),
+      position: JournalPosition.make(records.length + 1),
+      runId: fixture.runId
+    })
+
+    const rejection = yield* projectWorkflowOccurrences(records).pipe(Effect.flip)
+    expect(rejection._tag).toBe("HistoricalOutcomeWithoutInitiatingAction")
+  })
+)
+
+it.effect("rejects a foreign automatic successor session and resource identity in historical projection", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const fixed = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+    if (fixed._tag !== "Append") return yield* Effect.die("accepted S2 prefix must prepare its deterministic successor")
+    fixture.append(fixed.event)
+    const fixedRecord = fixture.records().at(-1)
+    if (fixedRecord?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+      return yield* Effect.die("accepted S2 history must end with its fixed-session record")
+    }
+    const foreignSuccessor = IntegratorSessionCorrelation.make({
+      ...fixedRecord.event.successor,
+      candidateResource: IntegratorCandidateResourceLocator.make("foreign-automatic-successor-resource"),
+      sessionId: IntegratorSessionId.make("foreign-automatic-successor-session")
+    })
+    const foreignEvent = IntegratorAutomaticSuccessorSessionFixedEvent.make({
+      ...fixedRecord.event,
+      successor: foreignSuccessor
+    })
+    const foreignRecords = fixture
+      .records()
+      .map((recordValue) =>
+        recordValue.position === fixedRecord.position ? { ...recordValue, event: foreignEvent } : recordValue
+      )
+
+    const rejection = yield* projectWorkflowOccurrences(foreignRecords).pipe(Effect.flip)
+    expect(rejection._tag).toBe("HistoricalOutcomeWithoutInitiatingAction")
+  })
+)
+
+it.effect("rejects a third automatic successor baseline round after the ready refresh", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const records = fixture.records()
+    const authorization = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+    const firstRead = records.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+    if (
+      authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+      firstRead?.event._tag !== "RemoteBaselineReadIntended"
+    ) {
+      return yield* Effect.die("accepted S2 prefix must contain its exact authorization and ready round one")
+    }
+
+    const secondRound = automaticCompetingHeadRemoteBaselineCorrelationFor(
+      fixture.runId,
+      firstRead.event.correlation.responsibility,
+      firstRead.event.correlation.localTarget,
+      firstRead.event.correlation.remoteTarget,
+      authorization.position,
+      RemoteBaselineRound.make(2)
+    )
+    const head = authorization.event.remoteHead
+    fixture.append(
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: secondRound,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    fixture.append(
+      RemoteBaselineObservedEvent.make({
+        correlation: secondRound,
+        observation: RemoteBaselineObservation.cases.Aligned.make({ localHead: head, remoteHead: head }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const thirdRound = automaticCompetingHeadRemoteBaselineCorrelationFor(
+      fixture.runId,
+      firstRead.event.correlation.responsibility,
+      firstRead.event.correlation.localTarget,
+      firstRead.event.correlation.remoteTarget,
+      authorization.position,
+      RemoteBaselineRound.make(3)
+    )
+    fixture.append(
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: thirdRound,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const rejection = yield* projectWorkflowOccurrences(fixture.records()).pipe(Effect.flip)
+    expect(rejection).toMatchObject({
+      _tag: "HistoricalOutcomeWithoutInitiatingAction",
+      detail: "automatic successor baseline rounds must be contiguous and bounded to two"
+    })
+    expect(
+      fixture.records().filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+    ).toHaveLength(0)
   })
 )
 

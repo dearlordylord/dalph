@@ -16,6 +16,11 @@ export const RemoteBaselineRound = Schema.Int.check(Schema.isGreaterThanOrEqualT
 export type RemoteBaselineRound = typeof RemoteBaselineRound.Type
 /** Explicit ordinal for the first read under one automatic-successor authorization. */
 export const initialAutomaticCompetingHeadBaselineRound = RemoteBaselineRound.make(1)
+const maximumAutomaticSuccessorBaselineRoundOrdinal = 2
+/** The accepted chronology permits the initial read followed by one bounded refresh. */
+export const maximumAutomaticSuccessorBaselineRound = RemoteBaselineRound.make(
+  maximumAutomaticSuccessorBaselineRoundOrdinal
+)
 
 const remoteBaselineIdParts = (
   runId: RunId,

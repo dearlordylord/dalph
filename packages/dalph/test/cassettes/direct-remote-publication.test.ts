@@ -1,6 +1,10 @@
 // @effect-diagnostics multipleEffectProvide:off
+/* eslint-disable import/no-nodejs-modules -- Timeout diagnostics inspect exact Git sender custody and process evidence. */
+import { createHash } from "node:crypto"
+import { readFile, readdir } from "node:fs/promises"
 import {
   GitCommand,
+  gitSenderTokenEnvironment,
   type GithubGraphqlRequest,
   JournalStore,
   OperationId,
@@ -38,6 +42,7 @@ const fixtureLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.la
 const diagnosticPath = "/tmp/public-s1-timeout-diagnostic.json"
 const diagnosticProviderPath = "/tmp/public-s1-timeout-provider.json"
 const diagnosticAuditPath = "/tmp/public-s1-timeout-audit.json"
+const diagnosticGitBoundaryPath = "/tmp/public-s1-timeout-git-boundary.json"
 
 type DiagnosticRecord = { readonly [key: string]: unknown }
 
@@ -135,19 +140,21 @@ const githubProviderOperationTags = new Set<GithubGraphqlRequest["_tag"]>([
   "ReadBlockedBy"
 ])
 
-const awaitWithDiagnostic = <A, E, R, E1, R1, E2, R2, E3, R3, E4, R4>(
+const awaitWithDiagnostic = <A, E, R, E1, R1, E2, R2, E3, R3, E4, R4, E5, R5>(
   awaited: Effect.Effect<A, E, R>,
   timeoutMillis: number,
   writePrimary: Effect.Effect<void, E1, R1>,
   writeProvider: Effect.Effect<void, E2, R2>,
-  stopChild: Effect.Effect<void, E3, R3>,
-  writeAudit: Effect.Effect<void, E4, R4>
+  writeAttemptBoundary: Effect.Effect<void, E3, R3>,
+  stopChild: Effect.Effect<void, E4, R4>,
+  writeAudit: Effect.Effect<void, E5, R5>
 ) =>
   Effect.gen(function* () {
     const result = yield* awaited.pipe(Effect.timeoutOption(Duration.millis(timeoutMillis)))
     if (Option.isSome(result)) return result.value
     yield* writePrimary
     yield* writeProvider
+    yield* writeAttemptBoundary
     yield* stopChild
     yield* writeAudit
     return yield* new PublicPublicationTimeout({ timeoutMillis })
@@ -226,6 +233,7 @@ it.live("writes timeout diagnostics before a failed audit and surfaces the timeo
       Effect.never,
       10,
       fs.writeFileString(primary, JSON.stringify({ publicRecordTags: ["RunSelected"] })),
+      Effect.void,
       Effect.void,
       Effect.void,
       writeBoundedDiagnostic(audit, Effect.fail("controlled audit failure"))
@@ -381,11 +389,98 @@ it.live(
             })
           )
         )
+        const writeAttemptBoundaryDiagnostic = writeBoundedDiagnostic(
+          diagnosticGitBoundaryPath,
+          Effect.scoped(
+            Effect.gen(function* () {
+              const journalContext = yield* Layer.build(sqliteJournalStoreLayer({ filename: fixture.journalDatabase }))
+              const audit = yield* Context.get(journalContext, JournalStore).auditAll()
+              const records = audit.runs[0]?.records ?? []
+              const latestAttempt = records.findLast(
+                ({ event }) => event._tag === "RemotePublicationAttemptIntended"
+              )?.event
+              if (latestAttempt?._tag !== "RemotePublicationAttemptIntended")
+                return { _tag: "NoRemotePublicationAttemptIntent" }
+
+              const subject = {
+                requestId: latestAttempt.correlation.requestId,
+                attemptOrdinal: latestAttempt.attemptOrdinal
+              }
+              const custodyPath = `${fixture.manifest.commonDirectory}/dalph/git-senders/${createHash("sha256")
+                .update(JSON.stringify(subject))
+                .digest("hex")}.json`
+              const custodyRecord = yield* Effect.tryPromise({
+                try: async () => JSON.parse(await readFile(custodyPath, "utf8")) as unknown,
+                catch: () => undefined
+              })
+              const custody = diagnosticRecord(custodyRecord)
+              const identity = diagnosticRecord(diagnosticField(custody, "identity"))
+              const phase = diagnosticString(diagnosticField(custody, "phase"))
+              const token = diagnosticString(diagnosticField(custody, "token"))
+              const tokenBearingPids =
+                phase === "Launching" && token !== undefined
+                  ? yield* Effect.tryPromise({
+                      try: async () => {
+                        const processIds = (await readdir("/proc")).filter((entry) => /^\d+$/u.test(entry))
+                        const matches = await Promise.all(
+                          processIds.map(async (processId) => {
+                            try {
+                              const environment = await readFile(`/proc/${processId}/environ`)
+                              return environment
+                                .toString()
+                                .split("\0")
+                                .includes(`${gitSenderTokenEnvironment}=${token}`)
+                                ? Number(processId)
+                                : undefined
+                            } catch {
+                              return undefined
+                            }
+                          })
+                        )
+                        return matches.filter((pid): pid is number => pid !== undefined)
+                      },
+                      catch: () => undefined
+                    })
+                  : undefined
+              const remoteHead = yield* Effect.result(
+                git.run(fixture.remoteRepository, ["rev-parse", fixture.remoteRef])
+              )
+              return {
+                _tag: "RemotePublicationAttemptBoundary",
+                requestId: subject.requestId,
+                attemptOrdinal: subject.attemptOrdinal,
+                custody: {
+                  _tag: custody === undefined ? "Unavailable" : "Available",
+                  phase,
+                  pid: diagnosticInteger(diagnosticField(identity, "pid")),
+                  startIdentity: diagnosticString(diagnosticField(identity, "startIdentity"))
+                },
+                ...(phase === "Launching"
+                  ? {
+                      tokenBearingPids:
+                        tokenBearingPids === undefined
+                          ? { _tag: "Unavailable" }
+                          : { _tag: "Available", pids: tokenBearingPids }
+                    }
+                  : { tokenBearingPids: { _tag: "NotNeeded" } }),
+                remoteHead:
+                  remoteHead._tag === "Success"
+                    ? {
+                        _tag: "Available",
+                        exitCode: remoteHead.success.exitCode,
+                        sha: remoteHead.success.stdout.trim()
+                      }
+                    : { _tag: "Unavailable" }
+              }
+            })
+          )
+        )
         const childStatus = yield* awaitWithDiagnostic(
           controller.awaitChild(child),
           45_000,
           writePrimaryDiagnostic,
           writeProviderDiagnostic,
+          writeAttemptBoundaryDiagnostic,
           controller.killChild(child).pipe(Effect.asVoid),
           writeAuditDiagnostic
         )
