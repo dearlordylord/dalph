@@ -788,6 +788,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         frame: currentFrame,
         opportunity: RunActivationOpportunity.OrdinaryRunEntry(),
         recoveredAttemptIds: new Set(required.map(({ attemptId }) => attemptId)),
+        unsettledIntegrationTaskIds: new Set(),
         runId,
         target
       }).pipe(Effect.map(({ frontier }) => frontier))

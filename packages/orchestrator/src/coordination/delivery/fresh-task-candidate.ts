@@ -244,6 +244,8 @@ interface FreshTaskCandidateEvaluationInput {
   readonly frame: CurrentDeliveryFrame | undefined
   readonly opportunity: RunActivationOpportunity
   readonly recoveredAttemptIds: ReadonlySet<AttemptId>
+  /** Integration responsibilities remain prerequisites until their finality is settled. */
+  readonly unsettledIntegrationTaskIds: ReadonlySet<TaskId>
   readonly runId: RunId
   readonly target: TrackerTarget
 }
@@ -261,12 +263,21 @@ export const deriveFreshTaskCandidateEvaluation = Effect.fn("FreshTaskCandidate.
   }
   const derived =
     input.frame === undefined ? [] : deriveFreshWorkflowDecisions(input.frame, input.recoveredAttemptIds, input.target)
+  // A complete tracker graph can report a prerequisite task completed while
+  // Dalph still owes that task's integration finality. Do not advance a
+  // dependant's fresh workflow from that graph. Existing executor work can
+  // still report progress while its predecessor finality settles.
+  const finalityQualified = derived.filter(
+    ({ step }) =>
+      step._tag === "ObservePlannedAttemptExecutorWork" ||
+      !step.task.prerequisiteIds.some((taskId) => input.unsettledIntegrationTaskIds.has(taskId))
+  )
   const decisions = (() => {
     if (!input.activeRefreshBoundaryReached || input.opportunity._tag !== "ActiveWorkAuthorityRefresh") {
-      return derived
+      return finalityQualified
     }
     const subjects = input.opportunity.subjects
-    return derived.filter(
+    return finalityQualified.filter(
       ({ transition }) =>
         !transitionHasPlannedAttempt(transition) ||
         !activeWorkAuthorityRefreshSubjectsContain(subjects, transition.plannedAttempt)
