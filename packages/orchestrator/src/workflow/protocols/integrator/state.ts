@@ -11,15 +11,20 @@ import type { WorkflowJournalEvent } from "../../registry/event.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import {
   IntegratorResponsibilityFacts,
-  integratorSessionCorrelationsEqual,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
-  integratorRetryRunOrdinal
+  type IntegratorRunState,
+  type IntegratorSessionCorrelation,
+  integratorRetryRunOrdinal,
+  maximumIntegratorSessionsPerResponsibility
 } from "./events.js"
-import type { IntegratorSessionCorrelation, IntegratorRunState } from "./events.js"
+import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
+import { integratorRunTwoAuthorizationIssue } from "./retry-authorization.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
+export { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
 
@@ -33,20 +38,7 @@ export const integratorResponsibilityFactsFor = (
   startedAt: responsibility.startedAt
 })
 
-export const integratorResponsibilityFactsFromCorrelation = (
-  correlation: IntegratorSessionCorrelation
-): IntegratorResponsibilityFacts => ({
-  acceptedResult: correlation.acceptedResult,
-  integrationTarget: correlation.integrationTarget,
-  plannedAttempt: correlation.plannedAttempt,
-  queuedAt: correlation.queuedAt,
-  startedAt: correlation.startedAt
-})
-
 export const integratorResponsibilityFactsEqual = responsibilityFactsEquivalence
-
-export const integratorCorrelationsEqual = integratorSessionCorrelationsEqual
-
 export const integratorFindEventAtKey = journalRecordByKey
 
 /** Reconstructs run-bound state without upcasting any session-only history. */
@@ -119,9 +111,13 @@ const latestStartedRunFor = (
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
-  | { readonly _tag: "Valid"; readonly run: IntegratorRunCorrelation } => {
+  | {
+      readonly _tag: "Valid"
+      readonly run: IntegratorRunCorrelation
+      readonly position: JournalRecord["position"]
+    } => {
   let ordinals = HashSet.empty<number>()
-  let latest: IntegratorRunCorrelation | undefined
+  let latest: { readonly run: IntegratorRunCorrelation; readonly position: JournalRecord["position"] } | undefined
   for (const record of journalRecordsOfKind(records, "IntegratorRunStarted")) {
     const { event } = record
     if (event._tag !== "IntegratorRunStarted" || !integratorCorrelationsEqual(event.run.session, session)) continue
@@ -129,9 +125,11 @@ const latestStartedRunFor = (
     if (issue !== undefined) return { _tag: "Invalid", detail: issue }
     ordinals = HashSet.add(ordinals, event.run.ordinal)
     /* v8 ignore next -- @preserve validated Journal order records a lower ordinal before its authorized successor. */
-    if (latest === undefined || event.run.ordinal > latest.ordinal) latest = event.run
+    if (latest === undefined || event.run.ordinal > latest.run.ordinal) {
+      latest = { run: event.run, position: record.position }
+    }
   }
-  return latest === undefined ? { _tag: "Absent" } : { _tag: "Valid", run: latest }
+  return latest === undefined ? { _tag: "Absent" } : { _tag: "Valid", ...latest }
 }
 
 const activeSuccessorFor = (
@@ -140,23 +138,67 @@ const activeSuccessorFor = (
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
-  | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
-  let record: JournalRecord | undefined
-  let relatedCount = 0
-  for (const candidate of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-    if (
-      candidate.event._tag === "IntegratorSuccessorSessionFixed" &&
-      candidate.event.predecessor.sessionId === predecessor.sessionId
-    ) {
-      relatedCount += 1
-      record ??= candidate
+  | {
+      readonly _tag: "Valid"
+      readonly successor: IntegratorSessionCorrelation
+      readonly relation: "Automatic" | "FullRerun"
+    } => {
+  let active = predecessor
+  let relation: "Automatic" | "FullRerun" = "FullRerun"
+  let successorCount = 0
+  let advanced = false
+  const visited = new Set<string>()
+  for (;;) {
+    if (visited.has(active.sessionId)) {
+      return { _tag: "Invalid", detail: "Integrator successor relations contain a session cycle" }
+    }
+    visited.add(active.sessionId)
+    const related = [
+      ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
+      ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")
+    ].filter(
+      ({ event }) =>
+        (event._tag === "IntegratorSuccessorSessionFixed" ||
+          event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
+        event.predecessor.sessionId === active.sessionId
+    )
+    if (related.length === 0) {
+      return advanced ? { _tag: "Valid", successor: active, relation } : { _tag: "Absent" }
+    }
+    if (related.length !== 1) {
+      const fullRerunRelations = related.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed").length
+      return {
+        _tag: "Invalid",
+        detail:
+          fullRerunRelations > 1
+            ? "multiple FullRerun successors describe one Integrator predecessor"
+            : "multiple successor relations describe one Integrator predecessor"
+      }
+    }
+    const record = related[0]
+    if (record === undefined) return { _tag: "Invalid", detail: "successor relation disappeared during reconstruction" }
+    if (record.event._tag === "IntegratorSuccessorSessionFixed") {
+      const validated = evaluateIntegratorFullRerunSuccessor(records, record, active)
+      if (validated._tag !== "Valid") return validated
+      active = validated.successor
+      relation = "FullRerun"
+    } else if (record.event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+      const validated = validateAutomaticSuccessorSessionFixedRecord(records, record, active)
+      if (validated._tag !== "Valid") return validated
+      active = record.event.successor
+      relation = "Automatic"
+    } else {
+      return { _tag: "Invalid", detail: "successor relation has an unexpected event kind" }
+    }
+    advanced = true
+    successorCount += 1
+    if (successorCount + 1 >= maximumIntegratorSessionsPerResponsibility && visited.has(active.sessionId)) {
+      return { _tag: "Invalid", detail: "Integrator successor relations exceed the three-session bound" }
+    }
+    if (successorCount + 1 > maximumIntegratorSessionsPerResponsibility) {
+      return { _tag: "Invalid", detail: "Integrator successor relations exceed the three-session bound" }
     }
   }
-  if (relatedCount > 1) {
-    return { _tag: "Invalid", detail: "multiple FullRerun successors describe one Integrator predecessor" }
-  }
-  if (record === undefined || record.event._tag !== "IntegratorSuccessorSessionFixed") return { _tag: "Absent" }
-  return evaluateIntegratorFullRerunSuccessor(records, record, predecessor)
 }
 
 /**
@@ -233,6 +275,24 @@ type CurrentRunValidation =
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly run: IntegratorRunCorrelation }
 
+const currentSuccessorRunAuthorizationIssue = (
+  records: JournalHistorySource,
+  successor: ReturnType<typeof activeSuccessorFor>,
+  startedRun: ReturnType<typeof latestStartedRunFor>
+): string | undefined => {
+  if (
+    successor._tag !== "Valid" ||
+    startedRun._tag !== "Valid" ||
+    startedRun.run.ordinal === IntegratorRunOrdinal.make(1)
+  ) {
+    return undefined
+  }
+  if (successor.relation !== "Automatic" || startedRun.run.ordinal !== integratorRetryRunOrdinal) {
+    return "FullRerun successor permits only its initial Integrator run"
+  }
+  return integratorRunTwoAuthorizationIssue(records, startedRun.run, { beforePosition: startedRun.position })
+}
+
 const currentRunFor = (
   records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation
@@ -242,13 +302,8 @@ const currentRunFor = (
   const session = activeSuccessor._tag === "Valid" ? activeSuccessor.successor : predecessor
   const startedRun = latestStartedRunFor(records, session)
   if (startedRun._tag === "Invalid") return startedRun
-  if (
-    activeSuccessor._tag === "Valid" &&
-    startedRun._tag === "Valid" &&
-    startedRun.run.ordinal !== IntegratorRunOrdinal.make(1)
-  ) {
-    return { _tag: "Invalid", detail: "FullRerun successor permits only its initial Integrator run" }
-  }
+  const authorizationIssue = currentSuccessorRunAuthorizationIssue(records, activeSuccessor, startedRun)
+  if (authorizationIssue !== undefined) return { _tag: "Invalid", detail: authorizationIssue }
   const run =
     startedRun._tag === "Valid"
       ? startedRun.run

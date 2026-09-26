@@ -640,8 +640,8 @@ const validateCandidateCleanupOccurrence = Effect.fn("HermeticQualification.vali
   ) {
     const disposition = occurrence.event.authorization.disposition
     yield* validateSessionCorrelation(integratorCandidateCleanupSessionOf(disposition), context)
-    if (disposition._tag === "Superseded") yield* validateSessionCorrelation(disposition.successor, context)
-    else yield* validateCandidate(disposition.qualifiedCandidate, context)
+    if (disposition._tag === "Settled") yield* validateCandidate(disposition.qualifiedCandidate, context)
+    else yield* validateSessionCorrelation(disposition.successor, context)
   }
 )
 

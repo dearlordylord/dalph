@@ -297,11 +297,11 @@ const focusedCompletionOperationIds = Effect.fn("HermeticQualification.focusedCo
         FocusedTaskCompletionFactsObserved,
         strictSource
       )(item.observed.observation).pipe(Effect.mapError(sourceRejected))
-      yield* validateCompletionRequest(original.request, context)
+      const request = yield* validateCompletionRequest(original.request, context)
       yield* validateCompletionFacts(original.facts, context)
       if (!Schema.toEquivalence(TrackerTarget)(original.target, context.configuration.target))
         return yield* sourceRejected()
-      return [original.operationId]
+      return [original.operationId, completionOriginalTaskClaimReleaseFor(request.claim).operationId]
     })
   ).pipe(Effect.map((ids) => ids.flat()))
 })

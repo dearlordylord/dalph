@@ -1,20 +1,28 @@
+import { GitCommitSha } from "@dalph/contracts"
+import { Schema } from "effect"
 import { expect, it } from "vitest"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import { integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
 import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import {
+  automaticCompetingHeadRemoteBaselineCorrelationFor,
+  initialAutomaticCompetingHeadBaselineRound,
   LocalTargetCatchUpIntendedEvent,
   LocalTargetCatchUpObservedEvent,
   LocalTargetCatchUpResult,
   RemoteBaselineId,
+  RemoteBaselineCorrelation,
   RemoteBaselineObservedEvent,
   RemoteBaselineObservation,
+  RemoteBaselineRound,
   RemoteBaselineReadIntendedEvent,
   remoteBaselineCorrelationFor,
   type RemoteBaselineJournalEvent
 } from "./baseline-events.js"
 import { deriveRemoteBaselineState } from "./baseline-state.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { remoteBaselineReadIntendedRecordKey } from "../../../workflow-journal/record-key.js"
 
 const candidate = integrationFinalityFixture.qualifiedCandidate
 const session = candidate.run.session
@@ -27,6 +35,50 @@ const correlation = remoteBaselineCorrelationFor(
 const localHead = session.expectedTargetHead
 const remoteHead = candidate.candidateCommit
 const actor = { _tag: "DalphCoordinator" as const }
+
+it("tags initial and automatic baseline rounds in correlation identity and record keys", () => {
+  const authorizationAt = JournalPosition.make(12)
+  const automaticRoundOne = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    session.plannedAttempt.runId,
+    integratorResponsibilityFactsFromCorrelation(session),
+    session.integrationTarget,
+    remotePublicationTargetForTest,
+    authorizationAt,
+    initialAutomaticCompetingHeadBaselineRound
+  )
+  const automaticRoundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    session.plannedAttempt.runId,
+    integratorResponsibilityFactsFromCorrelation(session),
+    session.integrationTarget,
+    remotePublicationTargetForTest,
+    authorizationAt,
+    RemoteBaselineRound.make(2)
+  )
+  expect(correlation._tag).toBe("Initial")
+  expect(Schema.is(RemoteBaselineCorrelation)(correlation)).toBe(true)
+  expect(automaticRoundOne).toMatchObject({
+    _tag: "AutomaticCompetingHead",
+    authorizationAt,
+    baselineRound: initialAutomaticCompetingHeadBaselineRound
+  })
+  expect(Schema.is(RemoteBaselineCorrelation)(automaticRoundOne)).toBe(true)
+  expect(automaticRoundTwo).toMatchObject({
+    _tag: "AutomaticCompetingHead",
+    authorizationAt,
+    baselineRound: RemoteBaselineRound.make(2)
+  })
+  expect(new Set([correlation, automaticRoundOne, automaticRoundTwo].map(({ baselineId }) => baselineId)).size).toBe(3)
+  expect(
+    new Set(
+      [correlation, automaticRoundOne, automaticRoundTwo].map((item) =>
+        remoteBaselineReadIntendedRecordKey(item.baselineId).toString()
+      )
+    ).size
+  ).toBe(3)
+  expect(Schema.is(RemoteBaselineCorrelation)({ ...automaticRoundOne, baselineRound: undefined })).toBe(false)
+  expect(Schema.is(RemoteBaselineCorrelation)({ ...automaticRoundOne, authorizationAt: undefined })).toBe(false)
+  expect(Schema.is(RemoteBaselineCorrelation)({ ...automaticRoundOne, _tag: "Initial" })).toBe(false)
+})
 
 const readIntent = RemoteBaselineReadIntendedEvent.make({
   correlation,
@@ -152,11 +204,21 @@ it("rejects a catch-up result that does not bind its exact observed heads", () =
     expectedLocalHead: localHead,
     occurrenceClassification: "NonActionOccurrence",
     remoteHead,
-    result: LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: localHead }),
+    result: LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: GitCommitSha.make("8".repeat(40)) }),
     version: workflowJournalEventVersion
   })
-  expect(deriveRemoteBaselineState([readIntent, localAncestor, catchUpIntent, rejected])).toMatchObject({
-    _tag: "Retained"
+  const rejectedState = deriveRemoteBaselineState([readIntent, localAncestor, catchUpIntent, rejected])
+  expect(rejectedState).toMatchObject({
+    _tag: "Retained",
+    cause: {
+      _tag: "CatchUpChanged",
+      expectedLocalHead: localHead,
+      observedLocalHead: GitCommitSha.make("8".repeat(40)),
+      remoteHead
+    }
+  })
+  expect(deriveRemoteBaselineState([readIntent, localAncestor, catchUpIntent, rejected, localAncestor])).toMatchObject({
+    _tag: "Contradiction"
   })
   const unavailable = LocalTargetCatchUpObservedEvent.make({
     correlation,

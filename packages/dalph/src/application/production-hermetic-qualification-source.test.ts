@@ -2237,6 +2237,59 @@ describe("qualification original source boundary", () => {
     }
   })
 
+  it("accepts a completion-derived original claim release in a post-completion tracker wait", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { completionEvidence, context } = routeFixtures(originalContext)
+    const focusedCompletion = completionEvidence.find((item) => item._tag === "FocusedTaskCompletionSuccess")
+    if (focusedCompletion === undefined) return expect.fail("accepted completion evidence must be present")
+    const release = completionOriginalTaskClaimReleaseFor(focusedCompletion.observed.observation.request.claim)
+    expect(context.derivedOperationIds).not.toContain(release.operationId)
+    const releaseOperation = WorkflowOperation.cases.ReleaseTaskClaim.make({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+      predecessorOperationIds: [focusedCompletion.observed.observation.request.claim.originalClaim.operationId],
+      release
+    })
+    const releaseResponsibility = WorkflowResponsibilityEntry.cases.TaskClaimReleaseResponsibility.make({
+      beganAt: JournalPosition.make(21),
+      operation: releaseOperation,
+      taskId: context.taskId
+    })
+    const state = withFirstDelivery(
+      readyFor(context, [], completionEvidence, false, true),
+      [
+        {
+          _tag: "ResponsibilitySituation",
+          facts: {
+            _tag: "WorkflowOperationFreshFacts",
+            disposition: ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: "Missing" }),
+            responsibility: releaseResponsibility
+          }
+        }
+      ],
+      [{ _tag: "WorkflowResponsibility", responsibility: releaseResponsibility }]
+    )
+
+    const checked = await Effect.runPromise(
+      validateHermeticQualificationStatus(manifest, configuration, state, runId).pipe(Effect.result)
+    )
+    if (checked._tag === "Failure")
+      return expect.fail(`completion-derived claim release must remain valid: ${JSON.stringify(checked.failure)}`)
+    expect(checked.success.status._tag).toBe("DeliveryStatusAvailable")
+    if (checked.success.status._tag !== "DeliveryStatusAvailable") return
+    expect(checked.success.status.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          _tag: "TrackerFactWait",
+          responsibility: { _tag: "WorkflowResponsibility", responsibility: releaseResponsibility }
+        })
+      ])
+    )
+    expect(release.operationId).toBe(
+      completionOriginalTaskClaimReleaseFor(focusedCompletion.observed.observation.request.claim).operationId
+    )
+  })
+
   it("checks controlled waiting, live, unavailable, integration, dependency, and settlement status entries", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const context = await Effect.runPromise(contextFor(manifest, configuration, runId))

@@ -256,14 +256,14 @@ it.effect(
           outcome: "Preserved"
         },
         {
-          name: "live writer",
+          name: "same-session live writer",
           observation: IntegratorCandidateCleanupObservation.cases.Foreign.make({
             locator: predecessor.candidateResource,
             observedSessionId: predecessor.sessionId,
             reason: "LiveWriter",
             revision: evidenceRevision
           }),
-          outcome: "Preserved"
+          outcome: "Pending"
         },
         {
           name: "changed revision",

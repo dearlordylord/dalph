@@ -18,7 +18,7 @@ const fixtureLog = (commands: Array<{ kind: string; name: string }>) => {
     ...Object.entries(phaseCounts).map(
       ([kind, count]) => `Quint phase timing: ${kind} ${count} command(s), ${count}.00s`
     ),
-    "Complete Quint model gate: 105.00s (budget 750s)"
+    `Complete Quint model gate: ${commands.length.toFixed(2)}s (budget 750s)`
   ].join("\n")
 }
 
@@ -60,14 +60,15 @@ describe("Quint profile evidence parser", () => {
     ]
   ])("rejects a %s command sequence", (_label, mutate) => {
     const commands = quintGateCommandManifest.map((command) => ({ ...command }))
-    expect(() => parseFixture(mutate(commands))).toThrow(/manifest|Expected 105 commands/)
+    expect(() => parseFixture(mutate(commands))).toThrow(/manifest|Expected \d+ commands/)
   })
 
   it("rejects phase totals outside emitted per-command rounding tolerance", () => {
     const commands = quintGateCommandManifest.map((command) => ({ ...command }))
+    const testCount = commands.filter((command) => command.kind === "test").length
     const log = fixtureLog(commands).replace(
-      "Quint phase timing: test 46 command(s), 46.00s",
-      "Quint phase timing: test 46 command(s), 47.00s"
+      `Quint phase timing: test ${testCount} command(s), ${testCount}.00s`,
+      `Quint phase timing: test ${testCount} command(s), ${(testCount + 1).toFixed(2)}s`
     )
     expect(() => parseProfileLog({ id: "fixture", node: "fixture", repeat: "1", installSeconds: "-", log })).toThrow(
       "Phase total mismatch for test"
@@ -92,6 +93,6 @@ describe("Quint profile evidence parser", () => {
         installSeconds: "-",
         log: fixtureLog(commands).replace("result=exit:0", "result=unknown")
       })
-    ).toThrow(/manifest|Expected 105 commands/)
+    ).toThrow(/manifest|Expected \d+ commands/)
   })
 })

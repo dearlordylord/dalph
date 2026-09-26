@@ -47,6 +47,7 @@ import type {
   RemotePublicationRequestId,
   RemotePublicationResumeRequestId
 } from "../workflow/protocols/direct-publication/events.js"
+import type { IntegratorCompetingHeadSuccessorAuthorizationId } from "../workflow/protocols/integrator/automatic-successor-events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -211,11 +212,9 @@ export const stoppedAttemptClaimNoReleaseRecordKey = (requestId: AttemptChoiceRe
 export const taskWorkCapacityPolicyRecordKey = (revision: RunPolicyRevision): JournalRecordKey =>
   JournalRecordKey.make(`run-policy:${revision}:task-work-capacity`)
 
-export const intentRecordKey = (operationId: OperationId): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:intent`)
+export const intentRecordKey = (operationId: OperationId) => JournalRecordKey.make(`operation:${operationId}:intent`)
 
-export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
-  JournalRecordKey.make(`operation:${operationId}:outcome`)
+export const outcomeRecordKey = (operationId: OperationId) => JournalRecordKey.make(`operation:${operationId}:outcome`)
 
 /** Stable key for one Restart-scoped authority-read failure occurrence. */
 export const attemptRestartAuthorityReadFailedRecordKey = (operationId: OperationId): JournalRecordKey =>
@@ -348,7 +347,21 @@ export const integratorSuccessorSessionFixedRecordKey = (
     `${integratorCorrelationRecordKeyPrefix(predecessor)}:successor:full-rerun:${quarantineAt}:${directionAppliedAt}:fixed`
   )
 
-/** Stable keys for one initial baseline read and its optional exact local catch-up. */
+/** Stable key for one automatically authorized competing-head successor. */
+export const integratorCompetingHeadSuccessorAuthorizedRecordKey = (
+  authorizationId: IntegratorCompetingHeadSuccessorAuthorizationId
+): JournalRecordKey => JournalRecordKey.make("integrator:" + authorizationId + ":successor-authorized")
+
+/** Stable key for one fresh session fixed by an exact automatic authorization. */
+export const integratorAutomaticSuccessorSessionFixedRecordKey = (
+  predecessor: IntegratorSessionCorrelation,
+  authorizationAt: JournalPosition
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${integratorCorrelationRecordKeyPrefix(predecessor)}:successor:automatic-competing-head:${authorizationAt}:fixed`
+  )
+
+/** Stable keys for one exact initial or authorization-scoped baseline read and catch-up. */
 export const remoteBaselineReadIntendedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>
   JournalRecordKey.make(`remote-baseline:${baselineId}:read-intended`)
 export const remoteBaselineObservedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>
@@ -415,11 +428,10 @@ export const remotePublicationResumeRequestedRecordKey = (
 
 const targetPromotionRecordKeyPrefix = (requestId: TargetPromotionRequestId): string => `target-promotion:${requestId}`
 
-/** Stable journal key for one exact candidate's promotion intent. */
+/** Stable keys for one exact candidate promotion intent and its numbered compare-and-set request. */
 export const targetPromotionIntentRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
   JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:intent`)
 
-/** Stable journal key for the intent preceding one numbered compare-and-set request. */
 export const targetPromotionAttemptIntentRecordKey = (
   requestId: TargetPromotionRequestId,
   attemptOrdinal: TargetPromotionAttemptOrdinal
@@ -545,14 +557,12 @@ export const completionTaskCandidateAncestryReadIntentRecordKey = (operationId: 
 export const completionTaskCandidateAncestryObservedRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`${completionTaskRecordKeyPrefix(operationId)}:ancestry-read:observed`)
 
-/** Stable key for intent before one exact request-result lookup. */
+/** Stable keys for one exact request-result lookup intent and its recorded result. */
 export const completionTaskRequestLookupIntentRecordKey = (
   request: CompletionTaskRequest,
   ordinal: CompletionTaskRequestOrdinal
 ): JournalRecordKey =>
   JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:lookup:${ordinal}:intent`)
-
-/** Stable key for one exact-request lookup result. */
 export const completionTaskRequestLookupRecordKey = (
   request: CompletionTaskRequest,
   ordinal: CompletionTaskRequestOrdinal

@@ -27,6 +27,7 @@ import { promisify } from "node:util"
 import { applicationExitMutationRegistry } from "./application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
+  acceptedResultIntegrationAutomaticSuccessorProofObligations,
   freshTaskAdmissionObligations,
   plannedAttemptExecutorObligations,
   runCancellationObligations,
@@ -112,6 +113,12 @@ const SPECS = [
     file: "specs/acceptedResultIntegration.qnt",
     invariants: acceptedResultIntegrationObligations.invariants,
     witnesses: acceptedResultIntegrationObligations.witnesses
+  },
+  {
+    name: "acceptedResultIntegrationAutomaticSuccessorProof",
+    file: "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
+    invariants: acceptedResultIntegrationAutomaticSuccessorProofObligations.invariants,
+    witnesses: acceptedResultIntegrationAutomaticSuccessorProofObligations.witnesses
   },
   {
     name: "integrationFinality",

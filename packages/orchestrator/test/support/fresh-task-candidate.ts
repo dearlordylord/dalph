@@ -128,6 +128,7 @@ export const makeFreshTaskCandidateFrontierForTest = (input: {
       frame,
       opportunity: RunActivationOpportunity.OrdinaryRunEntry(),
       recoveredAttemptIds: new Set(),
+      unsettledIntegrationTaskIds: new Set(),
       runId: input.runId,
       target
     })

@@ -91,7 +91,7 @@ const fixture = async () => {
 }
 
 const formalCommands = (custodyOffset) =>
-  Array.from({ length: 105 }, (_value, position) => ({
+  Array.from({ length: 115 }, (_value, position) => ({
     position,
     kind: "test",
     name: `formal command ${position}`,
@@ -138,17 +138,17 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
     reportDigest: String(jobStart + shard)
       .slice(-1)
       .repeat(64),
-    positions: Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
+    positions: Array.from({ length: 115 }, (_value, position) => position).filter((position) =>
       shard === 0
         ? position <= 36 ||
           (position >= 42 && position <= 46) ||
           (position >= 60 && position <= 64) ||
           (position >= 86 && position <= 90) ||
-          position >= 100
+          position >= 110
         : (position >= 37 && position <= 41) ||
           (position >= 47 && position <= 59) ||
           (position >= 65 && position <= 85) ||
-          (position >= 91 && position <= 99)
+          (position >= 91 && position <= 109)
     ),
     setupInstallSeconds: 12,
     formalSeconds: 105 - shard,

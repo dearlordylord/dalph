@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
-import { Context, Effect, Ref, Schema, type Stream } from "effect"
+import { type Layer, Context, Effect, Ref, Schema, type Stream } from "effect"
 import { journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
 import { DeliveryCleanupBoundary } from "../delivery/delivery-cleanup-boundary.js"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
@@ -45,6 +45,12 @@ import type { AcceptedJournalReader } from "../../workflow-journal/accepted-read
 import { Journal, type JournalInitialHistoryInvalid } from "../delivery/journal.js"
 import { delivery } from "../delivery/delivery.js"
 import { deliveryRuntimeFrom } from "../delivery/delivery-runtime-adapter.js"
+import type {
+  DeliveryReflectionError,
+  DeliveryRelationSourceError,
+  DeliverySettlementError,
+  TicketDeliveryError
+} from "../delivery/relations.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../delivery/delivery-action-executor.js"
 import { makeLiveDeliveryActionExecutor } from "../delivery/live-delivery-action-executor.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
@@ -60,7 +66,7 @@ import type {
   PauseProgressView
 } from "./pause-progress-observation.js"
 import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
-import { runStabilizedDelivery } from "./run-stabilization.js"
+import { runStabilizedDelivery, type RunStabilizedDeliveryEffect } from "./run-stabilization.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
@@ -385,6 +391,32 @@ export type InitialControlPolicySource<E = never, R = never> = Effect.Effect<Ini
 const liveDeliveryActionExecutorFactory = (runId: RunId, target: TrackerTarget) =>
   makeLiveDeliveryActionExecutor(runId, target)
 
+type ReactiveDeliveryRelationsEffect = ReturnType<typeof makeReactiveDeliveryRelationsLayer>
+type ReactiveDeliveryRelations = Layer.Success<Effect.Success<ReactiveDeliveryRelationsEffect>>
+type DeliverySignalError =
+  | DeliveryRelationSourceError
+  | TicketDeliveryError
+  | DeliverySettlementError
+  | DeliveryReflectionError
+type StabilizedDeliveryEffect = RunStabilizedDeliveryEffect<DeliverySignalError>
+type RunJournaledDeliveryEffect<E, R> = Effect.Effect<
+  RunFinalityProof,
+  | E
+  | Effect.Error<ReactiveDeliveryRelationsEffect>
+  | Effect.Error<StabilizedDeliveryEffect>
+  | Effect.Error<DispositionCleanupActivationService["run"]>
+  | JournalError,
+  | R
+  | Journal
+  | RunRecoveryProjection
+  | DeliveryRuntimeResources
+  | RunActivationGraphBaseline
+  | DispositionCleanupActivation
+  | DeliveryCleanupBoundary
+  | Effect.Services<ReactiveDeliveryRelationsEffect>
+  | Exclude<Effect.Services<StabilizedDeliveryEffect>, ReactiveDeliveryRelations | DeliveryActionExecutor>
+>
+
 /** Interleaves exact cleanup with delivery phases; no pre-cleanup proof authorizes termination. */
 export const runDeliveryAfterDispositionCleanup = Effect.fn("Run.runDeliveryAfterDispositionCleanup")(function* <E, R>(
   cleanup: DispositionCleanupActivationService,
@@ -418,7 +450,7 @@ const runJournaledDelivery = <E, R>(
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
   activateCleanup: boolean,
   opportunity: RunActivationOpportunity
-) =>
+): RunJournaledDeliveryEffect<E, R> =>
   Effect.gen(function* () {
     const compose = () =>
       runDeliveryComposition(
@@ -451,8 +483,54 @@ const runJournaledDelivery = <E, R>(
     return yield* runDeliveryAfterDispositionCleanup(cleanup, deliveryProgram, boundary)
   })
 
+type ActivatedRunEffect<EInitial, RInitial, E, R> = Effect.Effect<
+  RunFinalityDecision,
+  E | EInitial | ApplicationExiting | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
+  RInitial | JournaledRunBootstrap | Exclude<R, JournaledRunServices>
+>
+
+type LiveDeliveryExecutorEffect = ReturnType<typeof makeLiveDeliveryActionExecutor>
+type LiveJournaledDeliveryEffect = RunJournaledDeliveryEffect<
+  Effect.Error<LiveDeliveryExecutorEffect>,
+  Effect.Services<LiveDeliveryExecutorEffect>
+>
+
+export type RunWorkflowEffect<EInitial, RInitial> = ActivatedRunEffect<
+  EInitial,
+  RInitial,
+  Effect.Error<LiveJournaledDeliveryEffect>,
+  Effect.Services<LiveJournaledDeliveryEffect>
+>
+
+type CancellationApplicationEffect = ReturnType<JournaledRunBootstrapService["operatorControl"]["applyRunCancellation"]>
+
+type CancellationProgramEffect = Effect.Effect<
+  RunFinalityProof,
+  Effect.Error<CancellationApplicationEffect> | Effect.Error<LiveJournaledDeliveryEffect>,
+  Effect.Services<LiveJournaledDeliveryEffect>
+>
+
 /** Explicit controlled composition; production callers use {@link runWorkflow}. */
-export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RInitial, E, R>(
+export type RunWorkflowWithControlledDeliveryActionExecutor = <EInitial, RInitial, E, R>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
+  activateCleanup?: boolean,
+  opportunity?: RunActivationOpportunity
+) => ActivatedRunEffect<
+  EInitial,
+  RInitial,
+  Effect.Error<RunJournaledDeliveryEffect<E, R>>,
+  Effect.Services<RunJournaledDeliveryEffect<E, R>>
+>
+
+export const runWorkflowWithControlledDeliveryActionExecutor: RunWorkflowWithControlledDeliveryActionExecutor = <
+  EInitial,
+  RInitial,
+  E,
+  R
+>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId,
@@ -472,7 +550,14 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
   })
 
 /** Establishes one exact Run and performs one bounded ordinary delivery activation. */
-export const runWorkflow = <EInitial, RInitial>(
+export type RunWorkflow = <EInitial, RInitial>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId,
+  opportunity?: RunActivationOpportunity
+) => RunWorkflowEffect<EInitial, RInitial>
+
+export const runWorkflow: RunWorkflow = <EInitial, RInitial>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId,
@@ -492,7 +577,21 @@ export const runWorkflow = <EInitial, RInitial>(
  * ordinary delivery algebra can select work, then drives only the resulting
  * cancellation responsibilities and finality.
  */
-export const runCancellationWorkflow = <EInitial, RInitial>(
+export type RunCancellationWorkflow = <EInitial, RInitial>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId
+) => Effect.Effect<
+  RunFinalityDecision,
+  | Effect.Error<CancellationProgramEffect>
+  | EInitial
+  | ApplicationExiting
+  | JournaledRunBootstrapError
+  | JournaledRunIdentityMismatch,
+  RInitial | JournaledRunBootstrap | Exclude<Effect.Services<CancellationProgramEffect>, JournaledRunServices>
+>
+
+export const runCancellationWorkflow: RunCancellationWorkflow = <EInitial, RInitial>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId
@@ -514,7 +613,17 @@ export const runCancellationWorkflow = <EInitial, RInitial>(
   })
 
 /** Establishes one exact Run and captures its currently Running responsibilities for an active refresh. */
-export const runWorkflowWithActiveWorkAuthorityRefresh = <EInitial, RInitial>(
+export type RunWorkflowWithActiveWorkAuthorityRefresh = <EInitial, RInitial>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId,
+  source: ActiveWorkAuthorityRefreshSource
+) => RunWorkflowEffect<EInitial, RInitial>
+
+export const runWorkflowWithActiveWorkAuthorityRefresh: RunWorkflowWithActiveWorkAuthorityRefresh = <
+  EInitial,
+  RInitial
+>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId,
@@ -530,21 +639,36 @@ export const runWorkflowWithActiveWorkAuthorityRefresh = <EInitial, RInitial>(
   )
 
 /** Explicit controlled composition for one active-work authority refresh activation. */
-export const runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh = <EInitial, RInitial, E, R>(
+export type RunWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh = <EInitial, RInitial, E, R>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId,
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
   source: ActiveWorkAuthorityRefreshSource,
-  activateCleanup = true
-) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.activateActiveWorkAuthorityRefresh(
-      target,
-      initialControlPolicySource,
-      runId,
-      (opportunity) => runJournaledDelivery(runId, target, executorFactory, activateCleanup, opportunity),
-      source
-    )
-  })
+  activateCleanup?: boolean
+) => ActivatedRunEffect<
+  EInitial,
+  RInitial,
+  Effect.Error<RunJournaledDeliveryEffect<E, R>>,
+  Effect.Services<RunJournaledDeliveryEffect<E, R>>
+>
+
+export const runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh: RunWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh =
+  <EInitial, RInitial, E, R>(
+    target: TrackerTarget,
+    initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+    runId: AllocatedWorkflowRunId,
+    executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
+    source: ActiveWorkAuthorityRefreshSource,
+    activateCleanup = true
+  ) =>
+    Effect.gen(function* () {
+      const bootstrap = yield* JournaledRunBootstrap
+      return yield* bootstrap.activateActiveWorkAuthorityRefresh(
+        target,
+        initialControlPolicySource,
+        runId,
+        (opportunity) => runJournaledDelivery(runId, target, executorFactory, activateCleanup, opportunity),
+        source
+      )
+    })

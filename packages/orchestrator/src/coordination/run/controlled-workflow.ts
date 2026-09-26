@@ -21,7 +21,7 @@ import { attemptChoiceControlWithProvidedProtocolLayer } from "../../workflow/pr
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./journaled-run-bootstrap.js"
 import { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
-import { runWorkflow } from "./run.js"
+import { runWorkflow, type RunWorkflowEffect } from "./run.js"
 import { validatedRunActivationLayer } from "./startup-recovery.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { ApplicationExitRequestBoundary, makeApplicationExitShell } from "../application-exit/application-shell.js"
@@ -138,7 +138,21 @@ const controlledJournaledRunLayer = (runId: RunId) =>
   )
 
 /** Selects controlled implementations only outside the ordinary public workflow. */
-export const runControlledWorkflow = (
+export type RunControlledWorkflow = (
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy,
+  runId: RunId
+) => Effect.Effect<
+  Effect.Success<RunWorkflowEffect<never, never>>,
+  Effect.Error<RunWorkflowEffect<never, never>>,
+  | Exclude<
+      Effect.Services<RunWorkflowEffect<never, never>>,
+      Layer.Success<ReturnType<typeof controlledJournaledRunLayer>>
+    >
+  | Layer.Services<ReturnType<typeof controlledJournaledRunLayer>>
+>
+
+export const runControlledWorkflow: RunControlledWorkflow = (
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
   runId: RunId

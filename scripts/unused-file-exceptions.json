@@ -13,6 +13,7 @@
   "scripts/generate-quint-profile-evidence.d.mts",
   "scripts/quint-effective-profile.d.mts",
   "scripts/quint-evaluator-provenance.d.mts",
+  "scripts/quint-gate-automatic-successor-command-oracle.d.mts",
   "scripts/quint-gate-command-contract.d.mts",
   "scripts/quint-gate-command-manifest.d.mts",
   "scripts/quint-gate-concurrency.d.mts",

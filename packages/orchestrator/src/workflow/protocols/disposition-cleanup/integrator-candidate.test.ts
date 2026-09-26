@@ -17,6 +17,7 @@ import {
 } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -76,6 +77,8 @@ import {
   worktreeCleanupSettledRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
+import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../integrator/automatic-successor-session.js"
 
 const acceptedResult = AcceptedResult.make({
   commit: baseSha,
@@ -761,6 +764,82 @@ it.effect("rejects a FullRerun direction or target-lineage intent under a foreig
     )
     expect(validateIntegratorCandidateCleanupProvenance(foreignLineageIntent, authorization)._tag).toBe("Invalid")
   }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
+)
+
+it.effect("preserves an automatically superseded candidate until provider custody proves its writer stopped", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+    if (prepared._tag !== "Append")
+      return yield* Effect.die("accepted automatic S2 history must prepare one fixed session")
+    fixture.append(prepared.event)
+    const records = fixture.records()
+    const derived = deriveCleanupAuthorizations(records, () =>
+      IntegratorCandidateCleanupEvidenceRevision.make(1)
+    ).candidate
+    expect(derived).toHaveLength(1)
+    const authorization = derived[0]
+    if (authorization === undefined) return yield* Effect.die("exact S2 history must derive one predecessor cleanup")
+    expect(authorization.disposition._tag).toBe("AutomaticSuccessorSuperseded")
+    expect(authorization.locator).toBe(fixture.input.predecessor.candidateResource)
+    expect(authorization.owner.sessionId).toBe(fixture.input.predecessor.sessionId)
+    expect(validateIntegratorCandidateCleanupProvenance(records, authorization)._tag).toBe("Valid")
+
+    const liveWriter = IntegratorCandidateCleanupObservation.cases.Foreign.make({
+      locator: authorization.locator,
+      observedSessionId: authorization.owner.sessionId,
+      reason: "LiveWriter",
+      revision: IntegratorCandidateCleanupEvidenceRevision.make(1)
+    })
+    const blocked = yield* Effect.gen(function* () {
+      const outcome = yield* runIntegratorCandidateCleanup(authorization)
+      const boundary = yield* TestIntegratorCandidateCleanupBoundary
+      return { calls: yield* boundary.calls(), outcome }
+    }).pipe(
+      Effect.provide(integratorCandidateCleanupTestLayer({ observations: [liveWriter] })),
+      Effect.provide(liveJournalTestLayer({ records, runId: fixture.runId, target: fixture.accepted.trackerTarget }))
+    )
+    expect(blocked.outcome._tag).toBe("Pending")
+    expect(blocked.calls.map(({ _tag }) => _tag)).toEqual(["Observe"])
+
+    const quiescent = IntegratorCandidateCleanupObservation.cases.Present.make({
+      locator: authorization.locator,
+      revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+      sessionId: authorization.owner.sessionId,
+      writerQuiescent: true
+    })
+    const removed = IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+      locator: authorization.locator,
+      revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
+      sessionId: authorization.owner.sessionId
+    })
+    const cleaned = yield* Effect.gen(function* () {
+      const outcome = yield* runIntegratorCandidateCleanup(authorization)
+      const boundary = yield* TestIntegratorCandidateCleanupBoundary
+      return { calls: yield* boundary.calls(), outcome }
+    }).pipe(
+      Effect.provide(
+        integratorCandidateCleanupTestLayer({
+          observations: [
+            quiescent,
+            IntegratorCandidateCleanupObservation.cases.Absent.make({
+              locator: authorization.locator,
+              revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+            })
+          ],
+          mutations: [removed]
+        })
+      ),
+      Effect.provide(liveJournalTestLayer({ records, runId: fixture.runId, target: fixture.accepted.trackerTarget }))
+    )
+    expect(cleaned.outcome._tag).toBe("Settled")
+    expect(cleaned.calls.map(({ _tag }) => _tag)).toEqual(["Observe", "Remove", "Observe"])
+
+    const missingCustody = records.filter(({ event }) => event._tag !== "IntegratorRunResultRecorded")
+    expect(
+      deriveCleanupAuthorizations(missingCustody, () => IntegratorCandidateCleanupEvidenceRevision.make(1)).candidate
+    ).toEqual([])
+  })
 )
 
 it.effect("rejects a provider-failure quarantine without its activity-absence witness", () =>

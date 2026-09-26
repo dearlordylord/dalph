@@ -120,6 +120,35 @@ type RuntimeEvent<E> =
  */
 export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvaluation, E>
 
+/** Exact Effect result consumed by one runtime phase. */
+export type RunDeliveryRuntimePhaseEffect<E> = Effect.Effect<
+  DeliveryRuntimeQuiescence,
+  | E
+  | JournalError
+  | ApplicationExiting
+  | DeliveryActionCompletionPublicationMismatch
+  | DeliveryActionExecutionError
+  | DeliveryRuntimeAdmissionProgressContradiction
+  | DeliveryRuntimeProposalOwnershipConflict
+  | DeliveryRuntimeReconfirmationStateInvalid
+  | DeliveryRuntimeRunMismatch
+  | PlannedTaskAttemptError,
+  | DeliveryActionExecutor
+  | DeliveryAcceptedFactPublication
+  | RuntimeObservation.DeliveryRuntimeObservationPublication
+  | DeliveryRuntimeResources
+  | OperationIdAllocator
+  | PlannedAttemptProtocolController
+  | PlannedTaskAttemptPlanner
+>
+
+/** Public callable surface keeps the traced Effect.fn wrapper metadata out of declarations. */
+export type RunDeliveryRuntimePhase = <E>(
+  expectedRunId: RunId,
+  relation: DeliveryRuntimeInput<E>,
+  phase?: DeliveryRuntimePhaseType
+) => RunDeliveryRuntimePhaseEffect<E>
+
 const runtimeEvaluationRunIds = (evaluation: DeliveryRuntimeEvaluation): ReadonlyArray<RunId> => {
   const frontierRunIds =
     evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
@@ -159,7 +188,7 @@ const validateRuntimeEvaluationRun = (
  * ownership, and the complete live-owner lifecycle — remain governed by their
  * focused models and production tests rather than one whole-loop model.
  */
-export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
+export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
   expectedRunId: RunId,
   relation: DeliveryRuntimeInput<E>,
   phase: DeliveryRuntimePhaseType = DeliveryRuntimePhase.Ordinary
@@ -736,7 +765,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 })
 
 /** Runs one standalone runtime phase and releases its process-local resources at the phase boundary. */
-export const runDeliveryRuntime = <E>(expectedRunId: RunId, relation: DeliveryRuntimeInput<E>) =>
+export type RunDeliveryRuntime = <E>(
+  expectedRunId: RunId,
+  relation: DeliveryRuntimeInput<E>
+) => RunDeliveryRuntimePhaseEffect<E>
+
+export const runDeliveryRuntime: RunDeliveryRuntime = <E>(expectedRunId: RunId, relation: DeliveryRuntimeInput<E>) =>
   runDeliveryRuntimePhase(expectedRunId, relation).pipe(
     Effect.ensuring(
       Effect.gen(function* () {

@@ -17,6 +17,15 @@ own executable conformance adapter under
 | `specs/runActivation.qnt` | one idempotent Run-entry boundary: exact target and Run identity, lazy first policy versus the latest durable policy, reduction of exactly one unfinished history, independent reconstruction of every retained task-work position before new admission, and identical quiescence/finality handling after a new or reconstructed beginning. Process loss clears only process-local activation state; the same ordinary entry establishes the Run again from durable history. Executable seam: `packages/dalph/test/conformance/run-activation.mbt.test.ts` invokes production lifecycle, startup inspection, history reduction, recovery projection, the ordinary delivery relation's admission basis, admission, planned-attempt ambiguity reconciliation, and finality seams. | 195 |
 | `specs/applicationExit.qnt` | one process-local graceful application Exit decision boundary: cutoff-linearized admission, joined requests, typed owner disposition, exact executor evidence, enumerated quick drain actions, five monotonic ticks, distinct success/failure/timeout/unexpected-death outcomes, forced termination, no Run-journal Exit facts, and fresh restart state. Executable seam: `packages/dalph/test/conformance/application-exit.mbt.test.ts` invokes the production lifecycle-decision kernel without becoming a second runtime. | 203 |
 
+The accepted #385 automatic-successor model remains the canonical scenario and
+sampled/conformance subject. Its unchanged per-authorization and per-baseline-
+round catch-up CAS bound also has a small stage/counter projection,
+`specs/acceptedResultIntegration_automaticSuccessor_counters_proof.qnt`, because
+the canonical 44-transition state model returned Z3 UNKNOWN while checking
+that property. The projection is in the same formal profile and maps every
+canonical counter writer, authorization reset, round reset, and catch-up intent
+transition; it does not supply runtime behavior.
+
 The following additional subject models are accepted. Their production-backed
 conformance adapters remain part of their owning implementation phases:
 

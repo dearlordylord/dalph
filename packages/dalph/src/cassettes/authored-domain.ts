@@ -1474,9 +1474,10 @@ const targetPromotionOriginFor = (
     : undefined
 }
 
-type TargetPromotionCompareAndSetStoryItem =
-  | Extract<AuthoredCassetteStoryItem, { readonly _tag: "TargetPromotionCompareAndSetReturned" }>
-  | Extract<AuthoredCassetteStoryItem, { readonly _tag: "TargetPromotionCompareAndSetResponseLost" }>
+type TargetPromotionCompareAndSetStoryItem = Extract<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "TargetPromotionCompareAndSetReturned" | "TargetPromotionCompareAndSetResponseLost" }
+>
 
 const targetPromotionCompareAndSetItems = (story: ReadonlyArray<AuthoredCassetteStoryItem>) =>
   story.flatMap(

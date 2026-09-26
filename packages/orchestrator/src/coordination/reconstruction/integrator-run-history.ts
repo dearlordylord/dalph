@@ -23,7 +23,12 @@ import { setMapValue } from "./integration-history-run-binding.js"
 
 type IntegratorSessionFixed = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+  {
+    readonly _tag:
+      | "IntegratorSessionFixed"
+      | "IntegratorSuccessorSessionFixed"
+      | "IntegratorAutomaticSuccessorSessionFixed"
+  }
 >
 type IntegratorRunStarted = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunStarted" }>
 type IntegratorRunResultRecorded = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunResultRecorded" }>
