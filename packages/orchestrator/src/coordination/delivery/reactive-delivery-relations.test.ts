@@ -1,4 +1,6 @@
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
+import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -573,6 +575,79 @@ it.effect("records the initial and later exact production bundles without changi
         Effect.flatMap((signal) => signal.get)
       )
       expect(current.graph._tag).toBe("GraphEstablished")
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("withholds a dependant from a complete graph while prerequisite integration finality is pending", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const accepted = makeAcceptedIntegrationHistory({
+        acceptedResult: acceptedResultFixture(GitCommitSha.make("3".repeat(40))),
+        activeClaim: recoveredClaim,
+        integrationTarget,
+        plannedAttempt: recoveredAttempt,
+        runId,
+        targetHeadSha: recoveredAttempt.baseSha,
+        taskSpecification: recoveredSpecification,
+        trackerTarget: target
+      })
+      for (const record of accepted.records.slice(1)) {
+        yield* journal.append(record.runId, record.key, record.event)
+      }
+
+      const dependantTaskId = TaskId.make("finality-pending-dependant")
+      const laterGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: accepted.graphOperation.operationId },
+        OperationId.make("finality-pending-complete-graph"),
+        target,
+        [accepted.graphOperation.operationId],
+        [recoveredAttempt.taskId, dependantTaskId]
+      )
+      const graph = validSnapshot({
+        revision: "finality-pending-complete-graph-revision",
+        tasks: [
+          {
+            id: recoveredAttempt.taskId,
+            lifecycle: { _tag: "CompletedSuccessfully" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          {
+            id: dependantTaskId,
+            lifecycle: { _tag: "Open" },
+            parentTaskId: null,
+            prerequisiteIds: [recoveredAttempt.taskId]
+          }
+        ]
+      })
+      yield* journal.append(
+        runId,
+        intentRecordKey(laterGraphOperation.operationId),
+        taskTrackerReadIntent(laterGraphOperation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(laterGraphOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          laterGraphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(laterGraphOperation, graph)
+        )
+      )
+
+      const layer = yield* makeReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie))
+      )
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const evaluation = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
+
+      expect(evaluation.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [] })
+      if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return
+      expect(evaluation.proposedActions.freshTaskCandidateFrontier?.candidates).toEqual([])
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
