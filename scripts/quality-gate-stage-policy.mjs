@@ -110,7 +110,7 @@ export const preflightQualityGates = (baseSha) => [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   { args: ["typecheck"], name: "typecheck (including Effect diagnostics)", timeout: 2 * 60 * SECOND },
   ...baselineQualityGates(),
-  { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
+  { args: ["check:circular"], name: "dependency cycles", timeout: 3 * 60 * SECOND },
   complexityQualityGate(baseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:coverage:explanation"], name: "coverage explanation controls", timeout: 60 * SECOND },

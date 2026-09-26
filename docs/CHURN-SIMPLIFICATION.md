@@ -142,3 +142,13 @@ that existing class and re-exporting it from the orchestrator package makes the
 public return type nameable. No runtime branch, event or schema changed. The exact
 `pnpm build` command then passed all three production packages; the earlier TS4023
 obstruction is repaired, not waived.
+
+Run `68cbc8ef-8cc1-44bb-873c-ea10b3a0daa5` passed artifacts, typecheck,
+lint and Lab, then exhausted the existing dependency check's 60-second allowance.
+Its process custody stopped and source remained unchanged. The focused diagnostic
+asked whether the traversal contained a cycle/failure or merely exceeded that
+allowance. The same `check:circular` command with a three-minute bound exited zero
+and reported all 2,081 files analyzed with no circular dependency. This supports
+an inadequate stage allowance, not a dependency defect. The stage now retains its
+check and has a three-minute bound; the repaired bounded command must pass before
+another qualification attempt.
