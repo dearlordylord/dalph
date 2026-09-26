@@ -594,6 +594,9 @@ it.effect("withholds a dependant from a complete graph while prerequisite integr
         trackerTarget: target
       })
       for (const record of accepted.records.slice(1)) {
+        if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+          return yield* Effect.die(`accepted integration history contains non-appendable ${record.event._tag}`)
+        }
         yield* journal.append(record.runId, record.key, record.event)
       }
 
