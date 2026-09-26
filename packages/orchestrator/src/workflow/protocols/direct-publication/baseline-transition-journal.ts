@@ -1,7 +1,7 @@
 import type { RunId } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import { journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   localTargetCatchUpIntendedRecordKey,
   localTargetCatchUpObservedRecordKey,
@@ -22,6 +22,7 @@ import {
   RemoteBaselineReadIntendedEvent
 } from "./baseline-events.js"
 import { deriveRemoteBaselineState } from "./baseline-state.js"
+import { remoteBaselineEventsFor } from "./baseline-rounds.js"
 
 export type CurrentRemoteBaselineEvidence<E, R> = (runId: RunId) => Effect.Effect<JournalHistorySource, E, R>
 
@@ -35,27 +36,6 @@ export const readAcceptedRemoteBaselineEvidence = Effect.fn("RemoteBaseline.read
 ) {
   return yield* (yield* AcceptedJournalReader).readAccepted(runId)
 })
-
-export const remoteBaselineEventsFor = (
-  source: JournalHistorySource,
-  correlation: RemoteBaselineCorrelation
-): ReadonlyArray<RemoteBaselineJournalEvent> =>
-  [
-    ...journalRecordsOfKind(source, "RemoteBaselineReadIntended"),
-    ...journalRecordsOfKind(source, "RemoteBaselineObserved"),
-    ...journalRecordsOfKind(source, "LocalTargetCatchUpIntended"),
-    ...journalRecordsOfKind(source, "LocalTargetCatchUpObserved")
-  ]
-    .sort((left, right) => Number(left.position) - Number(right.position))
-    .flatMap(({ event }) =>
-      (event._tag === "RemoteBaselineReadIntended" ||
-        event._tag === "RemoteBaselineObserved" ||
-        event._tag === "LocalTargetCatchUpIntended" ||
-        event._tag === "LocalTargetCatchUpObserved") &&
-      event.correlation.baselineId === correlation.baselineId
-        ? [event]
-        : []
-    )
 
 const correlationEquals = Schema.toEquivalence(RemoteBaselineCorrelation)
 

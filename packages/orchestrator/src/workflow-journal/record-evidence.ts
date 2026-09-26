@@ -659,7 +659,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
       event._tag === "RemotePublicationRetained" ||
       event._tag === "RemotePublicationResumeRequested" ||
-      event._tag === "RemotePublicationSucceeded"
+      event._tag === "RemotePublicationSucceeded" ||
+      event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
     ) {
       return undefined
     }

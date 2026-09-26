@@ -231,7 +231,20 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const frame =
       journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
+    const records = journal.prefix
     const activeRefreshBoundaryReached = projection.activeRefreshBoundary !== undefined
+    const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
+    const unsettledIntegrationTaskIds = new Set(
+      integrationResponsibilities.map(({ plannedAttempt }) => plannedAttempt.taskId)
+    )
+    const tasksWaitingForIntegrationFinality = new Set(
+      frame?.currentGraph
+        .toWire()
+        .tasks.filter(({ prerequisiteIds }) =>
+          prerequisiteIds.some((taskId) => unsettledIntegrationTaskIds.has(taskId))
+        )
+        .map(({ id }) => id) ?? []
+    )
     /** A complete evaluation derives decisions and admission authority from the same coherent frame. */
     const freshEvaluation = yield* deriveFreshTaskCandidateEvaluation({
       acceptedAt: journal.position,
@@ -239,6 +252,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       frame,
       opportunity,
       recoveredAttemptIds,
+      unsettledIntegrationTaskIds,
       runId,
       target
     })
@@ -257,6 +271,12 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const activeCurrentGraphRequired = activeRefreshNeedsCurrentGraph(journal, opportunity)
     const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds).filter((transition) => {
       if (
+        transition._tag === "BeginPlannedAttemptExecutorWork" &&
+        tasksWaitingForIntegrationFinality.has(transition.plannedAttempt.taskId)
+      ) {
+        return false
+      }
+      if (
         !activeCurrentGraphRequired ||
         opportunity._tag !== "ActiveWorkAuthorityRefresh" ||
         !transitionHasPlannedAttempt(transition)
@@ -268,8 +288,6 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const ordinaryCurrentGraphRequired = ordinaryContinuationNeedsCurrentGraph(journal, opportunity, recovered)
     const currentGraphRequired = activeCurrentGraphRequired || ordinaryCurrentGraphRequired
     const transitions = [...recovered, ...admittedFresh.map(({ transition }) => transition)]
-    const records = journal.prefix
-    const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,
       acceptedOperationIds: acceptedOperationIdsOf(records),

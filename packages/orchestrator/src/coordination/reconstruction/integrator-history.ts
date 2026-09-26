@@ -13,10 +13,12 @@ import { acceptedResultEquivalence } from "../../workflow/protocols/integration-
 import type {
   IntegratorSessionCorrelation,
   IntegratorSessionFixedEvent,
-  IntegratorSuccessorSessionFixedEvent
+  IntegratorSuccessorSessionFixedEvent,
+  IntegratorAutomaticSuccessorSessionFixedEvent
 } from "../../workflow/protocols/integrator/events.js"
 import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator/state.js"
 import { integratorSuccessorCorrelationFor } from "../../workflow/protocols/integrator/session.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "../../workflow/protocols/integrator/automatic-successor-session.js"
 import { setMapValue } from "./integration-history-run-binding.js"
 import { type IntegratorRunHistoryIndexes, validateIntegratorRunHistoryEvent } from "./integrator-run-history.js"
 
@@ -33,7 +35,15 @@ export interface IntegratorHistoryIndexes extends IntegratorRunHistoryIndexes {
   readonly targetLineageObservations: HashMap.HashMap<JournalPosition, TargetLineageObserved>
   readonly integratorSessionFixed: HashMap.HashMap<
     JournalPosition,
-    Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }>
+    Extract<
+      WorkflowJournalEvent,
+      {
+        readonly _tag:
+          | "IntegratorSessionFixed"
+          | "IntegratorSuccessorSessionFixed"
+          | "IntegratorAutomaticSuccessorSessionFixed"
+      }
+    >
   >
   readonly integratorSessionsByStartedAt: HashMap.HashMap<JournalPosition, JournalPosition>
   readonly integratorSessionsBySessionId: HashMap.HashMap<string, JournalPosition>
@@ -56,6 +66,7 @@ type IntegratorSuccessorSessionFixed = Extract<
   WorkflowJournalEvent,
   { readonly _tag: "IntegratorSuccessorSessionFixed" }
 >
+type IntegratorAutomaticSuccessorSessionFixed = IntegratorAutomaticSuccessorSessionFixedEvent
 type TargetLineageObserved = typeof TargetLineageObservedEvent.Type
 const sameIntegrationTarget = (
   left: IntegratorSessionCorrelation["integrationTarget"],
@@ -400,7 +411,11 @@ const invalidIntegratorSuccessorSession = (
   )
   const successorLineage = mapGet(indexes.targetLineageObservations, event.successor.targetLineageObservedAt)
   const deterministicSuccessor = deterministicSuccessorFor(event, successorLineage)
-  const validPredecessor = validSuccessorPredecessorFor(predecessorPosition, predecessor, event)
+  const validPredecessor = validSuccessorPredecessorFor(
+    predecessorPosition,
+    predecessor?._tag === "IntegratorSessionFixed" ? predecessor : undefined,
+    event
+  )
   const validQuarantine = successorQuarantineIsValid(quarantine, record, event)
   const validDirection = successorDirectionIsValid(direction, record, event)
   const issue = invalidSuccessorRecord(
@@ -422,6 +437,69 @@ const invalidIntegratorSuccessorSession = (
       ...indexes,
       integratorSessionFixed: setMapValue(indexes.integratorSessionFixed, record.position, event),
       integratorSuccessorSessionFixed: setMapValue(indexes.integratorSuccessorSessionFixed, record.position, event),
+      integratorSuccessorSessionsByPredecessor: setMapValue(
+        indexes.integratorSuccessorSessionsByPredecessor,
+        event.predecessor.sessionId,
+        record.position
+      ),
+      integratorSessionsBySessionId: setMapValue(
+        indexes.integratorSessionsBySessionId,
+        event.successor.sessionId,
+        record.position
+      ),
+      integratorSessionsByCandidateResource: setMapValue(
+        indexes.integratorSessionsByCandidateResource,
+        event.successor.candidateResource,
+        record.position
+      )
+    }
+  }
+}
+
+const invalidIntegratorAutomaticSuccessorSession = (
+  record: JournalRecord,
+  event: IntegratorAutomaticSuccessorSessionFixed,
+  indexes: IntegratorHistoryIndexes,
+  records: JournalHistorySource
+): IntegratorHistoryValidation => {
+  const predecessorPosition = mapGet(indexes.integratorSessionsBySessionId, event.predecessor.sessionId)
+  const predecessor =
+    predecessorPosition === undefined ? undefined : mapGet(indexes.integratorSessionFixed, predecessorPosition)
+  const predecessorCorrelation =
+    predecessor?._tag === "IntegratorSessionFixed"
+      ? predecessor.correlation
+      : predecessor?._tag === "IntegratorSuccessorSessionFixed" ||
+          predecessor?._tag === "IntegratorAutomaticSuccessorSessionFixed"
+        ? predecessor.successor
+        : undefined
+  const existingSuccessorPosition = mapGet(
+    indexes.integratorSuccessorSessionsByPredecessor,
+    event.predecessor.sessionId
+  )
+  const existingSessionIdentity =
+    mapGet(indexes.integratorSessionsBySessionId, event.successor.sessionId) ??
+    mapGet(indexes.integratorSessionsByCandidateResource, event.successor.candidateResource)
+  const validation = validateAutomaticSuccessorSessionFixedRecord(records, record, event.predecessor)
+  const exactPredecessor =
+    predecessorPosition !== undefined &&
+    predecessorPosition < record.position &&
+    predecessorCorrelation !== undefined &&
+    integratorCorrelationsEqual(predecessorCorrelation, event.predecessor)
+  const detail =
+    existingSuccessorPosition !== undefined
+      ? `Integrator predecessor already has a successor at ${existingSuccessorPosition}`
+      : existingSessionIdentity !== undefined
+        ? `Integrator automatic successor reuses a session or resource at ${existingSessionIdentity}`
+        : !exactPredecessor
+          ? "Integrator automatic successor has no exact earlier predecessor session"
+          : validation._tag === "Invalid"
+            ? validation.detail
+            : undefined
+  return {
+    detail,
+    indexes: {
+      ...indexes,
+      integratorSessionFixed: setMapValue(indexes.integratorSessionFixed, record.position, event),
       integratorSuccessorSessionsByPredecessor: setMapValue(
         indexes.integratorSuccessorSessionsByPredecessor,
         event.predecessor.sessionId,
@@ -480,6 +558,10 @@ const validateNonRunIntegratorHistoryEvent = <Indexes extends IntegratorHistoryI
   }
   if (event._tag === "IntegratorSuccessorSessionFixed") {
     const validation = invalidIntegratorSuccessorSession(record, event, indexes, records)
+    return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
+  }
+  if (event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+    const validation = invalidIntegratorAutomaticSuccessorSession(record, event, indexes, records)
     return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
   }
   return { handled: false, indexes }

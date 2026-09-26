@@ -1,12 +1,13 @@
 import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
+import { acceptedAutomaticSuccessorQuintGateCommandKeys } from "./quint-gate-automatic-successor-command-oracle.mjs"
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
-  total: 105,
-  typecheck: 15,
-  test: 46,
-  "sampled-run": 23,
-  verify: 21
+  total: 115,
+  typecheck: 17,
+  test: 50,
+  "sampled-run": 25,
+  verify: 23
 })
 
 export const legacyQuintGateExpectedCommandCounts = Object.freeze({
@@ -34,10 +35,27 @@ const acceptedQuintGateCommandKeys = Object.freeze([
   ...acceptedFreshTaskAdmissionQuintGateCommandKeys,
   ...acceptedLegacyQuintGateCommandKeys.slice(freshTaskInsertionIndex)
 ])
+const automaticSuccessorInsertionIndex = acceptedQuintGateCommandKeys.indexOf(
+  "typecheck\u0000integration finality model typecheck"
+)
+if (automaticSuccessorInsertionIndex < 0)
+  throw new Error("accepted Quint oracle lacks the integration-finality boundary")
+const acceptedQuintGateCommandKeysWithAutomaticSuccessor = Object.freeze([
+  ...acceptedQuintGateCommandKeys.slice(0, automaticSuccessorInsertionIndex),
+  ...acceptedAutomaticSuccessorQuintGateCommandKeys,
+  ...acceptedQuintGateCommandKeys.slice(automaticSuccessorInsertionIndex)
+])
 
 /** Compare the retained pre-#315 commands with the independently accepted order. */
 export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
-  const retained = manifest.filter(({ name }) => !name.startsWith("fresh-task admission")).map(commandKey)
+  const retained = manifest
+    .filter(
+      ({ name }) =>
+        !name.startsWith("fresh-task admission") &&
+        !name.startsWith("accepted-result automatic successor proof") &&
+        !name.startsWith("accepted-result automatic successor counter proof")
+    )
+    .map(commandKey)
   const mismatch = retained.findIndex((key, index) => key !== acceptedLegacyQuintGateCommandKeys[index])
   if (retained.length === acceptedLegacyQuintGateCommandKeys.length && mismatch < 0) return
 
@@ -50,12 +68,13 @@ export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
 /** Compare every command with independent pre-#315 and #315 literal oracles. */
 export const assertAcceptedQuintGateCommands = (manifest) => {
   const received = manifest.map(commandKey)
-  const mismatch = received.findIndex((key, index) => key !== acceptedQuintGateCommandKeys[index])
-  if (received.length === acceptedQuintGateCommandKeys.length && mismatch < 0) return
+  const mismatch = received.findIndex((key, index) => key !== acceptedQuintGateCommandKeysWithAutomaticSuccessor[index])
+  if (received.length === acceptedQuintGateCommandKeysWithAutomaticSuccessor.length && mismatch < 0) return
 
-  const index = mismatch < 0 ? Math.min(received.length, acceptedQuintGateCommandKeys.length) : mismatch
+  const index =
+    mismatch < 0 ? Math.min(received.length, acceptedQuintGateCommandKeysWithAutomaticSuccessor.length) : mismatch
   throw new Error(
-    `accepted Quint command mismatch at ${index}: expected ${String(acceptedQuintGateCommandKeys[index])}, received ${String(received[index])}`
+    `accepted Quint command mismatch at ${index}: expected ${String(acceptedQuintGateCommandKeysWithAutomaticSuccessor[index])}, received ${String(received[index])}`
   )
 }
 
@@ -69,8 +88,8 @@ const countManifestCommands = (manifest) => {
 
 /**
  * Keep the selected command count independent from the manifest and the
- * execution path. Both representations must retain the freshness-corrected
- * 105-command phase contract even when an omission changes them together.
+ * execution path. Both representations must retain the current 115-command
+ * command contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {
   assertAcceptedQuintGateCommands(manifest)

@@ -19,9 +19,11 @@ import {
   IntegratorCandidateText,
   IntegratorGitObservation,
   IntegratorResult,
+  IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation
 } from "../protocols/integrator/events.js"
+import { IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../protocols/integrator/automatic-successor-events.js"
 import {
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
@@ -244,6 +246,37 @@ export const IntegratorSuccessorSessionFixed = Schema.TaggedStruct("IntegratorSu
 })
 export type IntegratorSuccessorSessionFixed = typeof IntegratorSuccessorSessionFixed.Type
 
+/** One compatible competing-head occurrence authorized one fresh successor session. */
+export const IntegratorCompetingHeadSuccessorAuthorized = Schema.TaggedStruct(
+  "IntegratorCompetingHeadSuccessorAuthorized",
+  {
+    ...initiatedByCoordinator,
+    authorizationId: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.authorizationId,
+    correlation: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.correlation,
+    mergeBase: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.mergeBase,
+    recordedAt: JournalPosition,
+    remoteHead: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.remoteHead,
+    remotePublicationRetainedAt: JournalPosition,
+    runId: RunId
+  }
+)
+export type IntegratorCompetingHeadSuccessorAuthorized = typeof IntegratorCompetingHeadSuccessorAuthorized.Type
+
+/** A newly fixed automatic successor retains the original integration responsibility. */
+export const IntegratorAutomaticSuccessorSessionFixed = Schema.TaggedStruct(
+  "IntegratorAutomaticSuccessorSessionFixed",
+  {
+    ...initiatedByCoordinator,
+    authorizationAt: JournalPosition,
+    predecessor: IntegratorSessionCorrelation,
+    recordedAt: JournalPosition,
+    runId: RunId,
+    successor: IntegratorSessionCorrelation,
+    successorGeneration: IntegratorAutomaticSuccessorSessionFixedEvent.fields.successorGeneration
+  }
+)
+export type IntegratorAutomaticSuccessorSessionFixed = typeof IntegratorAutomaticSuccessorSessionFixed.Type
+
 /** Dalph began one bounded call for an exact opaque Integrator run. */
 export const IntegratorRunStarted = Schema.TaggedStruct("IntegratorRunStarted", {
   ...initiatedByCoordinator,
@@ -405,6 +438,8 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   IntegratorCandidateCleanupOccurred,
   IntegratorCandidateQualificationInitiated,
   IntegratorCandidateQualificationObserved,
+  IntegratorCompetingHeadSuccessorAuthorized,
+  IntegratorAutomaticSuccessorSessionFixed,
   IntegratorRunResultRecorded,
   IntegratorRunStarted,
   IntegratorSessionFixed,

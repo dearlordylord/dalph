@@ -38,15 +38,13 @@ import {
   integratorSuccessorCorrelationFor,
   readRecordedIntegratorSession
 } from "./session.js"
-import {
-  integratorCorrelationsEqual,
-  integratorResponsibilityFactsEqual,
-  integratorResponsibilityFactsFromCorrelation
-} from "./state.js"
+import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
 import { deriveIntegrationQuarantineState } from "../integration-quarantine/state.js"
 import { integrationQuarantineDirectionSubject } from "../integration-quarantine/events.js"
 import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"
 import { exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
+import { integratorSessionCapacityForJournal } from "./session-capacity.js"
 
 /**
  * Whether a queued S2 fix still names the lineage read bound to the latest
@@ -376,36 +374,6 @@ const successorIdentityCollision = (
     return false
   })
 
-const distinctSessionCountForResponsibility = (
-  records: JournalHistorySource,
-  responsibility: ReturnType<typeof integratorResponsibilityFactsFromCorrelation>
-): number => {
-  const sessionIds = new Set<string>()
-  for (const record of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
-    if (
-      record.event._tag === "IntegratorSessionFixed" &&
-      integratorResponsibilityFactsEqual(
-        integratorResponsibilityFactsFromCorrelation(record.event.correlation),
-        responsibility
-      )
-    ) {
-      sessionIds.add(record.event.correlation.sessionId)
-    }
-  }
-  for (const record of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-    if (
-      record.event._tag === "IntegratorSuccessorSessionFixed" &&
-      integratorResponsibilityFactsEqual(
-        integratorResponsibilityFactsFromCorrelation(record.event.successor),
-        responsibility
-      )
-    ) {
-      sessionIds.add(record.event.successor.sessionId)
-    }
-  }
-  return sessionIds.size
-}
-
 const validateSuccessorUniqueness = (
   records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput,
@@ -415,9 +383,12 @@ const validateSuccessorUniqueness = (
   | { readonly _tag: "Available" }
   | { readonly _tag: "Existing"; readonly record: IntegratorSuccessorSessionFixedRecord }
   | { readonly _tag: "Invalid"; readonly detail: string } => {
-  const responsibility = integratorResponsibilityFactsFromCorrelation(input.predecessor)
-  if (distinctSessionCountForResponsibility(records, responsibility) >= maximumIntegratorSessionsPerResponsibility) {
+  const capacity = integratorSessionCapacityForJournal(records, input.predecessor)
+  if (capacity._tag === "Exhausted") {
     return { _tag: "Invalid", detail: "Integrator responsibility has reached its three-session aggregate bound" }
+  }
+  if (capacity._tag === "NoFixedSession") {
+    return { _tag: "Invalid", detail: "FullRerun successor requires a fixed predecessor session" }
   }
   const [existing, duplicate] = firstTwoSuccessorsFor(records, input.predecessor)
   if (duplicate) {
@@ -498,12 +469,51 @@ const activeIntegratorSuccessorFor = (
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
-  const [fixed, duplicate] = firstTwoSuccessorsFor(records, predecessor)
-  if (duplicate) {
-    return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }
+  let active = predecessor
+  let successorCount = 0
+  let advanced = false
+  const visited = new Set<string>()
+  for (;;) {
+    if (visited.has(active.sessionId)) {
+      return { _tag: "Invalid", detail: "Journal history contains a successor-session cycle" }
+    }
+    visited.add(active.sessionId)
+    const related = [
+      ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
+      ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")
+    ].filter(
+      ({ event }) =>
+        (event._tag === "IntegratorSuccessorSessionFixed" ||
+          event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
+        event.predecessor.sessionId === active.sessionId
+    )
+    if (related.length === 0) {
+      return advanced ? { _tag: "Valid", successor: active } : { _tag: "Absent" }
+    }
+    if (related.length !== 1) {
+      return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }
+    }
+    const fixed = related[0]
+    if (fixed === undefined) {
+      return { _tag: "Invalid", detail: "Journal history contains an unexpected successor event" }
+    }
+    if (isIntegratorSuccessorSessionFixedRecord(fixed)) {
+      const validated = validateActiveIntegratorSuccessorRecord(records, fixed, active)
+      if (validated._tag !== "Valid") return validated
+      active = validated.successor
+    } else if (fixed.event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+      const validated = validateAutomaticSuccessorSessionFixedRecord(records, fixed, active)
+      if (validated._tag !== "Valid") return validated
+      active = fixed.event.successor
+    } else {
+      return { _tag: "Invalid", detail: "Journal history contains an unexpected successor event" }
+    }
+    advanced = true
+    successorCount += 1
+    if (successorCount + 1 > maximumIntegratorSessionsPerResponsibility) {
+      return { _tag: "Invalid", detail: "Integrator responsibility exceeds its three-session bound" }
+    }
   }
-  if (fixed === undefined) return { _tag: "Absent" }
-  return validateActiveIntegratorSuccessorRecord(records, fixed, predecessor)
 }
 
 /**

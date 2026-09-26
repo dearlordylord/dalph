@@ -40,6 +40,7 @@ import { isSafeContinuationRevalidationEligibility } from "../frontier/fresh-fac
 import { UntrackedWorktreePath, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -96,9 +97,12 @@ import {
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
+  IntegratorGitObservation,
   IntegratorSessionCorrelation,
   IntegratorNotPreparedDetail,
   IntegratorRunCorrelation,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
   IntegratorResult,
@@ -200,9 +204,15 @@ import {
   continuationTrackerReadHasExactPlanPredecessor,
   latestContinuationTrackerReadStatusAfter
 } from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
+import { makeSuccessorPrefix } from "../../../test/support/automatic-successor-history.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../../workflow/protocols/integrator/automatic-successor-session.js"
 
 const coverageRunId = RunId.make("recovery-activation-coverage-run")
 const coverageTarget = FixtureTarget.make("recovery-activation-coverage-target")
+const fixtureTargetFrom = (target: TrackerTarget): FixtureTarget => {
+  if (typeof target !== "string") throw new Error("automatic successor fixture must use a fixture tracker target")
+  return target
+}
 const coverageTaskId = TaskId.make("recovery-activation-coverage-task")
 const coverageSpecification = makeTaskWorkSpecification({
   body: "coverage body",
@@ -873,6 +883,333 @@ const liveProjectionFor = <E, R>(
       return yield* projection.readDeliveryProjection
     })
   )
+
+const qualifiedAutomaticSuccessorHistory = Effect.fn("RecoveryActivationTest.qualifiedAutomaticSuccessorHistory")(
+  function* () {
+    const fixture = makeSuccessorPrefix()
+    const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+    if (prepared._tag !== "Append") return yield* Effect.die("accepted S2 prefix must fix one automatic successor")
+    fixture.append(prepared.event)
+    const session = prepared.event.successor
+    const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+    const candidateText = IntegratorCandidateText.make("refs/candidates/recovery-activation-s2")
+    const candidateCommit = GitCommitSha.make("8".repeat(40))
+    fixture.append(IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
+    fixture.append(
+      IntegratorRunResultRecordedEvent.make({
+        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run }),
+        run,
+        version: workflowJournalEventVersion
+      })
+    )
+    fixture.append(
+      IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
+    )
+    fixture.append(
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText,
+        observation: IntegratorGitObservation.cases.Commit.make({
+          candidateText,
+          commit: candidateCommit,
+          directParents: [session.expectedTargetHead, session.acceptedResult.commit]
+        }),
+        run,
+        version: workflowJournalEventVersion
+      })
+    )
+    const candidateRecords = fixture.records()
+    const taskId = fixture.accepted.plannedAttempt.taskId
+    const graphOne = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("recovery-activation-s2-authority-graph-one"),
+      fixture.accepted.trackerTarget,
+      [fixture.accepted.planOperation.operationId],
+      [taskId]
+    )
+    const graphSnapshot = validSnapshot({
+      revision: "recovery-activation-s2-authority-graph-one",
+      tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+    })
+    fixture.append(taskTrackerReadIntent(graphOne))
+    fixture.append(
+      taskTrackerFactsObservedEvent(graphOne.operationId, makeCompleteTaskTrackerFactsObserved(graphOne, graphSnapshot))
+    )
+    const claimOperation = makeTaskClaimObservationOperation(
+      OperationId.make("recovery-activation-s2-exact-claim"),
+      fixture.accepted.trackerTarget,
+      taskId,
+      [graphOne.operationId]
+    )
+    fixture.append(taskTrackerReadIntent(claimOperation))
+    fixture.append(
+      taskTrackerFactsObservedEvent(
+        claimOperation.operationId,
+        makeFocusedTaskClaimFactsObserved(claimOperation, fixture.accepted.activeClaim)
+      )
+    )
+    const graphAfterClaim = makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make("recovery-activation-s2-authority-graph-after-claim"),
+      fixture.accepted.trackerTarget,
+      [fixture.accepted.planOperation.operationId, claimOperation.operationId],
+      [taskId]
+    )
+    fixture.append(taskTrackerReadIntent(graphAfterClaim))
+    fixture.append(
+      taskTrackerFactsObservedEvent(
+        graphAfterClaim.operationId,
+        makeCompleteTaskTrackerFactsObserved(
+          graphAfterClaim,
+          validSnapshot({
+            revision: "recovery-activation-s2-authority-graph-after-claim",
+            tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+          })
+        )
+      )
+    )
+    const exactH2Lineage = makeTargetLineageObservationOperation({
+      integrationTarget: fixture.accepted.integrationTarget,
+      operationId: OperationId.make("recovery-activation-s2-exact-h2-lineage"),
+      plannedAttempt: fixture.accepted.plannedAttempt,
+      predecessorOperationIds: [graphAfterClaim.operationId]
+    })
+    fixture.append(
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: exactH2Lineage,
+        version: workflowJournalEventVersion
+      })
+    )
+    fixture.append(
+      TargetLineageObservedEvent.make({
+        observation: fixture.input.targetLineage,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: exactH2Lineage.operationId,
+        plannedAttempt: fixture.accepted.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const records = fixture.records()
+    const reduction = reduceWorkflowJournalHistory(fixture.runId, records)
+    if (reduction._tag === "InvalidWorkflowJournalHistory") {
+      return yield* Effect.die(`qualified S2 history must be accepted: ${JSON.stringify(reduction.issues)}`)
+    }
+    return { fixture, candidateRecords, claimOperation, graphAfterClaim, records, runState: reduction.runState }
+  }
+)
+
+const inertTargetPromotionRuntime = { git: { compareAndSet: () => Effect.never, read: () => Effect.never } }
+
+effectIt.effect("reuses exact H2 lineage after fresh activation and publishes the qualified automatic successor", () =>
+  Effect.gen(function* () {
+    const { candidateRecords, fixture, runState } = yield* qualifiedAutomaticSuccessorHistory()
+    const resources = yield* makeIntegrationTargetResourceController()
+    yield* resources.acquire(fixture.accepted.responsibility)
+    yield* resources.publishAcceptedOwnership(fixture.accepted.responsibility)
+    const projection = yield* liveProjectionFor(
+      makeRunRecoveryProjection(
+        fixture.runId,
+        fixture.accepted.integrationTarget,
+        resources,
+        inertTargetPromotionRuntime,
+        false,
+        false,
+        RunActivationOpportunity.OrdinaryRunEntry(),
+        true
+      ),
+      fixture.runId,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
+      runState,
+      candidateRecords
+    )
+    expect(
+      projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage")
+    ).toBe(false)
+    expect(projection.frontier.transitions.some(({ _tag }) => _tag === "RunRemotePublication")).toBe(true)
+  })
+)
+
+effectIt.effect("requires fresh lineage and blocks successor publication after a newer target graph observation", () =>
+  Effect.gen(function* () {
+    const { claimOperation: priorClaimOperation, fixture, records } = yield* qualifiedAutomaticSuccessorHistory()
+    const snapshot = validSnapshot({
+      revision: "recovery-activation-s2-lineage-invalidated",
+      tasks: [
+        {
+          id: fixture.accepted.plannedAttempt.taskId,
+          lifecycle: { _tag: "Open" },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ]
+    })
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make("recovery-activation-s2-lineage-invalidating-graph"),
+      fixture.accepted.trackerTarget,
+      [fixture.accepted.planOperation.operationId, priorClaimOperation.operationId],
+      [fixture.accepted.plannedAttempt.taskId]
+    )
+    const extendedRecords = [
+      ...records,
+      coverageRecord(records.length + 1, taskTrackerReadIntent(graphOperation), fixture.runId),
+      coverageRecord(
+        records.length + 2,
+        taskTrackerFactsObservedEvent(
+          graphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(graphOperation, snapshot)
+        ),
+        fixture.runId
+      )
+    ]
+    const extendedReduction = reduceWorkflowJournalHistory(fixture.runId, extendedRecords)
+    if (extendedReduction._tag === "InvalidWorkflowJournalHistory") {
+      return yield* Effect.die(`invalidated S2 history must be accepted: ${JSON.stringify(extendedReduction.issues)}`)
+    }
+    const extendedRunState = extendedReduction.runState
+    const resources = yield* makeIntegrationTargetResourceController()
+    yield* resources.acquire(fixture.accepted.responsibility)
+    yield* resources.publishAcceptedOwnership(fixture.accepted.responsibility)
+    const projection = yield* liveProjectionFor(
+      makeRunRecoveryProjection(
+        fixture.runId,
+        fixture.accepted.integrationTarget,
+        resources,
+        inertTargetPromotionRuntime,
+        false,
+        false,
+        RunActivationOpportunity.OrdinaryRunEntry(),
+        true
+      ),
+      fixture.runId,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
+      extendedRunState,
+      records
+    )
+    expect(
+      projection.frontier.transitions.some(({ _tag }) => _tag === "ObserveResponsibleTaskClaim"),
+      `expected exact claim refresh after the newer graph; got transitions ${projection.frontier.transitions.map(({ _tag }) => _tag).join(", ")} and explanations ${JSON.stringify(projection.frontier.explanations)}`
+    ).toBe(true)
+    expect(projection.frontier.transitions.some(({ _tag }) => _tag === "RunRemotePublication")).toBe(false)
+
+    const refreshedClaimOperation = makeTaskClaimObservationOperation(
+      OperationId.make("recovery-activation-s2-refreshed-claim-after-invalidator"),
+      fixture.accepted.trackerTarget,
+      fixture.accepted.plannedAttempt.taskId,
+      [graphOperation.operationId]
+    )
+    const graphAfterRefreshedClaim = makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make("recovery-activation-s2-graph-after-refreshed-claim"),
+      fixture.accepted.trackerTarget,
+      [fixture.accepted.planOperation.operationId, refreshedClaimOperation.operationId],
+      [fixture.accepted.plannedAttempt.taskId]
+    )
+    const refreshedClaimRecords = [
+      ...extendedRecords,
+      coverageRecord(records.length + 3, taskTrackerReadIntent(refreshedClaimOperation), fixture.runId),
+      coverageRecord(
+        records.length + 4,
+        taskTrackerFactsObservedEvent(
+          refreshedClaimOperation.operationId,
+          makeFocusedTaskClaimFactsObserved(refreshedClaimOperation, fixture.accepted.activeClaim)
+        ),
+        fixture.runId
+      ),
+      coverageRecord(records.length + 5, taskTrackerReadIntent(graphAfterRefreshedClaim), fixture.runId),
+      coverageRecord(
+        records.length + 6,
+        taskTrackerFactsObservedEvent(
+          graphAfterRefreshedClaim.operationId,
+          makeCompleteTaskTrackerFactsObserved(graphAfterRefreshedClaim, snapshot)
+        ),
+        fixture.runId
+      )
+    ]
+    const refreshedClaimReduction = reduceWorkflowJournalHistory(fixture.runId, refreshedClaimRecords)
+    if (refreshedClaimReduction._tag === "InvalidWorkflowJournalHistory") {
+      return yield* Effect.die(
+        `refreshed claim history must be accepted: ${JSON.stringify(refreshedClaimReduction.issues)}`
+      )
+    }
+    const afterClaimProjection = yield* liveProjectionFor(
+      makeRunRecoveryProjection(
+        fixture.runId,
+        fixture.accepted.integrationTarget,
+        resources,
+        inertTargetPromotionRuntime,
+        false,
+        false,
+        RunActivationOpportunity.OrdinaryRunEntry(),
+        true
+      ),
+      fixture.runId,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
+      refreshedClaimReduction.runState,
+      extendedRecords
+    )
+    const lineageRead = afterClaimProjection.frontier.transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+    )
+    if (lineageRead?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+      return yield* Effect.die(
+        `new graph and exact post-claim graph must select fresh lineage; got ${afterClaimProjection.frontier.transitions.map(({ _tag }) => _tag).join(",")}`
+      )
+    }
+    expect(afterClaimProjection.frontier.transitions.some(({ _tag }) => _tag === "RunRemotePublication")).toBe(false)
+
+    const lineageIntent = GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: lineageRead.operation,
+      version: workflowJournalEventVersion
+    })
+    const lineageObserved = TargetLineageObservedEvent.make({
+      observation: fixture.input.targetLineage,
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: lineageRead.operation.operationId,
+      plannedAttempt: fixture.accepted.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+    const completedRecords = [
+      ...refreshedClaimRecords,
+      coverageRecord(records.length + 7, lineageIntent, fixture.runId),
+      coverageRecord(records.length + 8, lineageObserved, fixture.runId)
+    ]
+    const completedReduction = reduceWorkflowJournalHistory(fixture.runId, completedRecords)
+    if (completedReduction._tag === "InvalidWorkflowJournalHistory") {
+      return yield* Effect.die(
+        `fresh H2 lineage history must be accepted: ${JSON.stringify(completedReduction.issues)}`
+      )
+    }
+    const afterLineageProjection = yield* liveProjectionFor(
+      makeRunRecoveryProjection(
+        fixture.runId,
+        fixture.accepted.integrationTarget,
+        resources,
+        inertTargetPromotionRuntime,
+        false,
+        false,
+        RunActivationOpportunity.OrdinaryRunEntry(),
+        true
+      ),
+      fixture.runId,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
+      completedReduction.runState,
+      extendedRecords
+    )
+    expect(
+      afterLineageProjection.frontier.transitions.some(
+        ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+      )
+    ).toBe(false)
+    expect(
+      afterLineageProjection.frontier.transitions.some(({ _tag }) => _tag === "RunRemotePublication"),
+      `expected publication after the fresh lineage result; got transitions ${afterLineageProjection.frontier.transitions.map(({ _tag }) => _tag).join(", ")} and explanations ${JSON.stringify(afterLineageProjection.frontier.explanations)}`
+    ).toBe(true)
+  })
+)
 
 const directionProjectionFixture = (
   direction: "Retry" | "FullRerun",
@@ -6065,6 +6402,26 @@ it("keeps paused-task boundaries fail-closed while admitting only safe reconcili
       new Set()
     ).transitions
   ).toEqual([prePauseIntegration.transitions[0]])
+})
+
+it("allows an already-held integration promotion to finish after Run Pause", () => {
+  const integration = pausedIntegrationScenario("held-run-pause", 3)
+  const pause = coverageRecord(5, runPause(1))
+  const runPausedState: ReconstructedRunState = {
+    ...coverageRunState([pause]),
+    pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "NoTaskPauses" } }
+  }
+  const promotion = integration.transitions[0]
+  const frontier = { explanations: [], transitions: [promotion] }
+
+  expect(promotion._tag).toBe("RunTargetPromotion")
+  expect(
+    filterFrontierForActivePauses(frontier, runPausedState, undefined, new Set(), new Set([coverageAttempt.taskId]))
+      .transitions
+  ).toEqual([promotion])
+  expect(filterFrontierForActivePauses(frontier, runPausedState, undefined, new Set(), new Set()).transitions).toEqual(
+    []
+  )
 })
 
 it("uses the later of Pause and cancellation as the integration reconciliation boundary", () => {

@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   integrationQuarantinedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
@@ -135,7 +136,12 @@ type EvidenceValidation<Value> =
 type FixedSessionRecord = JournalRecord & {
   readonly event: Extract<
     JournalRecord["event"],
-    { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+    {
+      readonly _tag:
+        | "IntegratorSessionFixed"
+        | "IntegratorSuccessorSessionFixed"
+        | "IntegratorAutomaticSuccessorSessionFixed"
+    }
   >
 }
 
@@ -147,6 +153,8 @@ const fixedSessionEventMatches = (record: JournalRecord, run: IntegratorRunCorre
   ((record.event._tag === "IntegratorSessionFixed" &&
     integratorCorrelationsEqual(record.event.correlation, run.session)) ||
     (record.event._tag === "IntegratorSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(record.event.successor, run.session)) ||
+    (record.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
       integratorCorrelationsEqual(record.event.successor, run.session)))
 
 const fixedSessionRecordMatches = (
@@ -158,11 +166,13 @@ const fixedSessionRecordMatches = (
 const fixedSessionRecordKey = (record: FixedSessionRecord) =>
   record.event._tag === "IntegratorSessionFixed"
     ? integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(record.event.correlation))
-    : integratorSuccessorSessionFixedRecordKey(
-        record.event.predecessor,
-        record.event.quarantineAt,
-        record.event.directionAppliedAt
-      )
+    : record.event._tag === "IntegratorSuccessorSessionFixed"
+      ? integratorSuccessorSessionFixedRecordKey(
+          record.event.predecessor,
+          record.event.quarantineAt,
+          record.event.directionAppliedAt
+        )
+      : integratorAutomaticSuccessorSessionFixedRecordKey(record.event.predecessor, record.event.authorizationAt)
 
 const validateFixedSession = (
   records: JournalHistorySource,

@@ -705,3 +705,55 @@ export const acceptedResultIntegrationQuarantineProofObligations = Object.freeze
     "conflictRejectedReached"
   ])
 })
+
+// This bounded projection covers automatic competing-head authorization,
+// journal-first local catch-up, and restart reuse of one fixed successor run.
+// The activation invariant covers every modeled pre-fixation Git observation
+// and compare-and-set; the negative test supplies an independent second-read
+// mutation rather than relying on a model action's guard alone.
+export const acceptedResultIntegrationAutomaticSuccessorProofObligations = Object.freeze({
+  invariants: Object.freeze([
+    "journalFirstAutomaticAuthorization",
+    "authorizationRequiresCurrentExactAuthority",
+    "catchUpRequiresJournaledExactCompareAndSet",
+    "catchUpCasIsBoundedByBaselineRounds",
+    "successorRefreshRoundsAreBounded",
+    "localCatchUpPreservesUnsafeWork",
+    "successorRequiresFreshBaseLineageAndJournaledAuthorization",
+    "successorKeepsAcceptedResultLineage",
+    "successorUsesLatestBaselineRoundUnderOriginalAuthorization",
+    "successorRecoveryReusesOneFixedRun",
+    "automaticSuccessorRetryRequiresExactOperatorChronology",
+    "automaticSuccessorBoundsAreFinite",
+    "automaticAuthorizationIsOccurrenceScoped",
+    "predecessorCleanupRequiresStoppedWriter",
+    "noUnrequestedFourthSession",
+    "oneGitObservationOrCompareAndSetPerActivation",
+    "noReadUntilStableLoop",
+    "pauseAndExitStopNewSuccessorActions",
+    "exactTaskAndResponsibilityAreRetained",
+    "forbiddenProofAndForceShortcutsRemainFalse",
+    "proofStateIsBounded"
+  ]),
+  witnesses: Object.freeze([
+    "competingHeadRetainedReached",
+    "automaticAuthorizationReached",
+    "baselineReadReached",
+    "refreshedH3BaselineReached",
+    "catchUpIntentReached",
+    "catchUpAppliedReached",
+    "successorSessionFixedReached",
+    "successorRecoveryReached",
+    "boundedWaitReached",
+    "unsafeLocalWaitReached"
+  ])
+})
+
+// This proof-only projection owns the accepted #385 authorization/read/CAS
+// counter bound and the one-refresh cap. Its source-transition map is
+// documented in the paired model; the canonical model remains the behavior and
+// sampled/conformance subject.
+export const acceptedResultIntegrationAutomaticSuccessorCountersProofObligations = Object.freeze({
+  invariants: Object.freeze(["successorRefreshRoundsAreBounded", "catchUpCasIsBoundedByBaselineRounds"]),
+  witnesses: Object.freeze(["catchUpAppliedReached", "secondRoundCatchUpReached"])
+})

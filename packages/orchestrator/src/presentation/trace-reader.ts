@@ -477,6 +477,12 @@ export const TraceDispositionFact = Schema.TaggedUnion({
     source: TraceItemIdentity,
     successor: IntegratorSessionCorrelation
   },
+  AutomaticCandidateSuperseded: {
+    authorizationAt: JournalPosition,
+    predecessor: IntegratorSessionCorrelation,
+    source: TraceItemIdentity,
+    successor: IntegratorSessionCorrelation
+  },
   NonConvergentPromotion: {
     correlation: TargetPromotionCorrelation,
     lastObservation: TargetPromotionNonConvergenceObservation,
@@ -893,6 +899,7 @@ const keyCheckedHistoricalEventTags = {
   IntegratorRunResultRecorded: true,
   IntegratorRunStarted: true,
   IntegratorSessionFixed: true,
+  IntegratorAutomaticSuccessorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true,
   LocalTargetCatchUpIntended: true,
   LocalTargetCatchUpObserved: true,
@@ -1590,6 +1597,7 @@ const historicalIntegratorOccurrenceKinds = {
   IntegratorRunResultRecorded: true,
   IntegratorRunStarted: true,
   IntegratorSessionFixed: true,
+  IntegratorAutomaticSuccessorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true
 } as const
 
@@ -1604,7 +1612,12 @@ const isHistoricalIntegratorOccurrence = (
 
 const taskIdsOfHistoricalIntegrator = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
   if (!isHistoricalIntegratorOccurrence(occurrence)) return undefined
-  if (occurrence._tag === "IntegratorSuccessorSessionFixed") return [occurrence.successor.plannedAttempt.taskId]
+  if (
+    occurrence._tag === "IntegratorSuccessorSessionFixed" ||
+    occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed"
+  ) {
+    return [occurrence.successor.plannedAttempt.taskId]
+  }
   if (occurrence._tag === "IntegratorSessionFixed") return [occurrence.correlation.plannedAttempt.taskId]
   if (occurrence._tag === "IntegratorCandidateQualificationObserved") {
     return [occurrence.originatingActionRun.session.plannedAttempt.taskId]

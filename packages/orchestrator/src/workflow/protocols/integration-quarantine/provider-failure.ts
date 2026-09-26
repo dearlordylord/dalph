@@ -4,6 +4,7 @@ import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   intentRecordKey,
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
@@ -36,6 +37,7 @@ import {
   integratorRetryRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../integrator/events.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "../integrator/automatic-successor-session.js"
 
 import {
   integratorCorrelationsEqual,
@@ -133,7 +135,10 @@ type DirectSessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
 }
 type SuccessorSessionRecord = JournalRecord & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
+  readonly event: Extract<
+    JournalRecord["event"],
+    { readonly _tag: "IntegratorSuccessorSessionFixed" | "IntegratorAutomaticSuccessorSessionFixed" }
+  >
 }
 type TargetLineageRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
@@ -157,7 +162,8 @@ const successorSessionsFor = (
 ): ReadonlyArray<SuccessorSessionRecord> =>
   history.filter(
     (record): record is SuccessorSessionRecord =>
-      record.event._tag === "IntegratorSuccessorSessionFixed" &&
+      (record.event._tag === "IntegratorSuccessorSessionFixed" ||
+        record.event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
       integratorCorrelationsEqual(record.event.successor, run.session)
   )
 
@@ -297,14 +303,15 @@ const successorRecordIsExact = (
   successor: SuccessorSessionRecord,
   predecessor: IntegratorSessionCorrelation
 ): boolean => {
-  const key = integratorSuccessorSessionFixedRecordKey(
-    predecessor,
-    successor.event.quarantineAt,
-    successor.event.directionAppliedAt
-  )
+  if (successor.event._tag !== "IntegratorSuccessorSessionFixed") return false
   return (
     successor.runId === runIdFor(run) &&
-    successor.key === key &&
+    successor.key ===
+      integratorSuccessorSessionFixedRecordKey(
+        predecessor,
+        successor.event.quarantineAt,
+        successor.event.directionAppliedAt
+      ) &&
     successor.position > run.session.targetLineageObservedAt
   )
 }
@@ -314,12 +321,14 @@ const successorPredecessorChronologyIsExact = (
   successor: SuccessorSessionRecord,
   evidence: SuccessorPredecessorEvidence
 ): boolean => {
+  const successorEvent = successor.event
+  if (successorEvent._tag !== "IntegratorSuccessorSessionFixed") return false
   const quarantine = history.find(
-    (record) => record.position === successor.event.quarantineAt && record.event._tag === "IntegrationQuarantined"
+    (record) => record.position === successorEvent.quarantineAt && record.event._tag === "IntegrationQuarantined"
   )
   const direction = history.find(
     (record): record is QuarantineDirectionRecord =>
-      record.position === successor.event.directionAppliedAt &&
+      record.position === successorEvent.directionAppliedAt &&
       record.event._tag === "IntegrationQuarantineDirectionApplied"
   )
   if (quarantine?.event._tag !== "IntegrationQuarantined") return false
@@ -336,16 +345,23 @@ const successorDirectionMatches = (
   direction: QuarantineDirectionRecord,
   successor: SuccessorSessionRecord,
   predecessor: IntegratorSessionCorrelation
-): boolean =>
-  direction.event.fingerprint.direction === "FullRerun" &&
-  direction.event.fingerprint.quarantineAt === successor.event.quarantineAt &&
-  direction.event.fingerprint.sessionId === predecessor.sessionId
+): boolean => {
+  if (successor.event._tag !== "IntegratorSuccessorSessionFixed") return false
+  return (
+    direction.event.fingerprint.direction === "FullRerun" &&
+    direction.event.fingerprint.quarantineAt === successor.event.quarantineAt &&
+    direction.event.fingerprint.sessionId === predecessor.sessionId
+  )
+}
 
 const successorLineageIssue = (
   history: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation,
   successor: SuccessorSessionRecord
 ): string | undefined => {
+  if (successor.event._tag !== "IntegratorSuccessorSessionFixed") {
+    return "provider FullRerun successor has unsupported fixed-session evidence"
+  }
   const authorization = evaluateIntegratorFullRerunAuthorization(
     history,
     run,
@@ -365,6 +381,26 @@ const exactSuccessorSession = (
 ): FixedSessionValidation => {
   const predecessor = successorPredecessorEvidence(history, run, direct, successor)
   if (predecessor._tag === "Invalid") return predecessor
+  if (successor.event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+    const validation = validateAutomaticSuccessorSessionFixedRecord(history, successor, predecessor.value.predecessor)
+    const expectedKey = integratorAutomaticSuccessorSessionFixedRecordKey(
+      predecessor.value.predecessor,
+      successor.event.authorizationAt
+    )
+    return successor.runId === runIdFor(run) &&
+      successor.key === expectedKey &&
+      successor.position > run.session.targetLineageObservedAt &&
+      integratorCorrelationsEqual(successor.event.successor, run.session) &&
+      validation._tag === "Valid"
+      ? { _tag: "Valid", session: successor }
+      : {
+          _tag: "Invalid",
+          detail:
+            validation._tag === "Invalid"
+              ? validation.detail
+              : "provider automatic successor has a foreign key or chronology"
+        }
+  }
   if (!successorRecordIsExact(run, successor, predecessor.value.predecessor)) {
     return { _tag: "Invalid", detail: "provider successor session has a foreign key or chronology" }
   }

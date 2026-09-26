@@ -74,6 +74,29 @@ export const IntegratorCandidateCleanupDisposition = Schema.TaggedStruct("Supers
 )
 export type IntegratorCandidateCleanupDisposition = typeof IntegratorCandidateCleanupDisposition.Type
 
+/** The exact Dalph-authorized competing-head successor that superseded one predecessor resource. */
+export const IntegratorCandidateAutomaticSuccessorCleanupDisposition = Schema.TaggedStruct(
+  "AutomaticSuccessorSuperseded",
+  {
+    authorizationAt: JournalPosition,
+    dispositionAt: JournalPosition,
+    predecessor: IntegratorSessionCorrelation,
+    successor: IntegratorSessionCorrelation
+  }
+).check(
+  Schema.makeFilter((disposition) => {
+    const valid =
+      disposition.authorizationAt < disposition.dispositionAt &&
+      integratorSuccessorIdentitiesAreDistinct(disposition.predecessor, disposition.successor) &&
+      integratorSuccessorResponsibilityMatches(disposition.predecessor, disposition.successor)
+    return valid
+      ? undefined
+      : "automatic successor cleanup requires one later distinct session for the same integration responsibility"
+  })
+)
+export type IntegratorCandidateAutomaticSuccessorCleanupDisposition =
+  typeof IntegratorCandidateAutomaticSuccessorCleanupDisposition.Type
+
 /** Normal finality made one exact promoted Integrator candidate resource disposable. */
 export const IntegratorCandidateCleanupSettledDisposition = Schema.TaggedStruct("Settled", {
   dispositionAt: JournalPosition,
@@ -84,6 +107,7 @@ export type IntegratorCandidateCleanupSettledDisposition = typeof IntegratorCand
 
 export const IntegratorCandidateCleanupAuthorizationDisposition = Schema.Union([
   IntegratorCandidateCleanupDisposition,
+  IntegratorCandidateAutomaticSuccessorCleanupDisposition,
   IntegratorCandidateCleanupSettledDisposition
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type IntegratorCandidateCleanupAuthorizationDisposition =
@@ -93,7 +117,7 @@ export type IntegratorCandidateCleanupAuthorizationDisposition =
 export const integratorCandidateCleanupSessionOf = (
   disposition: IntegratorCandidateCleanupAuthorizationDisposition
 ): IntegratorSessionCorrelation =>
-  disposition._tag === "Superseded" ? disposition.predecessor : disposition.qualifiedCandidate.run.session
+  disposition._tag === "Settled" ? disposition.qualifiedCandidate.run.session : disposition.predecessor
 
 /** Ownership evidence for the exact planned-attempt worktree registration. */
 export const WorktreeCleanupOwner = Schema.Struct({ attemptId: AttemptId, branch: TaskBranchRef }).pipe(

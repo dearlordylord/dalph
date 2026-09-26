@@ -72,6 +72,8 @@ import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
   integratorSuccessorSessionFixedRecordKey,
+  integratorCompetingHeadSuccessorAuthorizedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   remotePublicationAdmissionObservedRecordKey,
   remotePublicationAdmissionReadIntendedRecordKey,
   remotePublicationAttemptIntendedRecordKey,
@@ -423,6 +425,14 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         event.quarantineAt,
         event.directionAppliedAt
       )
+    }),
+    IntegratorCompetingHeadSuccessorAuthorized: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCompetingHeadSuccessorAuthorizedRecordKey(event.authorizationId)
+    }),
+    IntegratorAutomaticSuccessorSessionFixed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorAutomaticSuccessorSessionFixedRecordKey(event.predecessor, event.authorizationAt)
     }),
     IntegratorRunStarted: (event) => ({
       _tag: "GenericEventDescriptor",

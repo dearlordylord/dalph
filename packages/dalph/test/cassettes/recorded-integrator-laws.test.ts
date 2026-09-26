@@ -11,19 +11,24 @@ import {
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantineFailureDetail,
   IntegrationQuarantinedEvent,
+  IntegratorCandidateResourceLocator,
   IntegratorJournalEvent,
+  IntegratorSessionId,
   JournalPosition,
   JournalRecord,
   OperationId,
   TargetLineageObservedEvent,
   WorkflowActor,
   WorkflowOperation,
+  integratorCompetingHeadSuccessorAuthorizationIdFor,
   exportWorkflowHistoryRecords,
   type WorkflowJournalEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
-import { GitCommitSha } from "@dalph/contracts"
+import { AttemptId, GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import { integratorSuccessorCorrelationFor } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../../../orchestrator/src/workflow/protocols/integrator/automatic-successor-session.js"
+import { makeSuccessorPrefix } from "../../../orchestrator/test/support/automatic-successor-history.js"
 import {
   CassetteIdentityRenaming,
   foldRecordedCassette,
@@ -212,5 +217,138 @@ it("projects, folds, and non-trivially renames the current FullRerun successor c
       ).toBe(true)
       expect(renderRecordedCassetteLyrics(recorded)).toContain("FullRerun successor")
     }).pipe(Effect.provide(NodeCrypto.layer))
+  )
+})
+
+it("records automatic successor authorization and fixation as distinct Dalph coordinator facts", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const fixture = makeSuccessorPrefix()
+      const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+      if (prepared._tag !== "Append") return yield* Effect.die("automatic successor fixture must produce one append")
+      fixture.append(prepared.event)
+      const records = fixture.records()
+      const authorization = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+      const fixed = records.find(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+      if (
+        authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+        fixed?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed"
+      ) {
+        return yield* Effect.die("automatic successor projection requires both exact S2 events")
+      }
+
+      expect(authorization.event.initiatedBy._tag).toBe("DalphCoordinator")
+      expect(authorization.event.occurrenceClassification).toBe("InitiatedAction")
+      const cassette = yield* projectRecordedCassette(records)
+      const authorizationEntry = cassette.entries.find(
+        ({ _tag }) => _tag === "IntegratorCompetingHeadSuccessorAuthorized"
+      )
+      if (authorizationEntry?._tag !== "IntegratorCompetingHeadSuccessorAuthorized") {
+        return yield* Effect.die("recorded cassette lost automatic authorization identity")
+      }
+      expect(authorizationEntry).toMatchObject({
+        _tag: "IntegratorCompetingHeadSuccessorAuthorized",
+        authorizationId: authorization.event.authorizationId,
+        correlation: authorization.event.correlation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        mergeBase: authorization.event.mergeBase,
+        occurrenceClassification: "InitiatedAction",
+        remoteHead: authorization.event.remoteHead,
+        remotePublicationRetainedAt: authorization.event.remotePublicationRetainedAt
+      })
+
+      const fixedEntry = cassette.entries.find(({ _tag }) => _tag === "IntegratorAutomaticSuccessorSessionFixed")
+      if (fixedEntry?._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+        return yield* Effect.die("recorded cassette lost automatic successor fixation")
+      }
+      expect(fixedEntry).toEqual({
+        _tag: "IntegratorAutomaticSuccessorSessionFixed",
+        authorizationAt: fixed.event.authorizationAt,
+        predecessor: fixed.event.predecessor,
+        successor: fixed.event.successor,
+        successorGeneration: fixed.event.successorGeneration
+      })
+      expect(cassette.entries.map(({ _tag }) => _tag)).not.toContain("IntegratorSuccessorSessionFixed")
+      expect(cassette.entries.map(({ _tag }) => _tag)).not.toContain("IntegrationQuarantineDirectionApplied")
+      expect(
+        verifyRecordedCassetteRoundTrip(records, cassette).every(
+          ({ operationalStateEquivalent, pureSelectionEquivalent, workflowHistoryEquivalent }) =>
+            operationalStateEquivalent && pureSelectionEquivalent && workflowHistoryEquivalent
+        )
+      ).toBe(true)
+      const lyrics = renderRecordedCassetteLyrics(cassette)
+      expect(lyrics).toContain("Dalph coordinator authorized one automatic successor")
+      expect(lyrics).toContain("fixed automatic successor session")
+      expect(lyrics).toContain("no Operator direction was applied")
+      expect(lyrics).not.toContain("Operator applied ")
+
+      const renamed = yield* renameRecordedCassette(
+        cassette,
+        CassetteIdentityRenaming.make({
+          attemptIds: [
+            {
+              from: fixed.event.predecessor.plannedAttempt.attemptId,
+              to: AttemptId.make("automatic-successor-renamed-attempt")
+            }
+          ],
+          claimTokens: [],
+          integratorCandidateResourceLocators: [
+            {
+              from: fixed.event.predecessor.candidateResource,
+              to: IntegratorCandidateResourceLocator.make("automatic-successor-renamed-predecessor-resource")
+            },
+            {
+              from: fixed.event.successor.candidateResource,
+              to: IntegratorCandidateResourceLocator.make("automatic-successor-renamed-successor-resource")
+            }
+          ],
+          integratorSessionIds: [
+            {
+              from: fixed.event.predecessor.sessionId,
+              to: IntegratorSessionId.make("automatic-successor-renamed-predecessor")
+            },
+            {
+              from: fixed.event.successor.sessionId,
+              to: IntegratorSessionId.make("automatic-successor-renamed-successor")
+            }
+          ],
+          operationIds: [],
+          runIds: [],
+          taskBranchRefs: [
+            {
+              from: fixed.event.predecessor.plannedAttempt.branch,
+              to: TaskBranchRef.make("refs/heads/dalph/automatic-successor-renamed")
+            }
+          ],
+          worktreeLocators: [
+            {
+              from: fixed.event.predecessor.plannedAttempt.worktree,
+              to: WorktreeLocator.make("/dalph/automatic-successor-renamed")
+            }
+          ]
+        })
+      )
+      const renamedAuthorization = renamed.entries.find(
+        ({ _tag }) => _tag === "IntegratorCompetingHeadSuccessorAuthorized"
+      )
+      if (renamedAuthorization?._tag !== "IntegratorCompetingHeadSuccessorAuthorized") {
+        return yield* Effect.die("renaming lost automatic authorization")
+      }
+      expect(renamedAuthorization.authorizationId).toBe(
+        integratorCompetingHeadSuccessorAuthorizationIdFor(
+          renamedAuthorization.correlation.requestId,
+          authorization.event.remotePublicationRetainedAt,
+          authorization.event.mergeBase,
+          authorization.event.remoteHead
+        )
+      )
+      const renamedFixed = renamed.entries.find(({ _tag }) => _tag === "IntegratorAutomaticSuccessorSessionFixed")
+      if (renamedFixed?._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+        return yield* Effect.die("renaming lost automatic successor fixation")
+      }
+      expect(renamedFixed.predecessor.sessionId).toBe("automatic-successor-renamed-predecessor")
+      expect(renamedFixed.successor.sessionId).toBe("automatic-successor-renamed-successor")
+      expect(renamedFixed.authorizationAt).toBe(fixed.event.authorizationAt)
+    })
   )
 })

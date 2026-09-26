@@ -6,7 +6,8 @@ import {
   runDeliveryRuntimePhase,
   type DeliveryRuntimeInput,
   type DeliveryRuntimeQuiescence,
-  type ActiveRefreshPreG2Subject
+  type ActiveRefreshPreG2Subject,
+  type RunDeliveryRuntimePhaseEffect
 } from "../delivery/run-delivery-runtime.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import type { DeliveryRuntimeEvaluation } from "../delivery/relations.js"
@@ -21,6 +22,7 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
+import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { AcceptedJournalReader, type AcceptedJournalReaderService } from "../../workflow-journal/accepted-reader.js"
 import {
@@ -35,6 +37,18 @@ import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../../workflo
 type EstablishedTrackerGraph = Extract<
   DeliveryRuntimeQuiescence["current"]["trackerGraph"],
   { readonly _tag: "GraphEstablished" }
+>
+
+export type RunStabilizedDeliveryEffect<E> = Effect.Effect<
+  RunFinalityProof,
+  | Effect.Error<RunDeliveryRuntimePhaseEffect<E>>
+  | Effect.Error<ReturnType<AcceptedJournalReaderService["readAccepted"]>>
+  | Effect.Error<ReturnType<WorkflowInterpreter["Service"]["readTrackerGraph"]>>
+  | Effect.Error<ReturnType<WorkflowTrace["Service"]["emit"]>>,
+  | Effect.Services<RunDeliveryRuntimePhaseEffect<E>>
+  | AcceptedJournalReader
+  | WorkflowInterpreter
+  | WorkflowTrace
 >
 
 const unsettledProof = (acceptedAt: JournalPosition | null): RunFinalityProof => ({
@@ -230,7 +244,7 @@ const distinctOperationIds = <OperationId>(operationIds: ReadonlyArray<Operation
  * tracker observation through the journaled read protocol, then lets the same
  * runtime react once more before returning finality to the Run bootstrap.
  */
-export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function* <E>(
+const runStabilizedDeliveryImplementation: RunStabilizedDelivery = Effect.fn("RunStabilization.run")(function* <E>(
   target: TrackerTarget,
   expectedRunId: RunId,
   evaluations: DeliveryRuntimeInput<E>,
@@ -346,3 +360,13 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
     Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))
   )
 })
+
+/** Public callable type hides Effect.fn's inspection metadata from generated declarations. */
+export type RunStabilizedDelivery = <E>(
+  target: TrackerTarget,
+  expectedRunId: RunId,
+  evaluations: DeliveryRuntimeInput<E>,
+  opportunity?: RunActivationOpportunity
+) => RunStabilizedDeliveryEffect<E>
+
+export const runStabilizedDelivery: RunStabilizedDelivery = runStabilizedDeliveryImplementation

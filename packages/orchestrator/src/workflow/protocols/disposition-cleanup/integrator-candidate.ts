@@ -386,17 +386,25 @@ const observationHasAuthorizedLocator = (
   authorization: IntegratorCandidateCleanupAuthorization
 ): boolean => observation.locator === authorization.locator
 
+const observationReportsLiveWriter = (
+  observation: IntegratorCandidateCleanupObservation,
+  authorization: IntegratorCandidateCleanupAuthorization
+): boolean =>
+  observation._tag === "Foreign" &&
+  observation.reason === "LiveWriter" &&
+  observation.observedSessionId === authorization.owner.sessionId
+
 /**
  * A cleanup observation is terminally contradictory only when it proves a
  * different owner/resource or a stale private revision. Provider read
- * failures and an exact resource that is still present remain retryable.
+ * failures and an exact predecessor writer that remains live are retryable.
  */
 const observationProvesContradiction = (
   observation: IntegratorCandidateCleanupObservation,
   authorization: IntegratorCandidateCleanupAuthorization
 ): boolean =>
   !observationHasAuthorizedLocator(observation, authorization) ||
-  observation._tag === "Foreign" ||
+  (observation._tag === "Foreign" && !observationReportsLiveWriter(observation, authorization)) ||
   (observation._tag === "Present" && observation.revision !== authorization.evidenceRevision)
 
 /** Every candidate result must identify the exact predecessor resource and session. */
@@ -653,6 +661,15 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
       authorization,
       attempts: count,
       reason: observation.detail
+    })
+  }
+  if (observationReportsLiveWriter(observation, authorization)) {
+    // Exact live custody is retryable. Another session owning this resource remains
+    // a contradiction.
+    return IntegratorCandidateCleanupOutcome.cases.Pending.make({
+      authorization,
+      attempts: count,
+      reason: "provider still reports the authorized predecessor writer live"
     })
   }
   if (observationProvesContradiction(observation, authorization)) {

@@ -24,6 +24,7 @@ import {
   IntegratorRunQualifiedCandidate,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
+  integratorSessionCorrelationsEqual,
   type IntegratorSessionCorrelation,
   IntegratorSessionFixedEvent
 } from "../../src/workflow/protocols/integrator/events.js"
@@ -89,9 +90,16 @@ export const makePromotedIntegrationHistory = (input: {
     return { appended, records: next }
   }
   const version = workflowJournalEventVersion
-  const fixed = append(input.records, IntegratorSessionFixedEvent.make({ correlation: input.session, version }))
+  const fixedAutomatically = input.records.some(
+    ({ event }) =>
+      event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+      integratorSessionCorrelationsEqual(event.successor, input.session)
+  )
+  const fixedRecords = fixedAutomatically
+    ? input.records
+    : append(input.records, IntegratorSessionFixedEvent.make({ correlation: input.session, version })).records
   const run = { ordinal: IntegratorRunOrdinal.make(1), session: input.session }
-  const started = append(fixed.records, IntegratorRunStartedEvent.make({ run, version }))
+  const started = append(fixedRecords, IntegratorRunStartedEvent.make({ run, version }))
   const prepared = append(
     started.records,
     IntegratorRunResultRecordedEvent.make({

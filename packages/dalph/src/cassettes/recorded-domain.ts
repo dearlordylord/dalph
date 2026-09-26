@@ -52,7 +52,9 @@ import {
   IntegratorGitObservation,
   IntegratorResult,
   IntegratorRunCorrelation,
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorSuccessorGeneration,
+  IntegratorCompetingHeadSuccessorAuthorizationId,
   JournalPosition,
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
@@ -439,6 +441,16 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     remoteHead: GitCommitSha,
     result: LocalTargetCatchUpResult
   },
+  /** Dalph's automatic competing-head authorization stays distinct from an Operator direction. */
+  IntegratorCompetingHeadSuccessorAuthorized: {
+    authorizationId: IntegratorCompetingHeadSuccessorAuthorizationId,
+    correlation: RemotePublicationCorrelation,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    mergeBase: GitCommitSha,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    remoteHead: GitCommitSha,
+    remotePublicationRetainedAt: JournalPosition
+  },
   /** Outer Integrator facts retain the exact correlation, including causal Journal positions. */
   IntegratorSessionFixed: { correlation: IntegratorSessionCorrelation },
   /** FullRerun preserves the quarantined predecessor while fixing one fresh-head successor. */
@@ -449,6 +461,13 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     quarantineAt: JournalPosition,
     successor: IntegratorSessionCorrelation,
     successorGeneration: IntegratorSuccessorGeneration
+  },
+  /** S2 fixes one separately authorized automatic successor after its baseline and lineage evidence. */
+  IntegratorAutomaticSuccessorSessionFixed: {
+    authorizationAt: JournalPosition,
+    predecessor: IntegratorSessionCorrelation,
+    successor: IntegratorSessionCorrelation,
+    successorGeneration: IntegratorAutomaticSuccessorGeneration
   },
   /** Run-scoped Integrator facts retain the exact run ordinal and owning session. */
   IntegratorRunStarted: { run: IntegratorRunCorrelation },
@@ -739,7 +758,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Run-pinned publication destination and direct-publication journal facts.
  * Recorded cassettes remain fail-closed at the current version.
  */
-const currentRecordedCassetteVersion = 15
+const currentRecordedCassetteVersion = 16
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

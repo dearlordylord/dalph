@@ -52,6 +52,10 @@ export const quintGateCommandManifest = Object.freeze([
   ...model("accepted-result integration"),
   command("typecheck", "accepted-result integration quarantine proof typecheck"),
   ...proof("accepted-result integration quarantine proof"),
+  command("typecheck", "accepted-result automatic successor proof typecheck"),
+  ...proof("accepted-result automatic successor proof"),
+  command("typecheck", "accepted-result automatic successor counter proof typecheck"),
+  ...proof("accepted-result automatic successor counter proof"),
   ...exhaustiveModel("integration finality")
 ])
 

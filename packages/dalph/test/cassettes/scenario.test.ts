@@ -215,6 +215,8 @@ import {
   runCachedAuthoredScenarioCassette,
   runCachedRecordedCassette
 } from "../../test-support/prototype-authored-run-cache.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../../../orchestrator/src/workflow/protocols/integrator/automatic-successor-session.js"
+import { makeSuccessorPrefix } from "../../../orchestrator/test/support/automatic-successor-history.js"
 
 const evidenceDigestHexLength = 64
 
@@ -7092,6 +7094,8 @@ it.effect(
         CompletionClaimDeletionReadObserved: true,
         CompletionClaimDeleted: true,
         IntegrationFinalitySettled: true,
+        IntegratorAutomaticSuccessorSessionFixed: true,
+        IntegratorCompetingHeadSuccessorAuthorized: true,
         IntegratorSessionFixed: true,
         IntegratorSuccessorSessionFixed: true,
         IntegratorRunStarted: true,
@@ -7614,6 +7618,19 @@ it.effect(
           successorGeneration: firstFullRerunSuccessorGeneration
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const automaticSuccessor = makeSuccessorPrefix()
+      const automaticSuccessorAppend = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+        automaticSuccessor.input,
+        automaticSuccessor.reduction.prefix
+      )
+      if (automaticSuccessorAppend._tag !== "Append") {
+        return yield* Effect.die("automatic successor catalog fixture must authorize and fix one session")
+      }
+      automaticSuccessor.append(automaticSuccessorAppend.event)
+      const automaticSuccessorEntries = (yield* projectRecordedCassette(automaticSuccessor.records())).entries.filter(
+        ({ _tag }) =>
+          _tag === "IntegratorAutomaticSuccessorSessionFixed" || _tag === "IntegratorCompetingHeadSuccessorAuthorized"
+      )
       expect(
         new Set(
           [
@@ -7631,6 +7648,7 @@ it.effect(
             resumeRedeliveryEntry,
             ...completionEntries,
             ...directPublicationEntries,
+            ...automaticSuccessorEntries,
             ...quarantineEntries
           ]
             .map(({ _tag }) => _tag)

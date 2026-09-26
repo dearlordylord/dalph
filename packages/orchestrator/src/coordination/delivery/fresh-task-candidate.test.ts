@@ -281,6 +281,7 @@ it.effect("fails closed when a hostile graph supplies duplicate entry tasks or a
       frame,
       opportunity: RunActivationOpportunity.OrdinaryRunEntry(),
       recoveredAttemptIds: new Set(),
+      unsettledIntegrationTaskIds: new Set(),
       runId,
       target: FixtureTarget.make("fresh-candidate-hostile-target")
     }).pipe(Effect.flip)
@@ -295,6 +296,7 @@ it.effect("fails closed when a hostile graph supplies duplicate entry tasks or a
       frame,
       opportunity: RunActivationOpportunity.OrdinaryRunEntry(),
       recoveredAttemptIds: new Set(),
+      unsettledIntegrationTaskIds: new Set(),
       runId: RunId.make("different-run"),
       target: FixtureTarget.make("fresh-candidate-hostile-target")
     }).pipe(Effect.flip)

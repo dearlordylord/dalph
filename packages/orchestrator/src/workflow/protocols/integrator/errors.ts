@@ -1,10 +1,12 @@
-import { GitCommitSha, IntegrationTarget, RunId } from "@dalph/contracts"
+import { GitCommitSha, IntegrationTarget } from "@dalph/contracts"
 import { Schema } from "effect"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalAppendError, JournalReadError } from "../../../workflow-journal/store.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import { IntegratorCandidateText, IntegratorRunCorrelation } from "./events.js"
+import type { IntegratorJournalContradiction } from "./journal-errors.js"
+export { IntegratorJournalContradiction } from "./journal-errors.js"
 
 /** The opaque provider call failed before Dalph received a conclusive outer result. */
 export class IntegratorCallFailure extends Schema.TaggedError<IntegratorCallFailure>()("IntegratorCallFailure", {
@@ -48,12 +50,6 @@ export class IntegratorTargetHeadChanged extends Schema.TaggedError<IntegratorTa
 export class IntegratorTargetLineageObservationChanged extends Schema.TaggedError<IntegratorTargetLineageObservationChanged>()(
   "IntegratorTargetLineageObservationChanged",
   { observedAt: JournalPosition, recordedAt: JournalPosition, responsibility: StartedIntegrationResponsibility }
-) {}
-
-/** A durable record at a boundary key contradicted the exact request being resumed. */
-export class IntegratorJournalContradiction extends Schema.TaggedError<IntegratorJournalContradiction>()(
-  "IntegratorJournalContradiction",
-  { detail: Schema.String, runId: RunId }
 ) {}
 
 export type IntegratorProtocolError =

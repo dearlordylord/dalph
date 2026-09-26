@@ -25,6 +25,7 @@ import {
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantinedEvent,
   IntegratorJournalEvent,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
   JournalPosition,
   PlannedAttemptContinuationAuthorizedEvent,
   PlannedAttemptReplacedEvent,
@@ -101,16 +102,14 @@ import {
   isRecordedGitObservationCassetteEntry,
   isRecordedGitObservationEntry,
   lyricForGitObservationEntry,
-  recordGitObservationEntry,
-  type RecordedGitObservationEntry
+  recordGitObservationEntry
 } from "./recorded-git-observation-mapping.js"
 import {
   eventForRunEntry,
   isJournalRunEntry,
   isRecordedRunEntry,
   lyricForRunEntry,
-  recordedRunEntryFor,
-  type RecordedRunEntry
+  recordedRunEntryFor
 } from "./recorded-run-mapping.js"
 import {
   eventForClaimReleaseEntry,
@@ -673,7 +672,7 @@ const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): Record
   )
 
 type IntegrationPreparationEvent = TargetPromotionEvent | IntegrationFinalityEvent
-type RecordedIntegrationPreparationEntry = RecordedTargetPromotionEntry | RecordedIntegrationFinalityEntry
+type RecordedIntegrationPreparationEntry = RecordedTargetPromotionEntry
 
 const isIntegrationPreparationEvent = (event: WorkflowJournalEvent): event is IntegrationPreparationEvent =>
   isTargetPromotionEvent(event) || isIntegrationFinalityTagged(event)
@@ -932,6 +931,8 @@ type OuterIntegratorEvent = Extract<
   WorkflowJournalEvent,
   {
     readonly _tag:
+      | "IntegratorCompetingHeadSuccessorAuthorized"
+      | "IntegratorAutomaticSuccessorSessionFixed"
       | "IntegratorRunCandidateGitObserved"
       | "IntegratorRunCandidateGitReadIntended"
       | "IntegratorRunResultRecorded"
@@ -957,6 +958,8 @@ const isIntegrationQuarantineEvent = (event: WorkflowJournalEvent): event is Int
   event._tag === "IntegrationQuarantined"
 
 const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterIntegratorEvent =>
+  event._tag === "IntegratorCompetingHeadSuccessorAuthorized" ||
+  event._tag === "IntegratorAutomaticSuccessorSessionFixed" ||
   event._tag === "IntegratorRunCandidateGitObserved" ||
   event._tag === "IntegratorRunCandidateGitReadIntended" ||
   event._tag === "IntegratorRunResultRecorded" ||
@@ -967,6 +970,8 @@ const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterInte
 type RecordedOuterIntegratorEntry = Extract<RecordedCassetteEntry, { readonly _tag: OuterIntegratorEvent["_tag"] }>
 
 const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is RecordedOuterIntegratorEntry =>
+  entry._tag === "IntegratorCompetingHeadSuccessorAuthorized" ||
+  entry._tag === "IntegratorAutomaticSuccessorSessionFixed" ||
   entry._tag === "IntegratorRunCandidateGitObserved" ||
   entry._tag === "IntegratorRunCandidateGitReadIntended" ||
   entry._tag === "IntegratorRunResultRecorded" ||
@@ -976,6 +981,16 @@ const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is 
 
 const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterIntegratorEntry =>
   Match.valueTags(event, {
+    IntegratorCompetingHeadSuccessorAuthorized: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      authorizationId: value.authorizationId,
+      correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      mergeBase: value.mergeBase,
+      occurrenceClassification: value.occurrenceClassification,
+      remoteHead: value.remoteHead,
+      remotePublicationRetainedAt: value.remotePublicationRetainedAt
+    }),
     IntegratorSessionFixed: (value): RecordedOuterIntegratorEntry => ({
       _tag: value._tag,
       correlation: value.correlation
@@ -986,6 +1001,13 @@ const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterI
       directionAppliedAt: value.directionAppliedAt,
       predecessor: value.predecessor,
       quarantineAt: value.quarantineAt,
+      successor: value.successor,
+      successorGeneration: value.successorGeneration
+    }),
+    IntegratorAutomaticSuccessorSessionFixed: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      authorizationAt: value.authorizationAt,
+      predecessor: value.predecessor,
       successor: value.successor,
       successorGeneration: value.successorGeneration
     }),
@@ -1333,7 +1355,9 @@ const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent
     : taskTrackerReadIntent(entry.operation)
 
 const eventForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): WorkflowJournalEvent =>
-  Schema.decodeUnknownSync(IntegratorJournalEvent)({ ...entry, version: workflowJournalEventVersion })
+  entry._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+    ? IntegratorCompetingHeadSuccessorAuthorizedEvent.make({ ...entry, version: workflowJournalEventVersion })
+    : Schema.decodeUnknownSync(IntegratorJournalEvent)({ ...entry, version: workflowJournalEventVersion })
 
 const eventForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantineEntry): WorkflowJournalEvent =>
   Match.valueTags(entry, {
@@ -2013,10 +2037,14 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
 
 const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): string =>
   Match.valueTags(entry, {
+    IntegratorCompetingHeadSuccessorAuthorized: (value) =>
+      `Dalph coordinator authorized one automatic successor after compatible remote head ${value.remoteHead}; no Operator direction was applied.`,
     IntegratorSessionFixed: (value) =>
       `Dalph coordinator fixed Integrator session ${value.correlation.sessionId} for target head ${value.correlation.expectedTargetHead}.`,
     IntegratorSuccessorSessionFixed: (value) =>
       `Dalph coordinator fixed FullRerun successor session ${value.successor.sessionId} after quarantining predecessor ${value.predecessor.sessionId}.`,
+    IntegratorAutomaticSuccessorSessionFixed: (value) =>
+      `Dalph coordinator fixed automatic successor session ${value.successor.sessionId} at target head ${value.successor.expectedTargetHead} after authorization ${value.authorizationAt}; predecessor ${value.predecessor.sessionId} remains distinct for custody.`,
     IntegratorRunStarted: (value) =>
       `Dalph coordinator intended Integrator run ${value.run.ordinal} in session ${value.run.session.sessionId}.`,
     IntegratorRunResultRecorded: (value) =>
@@ -2194,17 +2222,6 @@ const lyricForTaskBoundaryEntry = (
   entry: Exclude<
     RecordedCassetteEntry,
     | RecordedAttemptStopEntry
-    | RecordedExecutorEntry
-    | RecordedGitObservationEntry
-    | RecordedRemoteBaselineEntry
-    | RecordedRemotePublicationEntry
-    | RecordedRunEntry
-    | RecordedTrackerEntry
-    | RecordedTargetPromotionEntry
-    | RecordedIntegrationFinalityEntry
-    | RecordedOuterIntegratorEntry
-    | RecordedIntegrationQuarantineEntry
-    | RecordedCleanupEntry
     | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
     | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
@@ -2251,17 +2268,7 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
   })
 
 type RecordedOtherEntry = Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>
-type RecordedPresentationResidualEntry = Exclude<
-  RecordedOtherEntry,
-  | RecordedAttemptStopEntry
-  | RecordedCleanupEntry
-  | RecordedIntegrationPreparationEntry
-  | RecordedRemoteBaselineEntry
-  | RecordedRemotePublicationEntry
-  | RecordedOperatorDirectionEntry
-  | RecordedOuterIntegratorEntry
-  | RecordedIntegrationQuarantineEntry
->
+type RecordedPresentationResidualEntry = Exclude<RecordedOtherEntry, RecordedAttemptStopEntry>
 
 const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)

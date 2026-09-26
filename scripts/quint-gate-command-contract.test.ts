@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
+import { acceptedAutomaticSuccessorQuintGateCommandKeys } from "./quint-gate-automatic-successor-command-oracle.mjs"
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 import { type QuintManifestCommand, quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import {
@@ -24,14 +25,14 @@ const freshTaskBlockStart = 47
 const freshTaskBlockEnd = 60
 
 describe("Quint gate command contract", () => {
-  it("accepts the independent 105-command phase contract", () => {
+  it("accepts the independent 115-command contract", () => {
     assertQuintGateCommandContract({ manifest: quintGateCommandManifest, executed: quintGateExpectedCommandCounts })
     expect(quintGateExpectedCommandCounts).toEqual({
-      total: 105,
-      typecheck: 15,
-      test: 46,
-      "sampled-run": 23,
-      verify: 21
+      total: 115,
+      typecheck: 17,
+      test: 50,
+      "sampled-run": 25,
+      verify: 23
     })
   })
 
@@ -75,6 +76,28 @@ describe("Quint gate command contract", () => {
       kind: "typecheck",
       name: "Run cancellation model typecheck"
     })
+    expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
+  })
+
+  it("accepts the independent ten-command #385 automatic-successor inventory", () => {
+    expect(acceptedAutomaticSuccessorQuintGateCommandKeys).toEqual([
+      "typecheck\u0000accepted-result automatic successor proof typecheck",
+      "test\u0000accepted-result automatic successor proof deterministic tests",
+      "test\u0000accepted-result automatic successor proof negative mutation profile",
+      "sampled-run\u0000accepted-result automatic successor proof sampled model",
+      "verify\u0000accepted-result automatic successor proof exhaustive model",
+      "typecheck\u0000accepted-result automatic successor counter proof typecheck",
+      "test\u0000accepted-result automatic successor counter proof deterministic tests",
+      "test\u0000accepted-result automatic successor counter proof negative mutation profile",
+      "sampled-run\u0000accepted-result automatic successor counter proof sampled model",
+      "verify\u0000accepted-result automatic successor counter proof exhaustive model"
+    ])
+    const blockStart = quintGateCommandManifest.findIndex(
+      ({ name }) => name === "accepted-result automatic successor proof typecheck"
+    )
+    expect(
+      quintGateCommandManifest.slice(blockStart, blockStart + 10).map(({ kind, name }) => `${kind}\u0000${name}`)
+    ).toEqual(acceptedAutomaticSuccessorQuintGateCommandKeys)
     expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
   })
 

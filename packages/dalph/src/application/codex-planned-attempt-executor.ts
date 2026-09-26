@@ -174,6 +174,7 @@ const sameAcceptedManifest = Schema.toEquivalence(AcceptedResultEvidenceManifest
 
 type CodexEmptyRecord = Extract<CodexAttemptRecord, { readonly _tag: "EmptyPreTurn" }>
 type CodexAssociatedRecord = Extract<CodexAttemptRecord, { readonly _tag: "AssociatedPreTurn" }>
+type CodexPreTurnBeginRecord = CodexEmptyRecord | CodexAssociatedRecord
 /** A successful allocation has no readable rollout yet; only its current process owns this response authority. */
 type CodexBeginAssociation = Data.TaggedEnum<{
   FreshAllocation: { readonly record: CodexAssociatedRecord }
@@ -249,7 +250,7 @@ const observedRecordFor = (
 
 const runningRecordFor = (
   attempt: Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">,
-  record: CodexObservedRecord | CodexRunningRecord | CodexSafelySuspendedRecord
+  record: CodexObservedRecord
 ): CodexRunningRecord =>
   CodexAttemptRecord.cases.Running.make({
     attemptId: attempt.attemptId,
@@ -264,7 +265,7 @@ const runningRecordFor = (
 
 const safelySuspendedRecordFor = (
   attempt: Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">,
-  record: CodexObservedRecord | CodexRunningRecord | CodexSuspensionStopIntentRecord | CodexSafelySuspendedRecord
+  record: CodexObservedRecord
 ): CodexSafelySuspendedRecord =>
   CodexAttemptRecord.cases.SafelySuspended.make({
     attemptId: attempt.attemptId,
@@ -279,7 +280,7 @@ const safelySuspendedRecordFor = (
 
 const suspensionStopIntendedRecordFor = (
   attempt: Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">,
-  record: CodexObservedRecord | CodexRunningRecord | CodexSafelySuspendedRecord
+  record: CodexObservedRecord
 ): CodexSuspensionStopIntentRecord =>
   CodexAttemptRecord.cases.SuspensionStopIntended.make({
     attemptId: attempt.attemptId,
@@ -340,9 +341,7 @@ const isThreadBackedRecord = (record: CodexAttemptRecord): record is CodexThread
 const isAcceptedTerminalRecord = (record: CodexTerminalRecord): record is CodexAcceptedTerminalRecord =>
   record.terminal._tag === "Accepted" && record.evidenceManifest !== null
 
-const isPersistableOwnedRecord = (
-  record: CodexAttemptRecord
-): record is CodexObservedRecord | CodexRunningRecord | CodexSafelySuspendedRecord =>
+const isPersistableOwnedRecord = (record: CodexAttemptRecord): record is CodexObservedRecord =>
   record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended"
 
 export const ownedRecordPersistenceDisposition = (
@@ -1536,7 +1535,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     const reconcilePreTurnBegin = Effect.fn("CodexPlannedAttemptExecutor.reconcilePreTurnBegin")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexEmptyRecord | CodexAssociatedRecord
+      record: CodexPreTurnBeginRecord
     ) {
       if (record._tag === "EmptyPreTurn") {
         return CodexBeginAssociation.FreshAllocation({ record: yield* allocateThread(attempt, correlation) })
@@ -1824,7 +1823,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     const isPreTurnBeginRecord = (
       record: CodexAttemptRecord,
       purpose: PlannedAttemptExecutorObservationPurpose
-    ): record is CodexEmptyRecord | CodexAssociatedRecord =>
+    ): record is CodexPreTurnBeginRecord =>
       isBeginReconciliation(purpose) && (record._tag === "EmptyPreTurn" || record._tag === "AssociatedPreTurn")
 
     const issueBeginProof = Effect.fn("CodexPlannedAttemptExecutor.issueBeginProof")(function* (

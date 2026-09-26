@@ -1,6 +1,8 @@
 import { applicationExitCheckRegistry } from "./application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
+  acceptedResultIntegrationAutomaticSuccessorProofObligations,
+  acceptedResultIntegrationAutomaticSuccessorCountersProofObligations,
   acceptedResultIntegrationQuarantineProofObligations,
   freshTaskAdmissionObligations,
   freshTaskAdmissionProofObligations,
@@ -980,6 +982,136 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
         "tlc",
         "--invariants",
         ...acceptedResultIntegrationQuarantineProofInvariants,
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+
+  const acceptedResultIntegrationAutomaticSuccessorProofInvariants =
+    acceptedResultIntegrationAutomaticSuccessorProofObligations.invariants
+  const acceptedResultIntegrationAutomaticSuccessorProofWitnesses =
+    acceptedResultIntegrationAutomaticSuccessorProofObligations.witnesses
+  run("accepted-result automatic successor proof typecheck", [
+    "typecheck",
+    "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt"
+  ])
+  runFamily([
+    {
+      name: "accepted-result automatic successor proof deterministic tests",
+      args: [
+        "test",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProofTest"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor proof negative mutation profile",
+      args: [
+        "test",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof_negative_test.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProofNegativeTest"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor proof sampled model",
+      args: [
+        "run",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProof",
+        "--invariants",
+        ...acceptedResultIntegrationAutomaticSuccessorProofInvariants,
+        "--witnesses",
+        ...acceptedResultIntegrationAutomaticSuccessorProofWitnesses,
+        "--max-steps",
+        "34",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "38501",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor proof exhaustive model",
+      args: [
+        "verify",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProof",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...acceptedResultIntegrationAutomaticSuccessorProofInvariants,
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+
+  const acceptedResultIntegrationAutomaticSuccessorCountersProofInvariants =
+    acceptedResultIntegrationAutomaticSuccessorCountersProofObligations.invariants
+  const acceptedResultIntegrationAutomaticSuccessorCountersProofWitnesses =
+    acceptedResultIntegrationAutomaticSuccessorCountersProofObligations.witnesses
+  run("accepted-result automatic successor counter proof typecheck", [
+    "typecheck",
+    "specs/acceptedResultIntegration_automaticSuccessor_counters_proof.qnt"
+  ])
+  runFamily([
+    {
+      name: "accepted-result automatic successor counter proof deterministic tests",
+      args: [
+        "test",
+        "specs/acceptedResultIntegration_automaticSuccessor_counters_proof_test.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorCountersProofTest"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor counter proof negative mutation profile",
+      args: [
+        "test",
+        "specs/acceptedResultIntegration_automaticSuccessor_counters_proof_negative_test.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorCountersProofNegativeTest"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor counter proof sampled model",
+      args: [
+        "run",
+        "specs/acceptedResultIntegration_automaticSuccessor_counters_proof.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorCountersProof",
+        "--invariants",
+        ...acceptedResultIntegrationAutomaticSuccessorCountersProofInvariants,
+        "--witnesses",
+        ...acceptedResultIntegrationAutomaticSuccessorCountersProofWitnesses,
+        "--max-steps",
+        "12",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "38502",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor counter proof exhaustive model",
+      args: [
+        "verify",
+        "specs/acceptedResultIntegration_automaticSuccessor_counters_proof.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorCountersProof",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...acceptedResultIntegrationAutomaticSuccessorCountersProofInvariants,
         "--verbosity",
         "1"
       ]
