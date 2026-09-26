@@ -59,9 +59,9 @@ import {
 import {
   IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorCandidateResourceLocator,
+  IntegratorSessionFixedEvent,
   IntegratorSessionId
 } from "../../workflow/protocols/integrator/events.js"
-import { IntegratorSessionFixedEvent } from "../../workflow/protocols/integrator/events.js"
 import { integratorResponsibilityFactsFor } from "../../workflow/protocols/integrator/state.js"
 import { IntegratorJournalContradiction } from "../../workflow/protocols/integrator/journal-errors.js"
 import {
@@ -781,7 +781,7 @@ it.effect("replays exact S2 fixation after a lost acknowledgement and defers a c
       return yield* Effect.die("missing S2 fixation proposal")
     const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
 
-    const records = yield* Ref.make(prefix.records())
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(prefix.records())
     const prefixJournal = (append: Journal["Service"]["appendIfAcceptedPrefixCurrent"]) =>
       Journal.of({
         ...unusedJournal,
@@ -829,7 +829,7 @@ it.effect("replays exact S2 fixation after a lost acknowledgement and defers a c
       (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
     ).toHaveLength(1)
 
-    const racingRecords = yield* Ref.make(prefix.records())
+    const racingRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(prefix.records())
     const runPause = ControlDirectionAppliedEvent.make({
       direction: "Pause",
       initiatedBy: { _tag: "Operator" },
@@ -980,7 +980,7 @@ it.effect("defers an H2 fixation proposal after the accepted H3 refresh supersed
         version: workflowJournalEventVersion
       })
     )
-    const records = yield* Ref.make(prefix.records())
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(prefix.records())
     const appendCalls = yield* Ref.make(0)
     const baselineCalls = yield* Ref.make(0)
     const journal = Journal.of({
@@ -1029,7 +1029,7 @@ it.effect("rejects a foreign fixed-session record returned by automatic S2 fixat
     const proposal = proposalFor(transition)
     if (proposal === undefined) return yield* Effect.die("missing S2 fixation proposal")
     const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
-    const records = yield* Ref.make(prefix.records())
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(prefix.records())
     const appendCalls = yield* Ref.make(0)
     const journal = Journal.of({
       ...unusedJournal,

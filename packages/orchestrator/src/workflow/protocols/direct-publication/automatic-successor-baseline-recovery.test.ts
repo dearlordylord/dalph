@@ -853,11 +853,15 @@ it("rejects an automatic-successor baseline refresh beyond the two-round bound",
   ) {
     throw new Error("accepted automatic-successor prefix must contain its authorization and first baseline read")
   }
+  const firstCorrelation = firstRead.event.correlation
+  if (firstCorrelation._tag !== "AutomaticCompetingHead") {
+    throw new Error("accepted automatic-successor first read must use its authorized baseline correlation")
+  }
   const roundThree = automaticCompetingHeadRemoteBaselineCorrelationFor(
     fixture.runId,
-    firstRead.event.correlation.responsibility,
-    firstRead.event.correlation.localTarget,
-    firstRead.event.correlation.remoteTarget,
+    firstCorrelation.responsibility,
+    firstCorrelation.localTarget,
+    firstCorrelation.remoteTarget,
     authorization.position,
     RemoteBaselineRound.make(3)
   )
@@ -870,7 +874,7 @@ it("rejects an automatic-successor baseline refresh beyond the two-round bound",
     })
   )
 
-  const rounds = automaticRemoteBaselineRoundsFor(fixture.records(), firstRead.event.correlation)
+  const rounds = automaticRemoteBaselineRoundsFor(fixture.records(), firstCorrelation)
   expect(rounds.map(({ state }) => state._tag)).toEqual(["Contradiction", "Contradiction"])
   expect(integratorAutomaticSuccessorPreparationIsCurrent(fixture.records(), fixture.input)).toBe(false)
   expect(
@@ -889,13 +893,17 @@ it("contradicts a round-two read intent that predates the ready round-one comple
   ) {
     throw new Error("accepted automatic-successor prefix must contain its authorization and first baseline read")
   }
-  const firstRound = automaticRemoteBaselineRoundsFor(initialRecords, firstRead.event.correlation)[0]
+  const firstCorrelation = firstRead.event.correlation
+  if (firstCorrelation._tag !== "AutomaticCompetingHead") {
+    throw new Error("accepted automatic-successor first read must use its authorized baseline correlation")
+  }
+  const firstRound = automaticRemoteBaselineRoundsFor(initialRecords, firstCorrelation)[0]
   if (firstRound?.state._tag !== "Ready") throw new Error("accepted first round must be Ready")
   const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
     fixture.runId,
-    firstRead.event.correlation.responsibility,
-    firstRead.event.correlation.localTarget,
-    firstRead.event.correlation.remoteTarget,
+    firstCorrelation.responsibility,
+    firstCorrelation.localTarget,
+    firstCorrelation.remoteTarget,
     authorization.position,
     RemoteBaselineRound.make(2)
   )
@@ -914,7 +922,7 @@ it("contradicts a round-two read intent that predates the ready round-one comple
         : record
     )
 
-  const rounds = automaticRemoteBaselineRoundsFor(outOfOrder, firstRead.event.correlation)
+  const rounds = automaticRemoteBaselineRoundsFor(outOfOrder, firstCorrelation)
   expect(rounds.map(({ state }) => state._tag)).toEqual(["Ready", "Contradiction"])
 })
 

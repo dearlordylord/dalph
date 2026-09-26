@@ -217,12 +217,13 @@ it.effect("projects and fixes one automatic successor after the exact competing-
     if (fixed?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
       return yield* Effect.die("the accepted successor append must be present for chronology validation")
     }
+    const fixedEvent = fixed.event
     expect(validateAutomaticSuccessorSessionFixedRecord(records, fixed, fixture.input.predecessor)).toMatchObject({
       _tag: "Valid"
     })
     expect(
       validateAutomaticSuccessorSessionFixedRecord(
-        records.filter((record) => record.position !== fixed.event.successor.targetLineageObservedAt),
+        records.filter((record) => record.position !== fixedEvent.successor.targetLineageObservedAt),
         fixed,
         fixture.input.predecessor
       )
