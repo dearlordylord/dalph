@@ -152,3 +152,11 @@ and reported all 2,081 files analyzed with no circular dependency. This supports
 an inadequate stage allowance, not a dependency defect. The stage now retains its
 check and has a three-minute bound; the repaired bounded command must pass before
 another qualification attempt.
+
+Run `450eefb5-3e59-4b25-990b-171990802337` passed through coverage explanation
+controls, then one custody test exhausted its 10-second startup barrier under
+concurrent host load. The focused diagnostic distinguished missing surviving-
+writer fences from delayed fixture startup: the unchanged test passed every fence,
+reconciliation and resumed-progress assertion in under one second. The fixture
+startup allowance is now 30 seconds; production limits and assertions are intact.
+The identical repaired focused test and all 55 custody tests passed afterward.

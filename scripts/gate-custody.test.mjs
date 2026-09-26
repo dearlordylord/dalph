@@ -96,7 +96,7 @@ const start = (root, args, env = {}) => {
   return { child, done }
 }
 const until = async (predicate) => {
-  const deadline = performance.now() + 10_000
+  const deadline = performance.now() + 30_000
   while (!predicate()) {
     assert.ok(performance.now() < deadline, "controlled fixture reached its barrier deadline")
     await setTimeout(10)
