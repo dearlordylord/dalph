@@ -130,6 +130,7 @@ const main = async () => {
     if (existsSync(root) && !lstatSync(root).isDirectory()) throw new Error(`Unsupported disposable cache: ${root}`)
     rmSync(root, { recursive: true, force: true })
   }
+  atomicRecord(report, { ...identity, manifest, results: [], status: "preparing" })
   const guard = await startInputGuard({
     worktree: process.cwd(),
     logicalInvocation: candidateInputContract({ ...identity, manifest }),
@@ -157,9 +158,6 @@ const main = async () => {
       record: (result) => atomicRecord(report, { ...identity, ...result }),
       runStage: (stage) => runBoundedCommand({ ...stage.execution, environment })
     })
-  } catch (error) {
-    atomicRecord(report, { ...identity, manifest, status: "failed", message: error.message })
-    throw error
   } finally {
     await guard.close()
   }

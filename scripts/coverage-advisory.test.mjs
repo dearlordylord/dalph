@@ -7,7 +7,12 @@ import test from "node:test"
 
 const summaryCommand = new URL("./verify-coverage-summary.mjs", import.meta.url)
 const changedCommand = new URL("./verify-changed-coverage.mjs", import.meta.url)
-const invoke = (script, args, cwd) => spawnSync(process.execPath, [script.pathname, ...args], { cwd, encoding: "utf8" })
+const invoke = (script, args, cwd) =>
+  spawnSync(process.execPath, [script.pathname, ...args], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, DALPH_COVERAGE_BASE_SHA: "HEAD^" }
+  })
 
 void test("coverage commands report uncovered production without vetoing delivery", () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-coverage-advisory-"))

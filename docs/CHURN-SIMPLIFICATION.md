@@ -49,3 +49,19 @@ scenarios, known automatic-successor counterexample, R1/receipt/R2 ordering,
 crash/replay and Pause/Exit proof must be preserved when that base is available.
 No runtime refactor, scenario proof, live-host journey, or speedup is claimed by
 this tooling candidate.
+
+
+## Qualification repair evidence
+
+Run `bb153ae4-0a09-439f-b88b-588e332e7a43` stopped in coverage-explanation
+controls after artifact validation, typecheck, lint, Lab, and cycle checks passed.
+Custody was stopped and source unchanged; the result is unproven, not qualified.
+
+The diagnostic question was whether the product coverage boundary failed or its
+fixtures inherited incompatible inputs. The focused two-test run with the real
+`DALPH_COVERAGE_BASE_SHA` exited 1 and reproduced both distinguishing observations:
+the real Base was absent from the disposable Git repository, and the copied
+legacy runtime omitted `quality-check-selection.mjs`. This supports fixture
+isolation as the cause. After using the fixture's own Base and copying the new
+dependency, the identical focused command passed both tests in 22.9 seconds.
+The final runner also retains completed-stage results when a later stage fails.
