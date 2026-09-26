@@ -43,15 +43,24 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
+  LocalTargetCatchUpIntendedEvent,
+  LocalTargetCatchUpObservedEvent,
   LocalTargetCatchUpResult,
   RemoteBaselineGit,
   RemoteBaselineObservation,
+  RemoteBaselineObservedEvent,
+  RemoteBaselineReadIntendedEvent,
   RemoteBaselineRound
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import {
   integratorCompetingHeadSuccessorAuthorizationIdFor,
   IntegratorCompetingHeadSuccessorAuthorizedEvent
 } from "../../workflow/protocols/integrator/automatic-successor-events.js"
+import {
+  IntegratorAutomaticSuccessorSessionFixedEvent,
+  IntegratorCandidateResourceLocator,
+  IntegratorSessionId
+} from "../../workflow/protocols/integrator/events.js"
 import { IntegratorSessionFixedEvent } from "../../workflow/protocols/integrator/events.js"
 import { integratorResponsibilityFactsFor } from "../../workflow/protocols/integrator/state.js"
 import { IntegratorJournalContradiction } from "../../workflow/protocols/integrator/journal-errors.js"
@@ -60,6 +69,10 @@ import {
   ControlDirectionApplicationOrdinal
 } from "../../workflow/protocols/control-direction-application/events.js"
 import { makeSuccessorPrefix } from "../../../test/support/automatic-successor-history.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import { OperationId } from "../../workflow/identity.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
+import { makeTargetLineageObservationOperation } from "../../workflow/registry/operation.js"
 
 const target = FixtureTarget.make("integration-adapter-finality-target")
 const responsibility = StartedIntegrationResponsibility.make({
@@ -871,5 +884,190 @@ it.effect("replays exact S2 fixation after a lost acknowledgement and defers a c
       )
     ).toBe(true)
     expect(afterRace.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(0)
+  })
+)
+
+it.effect("defers an H2 fixation proposal after the accepted H3 refresh supersedes its baseline", () =>
+  Effect.gen(function* () {
+    const prefix = makeSuccessorPrefix()
+    const transition = RunnableFrontierTransition.FixIntegratorAutomaticSuccessorSession({
+      input: prefix.input,
+      responsibility: prefix.accepted.responsibility
+    })
+    const proposal = proposalFor(transition)
+    if (proposal === undefined) return yield* Effect.die("missing stale H2 fixation proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+    const initial = prefix.records()
+    const authorization = initial.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+    const firstRead = initial.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+    if (
+      authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+      firstRead?.event._tag !== "RemoteBaselineReadIntended"
+    ) {
+      return yield* Effect.die("accepted H2 prefix must contain its authorization and ready baseline")
+    }
+    const h2 = authorization.event.remoteHead
+    const h3 = GitCommitSha.make("8".repeat(40))
+    const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+      prefix.runId,
+      firstRead.event.correlation.responsibility,
+      firstRead.event.correlation.localTarget,
+      firstRead.event.correlation.remoteTarget,
+      authorization.position,
+      RemoteBaselineRound.make(2)
+    )
+    prefix.append(
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: roundTwo,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    prefix.append(
+      RemoteBaselineObservedEvent.make({
+        correlation: roundTwo,
+        observation: RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: h2, remoteHead: h3 }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+    )
+    prefix.append(
+      LocalTargetCatchUpIntendedEvent.make({
+        correlation: roundTwo,
+        expectedLocalHead: h2,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        remoteHead: h3,
+        version: workflowJournalEventVersion
+      })
+    )
+    prefix.append(
+      LocalTargetCatchUpObservedEvent.make({
+        correlation: roundTwo,
+        expectedLocalHead: h2,
+        occurrenceClassification: "NonActionOccurrence",
+        remoteHead: h3,
+        result: LocalTargetCatchUpResult.cases.Applied.make({ newHead: h3 }),
+        version: workflowJournalEventVersion
+      })
+    )
+    const lineageOperation = makeTargetLineageObservationOperation({
+      integrationTarget: prefix.accepted.integrationTarget,
+      operationId: OperationId.make("stale-H2-fixation-after-H3-refresh"),
+      plannedAttempt: prefix.input.predecessor.plannedAttempt,
+      predecessorOperationIds: [prefix.accepted.targetLineageOperation.operationId]
+    })
+    const h3Lineage = TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: prefix.input.predecessor.plannedAttempt.baseSha,
+      targetHeadSha: h3
+    })
+    prefix.append(
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: lineageOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    prefix.append(
+      TargetLineageObservedEvent.make({
+        observation: h3Lineage,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: lineageOperation.operationId,
+        plannedAttempt: prefix.input.predecessor.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const records = yield* Ref.make(prefix.records())
+    const appendCalls = yield* Ref.make(0)
+    const baselineCalls = yield* Ref.make(0)
+    const journal = Journal.of({
+      ...unusedJournal,
+      appendIfAcceptedPrefixCurrent: () =>
+        Ref.update(appendCalls, (count) => count + 1).pipe(
+          Effect.andThen(Effect.die("stale H2 fixation must not append"))
+        ),
+      readAccepted: (runId) =>
+        Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+    })
+    const baselineGit = RemoteBaselineGit.of({
+      observe: () =>
+        Ref.update(baselineCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("no baseline read"))),
+      catchUp: () => Ref.update(baselineCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("no catch-up"))),
+      reconcileCatchUp: () =>
+        Ref.update(baselineCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("no reconciliation")))
+    })
+    const result = yield* executeIntegrationAction(action, transition, inertLease, prefix.accepted.trackerTarget).pipe(
+      Effect.provideService(Journal, journal),
+      Effect.provideService(InRunJournal, appendableJournal(records)),
+      Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+      Effect.provideService(RemoteBaselineGit, baselineGit),
+      Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+    )
+    expect(result).toMatchObject({
+      _tag: "ActionDeferred",
+      proposalId: proposal.id,
+      reason: "ContinuationAuthorizationStale"
+    })
+    expect(yield* Ref.get(appendCalls)).toBe(0)
+    expect(yield* Ref.get(baselineCalls)).toBe(0)
+    expect(
+      prefix.records().filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+    ).toHaveLength(0)
+  })
+)
+
+it.effect("rejects a foreign fixed-session record returned by automatic S2 fixation append", () =>
+  Effect.gen(function* () {
+    const prefix = makeSuccessorPrefix()
+    const transition = RunnableFrontierTransition.FixIntegratorAutomaticSuccessorSession({
+      input: prefix.input,
+      responsibility: prefix.accepted.responsibility
+    })
+    const proposal = proposalFor(transition)
+    if (proposal === undefined) return yield* Effect.die("missing S2 fixation proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+    const records = yield* Ref.make(prefix.records())
+    const appendCalls = yield* Ref.make(0)
+    const journal = Journal.of({
+      ...unusedJournal,
+      appendIfAcceptedPrefixCurrent: (runId, _expectedPosition, key, event) => {
+        if (event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+          return Effect.die("fixation append must contain the exact automatic S2 event")
+        }
+        const foreignEvent = IntegratorAutomaticSuccessorSessionFixedEvent.make({
+          ...event,
+          successor: {
+            ...event.successor,
+            candidateResource: IntegratorCandidateResourceLocator.make("foreign-automatic-successor-resource"),
+            sessionId: IntegratorSessionId.make("foreign-automatic-successor-session")
+          }
+        })
+        return Ref.update(appendCalls, (count) => count + 1).pipe(
+          Effect.as<ConditionalJournalAppendResult>({
+            _tag: "Appended",
+            record: { event: foreignEvent, key, position: JournalPosition.make(prefix.records().length + 1), runId }
+          })
+        )
+      },
+      readAccepted: (runId) =>
+        Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+    })
+    const failure = yield* executeIntegrationAction(action, transition, inertLease, prefix.accepted.trackerTarget).pipe(
+      Effect.flip,
+      Effect.provideService(Journal, journal),
+      Effect.provideService(InRunJournal, appendableJournal(records)),
+      Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+      Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit),
+      Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+    )
+    expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
+    expect(failure._tag).toBe("IntegratorJournalContradiction")
+    expect(yield* Ref.get(appendCalls)).toBe(1)
+    expect(
+      (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+    ).toHaveLength(0)
   })
 )
