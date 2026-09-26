@@ -424,9 +424,32 @@ authorization.
   and `::keeps resume request identity Run-wide across a different candidate correlation in memory and reopened SQLite`
   own request-result chronology and storage-level Run-wide identity uniqueness.
   The different-correlation test proves same-key rejection before append in both
-  stores; the composed #385 FullRerun successor path still needs an integration
-  test after the #385 producer and this Operator control are combined. The
-  production Operator no-retry boundary is also covered by
+  stores. The composed #385/#387 path is also required: one Run owns task A,
+  accepted commit C, and its exact FIFO integration responsibility; publication
+  is retained for compatible competing head H2. Alice submits an exact retained-
+  delivery resume request. The #387 control appends or replays its receipt and
+  wakes the ordinary Run owner only for a new receipt; the receipt itself creates
+  no Integrator authorization or session. The ordinary frontier must then
+  reconcile the latest compatible retained occurrence with any prior automatic
+  authorization for that same publication correlation. If the receipt is
+  recorded before authorization, Dalph records at most one authorization for
+  that correlation. If it is recorded after authorization but before successor
+  fixation, Dalph reuses that authorization and fixes at most one S2 at H2. A
+  crash/reopen at the latter cut restores the same authorization before fixing
+  the same successor. Exact receipt replay adds no wake, authorization, session,
+  successor, or task Begin. Every path retains the same Run, A, C, Base B, pinned
+  target, and FIFO position; it does not convert the receipt into Operator Full
+  rerun, mint a new publication correlation, pass A, or perform a duplicate
+  successor mutation.
+
+  The focused composition mapping is
+  `packages/orchestrator/src/coordination/delivery/automatic-successor-authorization-recovery.test.ts::records one successor authorization when a compatible resume receipt precedes authorization`,
+  `::reuses one successor authorization when a compatible resume receipt follows authorization before fixation`,
+  `::reconstructs the same successor authorization after receipt-before-fixation crash and reopen`, and
+  `::replays the exact resume receipt without another authorization or successor`.
+  These compose with the #387 ordinary-frontier and receipt-recovery cases above,
+  particularly `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts::reselects receipt-authorized compatible publication and reconciles unmatched promotion before fresh lineage` and `packages/orchestrator/src/workflow/protocols/direct-publication/resume.test.ts::replays the exact compatible-head continuation after restart from memory and reopened SQLite journals`.
+  The production Operator no-retry boundary is also covered by
   `packages/dalph/test/scenarios/production.test.ts::ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination`:
   fresh exact requests after real finality settlement and after Run termination
   return the preserved proof as status with no receipt, owner wake, or work.
