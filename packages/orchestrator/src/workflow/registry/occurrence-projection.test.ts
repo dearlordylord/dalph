@@ -122,6 +122,7 @@ import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
 } from "../protocols/integration-admission/events.js"
+import { IntegrationResponsibilityIdentity } from "../protocols/integration-admission/responsibility.js"
 import {
   ControlDirectionAppliedEvent,
   ControlDirectionApplicationOrdinal
@@ -144,6 +145,20 @@ import {
   TaskClaimReacquisitionRequestId
 } from "../protocols/task-claim-reacquisition/events.js"
 import { integrationFinalityFixture } from "../protocols/integration-finality/fixtures.js"
+import {
+  RemotePublicationAttemptAuthorization,
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationRetainedCause,
+  RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
+  RemotePublicationResumeRequestedEvent,
+  remotePublicationAttemptLimit,
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
+} from "../protocols/direct-publication/events.js"
 import {
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimReplacementIntendedEvent,
@@ -2732,3 +2747,104 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   expect(Object.keys(occurrenceVariants)).toHaveLength(62)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })
+
+it.effect("fails closed on historical resume receipts for nonresumable or exhausted publications", () =>
+  Effect.gen(function* () {
+    const correlation = remotePublicationCorrelationFor(
+      integrationFinalityFixture.qualifiedCandidate,
+      remotePublicationTargetForTest
+    )
+    const runId = correlation.qualifiedCandidate.run.session.plannedAttempt.runId
+    const history = (cause: typeof RemotePublicationRetainedCause.Type, attemptCount: number) => {
+      const requestId = RemotePublicationResumeRequestId.make(`projection-${cause._tag}-${attemptCount}`)
+      const request = RemotePublicationResumeRequest.make({
+        requestId,
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: correlation.qualifiedCandidate.run.session.queuedAt,
+          runId
+        }),
+        runId,
+        schemaVersion: 1
+      })
+      const events: Array<JournalRecord["event"]> = [
+        WorkflowRunBeganEvent.make({
+          initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTarget: remotePublicationTargetForTest,
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          target: FixtureTarget.make("publication-resume-projection"),
+          version: workflowJournalEventVersion
+        }),
+        RemotePublicationIntendedEvent.make({
+          correlation,
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      ]
+      for (let index = 0; index < attemptCount; index += 1) {
+        const attemptOrdinal = RemotePublicationAttemptOrdinal.make(index + 1)
+        events.push(
+          RemotePublicationAttemptIntendedEvent.make({
+            attemptOrdinal,
+            correlation,
+            initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+            occurrenceClassification: "InitiatedAction",
+            refspec: remotePublicationRefspecFor(
+              correlation.qualifiedCandidate.candidateCommit,
+              correlation.target.branch
+            ),
+            version: workflowJournalEventVersion
+          })
+        )
+      }
+      events.push(
+        RemotePublicationRetainedEvent.make({
+          authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+          cause,
+          correlation,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        }),
+        RemotePublicationResumeRequestedEvent.make({
+          correlation,
+          initiatedBy: WorkflowActor.cases.Operator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          request,
+          version: workflowJournalEventVersion
+        })
+      )
+      return events.map((event, index) => historicalRecord(index + 1, event))
+    }
+
+    const valid = yield* projectWorkflowOccurrences(
+      history(RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}), 1)
+    )
+    expect(valid.occurrences.at(-1)?._tag).toBe("RemotePublicationResumeRequested")
+
+    const invalid = [
+      {
+        records: history(
+          RemotePublicationRetainedCause.cases.AttemptsExhausted.make({}),
+          remotePublicationAttemptLimit
+        ),
+        detail: "publication resume receipt cannot override retained cause AttemptsExhausted"
+      },
+      {
+        records: history(RemotePublicationRetainedCause.cases.Throttled.make({}), 1),
+        detail: "publication resume receipt cannot override retained cause Throttled"
+      },
+      {
+        records: history(
+          RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+          remotePublicationAttemptLimit
+        ),
+        detail: "publication resume receipt cannot override the exhausted attempt allowance"
+      }
+    ]
+    for (const { detail, records } of invalid) {
+      const failure = yield* projectWorkflowOccurrences(records).pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "HistoricalOutcomeWithoutInitiatingAction", detail })
+    }
+  })
+)

@@ -24,6 +24,7 @@ import {
   RemotePublicationResumeRequestId,
   RemotePublicationResumeRequestedEvent,
   RemotePublicationSucceededEvent,
+  remotePublicationAttemptLimit,
   remotePublicationCorrelationFor,
   remotePublicationRefspecFor
 } from "./events.js"
@@ -348,4 +349,78 @@ it("rejects exhaustion before the exact publication attempt limit", () => {
     _tag: "PublicationContradiction",
     detail: "publication exhaustion requires the exact accepted attempt limit"
   })
+})
+
+it("rejects resume receipts for exhausted, throttled, or out-of-budget retained histories", () => {
+  const runId = correlation.qualifiedCandidate.run.session.plannedAttempt.runId
+  const request = RemotePublicationResumeRequest.make({
+    requestId: RemotePublicationResumeRequestId.make("resume-reject-exhausted-or-throttled"),
+    responsibility: IntegrationResponsibilityIdentity.make({
+      queuedAt: correlation.qualifiedCandidate.run.session.queuedAt,
+      runId
+    }),
+    runId,
+    schemaVersion: 1
+  })
+  const receipt = RemotePublicationResumeRequestedEvent.make({
+    correlation,
+    initiatedBy: WorkflowActor.cases.Operator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    request,
+    version: workflowJournalEventVersion
+  })
+  const makeHistory = (
+    cause: typeof RemotePublicationRetainedCause.Type,
+    attemptCount: number,
+    rejectedCount: number
+  ) => {
+    const attemptEvents = Array.from({ length: attemptCount }, (_, index) => {
+      const attemptOrdinal = RemotePublicationAttemptOrdinal.make(index + 1)
+      const intended = RemotePublicationAttemptIntendedEvent.make({ ...attempt, attemptOrdinal })
+      return rejectedCount > index
+        ? [
+            intended,
+            RemotePublicationAttemptRejectedNonFastForwardEvent.make({
+              attemptOrdinal,
+              correlation,
+              occurrenceClassification: "NonActionOccurrence",
+              version: workflowJournalEventVersion
+            })
+          ]
+        : [intended]
+    }).flat()
+    const retained = RemotePublicationRetainedEvent.make({
+      authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+      cause,
+      correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+    return [outerIntent, ...attemptEvents, retained, receipt]
+  }
+  const cases = [
+    {
+      events: makeHistory(
+        RemotePublicationRetainedCause.cases.AttemptsExhausted.make({}),
+        remotePublicationAttemptLimit,
+        remotePublicationAttemptLimit
+      ),
+      detail: "publication resume receipt cannot override retained cause AttemptsExhausted"
+    },
+    {
+      events: makeHistory(RemotePublicationRetainedCause.cases.Throttled.make({}), 1, 0),
+      detail: "publication resume receipt cannot override retained cause Throttled"
+    },
+    {
+      events: makeHistory(
+        RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+        remotePublicationAttemptLimit,
+        remotePublicationAttemptLimit - 1
+      ),
+      detail: "publication resume receipt cannot override the exhausted attempt allowance"
+    }
+  ]
+  for (const { detail, events } of cases) {
+    expect(deriveRemotePublicationState(events)).toEqual({ _tag: "PublicationContradiction", detail })
+  }
 })

@@ -215,10 +215,13 @@ export const deriveRemotePublicationState = (
       const attemptsBeforeReceipt = events
         .slice(0, index)
         .filter((prior) => prior._tag === "RemotePublicationAttemptIntended").length
-      phase =
-        remotePublicationRetainedCauseIsResumable(phase.cause) && attemptsBeforeReceipt < remotePublicationAttemptLimit
-          ? { _tag: "ResumeReady", cause: phase.cause, request }
-          : { _tag: "Retained", authorization: phase.authorization, cause: phase.cause }
+      if (!remotePublicationRetainedCauseIsResumable(phase.cause)) {
+        return contradiction(`publication resume receipt cannot override retained cause ${phase.cause._tag}`)
+      }
+      if (attemptsBeforeReceipt >= remotePublicationAttemptLimit) {
+        return contradiction("publication resume receipt cannot override the exhausted attempt allowance")
+      }
+      phase = { _tag: "ResumeReady", cause: phase.cause, request }
       continue
     }
     if (event._tag === "RemotePublicationSucceeded") {

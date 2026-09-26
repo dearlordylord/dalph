@@ -60,6 +60,7 @@ import {
   type TargetPromotionIntendedEvent
 } from "../protocols/target-promotion/events.js"
 import {
+  remotePublicationAttemptLimit,
   remotePublicationAdmissionIdFor,
   remotePublicationCorrelationEquals,
   remotePublicationRunIdOf,
@@ -70,6 +71,7 @@ import {
   type RemotePublicationRetainedEvent,
   type RemotePublicationSucceededEvent
 } from "../protocols/direct-publication/events.js"
+import { remotePublicationRetainedCauseIsResumable } from "../protocols/direct-publication/state.js"
 import {
   RemoteBaselineCorrelation,
   remoteBaselineCorrelationFor,
@@ -2207,6 +2209,17 @@ const projectHistoricalPublicationResumeRequested = (
       record,
       "publication resume receipt has no exact retained or successful publication subject"
     )
+  }
+  if (retained !== undefined) {
+    if (!remotePublicationRetainedCauseIsResumable(retained.cause)) {
+      return historicalFailure(record, `publication resume receipt cannot override retained cause ${retained.cause._tag}`)
+    }
+    const attemptsBeforeReceipt = Array.from(context.publicationAttemptIntents.values()).filter(
+      (attempt) => attempt.correlation.requestId === publicationRequestId
+    ).length
+    if (attemptsBeforeReceipt >= remotePublicationAttemptLimit) {
+      return historicalFailure(record, "publication resume receipt cannot override the exhausted attempt allowance")
+    }
   }
   if (context.publicationResumeRequests.has(receiptId)) {
     return historicalFailure(record, "duplicate publication resume request identity " + receiptId)
