@@ -1,3 +1,4 @@
+import { derivePublicationContinuation, type PublicationContinuation } from "./publication-continuation.js"
 /* eslint-disable max-lines -- Retry authorization and changed-head disposition remain one frontier algebra owner. */
 import { Option } from "effect"
 import { plannedAttemptExecutorCorrelation, type AttemptId, type TaskId } from "@dalph/contracts"
@@ -36,8 +37,6 @@ import {
   maximumIntegratorSessionsPerResponsibility,
   type IntegratorRunCorrelation
 } from "../../workflow/protocols/integrator/events.js"
-import { integratorSessionCapacityForJournal } from "../../workflow/protocols/integrator/session-capacity.js"
-import { integratorCompetingHeadSuccessorAuthorizationIdFor } from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import { integratorRunTwoAuthorizationIssue } from "../../workflow/protocols/integrator/retry-authorization.js"
 import {
   deriveIntegrationQuarantineState,
@@ -55,11 +54,7 @@ import {
 } from "../../workflow-journal/record-evidence.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 import { integrationQuarantinedRecordKey } from "../../workflow-journal/record-key.js"
-import {
-  remotePublicationCorrelationEquals,
-  remotePublicationCorrelationFor
-} from "../../workflow/protocols/direct-publication/events.js"
-import { deriveRemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
+import { remotePublicationCorrelationFor } from "../../workflow/protocols/direct-publication/events.js"
 import { remotePublicationEventsFor } from "../../workflow/protocols/direct-publication/transition-journal.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
@@ -432,9 +427,10 @@ const explanationAfterPrerequisitesFor = (
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
   integratorState: CurrentIntegratorState,
-  promotion: PromotionState
+  promotion: PromotionState,
+  continuation: PublicationContinuation
 ): FrontierExplanation => {
-  const boundedRetainedWait = boundedRetainedWaitFor(runState, responsibility, integratorState)
+  const boundedRetainedWait = boundedRetainedWaitFor(responsibility, continuation)
   if (boundedRetainedWait !== undefined) return boundedRetainedWait
   if (promotion?._tag === "PromotionSucceeded") {
     if (remotePublicationSuccessFor(runState, promotion.correlation.qualifiedCandidate) === undefined) {
@@ -442,23 +438,13 @@ const explanationAfterPrerequisitesFor = (
     }
     return integrationFinalityExplanationFor(workflowHistorySource(runState), responsibility, promotion, runtimeFacts)
   }
-  if (integratorState._tag === "GitQualifiedPrepared") {
-    const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
-    if (began?.event._tag === "WorkflowRunBegan") {
-      const candidate = integratorRunQualifiedCandidateFromState(integratorState)
-      const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
-      const publication = deriveRemotePublicationState(
-        remotePublicationEventsFor(workflowHistorySource(runState), correlation)
-      )
-      if (publication._tag === "PublicationRetained" && publication.cause._tag === "CompatibleCompetingHead") {
-        return FrontierExplanation.IntegrationPublicationCompatibleHeadWait({
-          mergeBase: publication.cause.mergeBase,
-          plannedAttempt: responsibility.plannedAttempt,
-          remoteHead: publication.cause.remoteHead,
-          wakeCondition: "SameCommitSuccessorPathAvailable"
-        })
-      }
-    }
+  if (continuation !== undefined && continuation._tag !== "Publication") {
+    return FrontierExplanation.IntegrationPublicationCompatibleHeadWait({
+      mergeBase: continuation.mergeBase,
+      plannedAttempt: responsibility.plannedAttempt,
+      remoteHead: continuation.remoteHead,
+      wakeCondition: "SameCommitSuccessorPathAvailable"
+    })
   }
   if (integratorState._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true) {
     return FrontierExplanation.TargetPromotionConfigurationWait({
@@ -506,47 +492,8 @@ const targetPromotionConfigurationIsMissing = (
   runtimeFacts: IntegrationFrontierRuntimeFacts
 ): boolean => state._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true
 
-/** Keep the exact target while one journaled compatible-head authorization is resumed. */
-const automaticSuccessorAuthorizationRetainsTarget = (
-  runState: ReconstructedRunState,
-  state: CurrentIntegratorState
-): boolean => {
-  if (state._tag !== "GitQualifiedPrepared") return false
-  const source = workflowHistorySource(runState)
-  const began = Array.from(journalRecordsOfKind(source, "WorkflowRunBegan"))[0]
-  if (began?.event._tag !== "WorkflowRunBegan") return false
-  const candidate = integratorRunQualifiedCandidateFromState(state)
-  const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
-  const publication = deriveRemotePublicationState(remotePublicationEventsFor(source, correlation))
-  if (publication._tag !== "PublicationRetained" || publication.cause._tag !== "CompatibleCompetingHead") return false
-  const { mergeBase, remoteHead } = publication.cause
-  const compatibleRetained = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).filter(
-    ({ event }) =>
-      event._tag === "RemotePublicationRetained" &&
-      remotePublicationCorrelationEquals(event.correlation, correlation) &&
-      event.cause._tag === "CompatibleCompetingHead" &&
-      event.cause.mergeBase === mergeBase &&
-      event.cause.remoteHead === remoteHead
-  )
-  return Array.from(journalRecordsOfKind(source, "IntegratorCompetingHeadSuccessorAuthorized")).some(
-    ({ event, position, runId }) =>
-      event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
-      runId === state.run.session.plannedAttempt.runId &&
-      event.mergeBase === mergeBase &&
-      event.remoteHead === remoteHead &&
-      remotePublicationCorrelationEquals(event.correlation, correlation) &&
-      compatibleRetained.some(
-        ({ position: retainedAt }) =>
-          event.remotePublicationRetainedAt === retainedAt &&
-          position > retainedAt &&
-          event.authorizationId ===
-            integratorCompetingHeadSuccessorAuthorizationIdFor(correlation.requestId, retainedAt, mergeBase, remoteHead)
-      )
-  )
-}
-
 const fixedLineageRequiresRelease = (
-  runState: ReconstructedRunState,
+  continuation: PublicationContinuation,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
   state: CurrentIntegratorState
@@ -556,7 +503,7 @@ const fixedLineageRequiresRelease = (
   return (
     lineage !== undefined &&
     fixedIntegratorSessionLineageChanged(state, lineage, responsibility) &&
-    !automaticSuccessorAuthorizationRetainsTarget(runState, state)
+    !(continuation?._tag === "AuthorizedSuccessor" && continuation.retainsTarget)
   )
 }
 
@@ -572,7 +519,7 @@ const promotionRecoveryMustPrecedeFreshLineage = (promotion: PromotionState): bo
   promotionAttemptNeedsReconciliationRead(promotion) || promotionReconciliationIsDeferred(promotion)
 
 const settledIntegrationMustReleaseTarget = (
-  runState: ReconstructedRunState,
+  continuation: PublicationContinuation,
   waiting: boolean,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
@@ -582,7 +529,7 @@ const settledIntegrationMustReleaseTarget = (
   waiting ||
   integratorStateBlocksProgress(integratorState, promotion) ||
   targetPromotionConfigurationIsMissing(integratorState, runtimeFacts) ||
-  (fixedLineageRequiresRelease(runState, runtimeFacts, responsibility, integratorState) &&
+  (fixedLineageRequiresRelease(continuation, runtimeFacts, responsibility, integratorState) &&
     !promotionRecoveryMustPrecedeFreshLineage(promotion))
 
 // eslint-disable-next-line complexity -- Started integration admission is one ordered authority gate over tracker, claim, quarantine, and target ownership.
@@ -596,7 +543,8 @@ const transitionsBeforeStartedIntegrationAdmission = (
   promotion: PromotionState,
   retryProgress: RetryIntegratorProgress,
   trackerFactsAreCurrentFor: (responsibility: { readonly plannedAttempt: { readonly taskId: TaskId } }) => boolean,
-  claimIsExactFor: (responsibility: ClaimSubject) => boolean
+  claimIsExactFor: (responsibility: ClaimSubject) => boolean,
+  continuation: PublicationContinuation
 ): ReadonlyArray<RunnableFrontierTransitionType> | undefined => {
   if (promotion?._tag === "PromotionSucceeded") {
     return promotionSucceededTransitionsFor(
@@ -677,7 +625,7 @@ const transitionsBeforeStartedIntegrationAdmission = (
     return undefined
   }
   if (
-    settledIntegrationMustReleaseTarget(runState, waiting, runtimeFacts, responsibility, integratorState, promotion)
+    settledIntegrationMustReleaseTarget(continuation, waiting, runtimeFacts, responsibility, integratorState, promotion)
   ) {
     return releaseStartedIntegrationTargetFor(responsibility, held)
   }
@@ -751,23 +699,17 @@ const qualifiedIntegratorProgressTransitionsFor = (
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
   state: Extract<CurrentIntegratorState, { readonly _tag: "GitQualifiedPrepared" }>,
-  promotion: PromotionState
+  promotion: PromotionState,
+  continuation: PublicationContinuation
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
   const targetLineageRefreshRequired =
     runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true &&
     !promotionRecoveryMustPrecedeFreshLineage(promotion)
-  const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
-  if (began?.event._tag !== "WorkflowRunBegan") return []
-  const candidate = integratorRunQualifiedCandidateFromState(state)
-  const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
-  const publication = deriveRemotePublicationState(
-    remotePublicationEventsFor(workflowHistorySource(runState), correlation)
-  )
+  if (continuation === undefined) return []
+  const { candidate, publication, target } = continuation
   if (publication._tag === "PublicationSucceeded") {
     if (targetLineageRefreshRequired) return []
-    const succeeded = remotePublicationEventsFor(workflowHistorySource(runState), correlation).findLast(
-      (event) => event._tag === "RemotePublicationSucceeded"
-    )
+    const succeeded = continuation._tag === "Publication" ? continuation.succeeded : undefined
     return succeeded?._tag === "RemotePublicationSucceeded"
       ? [RunnableFrontierTransition.RunTargetPromotion({ candidate, publication: succeeded, responsibility })]
       : []
@@ -775,79 +717,27 @@ const qualifiedIntegratorProgressTransitionsFor = (
   if (publication._tag === "PublicationRetained") {
     if (publication.cause._tag !== "CompatibleCompetingHead" || runtimeFacts.remotePublicationConfigured !== true)
       return []
-    const { mergeBase, remoteHead } = publication.cause
-    const source = workflowHistorySource(runState)
-    const compatibleRetained = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).filter(
-      ({ event }) =>
-        event._tag === "RemotePublicationRetained" &&
-        event.cause._tag === "CompatibleCompetingHead" &&
-        event.cause.mergeBase === mergeBase &&
-        event.cause.remoteHead === remoteHead &&
-        remotePublicationCorrelationEquals(event.correlation, correlation)
-    )
-    const retained = compatibleRetained.at(lastRecordOffset)
-    if (retained?.event._tag !== "RemotePublicationRetained") return []
-    const expectedAuthorizationId = integratorCompetingHeadSuccessorAuthorizationIdFor(
-      correlation.requestId,
-      retained.position,
-      mergeBase,
-      remoteHead
-    )
-    const authorizationRecords = Array.from(
-      journalRecordsOfKind(source, "IntegratorCompetingHeadSuccessorAuthorized")
-    ).filter(
-      ({ event }) =>
-        event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
-        remotePublicationCorrelationEquals(event.correlation, correlation)
-    )
-    // A resume receipt may append a later retained occurrence for the same
-    // compatible publication correlation. Reuse its exact prior authorization
-    // only when the retained cause and deterministic authorization identity
-    // still match; receipt replay never mints another session.
-    const authorization = authorizationRecords.find(({ event, position }) => {
-      if (
-        event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
-        event.mergeBase !== mergeBase ||
-        event.remoteHead !== remoteHead
-      )
-        return false
-      const authorizedRetained = compatibleRetained.find(
-        ({ position: retainedPosition }) => retainedPosition === event.remotePublicationRetainedAt
-      )
-      if (authorizedRetained?.event._tag !== "RemotePublicationRetained" || position <= authorizedRetained.position)
-        return false
-      const authorizedId = integratorCompetingHeadSuccessorAuthorizationIdFor(
-        correlation.requestId,
-        authorizedRetained.position,
-        mergeBase,
-        remoteHead
-      )
-      return event.authorizationId === authorizedId
-    })
-    if (authorization === undefined) {
-      const conflictingAuthorization = authorizationRecords.length > 0
-      if (
-        conflictingAuthorization ||
-        integratorSessionCapacityForJournal(source, state.run.session)._tag === "Exhausted"
-      )
-        return []
+    if (continuation._tag === "NeedsAuthorization") {
       if (targetLineageRefreshRequired) return []
       return [
         RunnableFrontierTransition.AuthorizeIntegratorCompetingHeadSuccessor({
-          authorizationId: expectedAuthorizationId,
-          correlation,
-          mergeBase,
-          remoteHead,
-          remotePublicationRetainedAt: retained.position,
+          authorizationId: continuation.authorizationId,
+          correlation: continuation.correlation,
+          mergeBase: continuation.mergeBase,
+          remoteHead: continuation.remoteHead,
+          remotePublicationRetainedAt: continuation.retainedAt,
           responsibility
         })
       ]
     }
+    if (continuation._tag !== "AuthorizedSuccessor") return []
+    const { authorization } = continuation
+    const source = workflowHistorySource(runState)
     const firstBaselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
       responsibility.plannedAttempt.runId,
       integratorResponsibilityFactsFor(responsibility),
       responsibility.integrationTarget,
-      began.event.remotePublicationTarget,
+      target,
       authorization.position,
       initialAutomaticCompetingHeadBaselineRound
     )
@@ -855,12 +745,14 @@ const qualifiedIntegratorProgressTransitionsFor = (
     const latestBaselineRound = baselineRounds.at(lastRecordOffset)
     if (latestBaselineRound === undefined) return []
     let baselineRound = latestBaselineRound
+    const baselinePredatesActivation = Option.exists(
+      runtimeFacts.activationBaselinePosition ?? Option.none(),
+      (position) => baselineRound.state._tag === "Ready" && Number(baselineRound.state.completedAt) <= Number(position)
+    )
     if (
       baselineRound.state._tag === "Ready" &&
       Number(baselineRound.round) === Number(initialAutomaticCompetingHeadBaselineRound) &&
-      runtimeFacts.activationBaselinePosition !== undefined &&
-      Option.isSome(runtimeFacts.activationBaselinePosition) &&
-      baselineRound.state.completedAt <= runtimeFacts.activationBaselinePosition.value
+      baselinePredatesActivation
     ) {
       baselineRound = baselineRounds.find(
         (round) => Number(round.round) === Number(maximumAutomaticSuccessorBaselineRound)
@@ -869,7 +761,7 @@ const qualifiedIntegratorProgressTransitionsFor = (
           responsibility.plannedAttempt.runId,
           integratorResponsibilityFactsFor(responsibility),
           responsibility.integrationTarget,
-          began.event.remotePublicationTarget,
+          target,
           authorization.position,
           maximumAutomaticSuccessorBaselineRound
         ),
@@ -909,58 +801,23 @@ const qualifiedIntegratorProgressTransitionsFor = (
   }
   if (publication._tag === "PublicationContradiction" || runtimeFacts.remotePublicationConfigured !== true) return []
   if (targetLineageRefreshRequired) return []
-  return [
-    RunnableFrontierTransition.RunRemotePublication({
-      candidate,
-      responsibility,
-      target: began.event.remotePublicationTarget
-    })
-  ]
+  return [RunnableFrontierTransition.RunRemotePublication({ candidate, responsibility, target })]
 }
 
 /** Derives the accepted bounded retained wait from exact compatible-head and fixed-session Journal facts. */
 const boundedRetainedWaitFor = (
-  runState: ReconstructedRunState,
   responsibility: StartedIntegrationResponsibility,
-  integratorState: CurrentIntegratorState
-): Extract<FrontierExplanation, { readonly _tag: "BoundedRetainedWait" }> | undefined => {
-  if (integratorState._tag !== "GitQualifiedPrepared") return undefined
-  const source = workflowHistorySource(runState)
-  const began = Array.from(journalRecordsOfKind(source, "WorkflowRunBegan"))[0]
-  if (began?.event._tag !== "WorkflowRunBegan") return undefined
-  const candidate = integratorRunQualifiedCandidateFromState(integratorState)
-  const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
-  const publication = deriveRemotePublicationState(remotePublicationEventsFor(source, correlation))
-  if (publication._tag !== "PublicationRetained") return undefined
-  const publicationCause = publication.cause
-  if (publicationCause._tag !== "CompatibleCompetingHead") return undefined
-  const retained = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).findLast(
-    ({ event }) =>
-      event._tag === "RemotePublicationRetained" &&
-      remotePublicationCorrelationEquals(event.correlation, correlation) &&
-      event.cause._tag === "CompatibleCompetingHead" &&
-      event.cause.mergeBase === publicationCause.mergeBase &&
-      event.cause.remoteHead === publicationCause.remoteHead
-  )
-  if (retained?.event._tag !== "RemotePublicationRetained") return undefined
-  const hasSuccessorAuthorization = Array.from(
-    journalRecordsOfKind(source, "IntegratorCompetingHeadSuccessorAuthorized")
-  ).some(
-    ({ event }) =>
-      event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
-      remotePublicationCorrelationEquals(event.correlation, correlation)
-  )
-  if (hasSuccessorAuthorization) return undefined
-  const capacity = integratorSessionCapacityForJournal(source, integratorState.run.session)
-  if (capacity._tag !== "Exhausted") return undefined
-  return FrontierExplanation.BoundedRetainedWait({
-    mergeBase: publicationCause.mergeBase,
-    plannedAttempt: responsibility.plannedAttempt,
-    remoteHead: publicationCause.remoteHead,
-    remotePublicationRetainedAt: retained.position,
-    sessionCount: maximumIntegratorSessionsPerResponsibility
-  })
-}
+  continuation: PublicationContinuation
+): Extract<FrontierExplanation, { readonly _tag: "BoundedRetainedWait" }> | undefined =>
+  continuation?._tag === "BoundedRetainedWait"
+    ? FrontierExplanation.BoundedRetainedWait({
+        mergeBase: continuation.mergeBase,
+        plannedAttempt: responsibility.plannedAttempt,
+        remoteHead: continuation.remoteHead,
+        remotePublicationRetainedAt: continuation.retainedAt,
+        sessionCount: maximumIntegratorSessionsPerResponsibility
+      })
+    : undefined
 
 const explicitRetryProgressTransitionsFor = (
   responsibility: StartedIntegrationResponsibility,
@@ -1003,7 +860,8 @@ const startedIntegrationProgressTransitionFor = (
   integratorState: CurrentIntegratorState,
   promotion: PromotionState,
   held: boolean,
-  retryProgress: RetryIntegratorProgress
+  retryProgress: RetryIntegratorProgress,
+  continuation: PublicationContinuation
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
   // A fixed Integrator session or qualified candidate may outlive a released
   // process-local target position. The unfinished outer boundary reuses S's
@@ -1012,7 +870,14 @@ const startedIntegrationProgressTransitionFor = (
   const retryTransitions = explicitRetryProgressTransitionsFor(responsibility, retryProgress)
   if (retryTransitions !== undefined) return retryTransitions
   if (integratorState._tag === "GitQualifiedPrepared") {
-    return qualifiedIntegratorProgressTransitionsFor(runState, runtimeFacts, responsibility, integratorState, promotion)
+    return qualifiedIntegratorProgressTransitionsFor(
+      runState,
+      runtimeFacts,
+      responsibility,
+      integratorState,
+      promotion,
+      continuation
+    )
   }
   if (integratorState._tag === "Absent") {
     return absentIntegratorProgressTransitionsFor(runState, runtimeFacts, responsibility, held)
@@ -1050,6 +915,12 @@ export const deriveStartedIntegrationFrontier = (
     state._tag === "GitQualifiedPrepared"
       ? deriveTargetPromotionStateFor(workflowHistorySource(runState), integratorRunQualifiedCandidateFromState(state))
       : undefined
+  const continuations = new Map<StartedIntegrationResponsibility, PublicationContinuation>()
+  const continuationFor = (responsibility: StartedIntegrationResponsibility, state: CurrentIntegratorState) => {
+    if (!continuations.has(responsibility))
+      continuations.set(responsibility, derivePublicationContinuation(runState, state))
+    return continuations.get(responsibility)
+  }
   const succeededPromotionFor = (responsibility: StartedIntegrationResponsibility) => {
     const promotion = promotionFor(integratorStateFor(responsibility))
     return promotion?._tag === "PromotionSucceeded" ? promotion : undefined
@@ -1069,7 +940,8 @@ export const deriveStartedIntegrationFrontier = (
       runtimeFacts,
       responsibility,
       integratorState,
-      promotionFor(integratorState)
+      promotionFor(integratorState),
+      continuationFor(responsibility, integratorState)
     )
   }
   const transitions = started.flatMap<RunnableFrontierTransitionType>((responsibility) => {
@@ -1090,7 +962,8 @@ export const deriveStartedIntegrationFrontier = (
       promotion,
       retryProgress,
       trackerFactsAreCurrentFor,
-      claimIsExactFor
+      claimIsExactFor,
+      continuationFor(responsibility, integratorState)
     )
     return (
       earlyTransition ??
@@ -1101,7 +974,8 @@ export const deriveStartedIntegrationFrontier = (
         integratorState,
         promotion,
         held,
-        retryProgress
+        retryProgress,
+        continuationFor(responsibility, integratorState)
       )
     )
   })
