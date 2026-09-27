@@ -37,6 +37,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { NodeServices } from "@effect/platform-node"
+import { sqliteJournalStoreLayer } from "../../../orchestrator/src/workflow-journal/adapters/sqlite-store.js"
 import { it } from "@effect/vitest"
 import {
   type CompletionTaskClaim,
@@ -3159,22 +3160,29 @@ it.effect("production Run defers a real exhausted publication batch through Paus
       })
       const candidate = qualified.qualifiedCandidate
       const activity = yield* Ref.make({ admissions: 0, observations: 0, pushes: 0 })
+      const boundaryTrace = yield* Ref.make<ReadonlyArray<string>>([])
+      const traceBoundary = (boundary: string) => Ref.update(boundaryTrace, (entries) => [...entries, boundary])
+      const failGraphRead = yield* Ref.make(false)
       const alreadyPublished = yield* Ref.make(false)
       const remoteGit = RemotePublicationGit.of({
         admit: () =>
-          Ref.update(activity, (current) => ({ ...current, admissions: current.admissions + 1 })).pipe(
+          traceBoundary("remote-admission").pipe(
+            Effect.andThen(Ref.update(activity, (current) => ({ ...current, admissions: current.admissions + 1 }))),
             Effect.as(
               RemotePublicationAdmissionObservation.cases.ExistingBranch.make({
                 remoteHead: candidate.run.session.expectedTargetHead
               })
             )
           ),
-        prepareSenderCustody: () => Effect.void,
-        reconcileSenderCustody: () => Effect.void,
+        prepareSenderCustody: () => traceBoundary("sender-custody"),
+        reconcileSenderCustody: () => traceBoundary("sender-custody"),
         observe: () =>
           Ref.get(alreadyPublished).pipe(
             Effect.flatMap((published) =>
-              Ref.update(activity, (current) => ({ ...current, observations: current.observations + 1 })).pipe(
+              traceBoundary("remote-git-read").pipe(
+                Effect.andThen(
+                  Ref.update(activity, (current) => ({ ...current, observations: current.observations + 1 }))
+                ),
                 Effect.as(
                   published
                     ? RemotePublicationGitObservation.cases.CandidateCurrent.make({
@@ -3188,7 +3196,8 @@ it.effect("production Run defers a real exhausted publication batch through Paus
             )
           ),
         push: () =>
-          Ref.update(activity, (current) => ({ ...current, pushes: current.pushes + 1 })).pipe(
+          traceBoundary("push").pipe(
+            Effect.andThen(Ref.update(activity, (current) => ({ ...current, pushes: current.pushes + 1 }))),
             Effect.as(RemotePublicationPushResult.cases.RejectedNonFastForward.make({}))
           )
       })
@@ -3249,81 +3258,116 @@ it.effect("production Run defers a real exhausted publication batch through Paus
       const currentGraph = yield* Ref.make(graph.snapshot)
       const currentClaim = yield* Ref.make(accepted.activeClaim)
       const localGitCalls = yield* Ref.make<ReadonlyArray<unknown>>([])
+      const observedJournalLayer = journalStoreCapabilities(
+        Layer.effect(
+          JournalStore,
+          JournalStore.pipe(
+            Effect.map((store) =>
+              JournalStore.of({
+                ...store,
+                append: (requestedRunId, key, event) =>
+                  (event._tag === "RemotePublicationAttemptIntended"
+                    ? traceBoundary("publication-intent")
+                    : Effect.void
+                  ).pipe(Effect.andThen(store.append(requestedRunId, key, event)))
+              })
+            )
+          )
+        ).pipe(Layer.provide(sqliteJournalStoreLayer({ filename: database })))
+      )
       const tracker = Layer.succeed(
         TrackerMutation,
         TrackerMutation.of({
           acquireTaskClaim: () => Effect.die("grant recovery must retain the exact accepted claim"),
-          readTaskClaim: () => Ref.get(currentClaim),
+          readTaskClaim: () => traceBoundary("tracker-claim").pipe(Effect.andThen(Ref.get(currentClaim))),
           releaseTaskClaim: () => Effect.die("grant recovery must not release the task claim")
         })
       )
-      const application = productionWorkflowInterpreterLayer(
-        accepted.runId,
-        GitCommonDirectoryTarget.make(accepted.integrationTarget.repository),
-        accepted.integrationTarget.repository,
-        accepted.integrationTarget,
-        tracker,
-        productionControlledFakePlannedAttemptExecutorLayer,
-        unavailableIntegratorCandidateProviderAuthority,
-        {
-          remotePublicationGitLayer: Layer.succeed(RemotePublicationGit, remoteGit),
-          remotePublicationTarget: remotePublicationTargetForTest,
-          targetPromotion: {
-            git: {
-              compareAndSet: (request) =>
-                Ref.get(alreadyPublished).pipe(
-                  Effect.flatMap((published) =>
-                    published
-                      ? git
-                          .runInWorktree(directory, [
-                            "update-ref",
-                            request.integrationTarget.ref,
-                            request.candidateCommit,
-                            request.expectedTargetHead
-                          ])
-                          .pipe(
-                            Effect.orDie,
-                            Effect.flatMap((result) =>
-                              result.exitCode === 0
-                                ? Effect.succeed(
-                                    TargetPromotionCompareAndSetResult.cases.Applied.make({
-                                      newHeadSha: request.candidateCommit
-                                    })
-                                  )
-                                : Effect.die(`already-published target compare-and-set failed: ${result.stderr}`)
+      const makeApplication = (observeJournal: boolean) =>
+        productionWorkflowInterpreterLayer(
+          accepted.runId,
+          GitCommonDirectoryTarget.make(accepted.integrationTarget.repository),
+          accepted.integrationTarget.repository,
+          accepted.integrationTarget,
+          tracker,
+          productionControlledFakePlannedAttemptExecutorLayer,
+          unavailableIntegratorCandidateProviderAuthority,
+          {
+            remotePublicationGitLayer: Layer.succeed(RemotePublicationGit, remoteGit),
+            remotePublicationTarget: remotePublicationTargetForTest,
+            ...(observeJournal ? { journalStoreLayer: observedJournalLayer } : {}),
+            onReconstructed: () => traceBoundary("current-control"),
+            targetPromotion: {
+              git: {
+                compareAndSet: (request) =>
+                  Ref.get(alreadyPublished).pipe(
+                    Effect.flatMap((published) =>
+                      published
+                        ? git
+                            .runInWorktree(directory, [
+                              "update-ref",
+                              request.integrationTarget.ref,
+                              request.candidateCommit,
+                              request.expectedTargetHead
+                            ])
+                            .pipe(
+                              Effect.orDie,
+                              Effect.flatMap((result) =>
+                                result.exitCode === 0
+                                  ? Effect.succeed(
+                                      TargetPromotionCompareAndSetResult.cases.Applied.make({
+                                        newHeadSha: request.candidateCommit
+                                      })
+                                    )
+                                  : Effect.die(`already-published target compare-and-set failed: ${result.stderr}`)
+                              )
                             )
+                        : Effect.die("exhausted publication must not promote the target")
+                    )
+                  ),
+                read: () =>
+                  Ref.get(alreadyPublished).pipe(
+                    Effect.flatMap((published) =>
+                      published
+                        ? Effect.succeed(
+                            TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+                              currentHeadSha: candidate.candidateCommit
+                            })
                           )
-                      : Effect.die("exhausted publication must not promote the target")
+                        : Effect.die("exhausted publication must not read target promotion")
+                    )
                   )
-                ),
-              read: () =>
-                Ref.get(alreadyPublished).pipe(
-                  Effect.flatMap((published) =>
-                    published
-                      ? Effect.succeed(
-                          TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
-                            currentHeadSha: candidate.candidateCommit
-                          })
+              }
+            },
+            workflowGitCommandObserver: (boundary) =>
+              traceBoundary("local-git-read").pipe(
+                Effect.andThen(Ref.update(localGitCalls, (calls) => [...calls, boundary]))
+              )
+          }
+        ).pipe(
+          Layer.provide(
+            Layer.succeed(
+              TrackerGraphReader,
+              TrackerGraphReader.of({
+                read: () =>
+                  traceBoundary("tracker-graph").pipe(
+                    Effect.andThen(
+                      Ref.get(failGraphRead).pipe(
+                        Effect.flatMap((fail) =>
+                          fail ? Effect.die("post-Unpause graph read failed") : Ref.get(currentGraph)
                         )
-                      : Effect.die("exhausted publication must not read target promotion")
-                  )
-                )
-            }
-          },
-          workflowGitCommandObserver: (boundary) => Ref.update(localGitCalls, (calls) => [...calls, boundary])
-        }
-      ).pipe(
-        Layer.provide(
-          Layer.succeed(
-            TrackerGraphReader,
-            TrackerGraphReader.of({
-              read: () => Ref.get(currentGraph),
-              readTaskWorkSpecification: () => Effect.succeed(accepted.specification)
-            })
-          )
-        ),
-        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
-      )
+                      )
+                    )
+                  ),
+                readTaskWorkSpecification: () =>
+                  traceBoundary("tracker-revision").pipe(Effect.as(accepted.specification))
+              })
+            )
+          ),
+          Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+        )
+      const application = makeApplication(false)
+      const observedApplication = makeApplication(true)
       const nextOperation = yield* Ref.make(0)
       const run = () =>
         runWorkflow(
@@ -3478,6 +3522,35 @@ it.effect("production Run defers a real exhausted publication batch through Paus
         ...accepted.activeClaim,
         token: ClaimToken.make("production-grant-pause-foreign-token")
       })
+      const failedReadDatabase = JournalDatabaseLocator.make(`${directory}/failed-graph-read.sqlite`)
+      yield* seedExitPrefix(pausedRecords, failedReadDatabase)
+      yield* Ref.set(failGraphRead, true)
+      const beforeFailedReadActivity = yield* Ref.get(activity)
+      const failedRead = yield* Effect.gen(function* () {
+        const bootstrap = yield* JournaledRunBootstrap
+        yield* bootstrap.operatorControl.applyControlDirection({
+          direction: "Unpause",
+          subject: { _tag: "Run", runId: accepted.runId }
+        })
+        yield* Ref.set(boundaryTrace, [])
+        return yield* Effect.exit(run())
+      }).pipe(
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: failedReadDatabase })))
+      )
+      expect(failedRead._tag).toBe("Failure")
+      const afterFailedReadActivity = yield* Ref.get(activity)
+      expect(afterFailedReadActivity.observations).toBe(beforeFailedReadActivity.observations)
+      expect(afterFailedReadActivity.pushes).toBe(beforeFailedReadActivity.pushes)
+      expect(yield* Ref.get(boundaryTrace)).toContain("tracker-graph")
+      expect(yield* Ref.get(boundaryTrace)).not.toContain("push")
+      const failedReadRecords = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(accepted.runId)
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: failedReadDatabase })))
+      expect(failedReadRecords.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(3)
+      expect(failedReadRecords.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+      expect(failedReadRecords.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(0)
+      yield* Ref.set(failGraphRead, false)
       for (const wait of [
         { name: "permission", graph: ineligible.snapshot, claim: accepted.activeClaim },
         { name: "claim", graph: graph.snapshot, claim: foreignClaim }
@@ -3567,18 +3640,74 @@ it.effect("production Run defers a real exhausted publication batch through Paus
           direction: "Unpause",
           subject: { _tag: "Run", runId: accepted.runId }
         })
+        yield* Ref.set(boundaryTrace, [])
         const resumedActivation = yield* run().pipe(Effect.exit)
         if (resumedActivation._tag === "Failure") return yield* Effect.failCause(resumedActivation.cause)
         expect(resumedActivation._tag).toBe("Success")
+        const firstActivationTrace = yield* Ref.get(boundaryTrace)
+        const firstIntent = firstActivationTrace.indexOf("publication-intent")
+        const firstPush = firstActivationTrace.indexOf("push")
+        expect(firstIntent).toBeGreaterThan(0)
+        expect(firstPush).toBeGreaterThan(firstIntent)
+        expect(firstActivationTrace.slice(0, firstIntent).filter((entry) => entry === "current-control")).toHaveLength(
+          1
+        )
+        let previousRead = -1
+        for (const read of [
+          "current-control",
+          "remote-admission",
+          "tracker-graph",
+          "tracker-claim",
+          "local-git-read",
+          "remote-git-read",
+          "sender-custody"
+        ]) {
+          const index = firstActivationTrace.indexOf(read)
+          const count = firstActivationTrace.slice(0, firstIntent).filter((entry) => entry === read).length
+          expect(count, `${read}: ${firstActivationTrace.join(" -> ")}`).toBeGreaterThanOrEqual(1)
+          expect(index, `${read}: ${firstActivationTrace.join(" -> ")}`).toBeGreaterThan(previousRead)
+          expect(index, `${read}: ${firstActivationTrace.join(" -> ")}`).toBeLessThan(firstIntent)
+          previousRead = index
+        }
         const nextActivation = yield* run().pipe(Effect.exit)
         if (nextActivation._tag === "Failure") return yield* Effect.failCause(nextActivation.cause)
         expect(nextActivation._tag).toBe("Success")
         return [resumedActivation.value, nextActivation.value]
       }).pipe(
-        Effect.provide(application),
+        Effect.provide(observedApplication),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: database })))
       )
       const resumedRecords = yield* readPersistedRecords()
+      const unpausedSuffix = resumedRecords.slice(pausedRecords.length)
+      const unpause = unpausedSuffix.findIndex(
+        ({ event }) =>
+          event._tag === "ControlDirectionApplied" &&
+          event.direction === "Unpause" &&
+          event.subject._tag === "Run" &&
+          event.subject.runId === accepted.runId
+      )
+      const firstAttempt = unpausedSuffix.findIndex(({ event }) => event._tag === "RemotePublicationAttemptIntended")
+      const currentRevision = unpausedSuffix.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies[0].contentIdentity === "production-grant-pause-current"
+      )
+      const exactClaim = unpausedSuffix.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskClaimFacts" &&
+          event.observation.observation._tag === "ActiveTaskClaim" &&
+          event.observation.observation.token === accepted.activeClaim.token
+      )
+      const currentLineage = unpausedSuffix.findIndex(({ event }) => event._tag === "TargetLineageObserved")
+      expect(firstAttempt).toBeGreaterThan(0)
+      expect(unpause).toBeGreaterThanOrEqual(0)
+      expect(currentRevision).toBeGreaterThan(unpause)
+      expect(exactClaim).toBeGreaterThan(currentRevision)
+      expect(currentLineage).toBeGreaterThan(exactClaim)
+      expect(currentLineage).toBeLessThan(firstAttempt)
+      expect(exactClaim).toBeLessThan(firstAttempt)
       const resumedActivity = yield* Ref.get(activity)
       expect(resumedDecision).toHaveLength(2)
       expect(resumedActivity.observations).toBeGreaterThan(paused.beforePausedActivation.observations)

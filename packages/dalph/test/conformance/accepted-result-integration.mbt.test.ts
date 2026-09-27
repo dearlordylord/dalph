@@ -1,8 +1,9 @@
 /* eslint-disable functional/no-mixed-types -- The executable Quint driver exposes imperative action controls. */
 import { expect, it } from "@effect/vitest"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
-import { Context, Deferred, Effect, Fiber, ManagedRuntime, Schema } from "effect"
+import { Context, Deferred, Effect, Fiber, FileSystem, Layer, ManagedRuntime, Path, Ref, Schema } from "effect"
 import type { AcceptedResult } from "@dalph/contracts"
 import {
   AttemptId,
@@ -47,15 +48,30 @@ import {
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
 import { makeTargetLineageObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
 import type { JournalRecordKey } from "../../../orchestrator/src/workflow-journal/identity.js"
-import { JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
 import {
   InRunJournal,
+  JournalStore,
   type AppendableWorkflowJournalEvent,
   type JournalRecord
 } from "../../../orchestrator/src/workflow-journal/store.js"
-import type { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
-import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
+import { Journal, journalLayer } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
+import { sqliteJournalStoreLayer } from "../../../orchestrator/src/workflow-journal/adapters/sqlite-store.js"
+import { materializeJournalRecords } from "../../../orchestrator/src/workflow-journal/record-sequence.js"
+import { journalRecordsOfKind } from "../../../orchestrator/src/workflow-journal/record-evidence.js"
+import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
+import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
+import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
+import { applyRemotePublicationBatchGrantWithAdmission } from "../../../orchestrator/src/workflow/protocols/direct-publication/batch-grant-control.js"
+import { ApplyControlDirectionRequest } from "../../../orchestrator/src/workflow/protocols/control-direction-application/request.js"
+import { ControlDirectionSubject } from "../../../orchestrator/src/workflow/protocols/control-direction-application/events.js"
+import {
+  ControlDirectionApplication,
+  controlDirectionApplicationLayer
+} from "../../../orchestrator/src/workflow/protocols/control-direction-application/protocol.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
 import {
   IntegrationResponsibilityBeganEvent,
@@ -139,6 +155,8 @@ import {
 } from "../../../orchestrator/src/workflow/protocols/target-promotion/transitions.js"
 import {
   RemotePublicationAdmissionObservation,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId,
   RemotePublicationGit,
   RemotePublicationGitObservation,
   RemotePublicationObservationFailure,
@@ -158,7 +176,10 @@ import {
   makeRemotePublicationEngine,
   runRemotePublication
 } from "../../../orchestrator/src/workflow/protocols/direct-publication/protocol-engine.js"
-import { integrationResponsibilityIdentity } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
+import {
+  IntegrationResponsibilityIdentity,
+  integrationResponsibilityIdentity
+} from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -4064,6 +4085,254 @@ const promotionReadOnlyReconciliationActions = [
   "recoverCoordinatorStep",
   "reconcilePromotionReadOnlyOne"
 ] as const
+
+it.effect("publication exhaustion grant consumes one batch consistently in memory and SQLite", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = integrationFinalityFixture
+      const grantRunId = fixture.runId
+      const specification = makeTaskWorkSpecification({
+        body: "Conform one recovered publication grant across journal stores.",
+        taskId: fixture.taskId,
+        title: "Recovered publication batch"
+      })
+      const accepted = makeAcceptedIntegrationHistory({
+        acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
+        activeClaim: fixture.activeClaim,
+        integrationTarget: fixture.integrationTarget,
+        plannedAttempt: { ...fixture.plannedAttempt, taskRevision: specification.fingerprint },
+        runId: grantRunId,
+        targetHeadSha: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+        taskSpecification: specification,
+        trackerTarget: fixture.target
+      })
+      const qualified = makePromotedIntegrationHistory({
+        candidateCommit: fixture.qualifiedCandidate.candidateCommit,
+        candidateText: fixture.qualifiedCandidate.candidateText,
+        originalClaim: accepted.activeClaim,
+        records: accepted.records,
+        session: integratorCorrelationFor(accepted)
+      })
+      const candidate = qualified.qualifiedCandidate
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-grant-mbt-" })
+      const filename = JournalDatabaseLocator.make(path.join(directory, "grant.sqlite"))
+      const withSqlite = <A, E, R>(use: (store: JournalStore["Service"]) => Effect.Effect<A, E, R>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            return yield* use(yield* JournalStore)
+          }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+        )
+      yield* withSqlite((store) =>
+        Effect.gen(function* () {
+          const [beginning, ...suffix] = qualified.qualifiedRecords
+          if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("MBT Run has no beginning")
+          yield* store.beginRun(
+            grantRunId,
+            beginning.event.target,
+            beginning.event.initialControlPolicy,
+            beginning.event.remotePublicationTarget
+          )
+          for (const record of suffix) {
+            if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+              return yield* Effect.die("MBT prefix contains a lifecycle suffix")
+            }
+            yield* store.append(grantRunId, record.key, record.event)
+          }
+        })
+      )
+      const servicesFromStore = Effect.fn("GrantMbt.servicesFromStore")(function* (store: JournalStore["Service"]) {
+        const records = yield* store.read(grantRunId)
+        const history = reduceWorkflowJournalHistory(grantRunId, records)
+        if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("MBT history must reconstruct")
+        const context = yield* Layer.build(journalLayer(grantRunId, accepted.trackerTarget, history, store))
+        return {
+          acceptedJournal: Context.get(context, AcceptedJournalReader),
+          inRunJournal: Context.get(context, InRunJournal),
+          journal: Context.get(context, Journal)
+        }
+      })
+      const control = Effect.fn("GrantMbt.control")(function* (
+        services: {
+          readonly acceptedJournal: AcceptedJournalReader["Service"]
+          readonly inRunJournal: InRunJournal["Service"]
+        },
+        direction: "Pause" | "Unpause"
+      ) {
+        const context = yield* Layer.build(
+          controlDirectionApplicationLayer.pipe(
+            Layer.provide(
+              Layer.merge(
+                Layer.succeed(InRunJournal, services.inRunJournal),
+                Layer.succeed(AcceptedJournalReader, services.acceptedJournal)
+              )
+            )
+          )
+        )
+        return yield* Context.get(context, ControlDirectionApplication).apply(
+          ApplyControlDirectionRequest.make({
+            direction,
+            subject: ControlDirectionSubject.cases.Run.make({ runId: grantRunId })
+          })
+        )
+      })
+      const runPublication = (inRunJournal: InRunJournal["Service"], git: RemotePublicationGit["Service"]) =>
+        makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+          .runRemotePublication(candidate, remotePublicationTargetForTest, {
+            runObservation: (phase) => phase,
+            runSender: (phase) => phase
+          })
+          .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
+      const initial = Effect.fn("GrantMbt.initial")(function* (services: {
+        readonly acceptedJournal: AcceptedJournalReader["Service"]
+        readonly inRunJournal: InRunJournal["Service"]
+        readonly journal: Journal["Service"]
+      }) {
+        const pushes = yield* Ref.make(0)
+        const git = RemotePublicationGit.of({
+          admit: () => Effect.die("qualified M has passed admission"),
+          prepareSenderCustody: () => Effect.void,
+          reconcileSenderCustody: () => Effect.void,
+          observe: () =>
+            Effect.succeed(
+              RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                remoteHead: candidate.run.session.expectedTargetHead
+              })
+            ),
+          push: () =>
+            Ref.update(pushes, (count) => count + 1).pipe(
+              Effect.as(RemotePublicationPushResult.cases.RejectedNonFastForward.make({}))
+            )
+        })
+        for (let activation = 0; activation < 4; activation += 1) {
+          const state = yield* runPublication(services.inRunJournal, git)
+          if (activation === 3) {
+            expect(state).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "AttemptsExhausted" } })
+          }
+        }
+        expect(yield* Ref.get(pushes)).toBe(3)
+        yield* control(services, "Pause")
+        const beforeGrant = yield* services.journal.state.get
+        const exhaustion = Array.from(journalRecordsOfKind(beforeGrant.prefix, "RemotePublicationRetained")).findLast(
+          ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+        )
+        if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+          return yield* Effect.die("MBT engine did not record exhaustion")
+        }
+        const request = RemotePublicationBatchGrantRequest.make({
+          exhaustionAt: exhaustion.position,
+          requestId: RemotePublicationBatchGrantRequestId.make("grant-mbt-lost-ack"),
+          responsibility: IntegrationResponsibilityIdentity.make({
+            queuedAt: accepted.responsibility.queuedAt,
+            runId: grantRunId
+          }),
+          runId: grantRunId,
+          schemaVersion: 1
+        })
+        const lostAck: Journal["Service"] = {
+          ...services.journal,
+          appendIfAcceptedPrefixCurrent: (requestedRunId, expectedPosition, key, event) =>
+            services.journal
+              .appendIfAcceptedPrefixCurrent(requestedRunId, expectedPosition, key, event)
+              .pipe(Effect.andThen(Effect.die("grant committed before acknowledgement")))
+        }
+        expect(
+          (yield* Effect.exit(applyRemotePublicationBatchGrantWithAdmission(grantRunId, lostAck, request)))._tag
+        ).toBe("Failure")
+        const committed = yield* services.journal.state.get
+        expect(Array.from(journalRecordsOfKind(committed.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(1)
+        expect(Array.from(journalRecordsOfKind(committed.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(3)
+        return { records: materializeJournalRecords(committed.prefix.records), request }
+      })
+      const recovered = Effect.fn("GrantMbt.recovered")(function* (
+        services: {
+          readonly acceptedJournal: AcceptedJournalReader["Service"]
+          readonly inRunJournal: InRunJournal["Service"]
+          readonly journal: Journal["Service"]
+        },
+        request: RemotePublicationBatchGrantRequest
+      ) {
+        const replay = yield* applyRemotePublicationBatchGrantWithAdmission(grantRunId, services.journal, request)
+        expect(replay._tag).toBe("BatchGrantReplay")
+        const paused = yield* services.journal.state.get
+        expect(Array.from(journalRecordsOfKind(paused.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(3)
+        yield* control(services, "Unpause")
+        const pushes = yield* Ref.make(0)
+        const git = RemotePublicationGit.of({
+          admit: () => Effect.die("qualified M has passed admission"),
+          prepareSenderCustody: () => Effect.void,
+          reconcileSenderCustody: () => Effect.void,
+          observe: () =>
+            Effect.succeed(
+              RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                remoteHead: candidate.run.session.expectedTargetHead
+              })
+            ),
+          push: () =>
+            Ref.update(pushes, (count) => count + 1).pipe(
+              Effect.as(RemotePublicationPushResult.cases.Applied.make({ remoteHead: candidate.candidateCommit }))
+            )
+        })
+        const visible = yield* runPublication(services.inRunJournal, git)
+        expect(visible._tag).toBe("PublicationSucceeded")
+        expect((yield* runPublication(services.inRunJournal, git))._tag).toBe("PublicationSucceeded")
+        const after = yield* services.journal.state.get
+        const grants = Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationBatchGrantApplied"))
+        const attempts = Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationAttemptIntended"))
+        const successes = Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationSucceeded"))
+        const sessions = Array.from(journalRecordsOfKind(after.prefix, "IntegratorSessionFixed"))
+        const begins = Array.from(journalRecordsOfKind(after.prefix, "PlannedAttemptExecutorWorkResponsibilityBegan"))
+        expect(grants).toHaveLength(1)
+        expect(attempts).toHaveLength(4)
+        expect(successes).toHaveLength(1)
+        expect(sessions).toHaveLength(1)
+        expect(begins).toHaveLength(1)
+        expect(yield* Ref.get(pushes)).toBe(1)
+        expect(attempts.at(-1)?.event).toMatchObject({ attemptOrdinal: 4, batchGrantAt: grants[0]?.position })
+        return {
+          visible: visible._tag,
+          attemptOrdinals: attempts.map(({ event }) =>
+            event._tag === "RemotePublicationAttemptIntended" ? event.attemptOrdinal : undefined
+          ),
+          grantCount: grants.length,
+          successCount: successes.length,
+          sessionCount: sessions.length,
+          taskBeginCount: begins.length,
+          resumedPushes: yield* Ref.get(pushes)
+        }
+      })
+      const memoryContext = yield* Layer.build(
+        liveJournalTestLayer({ records: qualified.qualifiedRecords, runId: grantRunId, target: accepted.trackerTarget })
+      )
+      const memoryServices = {
+        acceptedJournal: Context.get(memoryContext, AcceptedJournalReader),
+        inRunJournal: Context.get(memoryContext, InRunJournal),
+        journal: Context.get(memoryContext, Journal)
+      }
+      const memoryPrefix = yield* initial(memoryServices)
+      const sqlitePrefix = yield* withSqlite((store) => servicesFromStore(store).pipe(Effect.flatMap(initial)))
+      expect(sqlitePrefix.records.map(({ event }) => event._tag)).toEqual(
+        memoryPrefix.records.map(({ event }) => event._tag)
+      )
+      const reopenedMemory = yield* Layer.build(
+        liveJournalTestLayer({ records: memoryPrefix.records, runId: grantRunId, target: accepted.trackerTarget })
+      )
+      const memoryResult = yield* recovered(
+        {
+          acceptedJournal: Context.get(reopenedMemory, AcceptedJournalReader),
+          inRunJournal: Context.get(reopenedMemory, InRunJournal),
+          journal: Context.get(reopenedMemory, Journal)
+        },
+        memoryPrefix.request
+      )
+      const sqliteResult = yield* withSqlite((store) =>
+        servicesFromStore(store).pipe(Effect.flatMap((services) => recovered(services, sqlitePrefix.request)))
+      )
+      expect(sqliteResult).toEqual(memoryResult)
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+  )
+)
 
 it.effect("detects a chooseRetry projection that leaves its exact direction subject at zero", () =>
   Effect.sync(() => {
