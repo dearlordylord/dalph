@@ -206,7 +206,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 
-| `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
+| `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. Baseline and full preflight bound the command to seven minutes: a timed successful smoke took 330.592 seconds under shared-host contention, including 165.727 seconds in two capstone DOM scenarios. The command remains mandatory when selected. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
 | `check:quint` | Obtains the complete required formal profile through guarded local execution or applicable recorded success. It reports which occurred and names the original evidence. `--force` requests fresh execution under the same guards. |

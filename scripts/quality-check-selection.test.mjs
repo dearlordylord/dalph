@@ -2,10 +2,15 @@ import { readFileSync } from "node:fs"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { selectQualityStages } from "./quality-check-selection.mjs"
-import { fullQualityGateManifest } from "./quality-gate-stage-policy.mjs"
+import { baselineQualityGates, fullQualityGateManifest } from "./quality-gate-stage-policy.mjs"
 
 const manifest = fullQualityGateManifest("a".repeat(40))
 const ids = (paths) => selectQualityStages(manifest, paths).map((stage) => stage.id)
+
+void test("maintained Lab proof keeps its measured finite command bound", () => {
+  assert.equal(baselineQualityGates().find((gate) => gate.args[0] === "check:lab")?.timeout, 7 * 60_000)
+  assert.equal(manifest.find((stage) => stage.id === "reducer-lab")?.timeout, 7 * 60_000)
+})
 
 void test("product changes retain runtime proof without infrastructure and catalog reruns", () => {
   const selected = ids(["packages/orchestrator/src/coordination/run/frontier.ts"])
