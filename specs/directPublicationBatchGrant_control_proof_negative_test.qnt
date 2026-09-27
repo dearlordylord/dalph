@@ -691,7 +691,7 @@ module directPublicationBatchGrantControlProofNegativeTest {
       .then(closeInitialSession)
       .then(retainInitialPublicationExhaustion)
       .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
-      
+
       .then(mutateForwardSessionBeforeReceipt)
       .expect(and { state.grantCount == 0, state.grantSessionEvents == 1, not(grantReceiptIsVisibleBeforeForwardEffects) })
   }
