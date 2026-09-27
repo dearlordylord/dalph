@@ -120,6 +120,7 @@ const discoverExecutableConformancePaths = async (worktree) => {
 const supportedEnvironmentByJob = Object.freeze({
   "formal-models": Object.freeze({
     DALPH_FORMAL_COMMIT_SHA: "${{ github.sha }}",
+    DALPH_FORMAL_BASE_SHA: "${{ needs.change-plan.outputs.base-sha }}",
     DALPH_FORMAL_NODE_VERSION: "${{ matrix.node-version }}",
     NODE_OPTIONS: "--max-old-space-size=8192"
   }),
@@ -170,6 +171,9 @@ const supportedJobConditions = Object.freeze({
   "formal-model-aggregate": "always()"
 })
 const supportedAggregateStepConditions = Object.freeze({
+  "Set up pnpm": "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",
+  "Install dependencies":
+    "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",
   "Refuse failed change plan": "needs.change-plan.result != 'success'",
   Checkout: "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",
   "Set up Node.js": "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",

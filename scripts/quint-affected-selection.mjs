@@ -1,3 +1,4 @@
+import { candidateChangedPaths } from "./quality-check-selection.mjs"
 import { discoverFormalSourcePaths } from "./formal-input-policy.mjs"
 import { assertCompleteQuintHostedPartition, quintHostedModelFamilies } from "./quint-hosted-shards.mjs"
 
@@ -62,3 +63,12 @@ export const createAffectedQuintSelection = (profile, familyNames) => {
   if (!provenancePlaced) throw new Error("Affected selection lacks evaluator preparation")
   return { positions, steps }
 }
+
+/** Both hosted producer and reader derive selection from the exact bound Git range. */
+export const hostedAffectedQuintFamilies = ({ binding, profile, worktree = process.cwd() }) =>
+  selectAffectedQuintFamilies({
+    changedPaths:
+      binding.baseSha === undefined ? undefined : candidateChangedPaths(binding.baseSha, binding.commitSha, worktree),
+    profile,
+    worktree
+  })

@@ -360,6 +360,7 @@ jobs:
     timeout-minutes: 16
     env:
       DALPH_FORMAL_COMMIT_SHA: ${{ github.sha }}
+      DALPH_FORMAL_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
       DALPH_FORMAL_NODE_VERSION: ${{ matrix.node-version }}
       NODE_OPTIONS: --max-old-space-size=8192
 
@@ -435,11 +436,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up pnpm
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
       - name: Set up Node.js
         if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
+        run: pnpm install --frozen-lockfile
 
       - name: Download formal model shard evidence
         if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'

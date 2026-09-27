@@ -43,8 +43,10 @@ as local execution. The plan, owner exporter and aggregate bind the selected com
 and sample count; ordinary changes use the first declared Node version, while
 infrastructure/concurrency changes retain all versions. Local model-source edits
 select complete importing Quint families with their negative controls and deep
-proofs. Runtime-to-model ownership remains conservative, and hosted formal shards
-still run the full portfolio when affected. That part of row 6 remains outstanding.
+proofs. Hosted formal shards and their aggregate independently derive the same whole-family
+selection from the exact bound Base/candidate. Empty shards still require explicit
+reports. Runtime inputs without an established model-family ownership mapping
+conservatively retain the full portfolio.
 
 Focused selection evidence: `quint-affected-selection.test.mjs` covers canonical
 family completeness, import closure and unknown-input fallback;
@@ -198,3 +200,11 @@ defined`. The exact focused test reproduced that exception before any assertion,
 distinguishing a missing helper from a gate behavior failure. Restoring the
 existing admitted-command fixture helper made that focused case pass, followed
 by all 193 resume/input/control tests. The original failed run remains unproven.
+
+Hosted affected-formal proof now binds the comparison Base as well as candidate,
+run attempt and Node version. Its aggregate checks the independently derived
+family partition, every selected command/verdict and custody identity, and common
+evaluator provenance for nonempty shards. An empty shard is evidence of no selected
+commands, not a missing report. The aggregate job now installs pinned dependencies
+before source discovery. Tests cover missing reports/commands, wrong families,
+missing witness output, and canonical full-portfolio compatibility.

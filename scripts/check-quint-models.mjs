@@ -63,10 +63,9 @@ export const runQuintEffectiveProfile = async ({
   const shard =
     hostedShard === undefined
       ? undefined
-      : (assertCompleteQuintHostedPartition(profile), createQuintHostedShard(profile, hostedShard))
-  if (hostedShard !== undefined && affectedFamilies !== undefined)
-    throw new Error("Hosted shards cannot claim affected-only evidence")
-  const selection = affectedFamilies === undefined ? shard : createAffectedQuintSelection(profile, affectedFamilies)
+      : (assertCompleteQuintHostedPartition(profile), createQuintHostedShard(profile, hostedShard, affectedFamilies))
+  const selection =
+    shard ?? (affectedFamilies === undefined ? undefined : createAffectedQuintSelection(profile, affectedFamilies))
   const executionSteps = selection?.steps ?? profile.steps
   if (serverEndpoint !== undefined && environment === undefined) {
     throw new Error("An owned Quint endpoint requires an explicit sanitized environment")
@@ -98,7 +97,7 @@ export const runQuintEffectiveProfile = async ({
     entryPoint: quintEntryPoint,
     profile,
     ...(shard === undefined ? {} : { shard }),
-    ...(affectedFamilies === undefined ? {} : { affectedSelection: selection }),
+    ...(affectedFamilies === undefined || shard !== undefined ? {} : { affectedSelection: selection }),
     serverEndpoint: serverEndpoint ?? null,
     commands: commands.filter((command) => command !== undefined),
     timing: { records: timing.records(), aggregates: timing.aggregates() },

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "1d18ae6bfe123002d2cb26282536988c43e9e37acf0b3de591c3415d77514542",
+  "digest": "d92ef62c8fdb0f0b32e4eb63e7cf6f8c34d8779ad0f3adf875611bf2f74b0c8d",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -464,6 +464,7 @@
     "scripts/generate-hosted-formal-input-manifest.mjs",
     "scripts/hosted-formal-input-manifest.json",
     "scripts/hosted-formal-input-manifest.mjs",
+    "scripts/quality-check-selection.mjs",
     "scripts/quality-gate-failure-policy.mjs",
     "scripts/quality-output-budget.mjs",
     "scripts/quint-affected-selection.mjs",

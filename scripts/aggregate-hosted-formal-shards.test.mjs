@@ -3,7 +3,11 @@ import { test } from "node:test"
 
 import { aggregateHostedFormalShards } from "./aggregate-hosted-formal-shards.mjs"
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
-import { assertCompleteQuintHostedPartition, quintHostedProfileDigest } from "./quint-hosted-shards.mjs"
+import {
+  assertCompleteQuintHostedPartition,
+  createQuintHostedShard,
+  quintHostedProfileDigest
+} from "./quint-hosted-shards.mjs"
 
 const binding = Object.freeze({ runId: "run-1", runAttempt: "2", commitSha: "candidate", nodeVersion: "24.20.0" })
 
@@ -19,66 +23,68 @@ const capturedOutput = (command) => {
   return `${lines.join("\n")}\n`
 }
 
-const fixture = () => {
+const fixture = (affectedFamilies) => {
   const profile = createQuintEffectiveProfile()
-  return assertCompleteQuintHostedPartition(profile).map((shard) => {
-    const commands = shard.positions.map((position) => {
-      const command = profile.commands[position]
+  return assertCompleteQuintHostedPartition(profile)
+    .map(({ shard }) => createQuintHostedShard(profile, shard, affectedFamilies))
+    .map((shard) => {
+      const commands = shard.positions.map((position) => {
+        const command = profile.commands[position]
+        return {
+          position,
+          name: command.name,
+          kind: command.kind,
+          executable: "/opt/bin/node",
+          obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
+          args: command.args,
+          exitCode: command.verdict.acceptedExitCodes[0],
+          output: capturedOutput(command),
+          verdict: command.verdict
+        }
+      })
       return {
-        position,
-        name: command.name,
-        kind: command.kind,
-        executable: "/opt/bin/node",
-        obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
-        args: command.args,
-        exitCode: command.verdict.acceptedExitCodes[0],
-        output: capturedOutput(command),
-        verdict: command.verdict
+        version: 1,
+        binding,
+        profileDigest: quintHostedProfileDigest(profile),
+        shard: shard.shard,
+        shardCount: shard.shardCount,
+        report: {
+          version: 1,
+          entryPoint: "/workspace/node_modules/@informalsystems/quint/dist/src/cli.js",
+          profile,
+          shard,
+          serverEndpoint: null,
+          commands,
+          timing: {
+            records: commands.map(({ exitCode, kind, name }) => ({
+              kind,
+              name,
+              durationMilliseconds: 1,
+              result: `exit:${exitCode}`
+            })),
+            aggregates: Object.fromEntries(
+              ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
+                kind,
+                {
+                  count: commands.filter((command) => command.kind === kind).length,
+                  durationMilliseconds: commands.filter((command) => command.kind === kind).length
+                }
+              ])
+            )
+          },
+          provenance: {
+            architecture: "arm64",
+            bytes: 1,
+            evaluatorPath: "/home/runner/.quint/evaluator",
+            evaluatorVersion: "v0.6.0",
+            platform: "linux",
+            quintPackageVersion: "0.32.0",
+            sha256: "a".repeat(64)
+          },
+          elapsedMilliseconds: 100
+        }
       }
     })
-    return {
-      version: 1,
-      binding,
-      profileDigest: quintHostedProfileDigest(profile),
-      shard: shard.shard,
-      shardCount: shard.shardCount,
-      report: {
-        version: 1,
-        entryPoint: "/workspace/node_modules/@informalsystems/quint/dist/src/cli.js",
-        profile,
-        shard,
-        serverEndpoint: null,
-        commands,
-        timing: {
-          records: commands.map(({ exitCode, kind, name }) => ({
-            kind,
-            name,
-            durationMilliseconds: 1,
-            result: `exit:${exitCode}`
-          })),
-          aggregates: Object.fromEntries(
-            ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
-              kind,
-              {
-                count: commands.filter((command) => command.kind === kind).length,
-                durationMilliseconds: commands.filter((command) => command.kind === kind).length
-              }
-            ])
-          )
-        },
-        provenance: {
-          architecture: "arm64",
-          bytes: 1,
-          evaluatorPath: "/home/runner/.quint/evaluator",
-          evaluatorVersion: "v0.6.0",
-          platform: "linux",
-          quintPackageVersion: "0.32.0",
-          sha256: "a".repeat(64)
-        },
-        elapsedMilliseconds: 100
-      }
-    }
-  })
 }
 
 void test("accepts two out-of-order reports only as one exact 115-command profile", () => {
@@ -170,4 +176,27 @@ void test("fails closed on missing duplicate mixed and altered shard evidence", 
     mutate(reports)
     assert.throws(() => aggregateHostedFormalShards({ binding, envelopes: reports }), /Hosted Quint|witness/)
   }
+})
+
+void test("affected aggregate requires the exact family selection including an empty shard", () => {
+  const affectedFamilies = ["Run activation"]
+  const envelopes = fixture(affectedFamilies)
+  const result = aggregateHostedFormalShards({ affectedFamilies, binding, envelopes })
+  assert.equal(result.commands, 5)
+  assert.throws(() => aggregateHostedFormalShards({ binding, envelopes }), /structure/)
+  assert.throws(
+    () => aggregateHostedFormalShards({ affectedFamilies: ["Git reconciliation"], binding, envelopes }),
+    /structure/
+  )
+  assert.throws(
+    () => aggregateHostedFormalShards({ affectedFamilies, binding, envelopes: envelopes.slice(0, 1) }),
+    /exactly/
+  )
+  const missing = structuredClone(envelopes)
+  missing[0].report.commands.pop()
+  assert.throws(() => aggregateHostedFormalShards({ affectedFamilies, binding, envelopes: missing }), /structure/)
+  const missingOutput = structuredClone(envelopes)
+  const witness = missingOutput[0].report.commands.find((command) => command.verdict.witnesses.length > 0)
+  witness.output = ""
+  assert.throws(() => aggregateHostedFormalShards({ affectedFamilies, binding, envelopes: missingOutput }), /witness/)
 })

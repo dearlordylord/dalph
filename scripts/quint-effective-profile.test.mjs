@@ -610,10 +610,18 @@ void test("affected execution retains canonical verdicts and reports only select
     report.affectedSelection.positions
   )
   assert.equal(report.commands.length, 5)
-  await assert.rejects(
-    runQuintEffectiveProfile({ ...controls(profile, []), affectedFamilies: ["Run activation"], hostedShard: 0 }),
-    /cannot claim/
-  )
+  for (const hostedShard of [0, 1]) {
+    const hosted = await runQuintEffectiveProfile({
+      ...controls(profile, []),
+      affectedFamilies: ["Run activation"],
+      hostedShard
+    })
+    assert.deepEqual(
+      hosted.commands.map(({ position }) => position),
+      hosted.shard.positions
+    )
+    assert.equal(hosted.commands.length, hostedShard === 0 ? 5 : 0)
+  }
   await assert.rejects(
     runQuintEffectiveProfile({
       ...controls(profile, []),

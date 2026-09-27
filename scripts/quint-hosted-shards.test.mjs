@@ -83,3 +83,20 @@ void test("requires the exact GitHub workflow binding fields", () => {
   }
   assert.throws(() => readQuintHostedShardBinding(environment, "24.21.0"), /runtime/)
 })
+
+void test("selected hosted bindings retain exact Base identity and reject malformed comparison input", () => {
+  const environment = {
+    GITHUB_RUN_ID: "1",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_SHA: "a".repeat(40),
+    DALPH_FORMAL_COMMIT_SHA: "a".repeat(40),
+    DALPH_FORMAL_NODE_VERSION: "24.20.0",
+    DALPH_FORMAL_BASE_SHA: "b".repeat(40)
+  }
+  assert.equal(readQuintHostedShardBinding(environment, "24.20.0").baseSha, "b".repeat(40))
+  assert.throws(
+    () => readQuintHostedShardBinding({ ...environment, DALPH_FORMAL_BASE_SHA: "HEAD^" }, "24.20.0"),
+    /Base SHA/
+  )
+  assert.equal(readQuintHostedShardBinding({ ...environment, DALPH_FORMAL_BASE_SHA: "" }, "24.20.0").baseSha, undefined)
+})

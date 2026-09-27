@@ -1379,6 +1379,8 @@ Local candidate checks select complete Quint model families for model-source cha
 following imports through the existing parser. Each family retains its deep proof,
 negative controls, witness checks and evaluator provenance. Unknown or unregistered
 inputs and runtime changes without a model ownership mapping retain the full
-portfolio. Hosted formal shards still execute the full affected portfolio; this
-remaining conservative breadth is not claimed as a sampling reduction. Explicit
+portfolio. Hosted shard producers and their aggregate derive that same selection independently
+from the exact bound Base/candidate range. Empty shards retain explicit reports;
+missing commands, wrong families and missing negative verdicts cannot receive credit.
+Both jobs install the pinned dependencies needed for import discovery. Explicit
 `check:ci:formal` and `test:delivery-repeatability` retain the full diagnostics.
