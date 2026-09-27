@@ -1,15 +1,18 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { GitCommitSha, makeTaskWorkSpecification } from "@dalph/contracts"
+import { GitCommitSha, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
-import { Context, Effect, FileSystem, Layer, Path, Ref } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Path, Ref } from "effect"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { Journal, journalLayer, type JournalService } from "../../../coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
+import { deriveIntegrationFrontier } from "../../../coordination/frontier/integration-frontier.js"
+import { deriveRunFinalityDecision } from "../../../coordination/frontier/run-finality.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journal/identity.js"
 import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import { publicationPremiseFor } from "../integration-finality/publication-premise.js"
+import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
 import { type CompletionTaskBoundaryService, completionTaskRequestFor } from "../integration-finality/events.js"
 import {
   CompletionTaskPreconditionConflict,
@@ -71,6 +74,7 @@ import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationGit,
   RemotePublicationGitObservation,
+  RemotePublicationPushFailure,
   RemotePublicationPushResult,
   RemotePublicationResumeRequest,
   RemotePublicationResumeRequestId,
@@ -245,6 +249,292 @@ const applyRealUnpause = Effect.fn("RemotePublicationBatchGrantTest.applyUnpause
 
 const recordsFrom = (journal: JournalService) => journal.state.get.pipe(Effect.map(({ prefix }) => prefix))
 
+it.effect("rejects wrong Run, responsibility, queue position, commit, and candidate at exact grant admission", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(buildJournal())
+    const inRunJournal = Context.get(context, InRunJournal)
+    const journal = Context.get(context, Journal)
+    yield* actualExhaustionPrefix(inRunJournal)
+    const before = yield* journal.state.get
+    const exhaustion = Array.from(journalRecordsOfKind(before.prefix, "RemotePublicationRetained")).findLast(
+      ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+    )
+    if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+      return yield* Effect.die("the real publication engine must retain exact exhaustion")
+    }
+    const exact = grantRequest("wrong-subject-control", exhaustion.position)
+    const foreignRun = RunId.make("foreign-batch-grant-run")
+    const cases: ReadonlyArray<readonly [string, unknown]> = [
+      ["Run", { ...exact, runId: foreignRun }],
+      [
+        "responsibility",
+        {
+          ...exact,
+          responsibility: IntegrationResponsibilityIdentity.make({ ...exact.responsibility, runId: foreignRun })
+        }
+      ],
+      [
+        "queue position",
+        {
+          ...exact,
+          responsibility: IntegrationResponsibilityIdentity.make({
+            ...exact.responsibility,
+            queuedAt: JournalPosition.make(Number(exact.responsibility.queuedAt) + 1)
+          })
+        }
+      ],
+      ["commit", { ...exact, acceptedCommit: GitCommitSha.make("f".repeat(40)) }],
+      [
+        "candidate",
+        { ...exact, qualifiedCandidate: { ...candidate, candidateCommit: GitCommitSha.make("e".repeat(40)) } }
+      ]
+    ]
+    const sessionCount = Array.from(journalRecordsOfKind(before.prefix, "IntegratorSessionFixed")).length
+    const intentCount = Array.from(journalRecordsOfKind(before.prefix, "RemotePublicationAttemptIntended")).length
+    for (const [name, request] of cases) {
+      const rejected = yield* Effect.exit(applyRemotePublicationBatchGrantWithAdmission(runId, journal, request))
+      expect(rejected._tag, name).toBe("Failure")
+      const after = yield* journal.state.get
+      expect(after.position, name).toBe(before.position)
+      expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationBatchGrantApplied")), name).toHaveLength(0)
+      expect(Array.from(journalRecordsOfKind(after.prefix, "IntegratorSessionFixed")), name).toHaveLength(sessionCount)
+      expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationAttemptIntended")), name).toHaveLength(
+        intentCount
+      )
+    }
+    const admitted = yield* applyRemotePublicationBatchGrantWithAdmission(runId, journal, exact)
+    expect(admitted._tag).toBe("NewlyRecordedBatchGrant")
+  })
+)
+
+it.effect("resumes exact already-published M toward finality after Unpause without another session or push", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(buildJournal())
+    const inRunJournal = Context.get(context, InRunJournal)
+    const acceptedJournal = Context.get(context, AcceptedJournalReader)
+    const journal = Context.get(context, Journal)
+    yield* actualExhaustionPrefix(inRunJournal)
+    yield* applyRealPause(inRunJournal, acceptedJournal)
+    const before = yield* journal.state.get
+    const exhaustion = Array.from(journalRecordsOfKind(before.prefix, "RemotePublicationRetained")).findLast(
+      ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+    )
+    if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+      return yield* Effect.die("the actual batch must retain its exact exhaustion")
+    }
+    const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+      runId,
+      journal,
+      grantRequest("already-published-after-unpause", exhaustion.position)
+    )
+    expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+    yield* applyRealUnpause(inRunJournal, acceptedJournal)
+    const pushes = yield* Ref.make(0)
+    const reads = yield* Ref.make(0)
+    const git = RemotePublicationGit.of({
+      admit: () => Effect.die("candidate publication does not read admission"),
+      prepareSenderCustody: () => Effect.void,
+      reconcileSenderCustody: () => Effect.die("all prior sends are conclusive"),
+      observe: () =>
+        Ref.update(reads, (count) => count + 1).pipe(
+          Effect.as(
+            RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: candidate.candidateCommit })
+          )
+        ),
+      push: () => Ref.update(pushes, (count) => count + 1).pipe(Effect.andThen(Effect.die("M is already public")))
+    })
+    const result = yield* makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+      .runRemotePublication(candidate, remotePublicationTargetForTest, {
+        runObservation: (phase) => phase,
+        runSender: (phase) => phase
+      })
+      .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
+    expect(result._tag).toBe("PublicationSucceeded")
+    expect(yield* Ref.get(reads)).toBe(1)
+    expect(yield* Ref.get(pushes)).toBe(0)
+    const after = yield* journal.state.get
+    expect(Array.from(journalRecordsOfKind(after.prefix, "IntegratorSessionFixed"))).toHaveLength(
+      Array.from(journalRecordsOfKind(before.prefix, "IntegratorSessionFixed")).length
+    )
+    expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(4)
+    expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationSucceeded"))).toHaveLength(1)
+    const history = reduceWorkflowJournalHistory(runId, materializeJournalRecords(after.prefix.records))
+    if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("publication must reconstruct")
+    const frontier = deriveIntegrationFrontier(history.runState, {
+      activeResponsibilities: [],
+      currentTrackerTaskIds: new Set([accepted.plannedAttempt.taskId]),
+      heldResponsibilities: [
+        IntegrationResponsibilityIdentity.make({ queuedAt: accepted.responsibility.queuedAt, runId })
+      ],
+      integrationTarget: Option.some(accepted.integrationTarget),
+      remotePublicationConfigured: true,
+      targetPromotionConfigured: true,
+      taskClaimAuthorityByAttemptId: new Map([[accepted.plannedAttempt.attemptId, { _tag: "Exact" as const }]])
+    })
+    expect(frontier.transitions.map(({ _tag }) => _tag)).toEqual(["RunTargetPromotion"])
+  })
+)
+
+it.effect(
+  "retains exact post-Unpause authentication, throttle, custody, and lineage waits without retrying forward work",
+  () =>
+    Effect.gen(function* () {
+      const cases = [
+        { name: "authentication", cause: "AuthenticationDenied", pushes: 1, intents: 4 },
+        { name: "throttle", cause: "Throttled", pushes: 1, intents: 4 },
+        { name: "custody", cause: "PushCustodyUnproven", pushes: 0, intents: 3 },
+        { name: "lineage", cause: "IncompatibleLineage", pushes: 0, intents: 3 }
+      ] as const
+      for (const scenario of cases) {
+        const context = yield* Layer.build(buildJournal())
+        const inRunJournal = Context.get(context, InRunJournal)
+        const acceptedJournal = Context.get(context, AcceptedJournalReader)
+        const journal = Context.get(context, Journal)
+        yield* actualExhaustionPrefix(inRunJournal)
+        yield* applyRealPause(inRunJournal, acceptedJournal)
+        const paused = yield* journal.state.get
+        const exhaustion = Array.from(journalRecordsOfKind(paused.prefix, "RemotePublicationRetained")).findLast(
+          ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+        )
+        if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+          return yield* Effect.die("the actual batch must retain exact exhaustion")
+        }
+        const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+          runId,
+          journal,
+          grantRequest(`post-unpause-${scenario.name}`, exhaustion.position)
+        )
+        expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+        yield* applyRealUnpause(inRunJournal, acceptedJournal)
+        const pushes = yield* Ref.make(0)
+        const git = RemotePublicationGit.of({
+          admit: () => Effect.die("candidate publication has passed destination admission"),
+          prepareSenderCustody: () =>
+            scenario.name === "custody"
+              ? Effect.fail(
+                  new RemotePublicationPushFailure({
+                    reason: "SenderStopUnproven",
+                    target: remotePublicationTargetForTest
+                  })
+                )
+              : Effect.void,
+          reconcileSenderCustody: () => Effect.die("all earlier sends are conclusive"),
+          observe: () =>
+            Effect.succeed(
+              scenario.name === "lineage"
+                ? RemotePublicationGitObservation.cases.IncompatibleLineage.make({
+                    remoteHead: GitCommitSha.make("e".repeat(40))
+                  })
+                : RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                    remoteHead: candidate.run.session.expectedTargetHead
+                  })
+            ),
+          push: () =>
+            Ref.update(pushes, (count) => count + 1).pipe(
+              Effect.as(
+                scenario.name === "authentication"
+                  ? RemotePublicationPushResult.cases.RejectedDefinite.make({ cause: "Authentication" })
+                  : RemotePublicationPushResult.cases.Throttled.make({})
+              )
+            )
+        })
+        const run = () =>
+          makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+            .runRemotePublication(candidate, remotePublicationTargetForTest, {
+              runObservation: (phase) => phase,
+              runSender: (phase) => phase
+            })
+            .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
+        const retained = yield* run()
+        expect(retained, scenario.name).toMatchObject({
+          _tag: "PublicationRetained",
+          batchGrantAt: grant.result.acceptedAt,
+          cause: { _tag: scenario.cause }
+        })
+        const afterWait = yield* journal.state.get
+        expect(
+          Array.from(journalRecordsOfKind(afterWait.prefix, "RemotePublicationAttemptIntended")),
+          scenario.name
+        ).toHaveLength(scenario.intents)
+        expect(yield* Ref.get(pushes), scenario.name).toBe(scenario.pushes)
+        expect(yield* run(), scenario.name).toMatchObject({
+          _tag: "PublicationRetained",
+          cause: { _tag: scenario.cause }
+        })
+        const afterReplay = yield* journal.state.get
+        expect(afterReplay.position, scenario.name).toBe(afterWait.position)
+        expect(yield* Ref.get(pushes), scenario.name).toBe(scenario.pushes)
+        expect(
+          Array.from(journalRecordsOfKind(afterReplay.prefix, "IntegratorSessionFixed")),
+          scenario.name
+        ).toHaveLength(Array.from(journalRecordsOfKind(paused.prefix, "IntegratorSessionFixed")).length)
+        expect(
+          Array.from(journalRecordsOfKind(afterReplay.prefix, "RemotePublicationSucceeded")),
+          scenario.name
+        ).toHaveLength(0)
+      }
+    })
+)
+
+it.effect(
+  "keeps a granted responsibility waiting after Unpause when tracker permission or its exact claim is absent",
+  () =>
+    Effect.gen(function* () {
+      const context = yield* Layer.build(buildJournal())
+      const inRunJournal = Context.get(context, InRunJournal)
+      const acceptedJournal = Context.get(context, AcceptedJournalReader)
+      const journal = Context.get(context, Journal)
+      yield* actualExhaustionPrefix(inRunJournal)
+      yield* applyRealPause(inRunJournal, acceptedJournal)
+      const paused = yield* journal.state.get
+      const exhaustion = Array.from(journalRecordsOfKind(paused.prefix, "RemotePublicationRetained")).findLast(
+        ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+      )
+      if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+        return yield* Effect.die("the actual batch must retain exact exhaustion")
+      }
+      const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+        runId,
+        journal,
+        grantRequest("post-unpause-tracker-waits", exhaustion.position)
+      )
+      expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+      yield* applyRealUnpause(inRunJournal, acceptedJournal)
+      const after = yield* journal.state.get
+      const history = reduceWorkflowJournalHistory(runId, materializeJournalRecords(after.prefix.records))
+      if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("grant must reconstruct")
+      const sharedFacts = {
+        activeResponsibilities: [],
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({ queuedAt: accepted.responsibility.queuedAt, runId })
+        ],
+        integrationTarget: Option.some(accepted.integrationTarget),
+        remotePublicationConfigured: true,
+        targetPromotionConfigured: true
+      }
+      const noPermission = deriveIntegrationFrontier(history.runState, {
+        ...sharedFacts,
+        currentTrackerTaskIds: new Set(),
+        taskClaimAuthorityByAttemptId: new Map([[accepted.plannedAttempt.attemptId, { _tag: "Exact" as const }]])
+      })
+      expect(noPermission.transitions.map(({ _tag }) => _tag)).toEqual(["ReleaseStartedIntegrationTarget"])
+      expect(noPermission.explanations.map(({ _tag }) => _tag)).toContain("IntegrationTrackerFactsWait")
+      const foreignClaim = deriveIntegrationFrontier(history.runState, {
+        ...sharedFacts,
+        currentTrackerTaskIds: new Set([accepted.plannedAttempt.taskId]),
+        taskClaimAuthorityByAttemptId: new Map([[accepted.plannedAttempt.attemptId, { _tag: "Foreign" as const }]])
+      })
+      expect(foreignClaim.transitions).toEqual([])
+      expect(foreignClaim.explanations.map(({ _tag }) => _tag)).toContain("IntegrationTaskClaimConstraint")
+      const unchanged = yield* journal.state.get
+      expect(unchanged.position).toBe(after.position)
+      expect(Array.from(journalRecordsOfKind(unchanged.prefix, "IntegratorSessionFixed"))).toHaveLength(
+        Array.from(journalRecordsOfKind(paused.prefix, "IntegratorSessionFixed")).length
+      )
+      expect(Array.from(journalRecordsOfKind(unchanged.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(3)
+    })
+)
+
 it.effect(
   "records and replays one exact Full rerun grant during Pause, then executes one bounded batch after Unpause",
   () =>
@@ -319,6 +609,21 @@ it.effect(
       expect(completionFailure).toMatchObject({ reason: "RemotePublicationMissing" })
       expect(yield* Ref.get(completionCalls)).toBe(0)
       expect(yield* Ref.get(authorizationCalls)).toBe(0)
+      const grantOnlyHistory = reduceWorkflowJournalHistory(runId, materializeJournalRecords(afterGrant.prefix.records))
+      expect(grantOnlyHistory._tag).toBe("ValidWorkflowJournalHistory")
+      if (grantOnlyHistory._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die("the exact grant-only prefix must remain reconstructible")
+      }
+      const grantOnlyFrontier = deriveIntegrationFrontier(grantOnlyHistory.runState)
+      expect(
+        deriveRunFinalityDecision(grantOnlyFrontier, grantOnlyHistory.runState.responsibility, true)
+      ).toMatchObject({ _tag: "RunMustRemainActive" })
+      expect(
+        Array.from(journalRecordsOfKind((yield* journal.state.get).prefix, "IntegrationFinalitySettled"))
+      ).toHaveLength(0)
+      expect(deriveIntegrationFinalityStateFor((yield* journal.state.get).prefix, qualified.claim)?._tag).not.toBe(
+        "IntegrationFinalitySettled"
+      )
       expect(
         Array.from(journalRecordsOfKind(afterGrant.prefix, "ControlDirectionApplied")).at(-1)?.event
       ).toMatchObject({ direction: "Pause", subject: { _tag: "Run", runId } })
