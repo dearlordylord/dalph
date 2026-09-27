@@ -2546,7 +2546,10 @@ const projectHistoricalPublicationResumeRequested = (
   }
   if (retained !== undefined) {
     if (!remotePublicationRetainedCauseIsResumable(retained.cause)) {
-      return historicalFailure(record, `publication resume receipt cannot override retained cause ${retained.cause._tag}`)
+      return historicalFailure(
+        record,
+        `publication resume receipt cannot override retained cause ${retained.cause._tag}`
+      )
     }
     const attemptsBeforeReceipt = Array.from(context.publicationAttemptIntents.values()).filter(
       (attempt) => attempt.correlation.requestId === publicationRequestId

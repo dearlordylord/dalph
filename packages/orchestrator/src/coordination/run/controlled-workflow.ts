@@ -145,7 +145,10 @@ export type RunControlledWorkflow = (
 ) => Effect.Effect<
   Effect.Success<RunWorkflowEffect<never, never>>,
   Effect.Error<RunWorkflowEffect<never, never>>,
-  | Exclude<Effect.Services<RunWorkflowEffect<never, never>>, Layer.Success<ReturnType<typeof controlledJournaledRunLayer>>>
+  | Exclude<
+      Effect.Services<RunWorkflowEffect<never, never>>,
+      Layer.Success<ReturnType<typeof controlledJournaledRunLayer>>
+    >
   | Layer.Services<ReturnType<typeof controlledJournaledRunLayer>>
 >
 

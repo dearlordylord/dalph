@@ -183,3 +183,10 @@ runner now executes a bounded dependency validation before freezing inputs;
 it refuses stale dependencies and never installs them. The observer still protects
 all dependency files, including this metadata. The preparation command is retained
 in the candidate record. No qualification credit is claimed for the failed run.
+
+Combined run `cfd20a4e-3db7-4d35-b7ee-b994f83ce889` passed artifacts and root
+typecheck, then stopped on three inherited formatting mismatches. A focused
+`dprint check` exited 20 and named exactly `run-stabilization.ts`,
+`controlled-workflow.ts`, and `occurrence-projection.ts`; this supports formatter
+normalization rather than semantic lint failure. After formatting those files,
+the identical check exited zero. No behavior changed and no test was removed.

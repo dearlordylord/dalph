@@ -45,10 +45,7 @@ export type RunStabilizedDeliveryEffect<E> = Effect.Effect<
   | Effect.Error<ReturnType<AcceptedJournalReaderService["readAccepted"]>>
   | Effect.Error<ReturnType<WorkflowInterpreter["Service"]["readTrackerGraph"]>>
   | Effect.Error<ReturnType<WorkflowTrace["Service"]["emit"]>>,
-  | Effect.Services<RunDeliveryRuntimePhaseEffect<E>>
-  | AcceptedJournalReader
-  | WorkflowInterpreter
-  | WorkflowTrace
+  Effect.Services<RunDeliveryRuntimePhaseEffect<E>> | AcceptedJournalReader | WorkflowInterpreter | WorkflowTrace
 >
 
 const unsettledProof = (acceptedAt: JournalPosition | null): RunFinalityProof => ({
