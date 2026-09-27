@@ -1322,6 +1322,7 @@ it("retains the exact compatible-head wait after the third automatic successor",
     remoteHead: changedHead
   })
   const retained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     correlation: publicationCorrelation,
     cause: retainedCause,
     occurrenceClassification: "NonActionOccurrence",
@@ -1352,7 +1353,14 @@ it("retains the exact compatible-head wait after the third automatic successor",
       }),
       remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)
     ),
-    record(12, retained, remotePublicationRetainedRecordKey(publicationCorrelation.requestId))
+    record(
+      12,
+      retained,
+      remotePublicationRetainedRecordKey(
+        publicationCorrelation.requestId,
+        RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
+      )
+    )
   ]
   const runState = {
     ...scenario.runState,
@@ -1742,6 +1750,7 @@ it("retains the exact compatible-head wait after the third automatic successor",
   const secondPublicationCorrelation = remotePublicationCorrelationFor(secondCandidate, remotePublicationTargetForTest)
   const secondRetainedAt = JournalPosition.make(25)
   const secondRetained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     correlation: secondPublicationCorrelation,
     cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
       mergeBase: changedHead,
@@ -1784,7 +1793,10 @@ it("retains the exact compatible-head wait after the third automatic successor",
     record(
       Number(secondRetainedAt),
       secondRetained,
-      remotePublicationRetainedRecordKey(secondPublicationCorrelation.requestId).toString()
+      remotePublicationRetainedRecordKey(
+        secondPublicationCorrelation.requestId,
+        RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
+      ).toString()
     )
   ]
   const secondAuthorizationAt = JournalPosition.make(26)
@@ -1963,6 +1975,7 @@ it("retains the exact compatible-head wait after the third automatic successor",
   const thirdPublicationCorrelation = remotePublicationCorrelationFor(thirdCandidate, remotePublicationTargetForTest)
   const thirdRetainedAt = JournalPosition.make(38)
   const thirdRetained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     correlation: thirdPublicationCorrelation,
     cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
       mergeBase: secondRemoteHead,
@@ -2001,7 +2014,10 @@ it("retains the exact compatible-head wait after the third automatic successor",
     record(
       Number(thirdRetainedAt),
       thirdRetained,
-      remotePublicationRetainedRecordKey(thirdPublicationCorrelation.requestId).toString()
+      remotePublicationRetainedRecordKey(
+        thirdPublicationCorrelation.requestId,
+        RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
+      ).toString()
     )
   ]
   const exhaustedRunState = {
@@ -2530,6 +2546,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
     workflowHistory: { evidence: journalEvidenceFrom([runBegan, ...qualifiedRecords]) }
   }
   const retained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     correlation: publicationCorrelation,
     cause: RemotePublicationRetainedCause.cases.AttemptsExhausted.make({}),
     occurrenceClassification: "NonActionOccurrence",
@@ -2563,7 +2580,14 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       }),
       remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)
     ),
-    record(13, retained, remotePublicationRetainedRecordKey(publicationCorrelation.requestId))
+    record(
+      13,
+      retained,
+      remotePublicationRetainedRecordKey(
+        publicationCorrelation.requestId,
+        RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
+      )
+    )
   ]
   const publicationRuntimeFacts = {
     ...runtimeFacts,

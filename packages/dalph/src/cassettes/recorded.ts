@@ -100,7 +100,6 @@ import {
 import {
   eventForGitObservationEntry,
   isRecordedGitObservationCassetteEntry,
-  isRecordedGitObservationEntry,
   lyricForGitObservationEntry,
   recordGitObservationEntry
 } from "./recorded-git-observation-mapping.js"
@@ -672,7 +671,7 @@ const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): Record
   )
 
 type IntegrationPreparationEvent = TargetPromotionEvent | IntegrationFinalityEvent
-type RecordedIntegrationPreparationEntry = RecordedTargetPromotionEntry
+type RecordedIntegrationPreparationEntry = RecordedTargetPromotionEntry | RecordedIntegrationFinalityEntry
 
 const isIntegrationPreparationEvent = (event: WorkflowJournalEvent): event is IntegrationPreparationEvent =>
   isTargetPromotionEvent(event) || isIntegrationFinalityTagged(event)
@@ -1204,24 +1203,29 @@ export const projectRecordedCassette = Effect.fn("ScenarioCassette.projectRecord
   })
 })
 
+type RecordedTaskBoundaryEntry = Extract<
+  RecordedCassetteEntry,
+  {
+    readonly _tag:
+      | "TaskAttemptPlanned"
+      | "TaskClaimAcquired"
+      | "TaskClaimAcquisitionIntended"
+      | "TaskClaimAcquisitionRejected"
+      | "TaskClaimReleaseIntended"
+      | "TaskClaimReleased"
+      | "IntegrationResponsibilityBegan"
+      | "IntegrationStarted"
+      | "PlannedAttemptReplaced"
+      | "TaskWorktreeReady"
+      | "TaskWorktreeReconciliationIntended"
+  }
+>
+
+const isRecordedTaskBoundaryEntry = (entry: RecordedCassetteEntry): entry is RecordedTaskBoundaryEntry =>
+  Object.hasOwn(taskBoundaryEventTags, entry._tag)
+
 const eventForTaskBoundaryEntry = (
-  entry: Extract<
-    RecordedCassetteEntry,
-    {
-      readonly _tag:
-        | "TaskAttemptPlanned"
-        | "TaskClaimAcquired"
-        | "TaskClaimAcquisitionIntended"
-        | "TaskClaimAcquisitionRejected"
-        | "TaskClaimReleaseIntended"
-        | "TaskClaimReleased"
-        | "IntegrationResponsibilityBegan"
-        | "IntegrationStarted"
-        | "PlannedAttemptReplaced"
-        | "TaskWorktreeReady"
-        | "TaskWorktreeReconciliationIntended"
-    }
-  >,
+  entry: RecordedTaskBoundaryEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number
 ): WorkflowJournalEvent => {
@@ -2218,14 +2222,7 @@ const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): st
       `The task tracker preserved foreign claim ${value.observed.operationId} for task ${value.observed.taskId}.`
   })
 
-const lyricForTaskBoundaryEntry = (
-  entry: Exclude<
-    RecordedCassetteEntry,
-    | RecordedAttemptStopEntry
-    | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
-    | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
-  >
-): string => {
+const lyricForTaskBoundaryEntry = (entry: RecordedTaskBoundaryEntry): string => {
   if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
   if (isRecordedClaimReleaseEntry(entry)) return lyricForClaimReleaseEntry(entry)
   if (isRecordedIntegrationEntry(entry)) {
@@ -2234,9 +2231,6 @@ const lyricForTaskBoundaryEntry = (
       : `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
   }
   if (isRecordedWorktreeEntry(entry)) return lyricForWorktreeEntry(entry)
-  if (entry._tag === "AttemptRestartAuthorityReadFailed") {
-    return `The ${entry.failure._tag} boundary failed while Dalph checked whether attempt ${entry.subject.plannedAttempt.attemptId} could be replaced.`
-  }
   if (entry._tag === "PlannedAttemptReplaced") {
     return `Dalph atomically replaced attempt ${entry.subject.plannedAttempt.attemptId} with clean attempt ${entry.successorPlan.plannedAttempt.attemptId}.`
   }
@@ -2268,15 +2262,32 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
   })
 
 type RecordedOtherEntry = Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>
-type RecordedPresentationResidualEntry = Exclude<RecordedOtherEntry, RecordedAttemptStopEntry>
+type RecordedPresentationResidualEntry = Exclude<
+  RecordedOtherEntry,
+  | RecordedCleanupEntry
+  | RecordedOperatorDirectionEntry
+  | RecordedAttemptStopEntry
+  | RecordedOuterIntegratorEntry
+  | RecordedIntegrationQuarantineEntry
+  | RecordedIntegrationPreparationEntry
+  | RecordedRemotePublicationEntry
+  | RecordedRemoteBaselineEntry
+>
 
-const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
-  if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
-  if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
-  if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
-  if (isRecordedRunEntry(entry)) return lyricForRunEntry(entry)
-  return lyricForTaskBoundaryEntry(entry)
-}
+const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string =>
+  Match.value(entry).pipe(
+    Match.when(isRecordedGitObservationCassetteEntry, lyricForGitObservationEntry),
+    Match.when(isRecordedExecutorEntry, lyricForExecutorEntry),
+    Match.when(isRecordedTrackerEntry, lyricForTrackerEntry),
+    Match.when(isRecordedRunEntry, lyricForRunEntry),
+    Match.when(
+      isRecordedAttemptRestartAuthorityReadFailedEntry,
+      (value) =>
+        `The ${value.failure._tag} boundary failed while Dalph checked whether attempt ${value.subject.plannedAttempt.attemptId} could be replaced.`
+    ),
+    Match.when(isRecordedTaskBoundaryEntry, lyricForTaskBoundaryEntry),
+    Match.exhaustive
+  )
 
 const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
   if (isRecordedCleanupEntry(entry)) return lyricForCleanupEntry(entry)

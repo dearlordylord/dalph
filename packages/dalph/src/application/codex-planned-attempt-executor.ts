@@ -265,7 +265,7 @@ const runningRecordFor = (
 
 const safelySuspendedRecordFor = (
   attempt: Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">,
-  record: CodexObservedRecord
+  record: CodexObservedRecord | CodexSuspensionStopIntentRecord
 ): CodexSafelySuspendedRecord =>
   CodexAttemptRecord.cases.SafelySuspended.make({
     attemptId: attempt.attemptId,

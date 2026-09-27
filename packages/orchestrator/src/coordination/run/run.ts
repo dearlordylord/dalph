@@ -412,8 +412,6 @@ type RunJournaledDeliveryEffect<E, R> = Effect.Effect<
   | DeliveryRuntimeResources
   | RunActivationGraphBaseline
   | DispositionCleanupActivation
-  | DeliveryCleanupBoundary
-  | Effect.Services<ReactiveDeliveryRelationsEffect>
   | Exclude<Effect.Services<StabilizedDeliveryEffect>, ReactiveDeliveryRelations | DeliveryActionExecutor>
 >
 

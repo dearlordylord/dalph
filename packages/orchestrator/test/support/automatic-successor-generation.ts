@@ -17,6 +17,7 @@ import {
   automaticCompetingHeadRemoteBaselineCorrelationFor
 } from "../../src/workflow/protocols/direct-publication/baseline-events.js"
 import {
+  RemotePublicationAttemptAuthorization,
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
@@ -131,6 +132,7 @@ export const appendAutomaticSuccessorGeneration = (
   )
   const retained = fixture.append(
     RemotePublicationRetainedEvent.make({
+      authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
       cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
         mergeBase: predecessor.expectedTargetHead,
         remoteHead: competingHead
