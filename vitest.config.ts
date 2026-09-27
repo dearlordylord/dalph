@@ -13,6 +13,17 @@ const performanceTestPattern = "**/*.performance.test.ts"
 const publicRecoveryProcessBoundaryTestPattern =
   "packages/dalph/src/application/production-public-recovery.integration.test.ts"
 const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+// These process-heavy files passed focused coverage but crossed their own
+// deadlines when competing with other files in a broad coverage run.
+const lateCoverageTestPatterns = [
+  "packages/dalph/test/cassettes/direct-remote-publication.test.ts",
+  "packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"
+]
+const serialCoverageTestPatterns = [
+  "packages/dalph/test/cassettes/distinct-finality.test.ts",
+  "scripts/quint-ci-contract.test.ts"
+]
+const resourceSensitiveCoverageTestPatterns = [...lateCoverageTestPatterns, ...serialCoverageTestPatterns]
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
 const ordinaryWorkerCount = 4
@@ -28,6 +39,15 @@ const ordinaryTestIncludes = [
   "scripts/**/*.test.ts",
   "scripts/run-delivery-repeatability.test.mjs",
   "test/**/*.test.ts"
+]
+const selectedTestExcludes = (mode: string) => [
+  "**/node_modules/**",
+  "**/dist/**",
+  ...(mode === "mbt" ? [] : [mbtTestPattern]),
+  ...(runQualificationTests || runDeliveryRepeatability
+    ? []
+    : [deliveryRepeatabilityTestPattern, capabilityRegistrationTestPattern, recordedCatalogCoverageTestPattern]),
+  ...(mode === "coverage" ? [performanceTestPattern, publicRecoveryProcessBoundaryTestPattern] : [])
 ]
 // Inline projects do not inherit root Vite aliases. Every test interpretation
 // must keep package imports and relative source imports in one implementation.
@@ -50,15 +70,7 @@ export default defineConfig(({ mode }) => ({
       reporter: ["text", "json", "html"]
     },
     environment: "node",
-    exclude: [
-      "**/node_modules/**",
-      "**/dist/**",
-      ...(mode === "mbt" ? [] : [mbtTestPattern]),
-      ...(runQualificationTests || runDeliveryRepeatability
-        ? []
-        : [deliveryRepeatabilityTestPattern, capabilityRegistrationTestPattern, recordedCatalogCoverageTestPattern]),
-      ...(mode === "coverage" ? [performanceTestPattern, publicRecoveryProcessBoundaryTestPattern] : [])
-    ],
+    exclude: selectedTestExcludes(mode),
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
     maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
     experimental: {
@@ -68,6 +80,46 @@ export default defineConfig(({ mode }) => ({
       // observation, so it never becomes qualification evidence.
       fsModuleCache: true
     },
+    ...(mode === "coverage"
+      ? {
+          projects: [
+            {
+              resolve: currentSourceResolution,
+              test: {
+                exclude: [...selectedTestExcludes(mode), ...resourceSensitiveCoverageTestPatterns],
+                include: ordinaryTestIncludes,
+                maxWorkers: coverageWorkerCount,
+                name: "coverage",
+                sequence: { groupOrder: 0 },
+                testTimeout: coverageTestTimeoutMilliseconds
+              }
+            },
+            {
+              resolve: currentSourceResolution,
+              test: {
+                exclude: selectedTestExcludes(mode),
+                include: lateCoverageTestPatterns,
+                maxWorkers: coverageWorkerCount,
+                name: "coverage-late",
+                sequence: { groupOrder: 1 },
+                testTimeout: coverageTestTimeoutMilliseconds
+              }
+            },
+            {
+              resolve: currentSourceResolution,
+              test: {
+                exclude: selectedTestExcludes(mode),
+                fileParallelism: false,
+                include: serialCoverageTestPatterns,
+                maxWorkers: 1,
+                name: "coverage-serial",
+                sequence: { groupOrder: 2 },
+                testTimeout: coverageTestTimeoutMilliseconds
+              }
+            }
+          ]
+        }
+      : {}),
     ...(mode === "mbt"
       ? {
           // Running the accepted-result model beside the other MBTs can starve

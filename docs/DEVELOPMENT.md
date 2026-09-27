@@ -1162,7 +1162,13 @@ failure with the smallest named check that owns that boundary. Run cheap
 structural diagnostics before resource-sensitive acceptance checks; the gate
 manifest enforces its complete preflight prefix before qualification and
 coverage. `scripts/recorded-catalog-gate.test.ts` proves that ordering and the
-unchanged four-worker V8 policy.
+two-worker V8 policy. Coverage runs ordinary files with two workers, then the
+direct-publication and cleanup recovery files with two workers, then the
+distinct-finality and formal-command contract files one at a time. All three
+projects use the same 30-second per-test budget and current-source aliases.
+`scripts/coverage-scheduling.test.ts` checks that the split keeps the ordinary
+file selection and exclusions and runs each of the four resource-sensitive
+files once. This scheduling policy changes no Dalph runtime behavior.
 
 - Report 95% production and 75% maintained-evaluation goals independently
   for statements, branches, functions, lines, and changed executable lines.
