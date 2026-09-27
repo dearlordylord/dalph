@@ -1303,6 +1303,23 @@ Full rerun does not re-enqueue it behind later work for the same target. The
 quarantined predecessor remains available for later authorized cleanup.
 _Avoid_: Retry, new integration responsibility, task re-execution, cleanup
 
+**Publication-exhaustion occurrence**:
+The exact retained occurrence that records one integration responsibility has
+consumed its bounded session allowance or its bounded publication-intent
+allowance for one candidate. It is bound to its Run, responsibility, cause,
+and causal history. It is not an integration-quarantine occurrence, grants no
+additional work, and proves no publication.
+_Avoid_: Integration quarantine, failed task, counter reset, publication proof
+
+**Publication-batch grant**:
+The Operator's Full rerun choice for one exact publication-exhaustion
+occurrence, bound to its Run and integration responsibility. Its durable grant
+authorizes one additional bounded batch while preserving prior session and
+publication history and globally increasing ordinals. It is distinct from an
+Integration-quarantine direction choice and does not prove publication or
+task completion.
+_Avoid_: `IntegrationQuarantineDirectionApplied`, new task attempt, budget reset, publication proof
+
 **Cleanup authorization subject**:
 The immutable, family-specific permission to dispose one exact durable resource.
 It names the terminal disposition occurrence, locator, owner, last authority
