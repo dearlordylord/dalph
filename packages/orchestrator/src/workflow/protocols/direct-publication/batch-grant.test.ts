@@ -67,10 +67,14 @@ import {
   RemotePublicationGit,
   RemotePublicationGitObservation,
   RemotePublicationPushResult,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
+  RemotePublicationRetainedEvent,
   remotePublicationCorrelationEquals,
   remotePublicationCorrelationFor
 } from "./events.js"
 import { applyRemotePublicationBatchGrantWithAdmission } from "./batch-grant-control.js"
+import { applyRemotePublicationResumeWithAdmission } from "./resume-control.js"
 import { makeRemotePublicationEngine } from "./protocol-engine.js"
 import { validateRemotePublicationState } from "./transition-journal.js"
 
@@ -489,6 +493,78 @@ it.effect("rejects a publication batch grant for an unrelated quarantine occurre
     expect(
       Array.from(journalRecordsOfKind(yield* recordsFrom(journal), "RemotePublicationBatchGrantApplied"))
     ).toHaveLength(0)
+  })
+)
+
+it.effect("admits retained publication resume from the granted batch allowance", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(buildJournal())
+    const inRunJournal = Context.get(context, InRunJournal)
+    const journal = Context.get(context, Journal)
+    yield* actualExhaustionPrefix(inRunJournal)
+    const first = yield* journal.state.get
+    const exhaustion = Array.from(journalRecordsOfKind(first.prefix, "RemotePublicationRetained")).findLast(
+      ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+    )
+    if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+      return yield* Effect.die("actual first batch must reach its exact retained exhaustion")
+    }
+    const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+      runId,
+      journal,
+      grantRequest("resume-after-batch-grant", exhaustion.position)
+    )
+    expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+    const git = RemotePublicationGit.of({
+      admit: () => Effect.die("destination admission is outside this candidate test"),
+      prepareSenderCustody: () => Effect.void,
+      reconcileSenderCustody: () => Effect.void,
+      observe: () => Effect.succeed(RemotePublicationGitObservation.cases.TargetMissing.make({})),
+      push: () => Effect.die("a missing target cannot be pushed")
+    })
+    const engine = makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+    const retained = yield* engine
+      .runRemotePublication(candidate, remotePublicationTargetForTest, {
+        runObservation: (phase) => phase,
+        runSender: (phase) => phase
+      })
+      .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
+    expect(retained).toMatchObject({
+      _tag: "PublicationRetained",
+      batchGrantAt: grant.result.acceptedAt,
+      cause: { _tag: "TargetMissing" },
+      attemptOrdinalsInBatch: []
+    })
+    const resume = yield* applyRemotePublicationResumeWithAdmission(
+      runId,
+      journal,
+      RemotePublicationResumeRequest.make({
+        requestId: RemotePublicationResumeRequestId.make("resume-granted-target-missing"),
+        responsibility: IntegrationResponsibilityIdentity.make({ queuedAt: candidate.run.session.queuedAt, runId }),
+        runId,
+        schemaVersion: 1
+      })
+    )
+    expect(resume._tag).toBe("NewlyRecordedResumeReceipt")
+    const after = yield* journal.state.get
+    expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(3)
+    expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationResumeRequested"))).toHaveLength(1)
+    const forgedRetainedMarker = materializeJournalRecords(after.prefix.records).map((record) =>
+      record.event._tag === "RemotePublicationRetained" && record.event.cause._tag === "TargetMissing"
+        ? {
+            ...record,
+            event: RemotePublicationRetainedEvent.make({ ...record.event, batchGrantAt: JournalPosition.make(1) })
+          }
+        : record
+    )
+    expect(
+      (yield* Effect.exit(
+        validateRemotePublicationState(
+          forgedRetainedMarker,
+          remotePublicationCorrelationFor(candidate, remotePublicationTargetForTest)
+        )
+      ))._tag
+    ).toBe("Failure")
   })
 )
 

@@ -227,6 +227,17 @@ export const deriveRemotePublicationState = (
       continue
     }
     if (event._tag === "RemotePublicationRetained") {
+      // A fresh grant may encounter a current blocker before it can commit a
+      // publication intent. The retained result then starts that grant's batch
+      // with zero consumed intents while preserving the earlier exhaustion.
+      if (phase._tag === "Retained" && event.batchGrantAt !== undefined && event.batchGrantAt !== phase.batchGrantAt) {
+        phase = {
+          _tag: "Pending",
+          attemptOrdinalsInBatch: [],
+          authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+          batchGrantAt: event.batchGrantAt
+        }
+      }
       const matchesAuthorization =
         phase._tag === "Pending"
           ? event.batchGrantAt === phase.batchGrantAt &&

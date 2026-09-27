@@ -409,6 +409,16 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
               : result.cause === "Policy"
                 ? RemotePublicationRetainedCause.cases.PolicyDenied.make({})
                 : RemotePublicationRetainedCause.cases.RemoteDenied.make({})
+        pendingState = RemotePublicationState.cases.PublicationPending.make({
+          attemptOrdinals: [...pendingState.attemptOrdinals, attemptOrdinal],
+          attemptOrdinalsInBatch: [
+            ...(pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals),
+            attemptOrdinal
+          ],
+          authorization: pendingState.authorization,
+          ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
+          correlation
+        })
         yield* appendRemotePublicationRetained(
           correlation,
           cause,

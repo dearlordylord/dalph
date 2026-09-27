@@ -90,6 +90,21 @@ export type RemotePublicationBatchGrantRecord = JournalRecord & {
   readonly event: RemotePublicationBatchGrantAppliedEvent
 }
 
+const batchGrantReferencesExhaustion = (
+  source: JournalHistorySource,
+  grant: RemotePublicationBatchGrantRecord
+): boolean => {
+  const exhaustion = journalRecordByPosition(source, grant.event.request.exhaustionAt)
+  return (
+    exhaustion?.event._tag === "RemotePublicationRetained" &&
+    exhaustion.runId === grant.runId &&
+    exhaustion.position < grant.position &&
+    exhaustion.event.correlation.qualifiedCandidate.run.session.queuedAt ===
+      grant.event.request.responsibility.queuedAt &&
+    (exhaustion.event.cause._tag === "AttemptsExhausted" || exhaustion.event.cause._tag === "CompatibleCompetingHead")
+  )
+}
+
 const remotePublicationBatchGrantIsForCorrelation = (
   record: JournalRecord,
   correlation: RemotePublicationCorrelation
@@ -148,6 +163,29 @@ export const validateRemotePublicationState = (
     )
     .sort((left, right) => Number(left.position) - Number(right.position))
   const grants = remotePublicationBatchGrantsFor(source, correlation)
+  const retainedRecords = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).filter(
+    ({ event }) => event._tag === "RemotePublicationRetained" && event.correlation.requestId === correlation.requestId
+  )
+  for (const retained of retainedRecords) {
+    if (retained.event._tag !== "RemotePublicationRetained") continue
+    const currentGrant = grants.findLast(({ position }) => position < retained.position)
+    if (retained.event.batchGrantAt !== currentGrant?.position) {
+      return Effect.fail(
+        new RemotePublicationHistoryContradiction({
+          detail: "retained publication must reference the latest exact batch grant before its durable outcome",
+          requestId: correlation.requestId
+        })
+      )
+    }
+    if (currentGrant !== undefined && !batchGrantReferencesExhaustion(source, currentGrant)) {
+      return Effect.fail(
+        new RemotePublicationHistoryContradiction({
+          detail: "publication batch grant must reference an earlier retained exhaustion occurrence",
+          requestId: correlation.requestId
+        })
+      )
+    }
+  }
   const grantedAttemptCounts = new Map<string, number>()
   for (const attempt of attemptRecords) {
     if (attempt.event._tag !== "RemotePublicationAttemptIntended") continue
@@ -160,24 +198,15 @@ export const validateRemotePublicationState = (
         })
       )
     }
+    if (currentGrant !== undefined && !batchGrantReferencesExhaustion(source, currentGrant)) {
+      return Effect.fail(
+        new RemotePublicationHistoryContradiction({
+          detail: "publication batch grant must reference an earlier retained exhaustion occurrence",
+          requestId: correlation.requestId
+        })
+      )
+    }
     if (currentGrant !== undefined) {
-      const exhaustion = journalRecordByPosition(source, currentGrant.event.request.exhaustionAt)
-      if (
-        exhaustion?.event._tag !== "RemotePublicationRetained" ||
-        exhaustion.runId !== currentGrant.runId ||
-        exhaustion.position >= currentGrant.position ||
-        exhaustion.event.correlation.qualifiedCandidate.run.session.queuedAt !==
-          currentGrant.event.request.responsibility.queuedAt ||
-        (exhaustion.event.cause._tag !== "AttemptsExhausted" &&
-          exhaustion.event.cause._tag !== "CompatibleCompetingHead")
-      ) {
-        return Effect.fail(
-          new RemotePublicationHistoryContradiction({
-            detail: "publication batch grant must reference an earlier retained exhaustion occurrence",
-            requestId: correlation.requestId
-          })
-        )
-      }
       const key = String(currentGrant.position)
       const count = (grantedAttemptCounts.get(key) ?? 0) + 1
       if (count > remotePublicationAttemptLimit) {

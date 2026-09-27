@@ -212,9 +212,12 @@ const resumeStatusIfNotEligible = (
   ) {
     return statusAdmission(state)
   }
-  const attempts = remotePublicationEventsFor(prefix, correlation).filter(
-    (event) => event._tag === "RemotePublicationAttemptIntended"
-  ).length
+  const attempts =
+    state._tag === "PublicationRetained" && state.attemptOrdinalsInBatch !== undefined
+      ? state.attemptOrdinalsInBatch.length
+      : remotePublicationEventsFor(prefix, correlation).filter(
+          (event) => event._tag === "RemotePublicationAttemptIntended"
+        ).length
   if (!continueProvedFinality && attempts >= remotePublicationAttemptLimit) return statusAdmission(state)
   return undefined
 }
