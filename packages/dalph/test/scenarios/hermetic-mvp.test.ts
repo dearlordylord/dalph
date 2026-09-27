@@ -117,7 +117,9 @@ const runHermeticMvpJourney = (
   competingHeadBetweenDiscoveryAndPush = false,
   competingHeadAfterLostPushResponse = false,
   exhaustAutomaticSuccessorBounds = false,
-  grantExhaustedSuccessor = false
+  grantExhaustedSuccessor = false,
+  progressUnrelatedTarget?: () => Effect.Effect<void, unknown, never>,
+  taskLabel: "A" | "B" = "A"
 ) =>
   Effect.gen(function* () {
     const competingHeadRace =
@@ -135,7 +137,7 @@ const runHermeticMvpJourney = (
       const repository = `${root}/repository`
       const bareRemote = `${root}/target.git`
       const evidenceDirectory = `${root}/evidence`
-      const worktree = WorktreeLocator.make(`${root}/task-A`)
+      const worktree = WorktreeLocator.make(`${root}/task-${taskLabel}`)
       const journalFilename = JournalDatabaseLocator.make(`${root}/journal.sqlite`)
       yield* fileSystem.makeDirectory(repository)
       yield* fileSystem.makeDirectory(evidenceDirectory)
@@ -216,14 +218,18 @@ const runHermeticMvpJourney = (
       const competingHead = competingHeads[0]
       yield* runInWorktree(git, repository, ["branch", "unrelated", baseSha], "create unrelated branch")
 
-      const runId = RunId.make("hermetic-mvp-run")
-      const target = FixtureTarget.make("hermetic-mvp-target")
-      const taskId = TaskId.make("A")
-      const specification = makeTaskWorkSpecification({ body: "Create RESULT.md.", taskId, title: "Complete A" })
+      const runId = RunId.make(`hermetic-mvp-run-${taskLabel}`)
+      const target = FixtureTarget.make(`hermetic-mvp-target-${taskLabel}`)
+      const taskId = TaskId.make(taskLabel)
+      const specification = makeTaskWorkSpecification({
+        body: "Create RESULT.md.",
+        taskId,
+        title: `Complete ${taskLabel}`
+      })
       const plannedAttempt = PlannedTaskAttempt.make({
-        attemptId: AttemptId.make("hermetic-mvp-attempt-A"),
+        attemptId: AttemptId.make(`hermetic-mvp-attempt-${taskLabel}`),
         baseSha,
-        branch: TaskBranchRef.make("refs/heads/dalph/hermetic-mvp-A"),
+        branch: TaskBranchRef.make(`refs/heads/dalph/hermetic-mvp-${taskLabel}`),
         executor: TaskExecutorLocator.make("executor:hermetic-child"),
         runId,
         taskId,
@@ -591,7 +597,7 @@ const runHermeticMvpJourney = (
                 yield* runInWorktree(
                   git,
                   request.plannedAttempt.worktree,
-                  ["commit", "-m", "complete A"],
+                  ["commit", "-m", `complete ${taskLabel}`],
                   "commit task result"
                 )
                 const commit = GitCommitSha.make(
@@ -605,7 +611,7 @@ const runHermeticMvpJourney = (
                 yield* runInWorktree(
                   git,
                   request.plannedAttempt.worktree,
-                  ["push", bareRemote, `${commit}:refs/dalph/transfer-A`],
+                  ["push", bareRemote, `${commit}:refs/dalph/transfer-${taskLabel}`],
                   "transfer accepted commit to target object database"
                 )
                 const evidenceManifest = yield* evidenceStore.put(acceptedManifestBytes(request.plannedAttempt, commit))
@@ -649,7 +655,7 @@ const runHermeticMvpJourney = (
                   "-p",
                   acceptedCommit,
                   "-m",
-                  "integrate A"
+                  `integrate ${taskLabel}`
                 ],
                 "create explicit integration candidate"
               )
@@ -659,7 +665,7 @@ const runHermeticMvpJourney = (
               yield* runInGitDirectory(
                 git,
                 bareRemote,
-                ["update-ref", "-d", "refs/dalph/transfer-A", acceptedCommit],
+                ["update-ref", "-d", `refs/dalph/transfer-${taskLabel}`, acceptedCommit],
                 "remove private transfer ref"
               )
             }
@@ -930,6 +936,15 @@ const runHermeticMvpJourney = (
         )
         expect(localTarget).toBe(h3)
         expect(remoteTarget).toBe(h4)
+        if (progressUnrelatedTarget) {
+          yield* progressUnrelatedTarget()
+          const afterUnrelatedProgress = yield* Effect.gen(function* () {
+            return yield* (yield* JournalStore).read(runId)
+          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+          expect(afterUnrelatedProgress).toEqual(records)
+          expect(yield* Ref.get(terminated)).toBe(false)
+          expect(yield* Ref.get(lifecycle)).toBe("Open")
+        }
         if (grantExhaustedSuccessor) {
           const responsibility = records.find(hasEventTag("IntegrationResponsibilityBegan"))
           if (responsibility === undefined) return yield* Effect.die("accepted responsibility must identify the grant")
@@ -1471,7 +1486,9 @@ const runHermeticMvpJourney = (
       const plannedBranchStatus = yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])
       expect(plannedBranchStatus.exitCode).not.toBe(0)
       expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", "refs/heads/unrelated"])).exitCode).toBe(0)
-      expect((yield* git.run(bareRemote, ["show-ref", "--verify", "refs/dalph/transfer-A"])).exitCode).not.toBe(0)
+      expect(
+        (yield* git.run(bareRemote, ["show-ref", "--verify", `refs/dalph/transfer-${taskLabel}`])).exitCode
+      ).not.toBe(0)
       expect(yield* Option.getOrThrow(yield* Ref.get(childHandle)).isRunning).toBe(false)
 
       yield* Effect.scoped(
@@ -1528,5 +1545,14 @@ it.effect(
 it.effect(
   "fixes a same-commit fourth successor only after the exact third-session exhaustion grant",
   () => runHermeticMvpJourney(false, false, false, false, true, true),
+  240_000
+)
+
+it.effect(
+  "continues one exhausted publication responsibility through exactly one granted batch while an unrelated target progresses",
+  () =>
+    runHermeticMvpJourney(false, false, false, false, true, true, () =>
+      runHermeticMvpJourney(false, false, false, false, false, false, undefined, "B")
+    ),
   240_000
 )

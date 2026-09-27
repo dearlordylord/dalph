@@ -160,6 +160,141 @@ it.effect("reconstructs a fourth automatic successor only after its exact public
   })
 )
 
+it.effect("reopens the exact granted fourth session after its SQLite fixation commits without acknowledgement", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = makeSuccessorPrefix()
+      const s2 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+      if (s2._tag !== "Append") return yield* Effect.die("the accepted prefix must fix S2")
+      fixture.append(s2.event)
+      const second = appendAutomaticSuccessorGeneration(
+        fixture,
+        s2.event.successor,
+        GitCommitSha.make("8".repeat(40)),
+        IntegratorAutomaticSuccessorGeneration.make(2)
+      )
+      const s3 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(second.input, second.reduction.prefix)
+      if (s3._tag !== "Append") return yield* Effect.die("the accepted prefix must fix S3")
+      fixture.append(s3.event)
+      const third = appendAutomaticSuccessorGeneration(
+        fixture,
+        s3.event.successor,
+        GitCommitSha.make("9".repeat(40)),
+        IntegratorAutomaticSuccessorGeneration.make(3)
+      )
+      const exhaustion = fixture
+        .records()
+        .findLast(
+          ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "CompatibleCompetingHead"
+        )
+      if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+        return yield* Effect.die("the third successor must retain its exact exhausted occurrence")
+      }
+      const memoryContext = yield* Layer.build(
+        liveJournalTestLayer({
+          records: fixture.records(),
+          runId: fixture.runId,
+          target: fixture.accepted.trackerTarget
+        })
+      )
+      const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+        fixture.runId,
+        Context.get(memoryContext, Journal),
+        RemotePublicationBatchGrantRequest.make({
+          exhaustionAt: exhaustion.position,
+          requestId: RemotePublicationBatchGrantRequestId.make("sqlite-granted-fourth-session"),
+          responsibility: IntegrationResponsibilityIdentity.make({
+            queuedAt: fixture.input.predecessor.queuedAt,
+            runId: fixture.runId
+          }),
+          runId: fixture.runId,
+          schemaVersion: 1
+        })
+      )
+      expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+      const grantedRecords = yield* Context.get(memoryContext, InRunJournal).read(fixture.runId)
+
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-granted-successor-recovery-" })
+      const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+      const openSqlite = <A>(
+        use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>,
+        afterAppendCommit?: () => Effect.Effect<void, string>
+      ): Effect.Effect<A, unknown, Scope.Scope> =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const store = yield* JournalStore
+            return yield* use(store)
+          }).pipe(
+            Effect.provide(
+              afterAppendCommit === undefined
+                ? sqliteJournalStoreLayer({ filename })
+                : sqliteJournalTestLayer({ afterAppendCommit, filename })
+            )
+          )
+        )
+      yield* openSqlite((store) =>
+        Effect.gen(function* () {
+          const [began, ...remaining] = grantedRecords
+          if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("granted prefix lacks Run beginning")
+          yield* store.beginRun(
+            fixture.runId,
+            began.event.target,
+            began.event.initialControlPolicy,
+            began.event.remotePublicationTarget
+          )
+          for (const record of remaining) {
+            if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+              return yield* Effect.die("granted prefix contains another Run lifecycle event")
+            }
+            yield* store.append(fixture.runId, record.key, record.event)
+          }
+        })
+      )
+      const interrupted = yield* Effect.exit(
+        openSqlite(
+          (store) =>
+            Effect.gen(function* () {
+              const before = yield* store.read(fixture.runId)
+              const history = reduceWorkflowJournalHistory(fixture.runId, before)
+              if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("granted history invalid")
+              const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(third.input, history.prefix)
+              if (prepared._tag !== "Append") return yield* Effect.die("granted S4 must be prepared once")
+              expect(prepared.event.publicationBatchGrantAt).toBe(grant.result.acceptedAt)
+              yield* store.append(fixture.runId, prepared.key, prepared.event)
+            }),
+          () => Effect.fail("host stopped after granted S4 fixation committed")
+        )
+      )
+      expect(interrupted._tag).toBe("Failure")
+      yield* openSqlite((store) =>
+        Effect.gen(function* () {
+          const reopened = yield* store.read(fixture.runId)
+          const history = reduceWorkflowJournalHistory(fixture.runId, reopened)
+          if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("reopened history invalid")
+          const fixed = reopened.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+          expect(fixed).toHaveLength(3)
+          expect(fixed[2]?.event).toMatchObject({
+            publicationBatchGrantAt: grant.result.acceptedAt,
+            successorGeneration: 4
+          })
+          const fourth = fixed[2]
+          if (fourth?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+            return yield* Effect.die("reopened journal lacks the exact fourth fixed session")
+          }
+          const replay = yield* prepareIntegratorAutomaticSuccessorSessionAppend(third.input, history.prefix)
+          expect(replay).toMatchObject({ _tag: "Existing", record: { position: fourth.position } })
+          expect(deriveCurrentIntegratorState(history.prefix, fixture.accepted.responsibility)).toMatchObject({
+            _tag: "RunUnfinished",
+            run: { session: fourth.event.successor }
+          })
+        })
+      )
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+  )
+)
+
 it("counts predecessor and successor identities together against the shared session capacity", () => {
   const predecessor = makeSuccessorPrefix().input.predecessor
   const successor = IntegratorSessionCorrelation.make({
