@@ -53,9 +53,11 @@ export const copyQualityRuntimeFixture = (worktree) => {
     "quint-gate-fresh-task-command-oracle.mjs",
     "quint-gate-legacy-command-oracle.mjs",
     "quint-gate-policy.mjs",
+    "quint-gate-publication-batch-grant-command-oracle.mjs",
     "quint-gate-production-plan.mjs",
     "quint-gate-timing.mjs",
     "quint-model-obligations.mjs",
+    "quint-publication-batch-grant-projection-contract.mjs",
     "quint-temporal-gate.mjs",
     "quint-witness-coverage.mjs",
     "run-bounded-command.mjs"
