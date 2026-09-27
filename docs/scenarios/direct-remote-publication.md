@@ -665,10 +665,28 @@ authorization.
   rerun, mint a new publication correlation, pass A, or perform a duplicate
   successor mutation.
 
+  If the first retained compatible occurrence reports H2 and Dalph records its
+  authorization before Alice's exact resume receipt, the resumed Git read may
+  report a later compatible H3 at the same merge base. The ordinary frontier
+  reuses the authorization whose deterministic identity is tied to the exact
+  earlier H2 occurrence, then selects the latest H3 as the baseline. It does
+  not authorize H3 a second time or create another Integrator session. If the
+  first H3 baseline observation requires local catch-up, Dalph records that
+  deferral for the exact baseline action. Unrelated accepted Journal work may
+  advance and unrelated proposals may run during the same activation, but the
+  H3 baseline action does not read or compare-and-set again until a fresh Run
+  activation evaluates the accepted prefix.
+
   The focused receipt-after-authorization composition is implemented by
   `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts::reuses one successor authorization when a compatible resume receipt follows authorization before fixation`.
-  It proves the R1 authorization is reused after the exact Operator receipt and
-  compatible R2, with baseline work continuing and no second authorization.
+  Its H2-to-H3 extension proves the R1 authorization is reused after the exact
+  Operator receipt and compatible R2, with the latest H3 selected for baseline
+  work and no second authorization.
+  The activation-local boundary is owned by
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts::holds a pending H3 baseline action across unrelated accepted work until the next activation while allowing unrelated proposals`.
+  It proves one `RemoteBaselineReconciliationPending` result prevents a second
+  baseline attempt in that activation even when the accepted prefix advances,
+  while a distinct proposal still runs.
   Three additional seams remain planned in
   `packages/orchestrator/src/coordination/delivery/automatic-successor-authorization-recovery.test.ts`:
   `records one successor authorization when a compatible resume receipt precedes authorization`,

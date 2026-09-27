@@ -2248,6 +2248,7 @@ it("reuses one successor authorization when a compatible resume receipt follows 
     mergeBase: candidate.run.session.expectedTargetHead,
     remoteHead: changedHead
   })
+  const resumedHead = sha("3")
   const initialRetained = RemotePublicationRetainedEvent.make({
     authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     correlation: publicationCorrelation,
@@ -2265,7 +2266,10 @@ it("reuses one successor authorization when a compatible resume receipt follows 
   const resumedCompatibleRetained = RemotePublicationRetainedEvent.make({
     authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: resumeRequestId }),
     correlation: publicationCorrelation,
-    cause: compatibleCause,
+    cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
+      mergeBase: candidate.run.session.expectedTargetHead,
+      remoteHead: resumedHead
+    }),
     occurrenceClassification: "NonActionOccurrence",
     version: workflowJournalEventVersion
   })
@@ -2332,14 +2336,24 @@ it("reuses one successor authorization when a compatible resume receipt follows 
   }
   const receiptAfterAuthorizationFacts = {
     ...publicationRuntimeFacts,
-    targetLineageByAttemptId: new Map([[attemptId, lineage(changedHead)]])
+    targetLineageByAttemptId: new Map([[attemptId, lineage(resumedHead)]])
   }
+  const resumedBaselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    runId,
+    integratorResponsibilityFactsFor(responsibility),
+    target,
+    remotePublicationTargetForTest,
+    JournalPosition.make(14),
+    RemoteBaselineRound.make(1)
+  )
   const compatibleHeadAnalysis = deriveStartedIntegrationFrontier(
     receiptAuthorizedCompatibleRunState,
     receiptAfterAuthorizationFacts,
     [responsibility]
   )
-  expect(compatibleHeadAnalysis.transitions()).toEqual([expect.objectContaining({ _tag: "EstablishRemoteBaseline" })])
+  expect(compatibleHeadAnalysis.transitions()).toEqual([
+    RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: resumedBaselineCorrelation, responsibility })
+  ])
   expect(compatibleHeadAnalysis.transitions()).not.toContainEqual(
     expect.objectContaining({ _tag: "AuthorizeIntegratorCompetingHeadSuccessor" })
   )

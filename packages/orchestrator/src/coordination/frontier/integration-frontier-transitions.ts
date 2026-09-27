@@ -519,28 +519,34 @@ const automaticSuccessorAuthorizationRetainsTarget = (
   const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
   const publication = deriveRemotePublicationState(remotePublicationEventsFor(source, correlation))
   if (publication._tag !== "PublicationRetained" || publication.cause._tag !== "CompatibleCompetingHead") return false
-  const { mergeBase, remoteHead } = publication.cause
+  const { mergeBase } = publication.cause
   const compatibleRetained = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).filter(
     ({ event }) =>
       event._tag === "RemotePublicationRetained" &&
       remotePublicationCorrelationEquals(event.correlation, correlation) &&
       event.cause._tag === "CompatibleCompetingHead" &&
-      event.cause.mergeBase === mergeBase &&
-      event.cause.remoteHead === remoteHead
+      event.cause.mergeBase === mergeBase
   )
   return Array.from(journalRecordsOfKind(source, "IntegratorCompetingHeadSuccessorAuthorized")).some(
     ({ event, position, runId }) =>
       event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
       runId === state.run.session.plannedAttempt.runId &&
       event.mergeBase === mergeBase &&
-      event.remoteHead === remoteHead &&
       remotePublicationCorrelationEquals(event.correlation, correlation) &&
       compatibleRetained.some(
-        ({ position: retainedAt }) =>
+        ({ event: retainedEvent, position: retainedAt }) =>
+          retainedEvent._tag === "RemotePublicationRetained" &&
+          retainedEvent.cause._tag === "CompatibleCompetingHead" &&
           event.remotePublicationRetainedAt === retainedAt &&
+          event.remoteHead === retainedEvent.cause.remoteHead &&
           position > retainedAt &&
           event.authorizationId ===
-            integratorCompetingHeadSuccessorAuthorizationIdFor(correlation.requestId, retainedAt, mergeBase, remoteHead)
+            integratorCompetingHeadSuccessorAuthorizationIdFor(
+              correlation.requestId,
+              retainedAt,
+              mergeBase,
+              retainedEvent.cause.remoteHead
+            )
       )
   )
 }
@@ -777,13 +783,20 @@ const qualifiedIntegratorProgressTransitionsFor = (
       return []
     const { mergeBase, remoteHead } = publication.cause
     const source = workflowHistorySource(runState)
-    const compatibleRetained = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).filter(
+    const compatibleRetainedForCorrelation = Array.from(
+      journalRecordsOfKind(source, "RemotePublicationRetained")
+    ).filter(
       ({ event }) =>
         event._tag === "RemotePublicationRetained" &&
         event.cause._tag === "CompatibleCompetingHead" &&
         event.cause.mergeBase === mergeBase &&
-        event.cause.remoteHead === remoteHead &&
         remotePublicationCorrelationEquals(event.correlation, correlation)
+    )
+    const compatibleRetained = compatibleRetainedForCorrelation.filter(
+      ({ event }) =>
+        event._tag === "RemotePublicationRetained" &&
+        event.cause._tag === "CompatibleCompetingHead" &&
+        event.cause.remoteHead === remoteHead
     )
     const retained = compatibleRetained.at(lastRecordOffset)
     if (retained?.event._tag !== "RemotePublicationRetained") return []
@@ -800,27 +813,29 @@ const qualifiedIntegratorProgressTransitionsFor = (
         event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
         remotePublicationCorrelationEquals(event.correlation, correlation)
     )
-    // A resume receipt may append a later retained occurrence for the same
-    // compatible publication correlation. Reuse its exact prior authorization
-    // only when the retained cause and deterministic authorization identity
-    // still match; receipt replay never mints another session.
+    // A resume receipt may append a later compatible retained occurrence at
+    // the same merge base with a newer remote head. Reuse the authorization
+    // only when its exact original retained occurrence and deterministic ID
+    // still match; the latest occurrence selects baseline work, not a new
+    // authorization or Integrator session.
     const authorization = authorizationRecords.find(({ event, position }) => {
-      if (
-        event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
-        event.mergeBase !== mergeBase ||
-        event.remoteHead !== remoteHead
-      )
-        return false
-      const authorizedRetained = compatibleRetained.find(
+      if (event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" || event.mergeBase !== mergeBase) return false
+      const authorizedRetained = compatibleRetainedForCorrelation.find(
         ({ position: retainedPosition }) => retainedPosition === event.remotePublicationRetainedAt
       )
-      if (authorizedRetained?.event._tag !== "RemotePublicationRetained" || position <= authorizedRetained.position)
+      if (
+        authorizedRetained?.event._tag !== "RemotePublicationRetained" ||
+        authorizedRetained.event.cause._tag !== "CompatibleCompetingHead" ||
+        authorizedRetained.event.cause.mergeBase !== mergeBase ||
+        event.remoteHead !== authorizedRetained.event.cause.remoteHead ||
+        position <= authorizedRetained.position
+      )
         return false
       const authorizedId = integratorCompetingHeadSuccessorAuthorizationIdFor(
         correlation.requestId,
         authorizedRetained.position,
         mergeBase,
-        remoteHead
+        authorizedRetained.event.cause.remoteHead
       )
       return event.authorizationId === authorizedId
     })
