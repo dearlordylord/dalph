@@ -1,3 +1,4 @@
+import { candidateChangedPaths, deliverySmokeIterations } from "./quality-check-selection.mjs"
 import { spawnSync } from "node:child_process"
 import { copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
@@ -106,6 +107,7 @@ export const selectedHostedQualityStage = ({
     baseSha,
     candidateSha,
     nodeVersions,
+    changedPaths: candidateChangedPaths(baseSha, candidateSha, worktree),
     nodeExecutable: "node",
     pnpmEntryPoint: "pnpm"
   })
@@ -113,11 +115,12 @@ export const selectedHostedQualityStage = ({
     throw new Error(`Unknown hosted quality matrix cell '${String(nodeVersion)}:${String(stageId)}'`)
   const stages = fullQualityGateManifest(baseSha, {
     candidateHeadSha: candidateSha,
+    changedPaths: candidateChangedPaths(baseSha, candidateSha, worktree),
     nodeExecutable,
     pnpmEntryPoint,
     worktree
   }).filter(({ boundary }) => boundary === "qualification")
-  if (stages.map(({ id }) => id).join(",") !== hostedQualityStageIds.join(","))
+  if (stages.map(({ id }) => id).join(",") !== plan.expectedStageIds.join(","))
     throw new Error("Hosted quality stage policy differs from the required suffix inventory")
   const selected = stages.find(({ id }) => id === stageId)
   if (selected === undefined) throw new Error(`Unknown hosted quality stage '${String(stageId)}'`)
@@ -238,7 +241,7 @@ const deliveryIterationPattern =
 const deliverySummaryPattern =
   /^delivery repeatability complete mode=fresh .* occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=([0-9a-f]{40})$/u
 
-const deliveryEvidence = (log, outcome, candidateSha) => {
+export const deliveryEvidence = (log, outcome, candidateSha, expectedIterations) => {
   canonicalSha(candidateSha, "Hosted quality delivery candidate")
   const iterations = []
   const summaries = []
@@ -264,7 +267,7 @@ const deliveryEvidence = (log, outcome, candidateSha) => {
   const candidateMismatch =
     iterations.some((match) => match[5] !== candidateSha) || summaries.some((match) => match[3] !== candidateSha)
   const result = {
-    expectedIterations: deliveryRepeatabilityDefaultIterations,
+    expectedIterations,
     completedIterations: iterations.length,
     summaryCount: summaries.length,
     occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount,
@@ -274,11 +277,11 @@ const deliveryEvidence = (log, outcome, candidateSha) => {
     throw new Error("Delivery repeatability digest candidate differs from the hosted quality binding")
   if (
     outcome === "passed" &&
-    (iterations.length !== deliveryRepeatabilityDefaultIterations ||
+    (iterations.length !== expectedIterations ||
       iterations.some(
         (match) =>
           Number(match[1]) !== iterations.indexOf(match) + 1 ||
-          Number(match[2]) !== deliveryRepeatabilityDefaultIterations ||
+          Number(match[2]) !== expectedIterations ||
           Number(match[3]) !== deliveryRepeatabilityExpectedOccurrenceCount ||
           match[4] !== deliveryRepeatabilityExpectedAcceptedOrderDigest
       ) ||
@@ -398,7 +401,7 @@ export const exportHostedQualityStageEvidence = ({
     version: hostedQualityEvidenceVersion,
     binding,
     stageId,
-    expectedStageIds: hostedQualityStageIds,
+    expectedStageIds: selected.plan.expectedStageIds,
     configurationDigest: selected.plan.configurationDigest,
     nodeVersion,
     policyDigest: selected.plan.policyDigest,
@@ -416,7 +419,18 @@ export const exportHostedQualityStageEvidence = ({
     timing: { cellStartedAt: cellStart, startedAt: stage.startedAt, finishedAt: stage.finishedAt },
     artifacts,
     childDiagnostics,
-    ...(stageId === "delivery-repeatability" ? { delivery: deliveryEvidence(log, outcome, binding.candidateSha) } : {})
+    ...(stageId === "delivery-repeatability"
+      ? {
+          delivery: deliveryEvidence(
+            log,
+            outcome,
+            binding.candidateSha,
+            selected.stage.args[0] === "test:delivery-smoke"
+              ? deliverySmokeIterations
+              : deliveryRepeatabilityDefaultIterations
+          )
+        }
+      : {})
   }
   const envelope = { ...payload, envelopeSha256: digest(JSON.stringify(payload)) }
   writeFileSync(join(outputDirectory, "envelope.json"), `${JSON.stringify(envelope, undefined, 2)}\n`, { flag: "wx" })
@@ -622,9 +636,12 @@ const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
       if (!paths.includes(path)) failures.push(`passing coverage evidence lacks ${path}`)
   if (envelope?.outcome === "passed" && envelope.stageId === "delivery-repeatability") {
     const delivery = envelope.delivery
+    const expectedIterations = expectedCell?.command.args.includes("test:delivery-smoke")
+      ? 3
+      : deliveryRepeatabilityDefaultIterations
     if (
-      delivery?.expectedIterations !== deliveryRepeatabilityDefaultIterations ||
-      delivery?.completedIterations !== deliveryRepeatabilityDefaultIterations ||
+      delivery?.expectedIterations !== expectedIterations ||
+      delivery?.completedIterations !== expectedIterations ||
       ![0, 1].includes(delivery?.summaryCount) ||
       delivery?.occurrenceCount !== deliveryRepeatabilityExpectedOccurrenceCount ||
       delivery?.acceptedOrderDigest !== deliveryRepeatabilityExpectedAcceptedOrderDigest
@@ -634,7 +651,8 @@ const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
       const observedDelivery = deliveryEvidence(
         readFileSync(join(reportRoot, "stage.log"), "utf8"),
         "passed",
-        binding.candidateSha
+        binding.candidateSha,
+        expectedIterations
       )
       if (!same(delivery, observedDelivery)) failures.push("delivery digest differs from the retained log")
     } catch (error) {

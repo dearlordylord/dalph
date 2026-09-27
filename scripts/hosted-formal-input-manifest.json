@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "2c87fb66d14305da3aebb79500f501a682cb2fa14a8f614c5929831ca089cf7a",
+  "digest": "1d18ae6bfe123002d2cb26282536988c43e9e37acf0b3de591c3415d77514542",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -165,6 +165,7 @@
     "packages/orchestrator/src/coordination/frontier/integration-finality-frontier.ts",
     "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.ts",
     "packages/orchestrator/src/coordination/frontier/integration-frontier.ts",
+    "packages/orchestrator/src/coordination/frontier/publication-continuation.ts",
     "packages/orchestrator/src/coordination/frontier/recovery.ts",
     "packages/orchestrator/src/coordination/frontier/run-finality.ts",
     "packages/orchestrator/src/coordination/frontier/safe-continuation-revalidation-eligibility.ts",
@@ -465,6 +466,7 @@
     "scripts/hosted-formal-input-manifest.mjs",
     "scripts/quality-gate-failure-policy.mjs",
     "scripts/quality-output-budget.mjs",
+    "scripts/quint-affected-selection.mjs",
     "scripts/quint-effective-profile.mjs",
     "scripts/quint-evaluator-provenance.mjs",
     "scripts/quint-gate-automatic-successor-command-oracle.mjs",

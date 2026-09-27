@@ -170,3 +170,30 @@ void test("the plan CLI rejects unsupported options before emitting a matrix", (
     /Unsupported quality stage plan argument: --foreign/u
   )
 })
+
+void test("ordinary hosted changes select the same smoke and catalog policy as local checks", () => {
+  const changedPaths = ["packages/dalph/src/application/cli.ts"]
+  const plan = createQualityGateStagePlan({ baseSha, candidateSha, nodeVersions: ["24.20.0", "25.1.0"], changedPaths })
+  assert.deepEqual(plan.nodeVersions, ["24.20.0"])
+  assert.deepEqual(plan.expectedStageIds, ["delivery-repeatability", "coverage"])
+  assert.ok(plan.stages[0].command.args.includes("test:delivery-smoke"))
+  const local = fullQualityGateManifest(baseSha, { changedPaths }).filter(
+    ({ boundary }) => boundary === "qualification"
+  )
+  assert.deepEqual(
+    local.map(({ id }) => id),
+    plan.expectedStageIds
+  )
+  assert.deepEqual(
+    plan.stages.map((stage) => stage.command.args.slice(2)),
+    local.map(({ args }) => args)
+  )
+  const broad = createQualityGateStagePlan({
+    baseSha,
+    candidateSha,
+    nodeVersions: ["24.20.0", "25.1.0"],
+    changedPaths: ["scripts/run-bounded-command.mjs"]
+  })
+  assert.equal(broad.stages.length, 6)
+  assert.ok(broad.stages[0].command.args.includes("test:delivery-repeatability"))
+})

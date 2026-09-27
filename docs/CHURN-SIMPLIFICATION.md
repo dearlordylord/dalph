@@ -38,9 +38,20 @@ coverage and sampling assurance is explicit; tests and affected formal proofs
 remain authoritative. The standalone formal diagnostics and historical runner
 modules remain available, but do not govern ordinary `check:all`.
 
-Hosted suffix selection, the broad hosted matrix, and affected-model granularity
-remain unchanged. Hosted assurance still runs the full catalog and repetition.
-These parts of the proposed sampling demotion remain outstanding.
+Hosted suffix selection now uses the same catalog and fresh-delivery sample policy
+as local execution. The plan, owner exporter and aggregate bind the selected command
+and sample count; ordinary changes use the first declared Node version, while
+infrastructure/concurrency changes retain all versions. Local model-source edits
+select complete importing Quint families with their negative controls and deep
+proofs. Runtime-to-model ownership remains conservative, and hosted formal shards
+still run the full portfolio when affected. That part of row 6 remains outstanding.
+
+Focused selection evidence: `quint-affected-selection.test.mjs` covers canonical
+family completeness, import closure and unknown-input fallback;
+`quint-effective-profile.test.mjs` covers actual selected command execution and
+rejection of missing verdict output; `quality-gate-stage-plan.test.mjs` compares
+local and hosted commands; `hosted-quality-evidence.test.mjs` rejects wrong counts,
+missing samples, wrong candidates and malformed custody evidence.
 
 The publication refactor is implemented in `publication-continuation.ts` and
 consumed once per responsibility by frontier actions, target retention, and

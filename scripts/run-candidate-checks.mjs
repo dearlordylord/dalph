@@ -1,3 +1,5 @@
+import { selectAffectedQuintFamilies } from "./quint-affected-selection.mjs"
+import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { existsSync, lstatSync, rmSync } from "node:fs"
 import { startInputGuard } from "./gate-resume-inputs.mjs"
 import { execFileSync } from "node:child_process"
@@ -83,26 +85,25 @@ const main = async () => {
     pnpmEntryPoint,
     worktree: process.cwd()
   })
-  const deepRepetition =
-    stages.some((stage) => stage.id === "custody-controls") ||
-    changedPaths.some((path) => /\/(?:coordination|workflow|execution|cassettes)\//u.test(path))
-  const applicationStages = stages
-    .filter((stage) => stage.boundary === "qualification")
-    .map((stage) =>
-      stage.id === "delivery-repeatability" && !deepRepetition
-        ? {
-            ...stage,
-            id: "delivery-smoke",
-            name: "fresh-process delivery smoke",
-            args: ["test:delivery-smoke"],
-            artifactObligations: [],
-            timeout: 5 * 60_000
-          }
-        : stage
-    )
+  const applicationStages = stages.filter((stage) => stage.boundary === "qualification")
+  const affectedFamilies =
+    formal.status === "affected"
+      ? await selectAffectedQuintFamilies({
+          profile: createQuintEffectiveProfile(),
+          changedPaths: formal.affectedPaths,
+          worktree: process.cwd()
+        })
+      : undefined
   const formalStages =
     formal.status === "affected"
-      ? [{ id: "affected-formal", name: "affected formal proof", args: ["check:ci:formal"], timeout: 35 * 60_000 }]
+      ? [
+          {
+            id: "affected-formal",
+            name: "affected formal proof",
+            args: ["check:ci:formal", ...(affectedFamilies ?? []).map((name) => `--family=${name}`)],
+            timeout: 35 * 60_000
+          }
+        ]
       : []
   const manifest = materializeCandidateManifest(
     [...stages.filter((stage) => stage.boundary === "preflight"), ...formalStages, ...applicationStages],

@@ -24,7 +24,7 @@ jobs:
       docs-only: ${{ steps.change.outputs.docs-only }}
       formal-required: ${{ steps.change.outputs.formal-required }}
       formal-classification: ${{ steps.change.outputs.formal-classification }}
-      versions: ${{ steps.versions.outputs.versions }}
+      versions: ${{ steps.quality_plan.outputs.node-versions }}
       quality-stages: ${{ steps.quality_plan.outputs.expected-cells }}
     steps:
       - name: Checkout

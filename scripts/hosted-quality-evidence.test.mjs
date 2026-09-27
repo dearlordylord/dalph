@@ -11,6 +11,7 @@ import { digest, readRecord, repositoryLocation, withoutInheritedCustody } from 
 import { createQualityGateStagePlan } from "./quality-gate-stage-plan.mjs"
 import {
   aggregateHostedQualityStages,
+  deliveryEvidence,
   closedFailedTestFiles,
   hostedQualityNodeVersions,
   hostedQualityStageIds,
@@ -468,8 +469,9 @@ void test("the production runner exports owner-validated stopped custody from a 
     git("add", ".gitignore", "scripts/hosted-quality-evidence.test.mjs")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
     const fixtureBase = git("rev-parse", "HEAD")
-    writeFileSync(join(root, "candidate.txt"), "candidate\n")
-    git("add", "candidate.txt")
+    mkdirSync(join(root, "scripts"), { recursive: true })
+    writeFileSync(join(root, "scripts/candidate.mjs"), "candidate\n")
+    git("add", "scripts/candidate.mjs")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "candidate")
     const fixtureCandidate = git("rev-parse", "HEAD")
     const pnpm = join(root, "controlled-pnpm.mjs")
@@ -650,8 +652,9 @@ void test("relays cancellation, settles descendants, and never exports cancellat
     git("add", ".gitignore")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
     const fixtureBase = git("rev-parse", "HEAD")
-    writeFileSync(join(root, "candidate.txt"), "candidate\n")
-    git("add", "candidate.txt")
+    mkdirSync(join(root, "scripts"), { recursive: true })
+    writeFileSync(join(root, "scripts/candidate.mjs"), "candidate\n")
+    git("add", "scripts/candidate.mjs")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "candidate")
     const fixtureCandidate = git("rev-parse", "HEAD")
     const pidPath = join(root, ".scratch", "descendant.pid")
@@ -786,4 +789,17 @@ void test("relays cancellation, settles descendants, and never exports cancellat
     }
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+void test("smoke evidence requires its planned count and exact candidate delivery digest", () => {
+  const line = (index, count = 3, sha = candidateSha) =>
+    `delivery repeatability fresh iteration ${index}/${count} PASS elapsedMs=1 occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${sha}`
+  const log = [1, 2, 3].map((index) => line(index)).join("\n")
+  assert.equal(deliveryEvidence(log, "passed", candidateSha, 3).completedIterations, 3)
+  assert.throws(() => deliveryEvidence(log, "passed", candidateSha, 20), /exact complete/)
+  assert.throws(() => deliveryEvidence([line(1), line(2)].join("\n"), "passed", candidateSha, 3), /exact complete/)
+  assert.throws(
+    () => deliveryEvidence([line(1), line(2), line(3, 3, baseSha)].join("\n"), "passed", candidateSha, 3),
+    /candidate differs/
+  )
 })

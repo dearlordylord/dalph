@@ -93,9 +93,9 @@ configuration changes. Selection retains deleted and renamed source paths.
 Complexity, duplication, and unused-export checks are optional trend diagnostics,
 not delivery blockers; `lint` owns formatter and code-lint correctness only.
 This reduces heuristic and sampling assurance without changing application tests.
-Ordinary local candidates use three fresh delivery samples; coordination, workflow,
-execution, cassette, and tooling changes retain twenty. Hosted assurance retains
-the broad sample. Fewer samples reduce the chance of detecting rare races; the
+Ordinary local and hosted candidates use three fresh delivery samples; coordination, workflow,
+execution, cassette, and tooling changes retain twenty. Hosted plans select the same
+catalog boundary and retain all declared Node versions only for broad sampling changes. Fewer samples reduce the chance of detecting rare races; the
 complete checkpoint order is still asserted in every sample.
 
 The local `check:all` runner requires a clean frozen checkout and an exact Base
@@ -1322,7 +1322,8 @@ for the frozen candidate. Unused-export analysis is an optional diagnostic.
 Only exact diffs containing allowlisted documentation paths use the single
 Ubuntu docs gate: whitespace, classifier controls, changed-commit secrets.
 Everything else—including unreadable/empty diffs and manual/initial events—uses
-the comprehensive Node quality matrix. Independently, hosted formal shards run
+the selected Node quality matrix, conservatively retaining all versions when change
+evidence is unavailable. Independently, hosted formal shards run
 only when the exact base-to-head paths intersect the generated hosted-formal
 input projection. Unavailable base, head, diff, or projection evidence runs the
 shards; a proved unaffected change skips them while the required aggregate job
@@ -1370,3 +1371,14 @@ exclusions must not hide authored logic.
   `Context.Service` tags and `Schema.TaggedError`; no per-class escapes.
 - Duplication excludes tests and disposable prototypes; tooling/configuration
   remain scanned.
+
+
+### Affected formal checks
+
+Local candidate checks select complete Quint model families for model-source changes,
+following imports through the existing parser. Each family retains its deep proof,
+negative controls, witness checks and evaluator provenance. Unknown or unregistered
+inputs and runtime changes without a model ownership mapping retain the full
+portfolio. Hosted formal shards still execute the full affected portfolio; this
+remaining conservative breadth is not claimed as a sampling reduction. Explicit
+`check:ci:formal` and `test:delivery-repeatability` retain the full diagnostics.
