@@ -693,7 +693,42 @@ it.effect("rejects a superseded exhaustion occurrence after a later successor ca
   })
 )
 
-it.effect("replays an exact batch grant from a reopened SQLite journal without a second receipt", () =>
+it.effect("retries an exact paused grant after a precommit crash in memory", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(buildJournal())
+    const inRunJournal = Context.get(context, InRunJournal)
+    const acceptedJournal = Context.get(context, AcceptedJournalReader)
+    const journal = Context.get(context, Journal)
+    yield* actualExhaustionPrefix(inRunJournal)
+    yield* applyRealPause(inRunJournal, acceptedJournal)
+    const before = yield* journal.state.get
+    const exhaustion = Array.from(journalRecordsOfKind(before.prefix, "RemotePublicationRetained")).findLast(
+      ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+    )
+    if (exhaustion === undefined) return yield* Effect.die("actual exhaustion must precede the crash")
+    const request = grantRequest("memory-precommit-crash", exhaustion.position)
+    const precommitCrash: JournalService = {
+      ...journal,
+      appendIfAcceptedPrefixCurrent: () => Effect.die("host stopped before the grant append")
+    }
+    expect(
+      (yield* Effect.exit(applyRemotePublicationBatchGrantWithAdmission(runId, precommitCrash, request)))._tag
+    ).toBe("Failure")
+    const afterCrash = yield* journal.state.get
+    expect(afterCrash.position).toBe(before.position)
+    expect(Array.from(journalRecordsOfKind(afterCrash.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(0)
+    const grant = yield* applyRemotePublicationBatchGrantWithAdmission(runId, journal, request)
+    expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+    const afterRetry = yield* journal.state.get
+    expect(Array.from(journalRecordsOfKind(afterRetry.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(1)
+    expect(Array.from(journalRecordsOfKind(afterRetry.prefix, "IntegratorSessionFixed"))).toHaveLength(
+      Array.from(journalRecordsOfKind(before.prefix, "IntegratorSessionFixed")).length
+    )
+    expect(Array.from(journalRecordsOfKind(afterRetry.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(3)
+  })
+)
+
+it.effect("replays an exact batch grant from a reopened SQLite journal after lost acknowledgement", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -722,9 +757,22 @@ it.effect("replays an exact batch grant from a reopened SQLite journal without a
           }
           yield* applyRealPause(inRunJournal, acceptedJournal)
           const request = grantRequest("sqlite-exact-batch-grant", retained.position)
-          const grant = yield* applyRemotePublicationBatchGrantWithAdmission(runId, journal, request)
-          expect(grant._tag).toBe("NewlyRecordedBatchGrant")
-          return { acceptedAt: grant.result.acceptedAt, exhaustionAt: retained.position }
+          const lostAcknowledgement: JournalService = {
+            ...journal,
+            appendIfAcceptedPrefixCurrent: (requestedRunId, expectedPosition, key, event) =>
+              journal
+                .appendIfAcceptedPrefixCurrent(requestedRunId, expectedPosition, key, event)
+                .pipe(Effect.flatMap(() => Effect.die("host stopped after the grant committed before acknowledgement")))
+          }
+          expect(
+            (yield* Effect.exit(applyRemotePublicationBatchGrantWithAdmission(runId, lostAcknowledgement, request)))
+              ._tag
+          ).toBe("Failure")
+          const afterCrash = yield* journal.state.get
+          const grant = Array.from(journalRecordsOfKind(afterCrash.prefix, "RemotePublicationBatchGrantApplied"))[0]
+          if (grant === undefined) return yield* Effect.die("grant must survive lost acknowledgement")
+          expect(grant.event).toMatchObject({ request })
+          return { acceptedAt: grant.position, exhaustionAt: retained.position, request }
         })
       )
 
@@ -739,13 +787,15 @@ it.effect("replays an exact batch grant from a reopened SQLite journal without a
             Array.from(journalRecordsOfKind(reopened.prefix, "ControlDirectionApplied")).at(-1)?.event
           ).toMatchObject({ direction: "Pause", subject: { _tag: "Run", runId } })
 
-          const replay = yield* applyRemotePublicationBatchGrantWithAdmission(
+          const replay = yield* applyRemotePublicationBatchGrantWithAdmission(runId, journal, committed.request)
+          expect(replay._tag).toBe("BatchGrantReplay")
+          expect(replay.result.acceptedAt).toBe(committed.acceptedAt)
+          const otherDelivery = yield* applyRemotePublicationBatchGrantWithAdmission(
             runId,
             journal,
             grantRequest("sqlite-other-transport-request-id", committed.exhaustionAt)
           )
-          expect(replay._tag).toBe("BatchGrantAlreadyRecordedForExhaustion")
-          expect(replay.result.acceptedAt).toBe(committed.acceptedAt)
+          expect(otherDelivery._tag).toBe("BatchGrantAlreadyRecordedForExhaustion")
           const afterReplay = yield* journal.state.get
           expect(
             Array.from(journalRecordsOfKind(afterReplay.prefix, "RemotePublicationBatchGrantApplied"))
