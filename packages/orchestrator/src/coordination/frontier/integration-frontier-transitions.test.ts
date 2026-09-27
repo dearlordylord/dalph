@@ -2095,6 +2095,60 @@ it("retains the exact compatible-head wait after the third automatic successor",
   })
   expect(grantedFrontier.transitions).toEqual([expectedAuthorization])
 
+  const unrelatedTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/granted-publication-unrelated.git")
+  })
+  const unrelatedAttempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make("granted-publication-unrelated-attempt"),
+    baseSha,
+    branch: TaskBranchRef.make("refs/heads/dalph/granted-publication-unrelated"),
+    executor: TaskExecutorLocator.make("executor:granted-publication-unrelated"),
+    runId,
+    taskId: TaskId.make("granted-publication-unrelated-task"),
+    taskRevision: TaskRevision.make("granted-publication-unrelated-revision"),
+    worktree: WorktreeLocator.make("/worktrees/granted-publication-unrelated")
+  })
+  const unrelatedQueuedAt = JournalPosition.make(Number(grantAt) + 1)
+  const withUnrelated = [
+    ...grantedRecords,
+    record(
+      Number(unrelatedQueuedAt),
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: acceptedResultFixture(sha("f")),
+        integrationTarget: unrelatedTarget,
+        plannedAttempt: unrelatedAttempt,
+        version: workflowJournalEventVersion
+      }),
+      "granted-publication-unrelated-responsibility"
+    )
+  ]
+  const queuedUnrelated = deriveIntegrationAdmission(withUnrelated).responsibilities.find(
+    (candidate) => candidate.plannedAttempt.attemptId === unrelatedAttempt.attemptId
+  )
+  expect(queuedUnrelated?._tag).toBe("QueuedIntegrationResponsibility")
+  if (queuedUnrelated?._tag !== "QueuedIntegrationResponsibility") return
+  const concurrentFrontier = deriveIntegrationFrontier(
+    {
+      ...grantedRunState,
+      appliedThrough: unrelatedQueuedAt,
+      workflowHistory: { evidence: journalEvidenceFrom(withUnrelated) }
+    },
+    {
+      ...runtimeFacts,
+      currentTrackerTaskIds: new Set([responsibility.plannedAttempt.taskId, unrelatedAttempt.taskId]),
+      targetLineageByAttemptId: new Map([[attemptId, secondLineage]]),
+      taskClaimAuthorityByAttemptId: new Map([
+        [responsibility.plannedAttempt.attemptId, { _tag: "Exact" as const }],
+        [unrelatedAttempt.attemptId, { _tag: "Exact" as const }]
+      ])
+    }
+  )
+  expect(concurrentFrontier.transitions).toContainEqual(expectedAuthorization)
+  expect(concurrentFrontier.transitions).toContainEqual(
+    RunnableFrontierTransition.StartQueuedIntegration({ responsibility: queuedUnrelated })
+  )
+
   const staleRequest = RemotePublicationBatchGrantRequest.make({
     ...request,
     exhaustionAt: JournalPosition.make(Number(thirdRetainedAt) - 1)
