@@ -16,7 +16,8 @@ export const quintHostedModelFamilies = Object.freeze([
   { name: "accepted-result integration", first: 91, last: 99, shard: 1 },
   { name: "accepted-result automatic successor", first: 100, last: 104, shard: 1 },
   { name: "accepted-result automatic successor counter proof", first: 105, last: 109, shard: 1 },
-  { name: "integration finality", first: 110, last: 114, shard: 0 }
+  { name: "integration finality", first: 110, last: 114, shard: 0 },
+  { name: "publication exhaustion batch grant", first: 115, last: 119, shard: 1 }
 ])
 
 const shardForPosition = (position) =>

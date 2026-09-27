@@ -757,3 +757,42 @@ export const acceptedResultIntegrationAutomaticSuccessorCountersProofObligations
   invariants: Object.freeze(["successorRefreshRoundsAreBounded", "catchUpCasIsBoundedByBaselineRounds"]),
   witnesses: Object.freeze(["catchUpAppliedReached", "secondRoundCatchUpReached"])
 })
+
+// #386's compact transition model owns the exact publication-exhaustion grant
+// chronology. It treats the Journal as the retained workflow authority and
+// consumes Git/tracker outcomes only through explicit observations.
+export const directPublicationBatchGrantObligations = Object.freeze({
+  invariants: Object.freeze([
+    "grantIsBoundToRetainedExhaustion",
+    "oneGrantPerExactOccurrence",
+    "grantReceiptMatchesExactOccurrence",
+    "grantReplayIsIdempotent",
+    "batchBoundsHold",
+    "cumulativeOrdinalsAreNotReset",
+    "pauseDefersQForwardEffects",
+    "exitCutoffStopsQForwardEffects",
+    "taskBeginIsRetainedOnce",
+    "grantDoesNotProvePublication",
+    "completionRequiresProofPromotionAndCurrentPermission",
+    "settlementRequiresExactCompletionAndCleanup",
+    "exactSuccessorParentsAreRetained",
+    "successorCandidateIsBoundToItsSession",
+    "postGrantEffectsMatchSelectedPath",
+    "postGrantPathMatchesSelectedPath",
+    "grantReceiptIsVisibleBeforeForwardEffects",
+    "runTerminationRequiresSettledResponsibility"
+  ]),
+  witnesses: Object.freeze([
+    "exactExhaustionReached",
+    "grantCommittedReached",
+    "pausedGrantReached",
+    "grantSessionReached",
+    "grantPushReached",
+    "secondExhaustionReached",
+    "secondGrantReached",
+    "unrelatedProgressReached",
+    "exactProofReached",
+    "blockedWaitReached",
+    "settledReached"
+  ])
+})

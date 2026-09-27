@@ -56,7 +56,8 @@ export const quintGateCommandManifest = Object.freeze([
   ...proof("accepted-result automatic successor proof"),
   command("typecheck", "accepted-result automatic successor counter proof typecheck"),
   ...proof("accepted-result automatic successor counter proof"),
-  ...exhaustiveModel("integration finality")
+  ...exhaustiveModel("integration finality"),
+  ...exhaustiveModel("publication exhaustion batch grant")
 ])
 
 const manifestKeys = quintGateCommandManifest.map(({ kind, name }) => `${kind}\u0000${name}`)

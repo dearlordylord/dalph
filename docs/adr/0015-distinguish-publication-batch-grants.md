@@ -1,6 +1,6 @@
 # Distinguish Publication-Batch Grants from Integration Quarantine Directions
 
-Status: Accepted in the maintainer conversation on 2026-09-27
+Status: Accepted for #386 implementation on 2026-09-27
 
 Issue #386 lets the Operator continue one exact retained integration after a
 publication or successor-session allowance is exhausted. The Operator-facing

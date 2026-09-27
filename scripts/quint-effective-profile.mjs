@@ -4,6 +4,7 @@ import {
   acceptedResultIntegrationAutomaticSuccessorProofObligations,
   acceptedResultIntegrationAutomaticSuccessorCountersProofObligations,
   acceptedResultIntegrationQuarantineProofObligations,
+  directPublicationBatchGrantObligations,
   freshTaskAdmissionObligations,
   freshTaskAdmissionProofObligations,
   plannedAttemptExecutorProofObligations,
@@ -1235,6 +1236,61 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
         "tlc",
         "--invariants",
         ...integrationFinalityInvariants,
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+
+  const directPublicationBatchGrantInvariants = directPublicationBatchGrantObligations.invariants
+  const directPublicationBatchGrantWitnesses = directPublicationBatchGrantObligations.witnesses
+  run("publication exhaustion batch grant model typecheck", ["typecheck", "specs/directPublicationBatchGrant.qnt"])
+  runFamily([
+    {
+      name: "publication exhaustion batch grant deterministic tests",
+      args: ["test", "specs/directPublicationBatchGrant_test.qnt", "--main", "directPublicationBatchGrantTest"]
+    },
+    {
+      name: "publication exhaustion batch grant negative mutation profile",
+      args: [
+        "test",
+        "specs/directPublicationBatchGrant_negative_test.qnt",
+        "--main",
+        "directPublicationBatchGrantNegativeTest"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant sampled model",
+      args: [
+        "run",
+        "specs/directPublicationBatchGrant.qnt",
+        "--main",
+        "directPublicationBatchGrant",
+        "--invariants",
+        ...directPublicationBatchGrantInvariants,
+        "--witnesses",
+        ...directPublicationBatchGrantWitnesses,
+        "--max-steps",
+        "32",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "38601",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant exhaustive model",
+      args: [
+        "verify",
+        "specs/directPublicationBatchGrant.qnt",
+        "--main",
+        "directPublicationBatchGrant",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...directPublicationBatchGrantInvariants,
         "--verbosity",
         "1"
       ]

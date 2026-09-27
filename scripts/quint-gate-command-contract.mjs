@@ -1,13 +1,14 @@
 import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
 import { acceptedAutomaticSuccessorQuintGateCommandKeys } from "./quint-gate-automatic-successor-command-oracle.mjs"
+import { publicationBatchGrantQuintGateCommandKeys } from "./quint-gate-publication-batch-grant-command-oracle.mjs"
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
-  total: 115,
-  typecheck: 17,
-  test: 50,
-  "sampled-run": 25,
-  verify: 23
+  total: 120,
+  typecheck: 18,
+  test: 52,
+  "sampled-run": 26,
+  verify: 24
 })
 
 export const legacyQuintGateExpectedCommandCounts = Object.freeze({
@@ -45,6 +46,10 @@ const acceptedQuintGateCommandKeysWithAutomaticSuccessor = Object.freeze([
   ...acceptedAutomaticSuccessorQuintGateCommandKeys,
   ...acceptedQuintGateCommandKeys.slice(automaticSuccessorInsertionIndex)
 ])
+const acceptedQuintGateCommandKeysWithPublicationGrant = Object.freeze([
+  ...acceptedQuintGateCommandKeysWithAutomaticSuccessor,
+  ...publicationBatchGrantQuintGateCommandKeys
+])
 
 /** Compare the retained pre-#315 commands with the independently accepted order. */
 export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
@@ -53,7 +58,8 @@ export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
       ({ name }) =>
         !name.startsWith("fresh-task admission") &&
         !name.startsWith("accepted-result automatic successor proof") &&
-        !name.startsWith("accepted-result automatic successor counter proof")
+        !name.startsWith("accepted-result automatic successor counter proof") &&
+        !name.startsWith("publication exhaustion batch grant")
     )
     .map(commandKey)
   const mismatch = retained.findIndex((key, index) => key !== acceptedLegacyQuintGateCommandKeys[index])
@@ -68,13 +74,13 @@ export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
 /** Compare every command with independent pre-#315 and #315 literal oracles. */
 export const assertAcceptedQuintGateCommands = (manifest) => {
   const received = manifest.map(commandKey)
-  const mismatch = received.findIndex((key, index) => key !== acceptedQuintGateCommandKeysWithAutomaticSuccessor[index])
-  if (received.length === acceptedQuintGateCommandKeysWithAutomaticSuccessor.length && mismatch < 0) return
+  const mismatch = received.findIndex((key, index) => key !== acceptedQuintGateCommandKeysWithPublicationGrant[index])
+  if (received.length === acceptedQuintGateCommandKeysWithPublicationGrant.length && mismatch < 0) return
 
   const index =
-    mismatch < 0 ? Math.min(received.length, acceptedQuintGateCommandKeysWithAutomaticSuccessor.length) : mismatch
+    mismatch < 0 ? Math.min(received.length, acceptedQuintGateCommandKeysWithPublicationGrant.length) : mismatch
   throw new Error(
-    `accepted Quint command mismatch at ${index}: expected ${String(acceptedQuintGateCommandKeysWithAutomaticSuccessor[index])}, received ${String(received[index])}`
+    `accepted Quint command mismatch at ${index}: expected ${String(acceptedQuintGateCommandKeysWithPublicationGrant[index])}, received ${String(received[index])}`
   )
 }
 
@@ -88,7 +94,7 @@ const countManifestCommands = (manifest) => {
 
 /**
  * Keep the selected command count independent from the manifest and the
- * execution path. Both representations must retain the current 115-command
+ * execution path. Both representations must retain the current 120-command
  * command contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {

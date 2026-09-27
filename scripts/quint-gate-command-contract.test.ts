@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
 import { acceptedAutomaticSuccessorQuintGateCommandKeys } from "./quint-gate-automatic-successor-command-oracle.mjs"
+import { publicationBatchGrantQuintGateCommandKeys } from "./quint-gate-publication-batch-grant-command-oracle.mjs"
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 import { type QuintManifestCommand, quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import {
@@ -25,14 +26,14 @@ const freshTaskBlockStart = 47
 const freshTaskBlockEnd = 60
 
 describe("Quint gate command contract", () => {
-  it("accepts the independent 115-command contract", () => {
+  it("accepts the independent 120-command contract", () => {
     assertQuintGateCommandContract({ manifest: quintGateCommandManifest, executed: quintGateExpectedCommandCounts })
     expect(quintGateExpectedCommandCounts).toEqual({
-      total: 115,
-      typecheck: 17,
-      test: 50,
-      "sampled-run": 25,
-      verify: 23
+      total: 120,
+      typecheck: 18,
+      test: 52,
+      "sampled-run": 26,
+      verify: 24
     })
   })
 
@@ -98,6 +99,20 @@ describe("Quint gate command contract", () => {
     expect(
       quintGateCommandManifest.slice(blockStart, blockStart + 10).map(({ kind, name }) => `${kind}\u0000${name}`)
     ).toEqual(acceptedAutomaticSuccessorQuintGateCommandKeys)
+    expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
+  })
+
+  it("accepts the independent five-command #386 publication-grant inventory", () => {
+    expect(publicationBatchGrantQuintGateCommandKeys).toEqual([
+      "typecheck\u0000publication exhaustion batch grant model typecheck",
+      "test\u0000publication exhaustion batch grant deterministic tests",
+      "test\u0000publication exhaustion batch grant negative mutation profile",
+      "sampled-run\u0000publication exhaustion batch grant sampled model",
+      "verify\u0000publication exhaustion batch grant exhaustive model"
+    ])
+    expect(quintGateCommandManifest.slice(-5).map(({ kind, name }) => `${kind}\u0000${name}`)).toEqual(
+      publicationBatchGrantQuintGateCommandKeys
+    )
     expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
   })
 
