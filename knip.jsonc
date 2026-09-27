@@ -10,6 +10,8 @@
         // Spawned by packages/dalph/src/application/production-public-recovery.integration.test.ts.
         "bin/production-public-recovery-codex-fixture.ts",
         "bin/production-public-recovery-git-fixture.ts",
+        // Spawned by packages/dalph/src/application/git-sender-custody.real-host.test.ts.
+        "bin/git-sender-custody-host-fixture.ts",
         // Spawned by packages/dalph/src/application/production-host.test.ts.
         "bin/production-restart-host-fixture.ts"
       ]
