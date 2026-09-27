@@ -906,6 +906,61 @@ it.effect("reconciles an applied granted push from reopened SQLite without anoth
   )
 )
 
+it.effect("retains a precise policy wait after a granted attempt without retrying the denied push", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(buildJournal())
+    const inRunJournal = Context.get(context, InRunJournal)
+    const acceptedJournal = Context.get(context, AcceptedJournalReader)
+    const journal = Context.get(context, Journal)
+    yield* actualExhaustionPrefix(inRunJournal)
+    yield* applyRealPause(inRunJournal, acceptedJournal)
+    const exhaustion = Array.from(journalRecordsOfKind((yield* journal.state.get).prefix, "RemotePublicationRetained"))
+      .filter(({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted")
+      .at(-1)
+    if (exhaustion === undefined) return yield* Effect.die("actual exhaustion is missing")
+    const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+      runId,
+      journal,
+      grantRequest("granted-policy-wait", exhaustion.position)
+    )
+    yield* applyRealUnpause(inRunJournal, acceptedJournal)
+    const pushes = yield* Ref.make(0)
+    const git = RemotePublicationGit.of({
+      admit: () => Effect.die("destination admission precedes this accepted candidate"),
+      prepareSenderCustody: () => Effect.void,
+      reconcileSenderCustody: () => Effect.void,
+      observe: () =>
+        Effect.succeed(
+          RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+            remoteHead: candidate.run.session.expectedTargetHead
+          })
+        ),
+      push: () =>
+        Ref.update(pushes, (count) => count + 1).pipe(
+          Effect.as(RemotePublicationPushResult.cases.RejectedDefinite.make({ cause: "Policy" }))
+        )
+    })
+    const engine = makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+    const publish = engine
+      .runRemotePublication(candidate, remotePublicationTargetForTest, {
+        runObservation: (phase) => phase,
+        runSender: (phase) => phase
+      })
+      .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
+    const first = yield* publish
+    const restarted = yield* publish
+    expect(first).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "PolicyDenied" } })
+    expect(restarted).toEqual(first)
+    expect(yield* Ref.get(pushes)).toBe(1)
+    const after = yield* journal.state.get
+    expect(
+      Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationAttemptIntended")).at(-1)?.event
+    ).toMatchObject({ attemptOrdinal: 4, batchGrantAt: grant.result.acceptedAt })
+    expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(1)
+    expect(Array.from(journalRecordsOfKind(after.prefix, "IntegratorSessionFixed"))).toHaveLength(1)
+  })
+)
+
 it.effect("replays an exact batch grant from a reopened SQLite journal after lost acknowledgement", () =>
   Effect.scoped(
     Effect.gen(function* () {
