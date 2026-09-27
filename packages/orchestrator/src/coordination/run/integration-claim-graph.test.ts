@@ -204,6 +204,19 @@ for (const initiallyHeld of [true, false]) {
       const costs: Array<number> = []
       for (const count of [64, 256]) {
         const fixture = integrationFinalityFixture
+        const projected = projectTrackerSnapshot({
+          revision: TrackerRevision.make("integration-current-open"),
+          tasks: [
+            {
+              id: fixture.taskId,
+              lifecycle: TaskLifecycle.cases.Open.make({}),
+              parentTaskId: null,
+              prerequisiteIds: []
+            }
+          ]
+        })
+        if (projected._tag !== "Valid") return yield* Effect.die("open current-task fixture must be valid")
+        const currentOpenGraph = projected.snapshot
         const specification = makeTaskWorkSpecification({
           body: "integration graph",
           title: "Integration graph",
@@ -255,7 +268,7 @@ for (const initiallyHeld of [true, false]) {
           yield* append(
             taskTrackerFactsObservedEvent(
               graph.operationId,
-              makeCompleteTaskTrackerFactsObserved(graph, fixture.graphSnapshot)
+              makeCompleteTaskTrackerFactsObserved(graph, currentOpenGraph)
             )
           )
           expect(
@@ -318,7 +331,7 @@ for (const initiallyHeld of [true, false]) {
           const graphRecord = yield* append(
             taskTrackerFactsObservedEvent(
               ordinaryG2.operationId,
-              makeCompleteTaskTrackerFactsObserved(ordinaryG2, fixture.graphSnapshot)
+              makeCompleteTaskTrackerFactsObserved(ordinaryG2, currentOpenGraph)
             )
           )
           expect(graphRecord.position).toBeGreaterThan(claimRecord.position)

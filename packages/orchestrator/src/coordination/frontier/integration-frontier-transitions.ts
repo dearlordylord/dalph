@@ -952,12 +952,15 @@ export const deriveStartedIntegrationFrontier = (
   const transitions = started.flatMap<RunnableFrontierTransitionType>((responsibility) => {
     /* v8 ignore next -- @preserve The serialized coordinator cannot select a responsibility while its scoped Integrator effect is active. */
     if (integrationTargetResourceSnapshotIncludes(runtimeFacts.activeResponsibilities ?? [], responsibility)) return []
-    const waiting =
-      unsatisfiedPrerequisites(runState, responsibility).length > 0 ||
-      runtimeFacts.ineligibleCurrentTaskIds?.has(responsibility.plannedAttempt.taskId) === true
     const held = integrationTargetResourceSnapshotIncludes(runtimeFacts.heldResponsibilities, responsibility)
     const integratorState = integratorStateFor(responsibility)
     const promotion = promotionFor(integratorState)
+    // A terminal tracker lifecycle prevents new integration effects, but a
+    // succeeded promotion must still finish its publication-backed finality.
+    const waiting =
+      unsatisfiedPrerequisites(runState, responsibility).length > 0 ||
+      (promotion?._tag !== "PromotionSucceeded" &&
+        runtimeFacts.ineligibleCurrentTaskIds?.has(responsibility.plannedAttempt.taskId) === true)
     const retryProgress = retryIntegratorProgressFor(runState, runtimeFacts, responsibility, integratorState)
     const earlyTransition = transitionsBeforeStartedIntegrationAdmission(
       runState,
