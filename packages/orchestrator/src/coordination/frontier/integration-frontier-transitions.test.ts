@@ -42,6 +42,7 @@ import {
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
   remotePublicationResumeRequestedRecordKey,
+  remotePublicationBatchGrantRecordKey,
   remotePublicationSucceededRecordKey,
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey
@@ -148,6 +149,9 @@ import {
   RemotePublicationResumeRequest,
   RemotePublicationResumeRequestId,
   RemotePublicationResumeRequestedEvent,
+  RemotePublicationBatchGrantAppliedEvent,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId,
   RemotePublicationSucceededEvent,
   remotePublicationCorrelationFor,
   remotePublicationRefspecFor
@@ -155,6 +159,7 @@ import {
 import { deriveRemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
 import { WorkflowActor } from "../../workflow/registry/actor.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
+import { filterFrontierForActivePauses } from "../run/recovery-activation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
@@ -2046,6 +2051,122 @@ it("retains the exact compatible-head wait after the third automatic successor",
     _tag: "RunMustRemainActive",
     reason: "UnsettledResponsibility"
   })
+  // Continue the same three-session history through one exact grant.
+  const request = RemotePublicationBatchGrantRequest.make({
+    exhaustionAt: thirdRetainedAt,
+    requestId: RemotePublicationBatchGrantRequestId.make("frontier-exact-batch-grant"),
+    responsibility: IntegrationResponsibilityIdentity.make({ queuedAt: responsibility.queuedAt, runId }),
+    runId,
+    schemaVersion: 1
+  })
+  const grantAt = JournalPosition.make(Number(thirdRetainedAt) + 1)
+  const grant = RemotePublicationBatchGrantAppliedEvent.make({
+    direction: "FullRerun",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    request,
+    version: workflowJournalEventVersion
+  })
+  const grantedRecords = [
+    ...exhaustedRecords,
+    record(Number(grantAt), grant, remotePublicationBatchGrantRecordKey(request).toString())
+  ]
+  const grantedRunState = {
+    ...exhaustedRunState,
+    appliedThrough: grantAt,
+    workflowHistory: { evidence: journalEvidenceFrom(grantedRecords) }
+  }
+  const expectedAuthorization = RunnableFrontierTransition.AuthorizeIntegratorCompetingHeadSuccessor({
+    authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+      thirdPublicationCorrelation.requestId,
+      thirdRetainedAt,
+      secondRemoteHead,
+      exhaustedRemoteHead
+    ),
+    correlation: thirdPublicationCorrelation,
+    mergeBase: secondRemoteHead,
+    remoteHead: exhaustedRemoteHead,
+    remotePublicationRetainedAt: thirdRetainedAt,
+    responsibility
+  })
+  const grantedFrontier = deriveIntegrationFrontier(grantedRunState, {
+    ...runtimeFacts,
+    targetLineageByAttemptId: new Map([[attemptId, secondLineage]])
+  })
+  expect(grantedFrontier.transitions).toEqual([expectedAuthorization])
+
+  const staleRequest = RemotePublicationBatchGrantRequest.make({
+    ...request,
+    exhaustionAt: JournalPosition.make(Number(thirdRetainedAt) - 1)
+  })
+  const staleGrant = RemotePublicationBatchGrantAppliedEvent.make({ ...grant, request: staleRequest })
+  const staleRecords = [
+    ...exhaustedRecords,
+    record(Number(grantAt), staleGrant, remotePublicationBatchGrantRecordKey(staleRequest).toString())
+  ]
+  const staleFrontier = deriveIntegrationFrontier(
+    { ...exhaustedRunState, appliedThrough: grantAt, workflowHistory: { evidence: journalEvidenceFrom(staleRecords) } },
+    { ...runtimeFacts, targetLineageByAttemptId: new Map([[attemptId, secondLineage]]) }
+  )
+  expect(staleFrontier.transitions).toEqual([])
+  expect(staleFrontier.explanations).toEqual(exhaustedFrontier.explanations)
+
+  const pausedRunState = {
+    ...grantedRunState,
+    pause: { ...grantedRunState.pause, run: { _tag: "RunPaused" as const } }
+  }
+  expect(
+    filterFrontierForActivePauses(grantedFrontier, pausedRunState, undefined, new Set(), new Set()).transitions
+  ).toEqual([])
+
+  // This synthetic record is a projection seam only; accepted grant chronology is covered by the grant control tests.
+  const pendingAttemptAt = JournalPosition.make(Number(grantAt) + 1)
+  const pendingAttempt = RemotePublicationAttemptIntendedEvent.make({
+    attemptOrdinal: RemotePublicationAttemptOrdinal.make(2),
+    batchGrantAt: grantAt,
+    correlation: thirdPublicationCorrelation,
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    refspec: remotePublicationRefspecFor(thirdCandidate.candidateCommit, thirdPublicationCorrelation.target.branch),
+    version: workflowJournalEventVersion
+  })
+  const pendingRunState = {
+    ...grantedRunState,
+    appliedThrough: pendingAttemptAt,
+    workflowHistory: {
+      evidence: journalEvidenceFrom([
+        ...grantedRecords,
+        record(
+          Number(pendingAttemptAt),
+          pendingAttempt,
+          remotePublicationAttemptIntendedRecordKey(
+            thirdPublicationCorrelation.requestId,
+            RemotePublicationAttemptOrdinal.make(2)
+          ).toString()
+        )
+      ])
+    }
+  }
+  const pendingFrontier = deriveIntegrationFrontier(pendingRunState, {
+    ...runtimeFacts,
+    targetLineageByAttemptId: new Map([[attemptId, secondLineage]])
+  })
+  expect(pendingFrontier.transitions).toEqual([
+    RunnableFrontierTransition.RunRemotePublication({
+      candidate: thirdCandidate,
+      responsibility,
+      target: remotePublicationTargetForTest
+    })
+  ])
+  expect(
+    filterFrontierForActivePauses(
+      pendingFrontier,
+      { ...pendingRunState, pause: { ...pendingRunState.pause, run: { _tag: "RunPaused" as const } } },
+      undefined,
+      new Set(),
+      new Set()
+    ).transitions
+  ).toEqual([])
 })
 
 it("reuses one successor authorization when a compatible resume receipt follows authorization before fixation", () => {

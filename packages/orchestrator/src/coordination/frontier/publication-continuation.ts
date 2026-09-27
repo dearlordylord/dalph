@@ -4,14 +4,20 @@ import {
   integratorRunQualifiedCandidateFromState,
   type CurrentIntegratorState
 } from "../../workflow/protocols/integrator/state.js"
-import { integratorSessionCapacityForJournal } from "../../workflow/protocols/integrator/session-capacity.js"
+import {
+  integratorSessionCapacityAfterPublicationBatchGrantForJournal,
+  integratorSessionCapacityForJournal
+} from "../../workflow/protocols/integrator/session-capacity.js"
 import { integratorCompetingHeadSuccessorAuthorizationIdFor } from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import {
   remotePublicationCorrelationEquals,
   remotePublicationCorrelationFor
 } from "../../workflow/protocols/direct-publication/events.js"
 import { deriveRemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
-import { remotePublicationEventsFor } from "../../workflow/protocols/direct-publication/transition-journal.js"
+import {
+  remotePublicationBatchGrantForNextAttempt,
+  remotePublicationEventsFor
+} from "../../workflow/protocols/direct-publication/transition-journal.js"
 
 const lastRecordOffset = -1
 
@@ -84,6 +90,20 @@ export const derivePublicationContinuation = (runState: ReconstructedRunState, s
       )
   )
   const compatible = { ...qualified, mergeBase, remoteHead }
+  if (retained === undefined) return { ...compatible, _tag: "BlockedCompatibleHead" as const }
+  const hasSuccessorCapacity = (): boolean => {
+    if (integratorSessionCapacityForJournal(source, state.run.session)._tag !== "Exhausted") return true
+    const grant = remotePublicationBatchGrantForNextAttempt(source, correlation, publication)
+    return (
+      grant !== undefined &&
+      grant.event.request.exhaustionAt === retained.position &&
+      integratorSessionCapacityAfterPublicationBatchGrantForJournal(source, state.run.session, grant.position)._tag !==
+        "Exhausted"
+    )
+  }
+  if (!hasSuccessorCapacity()) {
+    return { ...compatible, _tag: "BoundedRetainedWait" as const, retainedAt: retained.position }
+  }
   const authorization = authorizations[0]
   if (authorization !== undefined) {
     return {
@@ -93,11 +113,8 @@ export const derivePublicationContinuation = (runState: ReconstructedRunState, s
       retainsTarget: authorizations.some(({ runId }) => runId === state.run.session.plannedAttempt.runId)
     }
   }
-  if (retained === undefined || authorizationRecords.length > 0) {
+  if (authorizationRecords.length > 0) {
     return { ...compatible, _tag: "BlockedCompatibleHead" as const }
-  }
-  if (integratorSessionCapacityForJournal(source, state.run.session)._tag === "Exhausted") {
-    return { ...compatible, _tag: "BoundedRetainedWait" as const, retainedAt: retained.position }
   }
   return {
     ...compatible,
