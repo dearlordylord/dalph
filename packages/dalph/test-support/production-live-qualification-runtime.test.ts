@@ -169,20 +169,21 @@ const termResistantDescendant = [
   "setInterval(() => {}, 1000)"
 ].join(";")
 const formalPositions = (shard: number) =>
-  Array.from({ length: 115 }, (_value, position) => position).filter((position) =>
+  Array.from({ length: 127 }, (_value, position) => position).filter((position) =>
     shard === 0
       ? position <= 36 ||
         (position >= 42 && position <= 46) ||
         (position >= 60 && position <= 64) ||
         (position >= 86 && position <= 90) ||
-        position >= 110
+        (position >= 110 && position <= 114)
       : (position >= 37 && position <= 41) ||
         (position >= 47 && position <= 59) ||
         (position >= 65 && position <= 85) ||
-        (position >= 91 && position <= 109)
+        (position >= 91 && position <= 109) ||
+        position >= 115
   )
 const formalCommands = (offset: number) =>
-  Array.from({ length: 115 }, (_value, position) => ({
+  Array.from({ length: 127 }, (_value, position) => ({
     position,
     kind: "test",
     name: `formal command ${position}`,

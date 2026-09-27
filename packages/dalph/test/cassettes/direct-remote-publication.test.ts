@@ -22,6 +22,8 @@ import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Context, Duration, Effect, FileSystem, Layer, MutableList, Option, Schema } from "effect"
 import { expect } from "vitest"
+import { reconfirmationMatchesPriorFullObservation } from "../../../orchestrator/src/workflow/task-tracker-facts/reconfirmation.js"
+import { UnchangedTaskTrackerFactsReconfirmed } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import { projectRecordedCassette } from "../../src/cassettes/recorded.js"
 import { makeHermeticController } from "../../test-support/production-hermetic-controller.js"
 import { createProductionPublicPublicationFixture } from "../../test-support/production-public-publication-fixture.js"
@@ -624,15 +626,34 @@ it.live(
           ).toBeGreaterThan(closeIndex)
         expect(tags.at(-1)).toBe("WorkflowRunTerminated")
 
-        const laterCompletedGraphIndex = cassette.entries.findIndex((entry, index) => {
-          if (index <= completionIndex) return false
-          if (
-            entry._tag !== "TaskTrackerFactsObserved" ||
-            (entry.evidence._tag !== "CompleteTaskTrackerFacts" &&
-              entry.evidence._tag !== "UnchangedTaskTrackerFactsReconfirmed")
-          )
-            return false
-          return entry.evidence.factFamilies.some(
+        const dependantExecutorStartIndex = cassette.entries.findIndex(
+          (entry) =>
+            entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+            entry.plannedAttempt.taskId === trackerAfterChild.graph.dependantTaskId
+        )
+        const completedGraphAt = (entries: typeof cassette.entries, index: number): boolean => {
+          const entry = entries[index]
+          if (entry?._tag !== "TaskTrackerFactsObserved") return false
+          let completeFacts: Extract<typeof entry.evidence, { readonly _tag: "CompleteTaskTrackerFacts" }> | undefined
+          if (entry.evidence._tag === "CompleteTaskTrackerFacts") {
+            completeFacts = entry.evidence
+          } else if (entry.evidence._tag === "UnchangedTaskTrackerFactsReconfirmed") {
+            const reconfirmation = entry.evidence
+            const prior = entries
+              .slice(0, index)
+              .find(
+                (candidate) =>
+                  candidate._tag === "TaskTrackerFactsObserved" &&
+                  candidate.evidence._tag === "CompleteTaskTrackerFacts" &&
+                  candidate.evidence.operationId === reconfirmation.priorFullObservationOperationId &&
+                  reconfirmationMatchesPriorFullObservation(reconfirmation, candidate.evidence)
+              )
+            if (prior?._tag === "TaskTrackerFactsObserved" && prior.evidence._tag === "CompleteTaskTrackerFacts") {
+              completeFacts = prior.evidence
+            }
+          }
+          if (completeFacts === undefined) return false
+          return completeFacts.factFamilies.some(
             (family) =>
               "lifecycles" in family &&
               family.lifecycles.some(
@@ -640,15 +661,22 @@ it.live(
                   taskId === trackerAfterChild.graph.rootTaskId && lifecycle._tag === "CompletedSuccessfully"
               )
           )
-        })
+        }
+        const lastCleanupIndex = Math.max(
+          tags.indexOf("WorktreeCleanupSettled"),
+          tags.indexOf("BranchCleanupSettled"),
+          tags.indexOf("IntegratorCandidateCleanupSettled")
+        )
+        const laterCompletedGraphIndex = cassette.entries.findIndex(
+          (_, index) =>
+            index > completionIndex &&
+            index > lastCleanupIndex &&
+            index < dependantExecutorStartIndex &&
+            completedGraphAt(cassette.entries, index)
+        )
         // Immutable attempt preparation may be journaled from an earlier current
         // eligibility observation. The post-cleanup graph is the boundary for
         // starting executor work, not for recording TaskAttemptPlanned.
-        const dependantExecutorStartIndex = cassette.entries.findIndex(
-          (entry) =>
-            entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-            entry.plannedAttempt.taskId === trackerAfterChild.graph.dependantTaskId
-        )
         expect(laterCompletedGraphIndex).toBeGreaterThan(completionIndex)
         for (const cleanupTag of [
           "WorktreeCleanupSettled",
@@ -660,6 +688,66 @@ it.live(
           )
         }
         expect(dependantExecutorStartIndex).toBeGreaterThan(laterCompletedGraphIndex)
+        const completedFullEntry = cassette.entries.find(
+          (entry, index) =>
+            entry._tag === "TaskTrackerFactsObserved" &&
+            entry.evidence._tag === "CompleteTaskTrackerFacts" &&
+            completedGraphAt(cassette.entries, index)
+        )
+        expect(completedFullEntry).toBeDefined()
+        if (
+          completedFullEntry?._tag === "TaskTrackerFactsObserved" &&
+          completedFullEntry.evidence._tag === "CompleteTaskTrackerFacts"
+        ) {
+          const syntheticOperationId = OperationId.make("s8-reference-control-reconfirmation")
+          const reconfirmedTags = [
+            "TaskIdentitiesReconfirmed",
+            "TaskLifecyclesReconfirmed",
+            "TaskPrerequisitesReconfirmed",
+            "TaskGroupingsReconfirmed",
+            "TaskTargetMembershipReconfirmed"
+          ] as const
+          const reconfirmation = Schema.decodeUnknownSync(UnchangedTaskTrackerFactsReconfirmed)({
+            _tag: "UnchangedTaskTrackerFactsReconfirmed",
+            operationId: syntheticOperationId,
+            priorFullObservationOperationId: completedFullEntry.evidence.operationId,
+            rootTaskId: completedFullEntry.evidence.rootTaskId,
+            target: completedFullEntry.evidence.target,
+            factFamilies: completedFullEntry.evidence.factFamilies.map((family, index) => ({
+              ...family,
+              _tag: reconfirmedTags[index],
+              freshness: { _tag: "ObservedDuringLogicalRead", operationId: syntheticOperationId }
+            }))
+          })
+          const reconfirmationEntry = {
+            ...completedFullEntry,
+            evidence: reconfirmation,
+            originatingActionOperationId: syntheticOperationId
+          }
+          const referenceControlEntries = [completedFullEntry, reconfirmationEntry]
+          expect(completedGraphAt(referenceControlEntries, 1)).toBe(true)
+          expect(
+            completedGraphAt(
+              referenceControlEntries.with(1, {
+                ...reconfirmationEntry,
+                evidence: {
+                  ...reconfirmation,
+                  priorFullObservationOperationId: OperationId.make("missing-full-observation")
+                }
+              }),
+              1
+            )
+          ).toBe(false)
+          expect(
+            completedGraphAt(
+              referenceControlEntries.with(1, {
+                ...reconfirmationEntry,
+                evidence: { ...reconfirmation, rootTaskId: trackerAfterChild.graph.dependantTaskId }
+              }),
+              1
+            )
+          ).toBe(false)
+        }
 
         const provider = providerAfterChild
         const githubProviderTransportCount = provider.operationCounts.reduce(
