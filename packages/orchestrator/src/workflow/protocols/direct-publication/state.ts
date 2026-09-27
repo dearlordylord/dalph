@@ -195,7 +195,11 @@ export const deriveRemotePublicationState = (
           authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
           batchGrantAt: nextBatchGrantAt
         }
-      } else if (phase._tag === "Pending" && attempts.length === 0 && nextBatchGrantAt !== undefined) {
+      } else if (
+        phase._tag === "Pending" &&
+        phase.attemptOrdinalsInBatch.length === 0 &&
+        nextBatchGrantAt !== undefined
+      ) {
         phase = { ...phase, batchGrantAt: nextBatchGrantAt }
       } else if (nextBatchGrantAt !== phase.batchGrantAt) {
         return contradiction("publication attempt cannot change its batch grant within an active batch")

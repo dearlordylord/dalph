@@ -510,7 +510,11 @@ const activeIntegratorSuccessorFor = (
     }
     advanced = true
     successorCount += 1
-    if (successorCount + 1 > maximumIntegratorSessionsPerResponsibility) {
+    if (
+      successorCount + 1 > maximumIntegratorSessionsPerResponsibility &&
+      (fixed.event._tag !== "IntegratorAutomaticSuccessorSessionFixed" ||
+        fixed.event.publicationBatchGrantAt === undefined)
+    ) {
       return { _tag: "Invalid", detail: "Integrator responsibility exceeds its three-session bound" }
     }
   }

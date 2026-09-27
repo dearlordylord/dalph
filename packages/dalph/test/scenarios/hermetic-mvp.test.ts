@@ -40,11 +40,13 @@ import {
   FixtureTarget,
   GitCommand,
   GitCommonDirectoryTarget,
+  IntegrationResponsibilityIdentity,
   InitialControlPolicy,
   IntegratorCandidateText,
   IntegratorResult,
   isExactTaskClaim,
   JournalDatabaseLocator,
+  JournaledRunBootstrap,
   JournalStore,
   nodeEvidenceStoreLayer,
   nodeGitDirectPublicationLayer,
@@ -77,6 +79,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ConfigProvider, Deferred, Effect, Exit, FileSystem, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
+import { derivePublicationContinuation } from "../../../orchestrator/src/coordination/frontier/publication-continuation.js"
+import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
+import { deriveCurrentIntegratorState } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 import { fileGitSenderCustodyLayer } from "../../src/application/git-sender-custody.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import {
@@ -92,7 +98,9 @@ import {
 } from "../../../orchestrator/test/support/direct-publication.js"
 import {
   RemotePublicationGit,
-  RemotePublicationPushFailure
+  RemotePublicationPushFailure,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId
 } from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
 
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
@@ -108,7 +116,8 @@ const runHermeticMvpJourney = (
   competingHeadBeforeDiscovery = false,
   competingHeadBetweenDiscoveryAndPush = false,
   competingHeadAfterLostPushResponse = false,
-  exhaustAutomaticSuccessorBounds = false
+  exhaustAutomaticSuccessorBounds = false,
+  grantExhaustedSuccessor = false
 ) =>
   Effect.gen(function* () {
     const competingHeadRace =
@@ -324,6 +333,9 @@ const runHermeticMvpJourney = (
               Effect.gen(function* () {
                 const candidatePush = yield* Ref.updateAndGet(candidatePublicationPushCalls, (count) => count + 1)
                 if (exhaustAutomaticSuccessorBounds) {
+                  if (grantExhaustedSuccessor && candidatePush === 4) {
+                    return yield* gitAuthority.push(request, attemptOrdinal)
+                  }
                   if (candidatePush > 3) {
                     return yield* Effect.die("an ungranted fourth automatic publication push reached Git")
                   }
@@ -614,7 +626,7 @@ const runHermeticMvpJourney = (
         prepare: (request) =>
           Effect.gen(function* () {
             const call = yield* Ref.updateAndGet(integratorCalls, (calls) => calls + 1)
-            if (exhaustAutomaticSuccessorBounds && call > 3) {
+            if (exhaustAutomaticSuccessorBounds && call > (grantExhaustedSuccessor ? 4 : 3)) {
               return yield* Effect.die("an ungranted fourth Integrator provider start reached the test boundary")
             }
             const acceptedCommit = request.correlation.session.acceptedResult.commit
@@ -729,6 +741,7 @@ const runHermeticMvpJourney = (
       )
       const terminated = yield* Ref.make(false)
       const publicationBatchObserved = yield* Ref.make(false)
+      const grantApplied = yield* Ref.make(false)
       const lastWorkflowDecision = yield* Ref.make<Option.Option<string>>(Option.none())
       const activationDriver = Effect.forEach(
         Array.from({ length: maxActivationPasses }),
@@ -742,6 +755,7 @@ const runHermeticMvpJourney = (
                 if (decision._tag === "RunMayTerminate") yield* Ref.set(terminated, true)
                 if (
                   exhaustAutomaticSuccessorBounds &&
+                  !(yield* Ref.get(grantApplied)) &&
                   decision._tag === "RunMustRemainActive" &&
                   (yield* Ref.get(candidatePublicationPushCalls)) === 3
                 ) {
@@ -916,6 +930,74 @@ const runHermeticMvpJourney = (
         )
         expect(localTarget).toBe(h3)
         expect(remoteTarget).toBe(h4)
+        if (grantExhaustedSuccessor) {
+          const responsibility = records.find(hasEventTag("IntegrationResponsibilityBegan"))
+          if (responsibility === undefined) return yield* Effect.die("accepted responsibility must identify the grant")
+          const grant = yield* Effect.gen(function* () {
+            const bootstrap = yield* JournaledRunBootstrap
+            return yield* bootstrap.operatorControl.applyRemotePublicationBatchGrant(
+              RemotePublicationBatchGrantRequest.make({
+                exhaustionAt: finalRetention.position,
+                requestId: RemotePublicationBatchGrantRequestId.make("hermetic-mvp-s4-grant"),
+                responsibility: IntegrationResponsibilityIdentity.make({ queuedAt: responsibility.position, runId }),
+                runId,
+                schemaVersion: 1
+              })
+            )
+          }).pipe(
+            Effect.provide(application),
+            Effect.provide(
+              ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename }))
+            )
+          )
+          expect(grant.exhaustionAt).toBe(finalRetention.position)
+          yield* Ref.set(grantApplied, true)
+          yield* Ref.set(publicationBatchObserved, false)
+          yield* activationDriver
+          const grantedRecords = yield* Effect.gen(function* () {
+            return yield* (yield* JournalStore).read(runId)
+          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+          const grantedSessions = grantedRecords.filter(hasEventTag("IntegratorAutomaticSuccessorSessionFixed"))
+          const integrationStarted = grantedRecords.find(hasEventTag("IntegrationStarted"))
+          if (integrationStarted === undefined) return yield* Effect.die("started responsibility is missing")
+          const startedResponsibility = StartedIntegrationResponsibility.make({
+            acceptedResult: responsibility.event.acceptedResult,
+            integrationTarget: responsibility.event.integrationTarget,
+            plannedAttempt: responsibility.event.plannedAttempt,
+            queuedAt: responsibility.position,
+            startedAt: integrationStarted.position
+          })
+          const rebuilt = reduceWorkflowJournalHistory(runId, grantedRecords)
+          if (rebuilt._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("granted history invalid")
+          const integratorState = deriveCurrentIntegratorState(rebuilt.prefix, startedResponsibility)
+          const continuation = derivePublicationContinuation(rebuilt.runState, integratorState)
+          expect(grantedRecords.filter(hasEventTag("RemotePublicationBatchGrantApplied"))).toHaveLength(1)
+          expect(grantedSessions).toHaveLength(3)
+          expect(grantedSessions[2]?.event.publicationBatchGrantAt).toBe(grant.acceptedAt)
+          expect(grantedSessions[2]?.event.successorGeneration).toBe(4)
+          expect(grantedSessions[2]?.event.successor.acceptedResult.commit).toBe(decodedEvidence.commit)
+          expect(grantedRecords.filter(hasEventTag("TaskAttemptPlanned"))).toHaveLength(1)
+          expect(yield* Ref.get(executorStarts)).toBe(1)
+          expect(yield* Ref.get(integratorCalls)).toBe(4)
+          expect(yield* Ref.get(candidatePublicationPushCalls)).toBe(4)
+          expect(grantedRecords.filter(hasEventTag("RemotePublicationSucceeded"))).toHaveLength(1)
+          expect({ state: integratorState._tag, publication: continuation?.publication._tag }).toEqual({
+            state: "GitQualifiedPrepared",
+            publication: "PublicationSucceeded"
+          })
+          expect(
+            grantedRecords.filter(hasEventTag("TargetPromotionObservedSuccess")),
+            JSON.stringify({
+              decision: Option.getOrElse(yield* Ref.get(lastWorkflowDecision), () => "missing"),
+              runtimeTrace: yield* Ref.get(runtimeTrace),
+              tail: grantedRecords.slice(-18).map(({ event }) => event._tag)
+            })
+          ).toHaveLength(1)
+          expect(grantedRecords.filter(hasEventTag("CompletionTaskAcknowledged"))).toHaveLength(1)
+          expect(grantedRecords.filter(hasEventTag("IntegrationFinalitySettled"))).toHaveLength(1)
+          expect(grantedRecords.filter(hasEventTag("WorkflowRunTerminated"))).toHaveLength(1)
+          expect(yield* Ref.get(terminated)).toBe(true)
+        }
         return
       }
       if (!(yield* Ref.get(terminated))) {
@@ -1440,5 +1522,11 @@ it.effect(
   () => runHermeticMvpJourney(false, false, false, false, true),
   // The real-Git journey took about 143s with V8 coverage; retain headroom
   // under the full suite's two-worker load while keeping a finite bound.
+  240_000
+)
+
+it.effect(
+  "fixes a same-commit fourth successor only after the exact third-session exhaustion grant",
+  () => runHermeticMvpJourney(false, false, false, false, true, true),
   240_000
 )

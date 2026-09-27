@@ -24,11 +24,17 @@ import { IntegratorJournalContradiction } from "../../workflow/protocols/integra
 import { ExpectedAcceptedPrefixPosition, Journal } from "./journal.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
+  integratorSessionCapacityAfterPublicationBatchGrantForJournal,
   integratorSessionCapacityForJournal,
   type IntegratorSessionCapacity
 } from "../../workflow/protocols/integrator/session-capacity.js"
 import { IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import { remotePublicationCorrelationEquals } from "../../workflow/protocols/direct-publication/events.js"
+import { deriveRemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
+import {
+  remotePublicationBatchGrantForNextAttempt,
+  remotePublicationEventsFor
+} from "../../workflow/protocols/direct-publication/transition-journal.js"
 import { journalRecordByKey, journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { integratorCompetingHeadSuccessorAuthorizedRecordKey } from "../../workflow-journal/record-key.js"
@@ -220,7 +226,15 @@ export const authorizeIntegratorCompetingHeadSuccessor = Effect.fn(
     })
   }
   const predecessor = transition.correlation.qualifiedCandidate.run.session
-  const capacity = integratorSessionCapacityForJournal(records, predecessor)
+  const originalCapacity = integratorSessionCapacityForJournal(records, predecessor)
+  const publication = deriveRemotePublicationState(remotePublicationEventsFor(records, transition.correlation))
+  const grant = remotePublicationBatchGrantForNextAttempt(records, transition.correlation, publication)
+  const capacity =
+    originalCapacity._tag === "Exhausted" &&
+    grant !== undefined &&
+    grant.event.request.exhaustionAt === transition.remotePublicationRetainedAt
+      ? integratorSessionCapacityAfterPublicationBatchGrantForJournal(records, predecessor, grant.position)
+      : originalCapacity
   const lastPosition = records.lastPosition
   if (!automaticAuthorizationCanBeRecorded(capacity, lastPosition)) {
     return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")

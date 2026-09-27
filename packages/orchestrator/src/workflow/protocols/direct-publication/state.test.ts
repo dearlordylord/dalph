@@ -29,6 +29,7 @@ import {
   remotePublicationRefspecFor
 } from "./events.js"
 import { deriveRemotePublicationState } from "./state.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 
 const target = RemotePublicationTarget.make({
   branch: RemotePublicationBranchRef.make("refs/heads/main"),
@@ -93,6 +94,27 @@ it("derives exact publication proof only after its numbered intent", () => {
     deriveRemotePublicationState([
       outerIntent,
       attempt,
+      RemotePublicationSucceededEvent.make({
+        correlation,
+        occurrenceClassification: "NonActionOccurrence",
+        proof,
+        version: workflowJournalEventVersion
+      })
+    ])
+  ).toEqual({ _tag: "PublicationSucceeded", correlation, proof })
+})
+
+it("derives publication proof for a successor candidate whose first intent uses the responsibility grant", () => {
+  const grantAt = JournalPosition.make(42)
+  const grantedAttempt = RemotePublicationAttemptIntendedEvent.make({ ...attempt, batchGrantAt: grantAt })
+  const proof = RemotePublicationProofBasis.cases.PushApplied.make({
+    attemptOrdinal: grantedAttempt.attemptOrdinal,
+    remoteHead: correlation.qualifiedCandidate.candidateCommit
+  })
+  expect(
+    deriveRemotePublicationState([
+      outerIntent,
+      grantedAttempt,
       RemotePublicationSucceededEvent.make({
         correlation,
         occurrenceClassification: "NonActionOccurrence",
@@ -322,13 +344,14 @@ it("retains an exact competing head only as the terminal outcome", () => {
   })
   expect(deriveRemotePublicationState([outerIntent, retained])).toEqual({
     _tag: "PublicationRetained",
+    attemptOrdinalsInBatch: [],
     authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     cause,
     correlation
   })
   expect(deriveRemotePublicationState([outerIntent, retained, attempt])).toEqual({
     _tag: "PublicationContradiction",
-    detail: "publication attempt after retained outcome requires a new exact resume receipt"
+    detail: "publication attempt after retained outcome requires a new exact batch grant or resume receipt"
   })
 })
 
