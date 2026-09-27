@@ -4,6 +4,7 @@ import {
 } from "../../../orchestrator/test/support/direct-publication.js"
 import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
+import { projectRecordedCassette, verifyRecordedCassetteRoundTrip } from "../../src/cassettes/recorded.js"
 // @effect-diagnostics multipleEffectProvide:off
 import {
   AttemptId,
@@ -3377,6 +3378,14 @@ it.effect("production Run defers a real exhausted publication batch through Paus
           )
       ).toBe(true)
       expect(resumedRecords.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+      const recorded = yield* projectRecordedCassette(resumedRecords)
+      expect(recorded.entries.filter(({ _tag }) => _tag === "RemotePublicationBatchGrantApplied")).toHaveLength(1)
+      expect(
+        verifyRecordedCassetteRoundTrip(resumedRecords, recorded).every(
+          ({ operationalStateEquivalent, pureSelectionEquivalent, workflowHistoryEquivalent }) =>
+            workflowHistoryEquivalent && operationalStateEquivalent && pureSelectionEquivalent
+        )
+      ).toBe(true)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
