@@ -740,6 +740,71 @@ it.effect("retries an exact paused grant after a precommit crash in memory", () 
   })
 )
 
+it.effect("reconciles an applied granted push after its response is lost without another push", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(buildJournal())
+    const inRunJournal = Context.get(context, InRunJournal)
+    const acceptedJournal = Context.get(context, AcceptedJournalReader)
+    const journal = Context.get(context, Journal)
+    yield* actualExhaustionPrefix(inRunJournal)
+    yield* applyRealPause(inRunJournal, acceptedJournal)
+    const retained = Array.from(journalRecordsOfKind((yield* journal.state.get).prefix, "RemotePublicationRetained"))
+      .filter(({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted")
+      .at(-1)
+    if (retained === undefined) return yield* Effect.die("actual exhaustion is missing")
+    const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+      runId,
+      journal,
+      grantRequest("memory-granted-push-lost-response", retained.position)
+    )
+    yield* applyRealUnpause(inRunJournal, acceptedJournal)
+    const remoteApplied = yield* Ref.make(false)
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const git = RemotePublicationGit.of({
+      admit: () => Effect.die("destination admission precedes this accepted candidate"),
+      prepareSenderCustody: (_, ordinal) => Ref.update(chronology, (events) => [...events, `prepare:${ordinal}`]),
+      reconcileSenderCustody: (_, ordinal) => Ref.update(chronology, (events) => [...events, `custody:${ordinal}`]),
+      observe: () =>
+        Ref.update(chronology, (events) => [...events, "observe"]).pipe(
+          Effect.andThen(Ref.get(remoteApplied)),
+          Effect.map((applied) =>
+            applied
+              ? RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: candidate.candidateCommit })
+              : RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                  remoteHead: candidate.run.session.expectedTargetHead
+                })
+          )
+        ),
+      push: (_request, ordinal) =>
+        Ref.update(chronology, (events) => [...events, `push:${ordinal}`]).pipe(
+          Effect.andThen(Ref.set(remoteApplied, true)),
+          Effect.andThen(Effect.die("host lost the applied granted push response"))
+        )
+    })
+    const engine = makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+    const publish = engine
+      .runRemotePublication(candidate, remotePublicationTargetForTest, {
+        runObservation: (phase) => phase,
+        runSender: (phase) => phase
+      })
+      .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
+    expect((yield* Effect.exit(publish))._tag).toBe("Failure")
+    const afterLoss = yield* journal.state.get
+    const attemptsAfterLoss = Array.from(journalRecordsOfKind(afterLoss.prefix, "RemotePublicationAttemptIntended"))
+    expect(attemptsAfterLoss.at(-1)?.event).toMatchObject({ attemptOrdinal: 4, batchGrantAt: grant.result.acceptedAt })
+    expect(Array.from(journalRecordsOfKind(afterLoss.prefix, "RemotePublicationSucceeded"))).toHaveLength(0)
+    expect((yield* publish)._tag).toBe("PublicationSucceeded")
+    expect(yield* Ref.get(chronology)).toEqual(["observe", "prepare:4", "push:4", "custody:4", "observe"])
+    const afterReconcile = yield* journal.state.get
+    expect(Array.from(journalRecordsOfKind(afterReconcile.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(4)
+    expect(Array.from(journalRecordsOfKind(afterReconcile.prefix, "RemotePublicationSucceeded"))).toHaveLength(1)
+    expect(Array.from(journalRecordsOfKind(afterReconcile.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(
+      1
+    )
+    expect(Array.from(journalRecordsOfKind(afterReconcile.prefix, "TaskAttemptPlanned"))).toHaveLength(1)
+  })
+)
+
 it.effect("replays an exact batch grant from a reopened SQLite journal after lost acknowledgement", () =>
   Effect.scoped(
     Effect.gen(function* () {
