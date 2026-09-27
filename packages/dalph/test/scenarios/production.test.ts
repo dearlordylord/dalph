@@ -3541,6 +3541,22 @@ it.effect("production Run defers a real exhausted publication batch through Paus
           waitRecords.filter(({ event }) => event._tag === "IntegrationFinalitySettled"),
           wait.name
         ).toHaveLength(0)
+        expect(
+          waitRecords
+            .slice(pausedRecords.length)
+            .filter(({ event }) =>
+              [
+                "RemotePublicationSucceeded",
+                "TargetPromotionIntended",
+                "TargetPromotionObservedSuccess",
+                "CompletionTaskAttemptIntended",
+                "CompletionTaskAcknowledged",
+                "IntegratorCandidateCleanupAuthorized",
+                "IntegratorCandidateCleanupSettled"
+              ].includes(event._tag)
+            ),
+          wait.name
+        ).toHaveLength(0)
       }
       yield* Ref.set(currentGraph, graph.snapshot)
       yield* Ref.set(currentClaim, accepted.activeClaim)
