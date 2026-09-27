@@ -141,14 +141,17 @@ const journalFromStore = Effect.fn("RemotePublicationBatchGrantTest.journalFromS
 })
 
 const actualExhaustionPrefix = Effect.fn("RemotePublicationBatchGrantTest.reachActualExhaustion")(function* (
-  inRunJournal: InRunJournal["Service"]
+  inRunJournal: InRunJournal["Service"],
+  expectedObservations = 4,
+  expectedPushes = 3
 ) {
   const pushes = yield* Ref.make(0)
   const observations = yield* Ref.make(0)
+  const chronology = yield* Ref.make<ReadonlyArray<string>>([])
   const git = RemotePublicationGit.of({
     admit: () => Effect.die("destination admission is outside this exact candidate publication test"),
     prepareSenderCustody: () => Effect.void,
-    reconcileSenderCustody: () => Effect.void,
+    reconcileSenderCustody: (_, ordinal) => Ref.update(chronology, (events) => [...events, `reconcile:${ordinal}`]),
     observe: () =>
       Ref.update(observations, (count) => count + 1).pipe(
         Effect.as(
@@ -158,7 +161,8 @@ const actualExhaustionPrefix = Effect.fn("RemotePublicationBatchGrantTest.reachA
         )
       ),
     push: () =>
-      Ref.update(pushes, (count) => count + 1).pipe(
+      Ref.update(chronology, (events) => [...events, "push"]).pipe(
+        Effect.andThen(Ref.update(pushes, (count) => count + 1)),
         Effect.as(RemotePublicationPushResult.cases.RejectedNonFastForward.make({}))
       )
   })
@@ -178,9 +182,9 @@ const actualExhaustionPrefix = Effect.fn("RemotePublicationBatchGrantTest.reachA
       .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
   }
   expect(result).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "AttemptsExhausted" } })
-  expect(yield* Ref.get(observations)).toBe(4)
-  expect(yield* Ref.get(pushes)).toBe(3)
-  return { engine, git, observations, pushes }
+  expect(yield* Ref.get(observations)).toBe(expectedObservations)
+  expect(yield* Ref.get(pushes)).toBe(expectedPushes)
+  return { chronology, engine, git, observations, pushes }
 })
 
 const grantRequest = (requestId: string, exhaustionAt: RemotePublicationBatchGrantRequest["exhaustionAt"]) =>
@@ -644,7 +648,63 @@ it.effect("replays an exact batch grant from a reopened SQLite journal without a
           ).toHaveLength(1)
 
           yield* applyRealUnpause(inRunJournal, acceptedJournal)
-          const { pushes } = yield* actualExhaustionPrefix(inRunJournal)
+          const pushCalls = yield* Ref.make(0)
+          const grantAt = committed.acceptedAt
+          const loseAcknowledgementAfterIntent = InRunJournal.of({
+            append: (requestedRunId, key, event) =>
+              inRunJournal
+                .append(requestedRunId, key, event)
+                .pipe(
+                  Effect.flatMap((record) =>
+                    event._tag === "RemotePublicationAttemptIntended" && event.batchGrantAt === grantAt
+                      ? Effect.die("host stopped after granted intent 4 committed")
+                      : Effect.succeed(record)
+                  )
+                ),
+            read: inRunJournal.read
+          })
+          const git = RemotePublicationGit.of({
+            admit: () => Effect.die("destination admission is outside this exact candidate publication test"),
+            prepareSenderCustody: () => Effect.void,
+            reconcileSenderCustody: () => Effect.void,
+            observe: () =>
+              Effect.succeed(
+                RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                  remoteHead: candidate.run.session.expectedTargetHead
+                })
+              ),
+            push: () => Ref.update(pushCalls, (count) => count + 1).pipe(Effect.die("crash cut must precede push"))
+          })
+          const engine = makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+          const crash = yield* Effect.exit(
+            engine
+              .runRemotePublication(candidate, remotePublicationTargetForTest, {
+                runObservation: (phase) => phase,
+                runSender: (phase) => phase
+              })
+              .pipe(
+                Effect.provideService(InRunJournal, loseAcknowledgementAfterIntent),
+                Effect.provideService(RemotePublicationGit, git)
+              )
+          )
+          expect(crash._tag).toBe("Failure")
+          expect(yield* Ref.get(pushCalls)).toBe(0)
+          const afterCrash = yield* journal.state.get
+          expect(Array.from(journalRecordsOfKind(afterCrash.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(
+            4
+          )
+        })
+      )
+
+      yield* openSqlite((store) =>
+        Effect.gen(function* () {
+          const { inRunJournal, journal } = yield* journalFromStore(store)
+          const reopenedBeforeReconcile = yield* journal.state.get
+          expect(
+            Array.from(journalRecordsOfKind(reopenedBeforeReconcile.prefix, "RemotePublicationAttemptIntended"))
+          ).toHaveLength(4)
+          const { chronology, pushes } = yield* actualExhaustionPrefix(inRunJournal, 3, 2)
+          expect((yield* Ref.get(chronology))[0]).toBe("reconcile:4")
           const afterBatch = yield* journal.state.get
           const grantRecord = Array.from(
             journalRecordsOfKind(afterBatch.prefix, "RemotePublicationBatchGrantApplied")
@@ -664,7 +724,7 @@ it.effect("replays an exact batch grant from a reopened SQLite journal without a
               .slice(3)
               .map(({ event }) => (event._tag === "RemotePublicationAttemptIntended" ? event.batchGrantAt : undefined))
           ).toEqual([grantRecord?.position, grantRecord?.position, grantRecord?.position])
-          expect(yield* Ref.get(pushes)).toBe(3)
+          expect(yield* Ref.get(pushes)).toBe(2)
         })
       )
 
