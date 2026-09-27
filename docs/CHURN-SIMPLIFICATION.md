@@ -44,20 +44,18 @@ These parts of the proposed sampling demotion remain outstanding.
 
 The publication refactor is implemented in `publication-continuation.ts` and
 consumed once per responsibility by frontier actions, target retention, and
-visible waits. Its independent standards and specification reviews found no
-new blocker. It is not fully qualified: the copied integration snapshot had
-315 typecheck errors before this refactor, reproduced with identical error
-codes and source locations after the refactor. These include unfinished cleanup
-service wiring, executor event typing, and publication fixture schema updates.
-No live integration worktree was modified.
+visible waits. Independent standards and specification reviews found no new
+semantic blocker. Its focused frontier, authorization recovery, and resume suites
+pass all 58 tests after four fixture events and their record keys were updated to
+the existing authorization schema. The production composition proof is recorded
+below. Full qualification remains blocked by package declaration generation.
 
-The focused frontier, authorization recovery, and resume suites now pass all 58
-tests after four fixture events and their record keys were updated to the existing
-required authorization schema. The production Pause/Exit selectors each pass.
-These are existing behavioral assertions, not a substitute for row 8's new
-production composition fixture. Row 8 remains unimplemented; hosted assurance
-selection and per-model formal granularity also remain pending. No delivery-time
-improvement or live-host proof is claimed.
+The copied integration snapshot initially had 315 typecheck errors, reproduced
+with identical codes and source locations before and after the refactor. Focused
+repairs to those inherited declarations and fixtures are described below. No live
+integration worktree was modified. Hosted assurance selection and per-model
+formal granularity remain pending. No delivery-time improvement or live-host proof
+is claimed.
 
 ## Qualification repair evidence
 
@@ -98,4 +96,39 @@ suites establish the existing behavior. Required mappings are:
 
 The refactor itself performs no external call and adds no crash boundary; crashes
 and retries are therefore tested at the retained interpreter/journal boundaries.
-New composition proof is required before row 8 is considered complete.
+The exact new composition proof and its remaining build qualification limit are recorded below.
+
+
+## Production composition proof and remaining build failure
+
+`packages/dalph/test/scenarios/publication-composition.test.ts` now owns the two
+moved Pause/Exit assertions and ten new production-interpreter cases. Every new
+case runs on both Memory and SQLite. The SQLite reopen case releases and rebuilds
+the production application after the receipt and before fixation. The controlled
+provider stops the process after the real interpreter has fixed S2; exact receipt
+replay after reopening must leave every record unchanged.
+
+| Accepted chronology | Exact test selector (each Memory and SQLite) |
+| --- | --- |
+| Receipt before authorization | `composes ReceiptBeforeAuthorization through production continuation and exact replay` |
+| R1 authorization, receipt R2 before fixation | `composes ReceiptAfterAuthorization through production continuation and exact replay` |
+| Reopen after receipt before fixation | `composes ReopenAfterReceipt through production continuation and exact replay` |
+| Pause after receipt preserves cutoff | `composes PauseAfterReceipt through production continuation and exact replay` |
+| Exit after receipt preserves cutoff | `composes ExitAfterReceipt through production continuation and exact replay` |
+
+All twelve cases passed in 9.45 seconds, then in 5.67 seconds with explicit
+successor identity assertions. The fixture checks one authorization, one successor,
+exact original authorization reuse, retained task/Base/accepted commit/FIFO target,
+no additional task begin, exact replay identity, and no forbidden control-cutoff
+calls. Existing bootstrap tests remain the owner of accepted-fact wake counts.
+No live-provider proof is implied.
+
+The inherited typecheck errors were repaired through missing fixture authorization,
+accurate existing variant unions, removal of a spurious externally required service,
+and an explicit dry-run scope. Of 229 focused regression tests, 228 passed together;
+the one property test that exceeded ten seconds under contention passed unchanged
+alone in 2.51 seconds. The full production package build still fails with TS4023
+`NodeInspectSymbol` errors in inferred public return types. This is an artifact
+qualification blocker, separate from runtime test success. The next diagnostic is
+to identify the originating public effect/error type in the package declarations;
+no gate or declaration check has been waived.
