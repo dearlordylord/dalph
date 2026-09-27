@@ -360,6 +360,10 @@ custody without rewriting that child result. Missing terminal receipts remain
 `UNPROVEN`; successful earlier stages are not a
 final green gate. Interrupted ordinary candidate checks restart from the beginning
 after reconciliation. No stage resume or formal reuse is credited by `check:all`.
+The enclosing cleanup negative-control fixture waits for its descendant's
+readiness byte before releasing the controller. This makes the required failed
+absence observation independent of test-file scheduling; it changes no gate
+runtime behavior or custody rule.
 Standalone `check:quint --force` remains available for formal diagnostics.
 Automatic MBT is temporarily excluded pending #363.
 
