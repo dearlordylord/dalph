@@ -805,6 +805,107 @@ it.effect("reconciles an applied granted push after its response is lost without
   })
 )
 
+it.effect("reconciles an applied granted push from reopened SQLite without another push", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-granted-push-recovery-" })
+      const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+      const openSqlite = <A, E, R>(use: (store: JournalStore["Service"]) => Effect.Effect<A, E, R>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            return yield* use(yield* JournalStore)
+          }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+        )
+      yield* openSqlite(seedSqlitePrefix)
+      const remoteApplied = yield* Ref.make(false)
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const git = RemotePublicationGit.of({
+        admit: () => Effect.die("destination admission precedes this accepted candidate"),
+        prepareSenderCustody: (_, ordinal) => Ref.update(chronology, (events) => [...events, `prepare:${ordinal}`]),
+        reconcileSenderCustody: (_, ordinal) => Ref.update(chronology, (events) => [...events, `custody:${ordinal}`]),
+        observe: () =>
+          Ref.update(chronology, (events) => [...events, "observe"]).pipe(
+            Effect.andThen(Ref.get(remoteApplied)),
+            Effect.map((applied) =>
+              applied
+                ? RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: candidate.candidateCommit })
+                : RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                    remoteHead: candidate.run.session.expectedTargetHead
+                  })
+            )
+          ),
+        push: (_request, ordinal) =>
+          Ref.update(chronology, (events) => [...events, `push:${ordinal}`]).pipe(
+            Effect.andThen(Ref.set(remoteApplied, true)),
+            Effect.andThen(Effect.die("SQLite host lost the applied granted push response"))
+          )
+      })
+      const committed = yield* openSqlite((store) =>
+        Effect.gen(function* () {
+          const { acceptedJournal, inRunJournal, journal } = yield* journalFromStore(store)
+          yield* actualExhaustionPrefix(inRunJournal)
+          yield* applyRealPause(inRunJournal, acceptedJournal)
+          const retained = Array.from(
+            journalRecordsOfKind((yield* journal.state.get).prefix, "RemotePublicationRetained")
+          )
+            .filter(
+              ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "AttemptsExhausted"
+            )
+            .at(-1)
+          if (retained === undefined) return yield* Effect.die("actual SQLite exhaustion is missing")
+          const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+            runId,
+            journal,
+            grantRequest("sqlite-granted-push-lost-response", retained.position)
+          )
+          yield* applyRealUnpause(inRunJournal, acceptedJournal)
+          const engine = makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+          expect(
+            (yield* Effect.exit(
+              engine
+                .runRemotePublication(candidate, remotePublicationTargetForTest, {
+                  runObservation: (phase) => phase,
+                  runSender: (phase) => phase
+                })
+                .pipe(
+                  Effect.provideService(InRunJournal, inRunJournal),
+                  Effect.provideService(RemotePublicationGit, git)
+                )
+            ))._tag
+          ).toBe("Failure")
+          const pending = yield* journal.state.get
+          expect(
+            Array.from(journalRecordsOfKind(pending.prefix, "RemotePublicationAttemptIntended")).at(-1)?.event
+          ).toMatchObject({ attemptOrdinal: 4, batchGrantAt: grant.result.acceptedAt })
+          return grant.result.acceptedAt
+        })
+      )
+      yield* openSqlite((store) =>
+        Effect.gen(function* () {
+          const { inRunJournal, journal } = yield* journalFromStore(store)
+          const engine = makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
+          const result = yield* engine
+            .runRemotePublication(candidate, remotePublicationTargetForTest, {
+              runObservation: (phase) => phase,
+              runSender: (phase) => phase
+            })
+            .pipe(Effect.provideService(InRunJournal, inRunJournal), Effect.provideService(RemotePublicationGit, git))
+          expect(result._tag).toBe("PublicationSucceeded")
+          expect(yield* Ref.get(chronology)).toEqual(["observe", "prepare:4", "push:4", "custody:4", "observe"])
+          const after = yield* journal.state.get
+          expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationAttemptIntended"))).toHaveLength(4)
+          expect(Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationSucceeded"))).toHaveLength(1)
+          expect(
+            Array.from(journalRecordsOfKind(after.prefix, "RemotePublicationBatchGrantApplied"))[0]?.position
+          ).toBe(committed)
+        })
+      )
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+  )
+)
+
 it.effect("replays an exact batch grant from a reopened SQLite journal after lost acknowledgement", () =>
   Effect.scoped(
     Effect.gen(function* () {
