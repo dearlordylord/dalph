@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
-import { Context, Effect, Layer, Ref, Schema, type Stream } from "effect"
+import { Context, Effect, type Layer, Ref, Schema, type Stream } from "effect"
 import { journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
 import { DeliveryCleanupBoundary } from "../delivery/delivery-cleanup-boundary.js"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
@@ -412,7 +412,6 @@ type RunJournaledDeliveryEffect<E, R> = Effect.Effect<
   | DeliveryRuntimeResources
   | RunActivationGraphBaseline
   | DispositionCleanupActivation
-  | DeliveryCleanupBoundary
   | Effect.Services<ReactiveDeliveryRelationsEffect>
   | Exclude<Effect.Services<StabilizedDeliveryEffect>, ReactiveDeliveryRelations | DeliveryActionExecutor>
 >
@@ -502,14 +501,12 @@ export type RunWorkflowEffect<EInitial, RInitial> = ActivatedRunEffect<
   Effect.Services<LiveJournaledDeliveryEffect>
 >
 
-type CancellationApplicationEffect = ReturnType<
-  JournaledRunBootstrapService["operatorControl"]["applyRunCancellation"]
->
+type CancellationApplicationEffect = ReturnType<JournaledRunBootstrapService["operatorControl"]["applyRunCancellation"]>
 
 type CancellationProgramEffect = Effect.Effect<
   RunFinalityProof,
   Effect.Error<CancellationApplicationEffect> | Effect.Error<LiveJournaledDeliveryEffect>,
-  Effect.Services<CancellationApplicationEffect> | Effect.Services<LiveJournaledDeliveryEffect>
+  Effect.Services<LiveJournaledDeliveryEffect>
 >
 
 /** Explicit controlled composition; production callers use {@link runWorkflow}. */
@@ -585,7 +582,11 @@ export type RunCancellationWorkflow = <EInitial, RInitial>(
   runId: AllocatedWorkflowRunId
 ) => Effect.Effect<
   RunFinalityDecision,
-  Effect.Error<CancellationProgramEffect> | EInitial | ApplicationExiting | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
+  | Effect.Error<CancellationProgramEffect>
+  | EInitial
+  | ApplicationExiting
+  | JournaledRunBootstrapError
+  | JournaledRunIdentityMismatch,
   RInitial | JournaledRunBootstrap | Exclude<Effect.Services<CancellationProgramEffect>, JournaledRunServices>
 >
 
@@ -651,26 +652,22 @@ export type RunWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorit
   Effect.Services<RunJournaledDeliveryEffect<E, R>>
 >
 
-export const runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh: RunWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh = <
-  EInitial,
-  RInitial,
-  E,
-  R
->(
-  target: TrackerTarget,
-  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
-  runId: AllocatedWorkflowRunId,
-  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
-  source: ActiveWorkAuthorityRefreshSource,
-  activateCleanup = true
-) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.activateActiveWorkAuthorityRefresh(
-      target,
-      initialControlPolicySource,
-      runId,
-      (opportunity) => runJournaledDelivery(runId, target, executorFactory, activateCleanup, opportunity),
-      source
-    )
-  })
+export const runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh: RunWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh =
+  <EInitial, RInitial, E, R>(
+    target: TrackerTarget,
+    initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+    runId: AllocatedWorkflowRunId,
+    executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
+    source: ActiveWorkAuthorityRefreshSource,
+    activateCleanup = true
+  ) =>
+    Effect.gen(function* () {
+      const bootstrap = yield* JournaledRunBootstrap
+      return yield* bootstrap.activateActiveWorkAuthorityRefresh(
+        target,
+        initialControlPolicySource,
+        runId,
+        (opportunity) => runJournaledDelivery(runId, target, executorFactory, activateCleanup, opportunity),
+        source
+      )
+    })

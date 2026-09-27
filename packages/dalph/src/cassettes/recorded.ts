@@ -672,7 +672,7 @@ const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): Record
   )
 
 type IntegrationPreparationEvent = TargetPromotionEvent | IntegrationFinalityEvent
-type RecordedIntegrationPreparationEntry = RecordedTargetPromotionEntry
+type RecordedIntegrationPreparationEntry = RecordedTargetPromotionEntry | RecordedIntegrationFinalityEntry
 
 const isIntegrationPreparationEvent = (event: WorkflowJournalEvent): event is IntegrationPreparationEvent =>
   isTargetPromotionEvent(event) || isIntegrationFinalityTagged(event)
@@ -2219,11 +2219,9 @@ const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): st
   })
 
 const lyricForTaskBoundaryEntry = (
-  entry: Exclude<
+  entry: Extract<
     RecordedCassetteEntry,
-    | RecordedAttemptStopEntry
-    | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
-    | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+    { readonly _tag: TaskBoundaryEvent["_tag"] | "AttemptRestartAuthorityReadFailed" }
   >
 ): string => {
   if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
@@ -2268,7 +2266,17 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
   })
 
 type RecordedOtherEntry = Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>
-type RecordedPresentationResidualEntry = Exclude<RecordedOtherEntry, RecordedAttemptStopEntry>
+type RecordedPresentationResidualEntry = Exclude<
+  RecordedOtherEntry,
+  | RecordedAttemptStopEntry
+  | RecordedCleanupEntry
+  | RecordedOperatorDirectionEntry
+  | RecordedOuterIntegratorEntry
+  | RecordedIntegrationQuarantineEntry
+  | RecordedIntegrationPreparationEntry
+  | RecordedRemotePublicationEntry
+  | RecordedRemoteBaselineEntry
+>
 
 const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)

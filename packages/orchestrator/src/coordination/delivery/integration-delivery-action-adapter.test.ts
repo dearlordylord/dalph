@@ -647,6 +647,7 @@ it.effect(
         version: workflowJournalEventVersion
       })
       const retained = RemotePublicationRetainedEvent.make({
+        authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
         cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({ mergeBase, remoteHead }),
         correlation,
         occurrenceClassification: "NonActionOccurrence",
@@ -961,6 +962,7 @@ it.effect("rejects a foreign S2 authorization record returned by conditional app
       version: workflowJournalEventVersion
     })
     const retained = RemotePublicationRetainedEvent.make({
+      authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
       cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({ mergeBase, remoteHead }),
       correlation,
       occurrenceClassification: "NonActionOccurrence",
