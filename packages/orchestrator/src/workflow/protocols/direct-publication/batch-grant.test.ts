@@ -514,11 +514,14 @@ it.effect(
       }
       const noPermission = deriveIntegrationFrontier(history.runState, {
         ...sharedFacts,
-        currentTrackerTaskIds: new Set(),
+        currentTrackerTaskIds: new Set([accepted.plannedAttempt.taskId]),
+        ineligibleCurrentTaskIds: new Set([accepted.plannedAttempt.taskId]),
         taskClaimAuthorityByAttemptId: new Map([[accepted.plannedAttempt.attemptId, { _tag: "Exact" as const }]])
       })
       expect(noPermission.transitions.map(({ _tag }) => _tag)).toEqual(["ReleaseStartedIntegrationTarget"])
-      expect(noPermission.explanations.map(({ _tag }) => _tag)).toContain("IntegrationTrackerFactsWait")
+      expect(deriveRunFinalityDecision(noPermission, history.runState.responsibility, true)._tag).toBe(
+        "RunMustRemainActive"
+      )
       const foreignClaim = deriveIntegrationFrontier(history.runState, {
         ...sharedFacts,
         currentTrackerTaskIds: new Set([accepted.plannedAttempt.taskId]),

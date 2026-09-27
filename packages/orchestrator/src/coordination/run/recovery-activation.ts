@@ -67,7 +67,7 @@ import {
 } from "../admission/integration-target-resource.js"
 import { OperationId } from "../../workflow/identity.js"
 import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
-import { isDependencySatisfied } from "../../authorities/task-tracker/task.js"
+import { isDependencySatisfied, isTaskOpen } from "../../authorities/task-tracker/task.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
   latestTaskClaimReacquisitionDirection,
@@ -3937,6 +3937,12 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   const currentTrackerTaskIds = new Set(
     currentTaskGraph?.taskIds().filter((taskId) => currentGraphObservationForTask(taskId) !== undefined) ?? []
   )
+  const ineligibleCurrentTaskIds = new Set(
+    [...currentTrackerTaskIds].filter((taskId) => {
+      const lifecycle = currentTaskGraph === undefined ? Option.none() : currentTaskGraph.lifecycleOf(taskId)
+      return Option.match(lifecycle, { onNone: () => false, onSome: (value) => !isTaskOpen(value) })
+    })
+  )
   const responsibilityFacts = deriveJournalResponsibilityFacts(
     settlementRunState,
     activationBaselinePosition,
@@ -4306,6 +4312,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   const integration = deriveIntegrationFrontier(runState, {
     ...integrationResourceSnapshot,
     currentTrackerTaskIds,
+    ineligibleCurrentTaskIds,
     integrationTarget,
     targetLineageByAttemptId,
     targetLineageRefreshRequiredAttemptIds,

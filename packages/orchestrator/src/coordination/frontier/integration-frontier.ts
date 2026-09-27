@@ -23,6 +23,8 @@ export interface IntegrationFrontierRuntimeFacts {
   /** Tasks covered by a complete graph observation committed in this activation. */
   readonly activeResponsibilities?: ReadonlyArray<IntegrationResponsibilityIdentity>
   readonly currentTrackerTaskIds: ReadonlySet<TaskId>
+  /** Fresh graph subjects whose current lifecycle cannot authorize further integration work. */
+  readonly ineligibleCurrentTaskIds?: ReadonlySet<TaskId>
   readonly heldResponsibilities: ReadonlyArray<IntegrationResponsibilityIdentity>
   readonly integrationTarget: Option.Option<IntegrationTarget>
   readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>

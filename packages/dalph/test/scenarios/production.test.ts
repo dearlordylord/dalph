@@ -3159,6 +3159,7 @@ it.effect("production Run defers a real exhausted publication batch through Paus
       })
       const candidate = qualified.qualifiedCandidate
       const activity = yield* Ref.make({ admissions: 0, observations: 0, pushes: 0 })
+      const alreadyPublished = yield* Ref.make(false)
       const remoteGit = RemotePublicationGit.of({
         admit: () =>
           Ref.update(activity, (current) => ({ ...current, admissions: current.admissions + 1 })).pipe(
@@ -3171,11 +3172,19 @@ it.effect("production Run defers a real exhausted publication batch through Paus
         prepareSenderCustody: () => Effect.void,
         reconcileSenderCustody: () => Effect.void,
         observe: () =>
-          Ref.update(activity, (current) => ({ ...current, observations: current.observations + 1 })).pipe(
-            Effect.as(
-              RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
-                remoteHead: candidate.run.session.expectedTargetHead
-              })
+          Ref.get(alreadyPublished).pipe(
+            Effect.flatMap((published) =>
+              Ref.update(activity, (current) => ({ ...current, observations: current.observations + 1 })).pipe(
+                Effect.as(
+                  published
+                    ? RemotePublicationGitObservation.cases.CandidateCurrent.make({
+                        remoteHead: candidate.candidateCommit
+                      })
+                    : RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                        remoteHead: candidate.run.session.expectedTargetHead
+                      })
+                )
+              )
             )
           ),
         push: () =>
@@ -3237,12 +3246,14 @@ it.effect("production Run defers a real exhausted publication batch through Paus
         tasks: [{ id: attempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
       })
       if (graph._tag === "Invalid") return yield* Effect.die("production grant tracker graph must be valid")
+      const currentGraph = yield* Ref.make(graph.snapshot)
+      const currentClaim = yield* Ref.make(accepted.activeClaim)
       const localGitCalls = yield* Ref.make<ReadonlyArray<unknown>>([])
       const tracker = Layer.succeed(
         TrackerMutation,
         TrackerMutation.of({
           acquireTaskClaim: () => Effect.die("grant recovery must retain the exact accepted claim"),
-          readTaskClaim: () => Effect.succeed(accepted.activeClaim),
+          readTaskClaim: () => Ref.get(currentClaim),
           releaseTaskClaim: () => Effect.die("grant recovery must not release the task claim")
         })
       )
@@ -3259,8 +3270,44 @@ it.effect("production Run defers a real exhausted publication batch through Paus
           remotePublicationTarget: remotePublicationTargetForTest,
           targetPromotion: {
             git: {
-              compareAndSet: () => Effect.die("exhausted publication must not promote the target"),
-              read: () => Effect.die("exhausted publication must not read target promotion")
+              compareAndSet: (request) =>
+                Ref.get(alreadyPublished).pipe(
+                  Effect.flatMap((published) =>
+                    published
+                      ? git
+                          .runInWorktree(directory, [
+                            "update-ref",
+                            request.integrationTarget.ref,
+                            request.candidateCommit,
+                            request.expectedTargetHead
+                          ])
+                          .pipe(
+                            Effect.orDie,
+                            Effect.flatMap((result) =>
+                              result.exitCode === 0
+                                ? Effect.succeed(
+                                    TargetPromotionCompareAndSetResult.cases.Applied.make({
+                                      newHeadSha: request.candidateCommit
+                                    })
+                                  )
+                                : Effect.die(`already-published target compare-and-set failed: ${result.stderr}`)
+                            )
+                          )
+                      : Effect.die("exhausted publication must not promote the target")
+                  )
+                ),
+              read: () =>
+                Ref.get(alreadyPublished).pipe(
+                  Effect.flatMap((published) =>
+                    published
+                      ? Effect.succeed(
+                          TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+                            currentHeadSha: candidate.candidateCommit
+                          })
+                        )
+                      : Effect.die("exhausted publication must not read target promotion")
+                  )
+                )
             }
           },
           workflowGitCommandObserver: (boundary) => Ref.update(localGitCalls, (calls) => [...calls, boundary])
@@ -3270,7 +3317,7 @@ it.effect("production Run defers a real exhausted publication batch through Paus
           Layer.succeed(
             TrackerGraphReader,
             TrackerGraphReader.of({
-              read: () => Effect.succeed(graph.snapshot),
+              read: () => Ref.get(currentGraph),
               readTaskWorkSpecification: () => Effect.succeed(accepted.specification)
             })
           )
@@ -3420,6 +3467,84 @@ it.effect("production Run defers a real exhausted publication batch through Paus
       expect(yield* Ref.get(activity)).toEqual(beforeExit)
       expect(yield* Ref.get(localGitCalls)).toEqual([])
 
+      const ineligible = projectTrackerSnapshot({
+        revision: "production-grant-pause-ineligible",
+        tasks: [
+          { id: attempt.taskId, lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      })
+      if (ineligible._tag === "Invalid") return yield* Effect.die("ineligible tracker graph must be valid")
+      const foreignClaim = ActiveTaskClaim.make({
+        ...accepted.activeClaim,
+        token: ClaimToken.make("production-grant-pause-foreign-token")
+      })
+      for (const wait of [
+        { name: "permission", graph: ineligible.snapshot, claim: accepted.activeClaim },
+        { name: "claim", graph: graph.snapshot, claim: foreignClaim }
+      ]) {
+        const waitDatabase = JournalDatabaseLocator.make(`${directory}/${wait.name}-wait.sqlite`)
+        yield* seedExitPrefix(pausedRecords, waitDatabase)
+        yield* Ref.set(currentGraph, wait.graph)
+        yield* Ref.set(currentClaim, wait.claim)
+        const beforeWaitActivity = yield* Ref.get(activity)
+        const waitDecision = yield* Effect.gen(function* () {
+          const bootstrap = yield* JournaledRunBootstrap
+          yield* bootstrap.operatorControl.applyControlDirection({
+            direction: "Unpause",
+            subject: { _tag: "Run", runId: accepted.runId }
+          })
+          return yield* run()
+        }).pipe(
+          Effect.provide(application),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: waitDatabase })))
+        )
+        expect(waitDecision._tag, wait.name).toBe("RunMustRemainActive")
+        const waitRecords = yield* Effect.gen(function* () {
+          return yield* (yield* JournalStore).read(accepted.runId)
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: waitDatabase })))
+        expect(
+          waitRecords.some(
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.observation._tag === "CompleteTaskTrackerFacts" &&
+              event.observation.factFamilies[0].contentIdentity ===
+                (wait.name === "permission" ? "production-grant-pause-ineligible" : "production-grant-pause-current")
+          ),
+          wait.name
+        ).toBe(true)
+        expect(
+          waitRecords.some(
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.observation._tag === "FocusedTaskClaimFacts" &&
+              event.observation.observation._tag === "ActiveTaskClaim" &&
+              event.observation.observation.token === wait.claim.token
+          ),
+          wait.name
+        ).toBe(true)
+        const afterWaitActivity = yield* Ref.get(activity)
+        expect(afterWaitActivity.observations, wait.name).toBe(beforeWaitActivity.observations)
+        expect(afterWaitActivity.pushes, wait.name).toBe(beforeWaitActivity.pushes)
+        expect(
+          waitRecords.filter(({ event }) => event._tag === "RemotePublicationBatchGrantApplied"),
+          wait.name
+        ).toHaveLength(1)
+        expect(
+          waitRecords.filter(({ event }) => event._tag === "IntegratorSessionFixed"),
+          wait.name
+        ).toHaveLength(1)
+        expect(
+          waitRecords.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended"),
+          wait.name
+        ).toHaveLength(3)
+        expect(
+          waitRecords.filter(({ event }) => event._tag === "IntegrationFinalitySettled"),
+          wait.name
+        ).toHaveLength(0)
+      }
+      yield* Ref.set(currentGraph, graph.snapshot)
+      yield* Ref.set(currentClaim, accepted.activeClaim)
+
       const resumedDecision = yield* Effect.gen(function* () {
         const bootstrap = yield* JournaledRunBootstrap
         yield* bootstrap.operatorControl.applyControlDirection({
@@ -3463,6 +3588,35 @@ it.effect("production Run defers a real exhausted publication batch through Paus
             workflowHistoryEquivalent && operationalStateEquivalent && pureSelectionEquivalent
         )
       ).toBe(true)
+
+      const publishedDatabase = JournalDatabaseLocator.make(`${directory}/already-published-after-grant.sqlite`)
+      yield* seedExitPrefix(pausedRecords, publishedDatabase)
+      yield* Ref.set(alreadyPublished, true)
+      const beforePublishedActivity = yield* Ref.get(activity)
+      const publishedActivation = yield* Effect.gen(function* () {
+        const bootstrap = yield* JournaledRunBootstrap
+        yield* bootstrap.operatorControl.applyControlDirection({
+          direction: "Unpause",
+          subject: { _tag: "Run", runId: accepted.runId }
+        })
+        return yield* run()
+      }).pipe(
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: publishedDatabase }))),
+        Effect.exit
+      )
+      expect(publishedActivation._tag).toBe("Success")
+      const afterPublishedActivity = yield* Ref.get(activity)
+      expect(afterPublishedActivity.pushes).toBe(beforePublishedActivity.pushes)
+      const publishedRecords = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(accepted.runId)
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: publishedDatabase })))
+      expect(publishedRecords.filter(({ event }) => event._tag === "RemotePublicationBatchGrantApplied")).toHaveLength(
+        1
+      )
+      expect(publishedRecords.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+      expect(publishedRecords.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(1)
+      expect(publishedRecords.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
