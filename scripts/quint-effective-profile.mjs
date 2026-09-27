@@ -1389,21 +1389,6 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
         "--verbosity",
         "1"
       ]
-    },
-    {
-      name: "publication exhaustion batch grant batch/finality projection exhaustive model",
-      args: [
-        "verify",
-        "specs/directPublicationBatchGrant_proof.qnt",
-        "--main",
-        "directPublicationBatchGrantBatchFinalityProof",
-        "--backend",
-        "tlc",
-        "--invariants",
-        ...directPublicationBatchGrantProjectionInvariants,
-        "--verbosity",
-        "1"
-      ]
     }
   ])
   assertQuintGateCommandContract({ manifest: commands, executed: quintGateExpectedCommandCounts })

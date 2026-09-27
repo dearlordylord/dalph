@@ -11,6 +11,5 @@ export const publicationBatchGrantQuintGateCommandKeys = Object.freeze([
   "verify\u0000publication exhaustion batch grant control projection exhaustive model",
   "test\u0000publication exhaustion batch grant batch/finality projection deterministic tests",
   "test\u0000publication exhaustion batch grant batch/finality projection negative mutation profile",
-  "sampled-run\u0000publication exhaustion batch grant batch/finality projection sampled model",
-  "verify\u0000publication exhaustion batch grant batch/finality projection exhaustive model"
+  "sampled-run\u0000publication exhaustion batch grant batch/finality projection sampled model"
 ])

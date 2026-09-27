@@ -319,7 +319,8 @@ export const directPublicationBatchGrantProjectionContract = Object.freeze({
       negativeTest: "specs/directPublicationBatchGrant_batch_finality_proof_negative_test.qnt",
       positiveMain: "directPublicationBatchGrantBatchFinalityProofTest",
       negativeMain: "directPublicationBatchGrantBatchFinalityProofNegativeTest",
-      verifyCommand: "publication exhaustion batch grant batch/finality projection exhaustive model",
+      // #408 owns exhaustive batch/finality exploration. #386 retains its
+      // deterministic positive and negative controls and one exact control proof.
       invariants: directPublicationBatchGrantObligations.invariants,
       witnesses: Object.freeze([
         "exactExhaustionReached",
@@ -827,7 +828,6 @@ export const assertDirectPublicationBatchGrantProjectionCommands = (commands) =>
     const positive = commands.find(({ name }) => name === profile.positiveCommand)
     const negative = commands.find(({ name }) => name === profile.negativeCommand)
     const sampled = commands.find(({ name }) => name === profile.sampledCommand)
-    const verify = commands.find(({ name }) => name === profile.verifyCommand)
     const expectedPositive = ["test", profile.test, "--main", profile.positiveMain]
     const expectedNegative = ["test", profile.negativeTest, "--main", profile.negativeMain]
     if (
@@ -855,17 +855,6 @@ export const assertDirectPublicationBatchGrantProjectionCommands = (commands) =>
     if (sampled.args[sampled.args.indexOf("--main") + 1] !== profile.main) {
       throw new Error(`sampled projection command ${profile.sampledCommand} selects the wrong main`)
     }
-    if (
-      !verify ||
-      verify.kind !== "verify" ||
-      verify.args[0] !== "verify" ||
-      verify.args[1] !== contract.projectionModel
-    ) {
-      throw new Error(`verify command ${profile.verifyCommand} differs from its model source`)
-    }
-    if (verify.args[verify.args.indexOf("--main") + 1] !== profile.main) {
-      throw new Error(`verify command ${profile.verifyCommand} selects the wrong main`)
-    }
     const sampleInvariantStart = sampled.args.indexOf("--invariants")
     const sampleInvariantEnd = sampled.args.indexOf("--witnesses", sampleInvariantStart)
     const sampleWitnessEnd = sampled.args.indexOf("--max-steps", sampleInvariantEnd)
@@ -884,14 +873,28 @@ export const assertDirectPublicationBatchGrantProjectionCommands = (commands) =>
     if (JSON.stringify(sampleWitnesses) !== JSON.stringify(profile.witnesses)) {
       throw new Error(`sample command ${profile.sampledCommand} witness list differs from its profile contract`)
     }
-    const invariantStart = verify.args.indexOf("--invariants")
-    const invariantEnd = verify.args.indexOf("--verbosity", invariantStart)
-    if (invariantStart < 0 || invariantEnd <= invariantStart) {
-      throw new Error(`verify command ${profile.verifyCommand} has no closed invariant argument list`)
-    }
-    const actual = verify.args.slice(invariantStart + 1, invariantEnd)
-    if (JSON.stringify(actual) !== JSON.stringify(profile.invariants)) {
-      throw new Error(`verify command ${profile.verifyCommand} invariant list differs from its profile contract`)
+    if (profile.verifyCommand !== undefined) {
+      const verify = commands.find(({ name }) => name === profile.verifyCommand)
+      if (
+        !verify ||
+        verify.kind !== "verify" ||
+        verify.args[0] !== "verify" ||
+        verify.args[1] !== contract.projectionModel
+      ) {
+        throw new Error(`verify command ${profile.verifyCommand} differs from its model source`)
+      }
+      if (verify.args[verify.args.indexOf("--main") + 1] !== profile.main) {
+        throw new Error(`verify command ${profile.verifyCommand} selects the wrong main`)
+      }
+      const invariantStart = verify.args.indexOf("--invariants")
+      const invariantEnd = verify.args.indexOf("--verbosity", invariantStart)
+      if (invariantStart < 0 || invariantEnd <= invariantStart) {
+        throw new Error(`verify command ${profile.verifyCommand} has no closed invariant argument list`)
+      }
+      const actual = verify.args.slice(invariantStart + 1, invariantEnd)
+      if (JSON.stringify(actual) !== JSON.stringify(profile.invariants)) {
+        throw new Error(`verify command ${profile.verifyCommand} invariant list differs from its profile contract`)
+      }
     }
   }
 }

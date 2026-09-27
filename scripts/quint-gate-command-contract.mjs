@@ -4,11 +4,11 @@ import { publicationBatchGrantQuintGateCommandKeys } from "./quint-gate-publicat
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
-  total: 128,
+  total: 127,
   typecheck: 19,
   test: 56,
   "sampled-run": 28,
-  verify: 25
+  verify: 24
 })
 
 export const legacyQuintGateExpectedCommandCounts = Object.freeze({
@@ -94,7 +94,7 @@ const countManifestCommands = (manifest) => {
 
 /**
  * Keep the selected command count independent from the manifest and the
- * execution path. Both representations must retain the current 128-command
+ * execution path. Both representations must retain the current 127-command
  * command contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {
