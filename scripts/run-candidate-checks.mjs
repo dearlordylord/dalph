@@ -151,6 +151,7 @@ const main = async () => {
     generatedOutputRoots: [
       ".scratch",
       "tmp",
+      "_apalache-out",
       "coverage",
       "dist",
       "packages/contracts/dist",

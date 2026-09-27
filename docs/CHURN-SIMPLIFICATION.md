@@ -229,3 +229,8 @@ declares candidate-root `tmp/` as generated output and ignores it in Git. Tracke
 observed. The full run still has no qualification credit; a focused repair check
 must allow the generated directory and reject an unrelated source write before
 another full attempt.
+
+The first repair verification then exposed `_apalache-out/`, another generated
+Quint output already ignored by Git. Both exact output roots are declared;
+verification must still reject writes outside them. This failed focused check
+did not authorize another full qualification attempt.
