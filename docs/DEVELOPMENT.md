@@ -144,6 +144,12 @@ generated hosted-formal input projection. That projection follows executable
 model-conformance adapters through their TypeScript-resolved repository import
 closure; the non-model workspace source-resolution control remains outside it. Unaffected changes retain the
 required formal check as a lightweight successful not-applicable result.
+The classifier reads exact committed root `package.json` contents at Base and
+HEAD. A change solely to `scripts.test:formal:controls` adds or changes a
+structural control without changing Quint inputs, so that package path alone
+does not start model proof. Dependency, Quint command, other package, or
+unreadable comparison changes still require formal proof. The classifier itself
+remains a governed formal input.
 
 When required, freeze the candidate and run
 `pnpm check:all --candidate=<base-sha>`. No prior stages are credited. The runner
