@@ -138,7 +138,12 @@ describe("hosted formal-model contract", () => {
     expect(aggregateJob).toMatch(
       /- name: Refuse missing formal classification\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required != 'true' && needs\.change-plan\.outputs\.formal-required != 'false'/u
     )
-    expect(aggregateJob).not.toContain("pnpm install")
+    expect(aggregateJob).toMatch(
+      /- name: Set up pnpm\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'\n\s+uses: pnpm\/action-setup@v6/u
+    )
+    expect(aggregateJob).toMatch(
+      /- name: Install dependencies\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'\n\s+run: pnpm install --frozen-lockfile/u
+    )
     expect(jobs.get("quality-preflight")?.join("\n")).toContain("\n    runs-on: ubuntu-latest")
     expect(jobs.get("quality-preflight")?.join("\n")).not.toContain("pnpm check:quint")
     expect(formalGate).toContain("Use the admitted pnpm check:quint entry point")
@@ -301,9 +306,9 @@ describe("hosted formal-model contract", () => {
     ).toEqual(["delivery-repeatability", "recorded-catalog", "coverage"])
   })
 
-  it("preserves required application checks alongside automatic local formal handoff", () => {
+  it("preserves required application checks in the candidate-local runner", () => {
     expect(packageJson.scripts["check:all"]).toBe(
-      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --local-handoff"
+      "node scripts/with-gate-slot.mjs -- node scripts/run-candidate-checks.mjs"
     )
     const stageCommands = fullQualityGateManifest("fixture-base").map(
       (stage: { args: ReadonlyArray<string> }) => stage.args[0]
@@ -326,11 +331,11 @@ describe("hosted formal-model contract", () => {
       artifactRoots: ["prototypes/reducer-lab/dist"],
       boundary: "preflight"
     })
-    expect(stageCommands.slice(structuralCommands.length)).toEqual([
-      "test:delivery-repeatability",
-      "test:recorded-catalog",
-      "test"
-    ])
+    expect(
+      manifest
+        .filter((stage: { readonly boundary: string }) => stage.boundary === "qualification")
+        .map((stage: { readonly args: ReadonlyArray<string> }) => stage.args[0])
+    ).toEqual(["test:delivery-repeatability", "test:recorded-catalog", "test"])
     expect(packageJson.scripts["check:ci:quality"]).not.toContain("test:mbt")
   })
 
