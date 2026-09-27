@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-redundant-type-constituents, typescript/no-duplicate-type-constituents -- Oxlint cannot resolve workspace-barrel types in this exhaustive mapper; TypeScript typecheck verifies them. */
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Match, Schema, SchemaParser } from "effect"
 import {
@@ -16,6 +17,7 @@ import {
   RemotePublicationIntendedEvent,
   RemotePublicationRetainedEvent,
   RemotePublicationResumeRequestedEvent,
+  RemotePublicationBatchGrantAppliedEvent,
   RemotePublicationSucceededEvent,
   LocalTargetCatchUpIntendedEvent,
   LocalTargetCatchUpObservedEvent,
@@ -260,6 +262,7 @@ type RemotePublicationEvent = Extract<
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
       | "RemotePublicationResumeRequested"
+      | "RemotePublicationBatchGrantApplied"
   }
 >
 type RecordedRemotePublicationEntry = Extract<
@@ -274,6 +277,7 @@ type RecordedRemotePublicationEntry = Extract<
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
       | "RemotePublicationResumeRequested"
+      | "RemotePublicationBatchGrantApplied"
   }
 >
 
@@ -285,7 +289,8 @@ const isRemotePublicationEvent = (event: WorkflowJournalEvent): event is RemoteP
   event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   event._tag === "RemotePublicationSucceeded" ||
   event._tag === "RemotePublicationRetained" ||
-  event._tag === "RemotePublicationResumeRequested"
+  event._tag === "RemotePublicationResumeRequested" ||
+  event._tag === "RemotePublicationBatchGrantApplied"
 
 const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry is RecordedRemotePublicationEntry =>
   entry._tag === "RemotePublicationAdmissionReadIntended" ||
@@ -295,7 +300,8 @@ const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry i
   entry._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   entry._tag === "RemotePublicationSucceeded" ||
   entry._tag === "RemotePublicationRetained" ||
-  entry._tag === "RemotePublicationResumeRequested"
+  entry._tag === "RemotePublicationResumeRequested" ||
+  entry._tag === "RemotePublicationBatchGrantApplied"
 
 /** Direct publication facts retain their complete correlation, provenance, and exact proof. */
 const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRemotePublicationEntry =>
@@ -325,6 +331,7 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
     RemotePublicationAttemptIntended: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationAttemptIntended",
       attemptOrdinal: value.attemptOrdinal,
+      ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
       correlation: value.correlation,
       initiatedBy: value.initiatedBy,
       occurrenceClassification: value.occurrenceClassification,
@@ -345,6 +352,7 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
     RemotePublicationRetained: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationRetained",
       authorization: value.authorization,
+      ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
       cause: value.cause,
       correlation: value.correlation,
       occurrenceClassification: value.occurrenceClassification
@@ -352,6 +360,13 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
     RemotePublicationResumeRequested: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationResumeRequested",
       correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      request: value.request
+    }),
+    RemotePublicationBatchGrantApplied: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationBatchGrantApplied",
+      direction: value.direction,
       initiatedBy: value.initiatedBy,
       occurrenceClassification: value.occurrenceClassification,
       request: value.request
@@ -1452,6 +1467,7 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
     RemotePublicationAttemptIntended: (value) =>
       RemotePublicationAttemptIntendedEvent.make({
         attemptOrdinal: value.attemptOrdinal,
+        ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
         correlation: value.correlation,
         initiatedBy: value.initiatedBy,
         occurrenceClassification: value.occurrenceClassification,
@@ -1475,6 +1491,7 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
     RemotePublicationRetained: (value) =>
       RemotePublicationRetainedEvent.make({
         authorization: value.authorization,
+        ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
         cause: value.cause,
         correlation: value.correlation,
         occurrenceClassification: value.occurrenceClassification,
@@ -1483,6 +1500,14 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
     RemotePublicationResumeRequested: (value) =>
       RemotePublicationResumeRequestedEvent.make({
         correlation: value.correlation,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationBatchGrantApplied: (value) =>
+      RemotePublicationBatchGrantAppliedEvent.make({
+        direction: value.direction,
         initiatedBy: value.initiatedBy,
         occurrenceClassification: value.occurrenceClassification,
         request: value.request,
@@ -2142,7 +2167,9 @@ const lyricForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
     RemotePublicationRetained: (value) =>
       `Dalph retained publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.cause._tag}.`,
     RemotePublicationResumeRequested: (value) =>
-      `The Operator requested delivery resumption for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`
+      `The Operator requested delivery resumption for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+    RemotePublicationBatchGrantApplied: (value) =>
+      `The Operator granted another publication batch for Run ${value.request.runId} at exhaustion ${value.request.exhaustionAt}.`
   })
 
 const lyricForRemoteBaselineEntry = (entry: RecordedRemoteBaselineEntry): string =>

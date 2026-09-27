@@ -672,7 +672,7 @@ it.effect("replays an exact batch grant from a reopened SQLite journal without a
       const path = yield* Path.Path
       const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-publication-batch-grant-" })
       const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
-      const openSqlite = <A>(use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>) =>
+      const openSqlite = <A, E, R>(use: (store: JournalStore["Service"]) => Effect.Effect<A, E, R>) =>
         Effect.scoped(
           Effect.gen(function* () {
             const store = yield* JournalStore
@@ -749,7 +749,10 @@ it.effect("replays an exact batch grant from a reopened SQLite journal without a
                   remoteHead: candidate.run.session.expectedTargetHead
                 })
               ),
-            push: () => Ref.update(pushCalls, (count) => count + 1).pipe(Effect.die("crash cut must precede push"))
+            push: () =>
+              Ref.update(pushCalls, (count) => count + 1).pipe(
+                Effect.andThen(Effect.die("crash cut must precede push"))
+              )
           })
           const engine = makeRemotePublicationEngine((requestedRunId) => inRunJournal.read(requestedRunId))
           const crash = yield* Effect.exit(

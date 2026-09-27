@@ -62,6 +62,8 @@ import {
   FixtureTarget,
   GitWorktreeReadFailure,
   IntegrationResponsibilityIdentity,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId,
   RemotePublicationResumeRequest,
   RemotePublicationResumeRequestId,
   Journal,
@@ -7076,6 +7078,7 @@ it.effect(
         RemotePublicationAttemptRejectedNonFastForward: true,
         RemotePublicationIntended: true,
         RemotePublicationRetained: true,
+        RemotePublicationBatchGrantApplied: true,
         RemotePublicationResumeRequested: true,
         RemotePublicationSucceeded: true,
         PlannedAttemptContinuationAuthorized: true,
@@ -7557,6 +7560,22 @@ it.effect(
           initiatedBy: { _tag: "Operator" },
           occurrenceClassification: "InitiatedAction",
           request: resumeRequest
+        },
+        {
+          _tag: "RemotePublicationBatchGrantApplied",
+          direction: "FullRerun",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          request: RemotePublicationBatchGrantRequest.make({
+            exhaustionAt: JournalPosition.make(1),
+            requestId: RemotePublicationBatchGrantRequestId.make("cassette-alpha-renaming-batch-grant"),
+            responsibility: IntegrationResponsibilityIdentity.make({
+              queuedAt: publication.correlation.qualifiedCandidate.run.session.queuedAt,
+              runId: publicationRunId
+            }),
+            runId: publicationRunId,
+            schemaVersion: 1
+          })
         }
       ]
       const fixedSession = completionEntries.find((entry) => entry._tag === "IntegratorSessionFixed")

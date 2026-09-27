@@ -438,7 +438,7 @@ const explanationAfterPrerequisitesFor = (
     }
     return integrationFinalityExplanationFor(workflowHistorySource(runState), responsibility, promotion, runtimeFacts)
   }
-  if (continuation !== undefined && continuation._tag !== "Publication") {
+  if (continuation !== undefined && continuation._tag !== "Publication" && continuation._tag !== "GrantedExhaustion") {
     return FrontierExplanation.IntegrationPublicationCompatibleHeadWait({
       mergeBase: continuation.mergeBase,
       plannedAttempt: responsibility.plannedAttempt,
@@ -715,6 +715,11 @@ const qualifiedIntegratorProgressTransitionsFor = (
       : []
   }
   if (publication._tag === "PublicationRetained") {
+    if (continuation._tag === "GrantedExhaustion") {
+      return runtimeFacts.remotePublicationConfigured === true && !targetLineageRefreshRequired
+        ? [RunnableFrontierTransition.RunRemotePublication({ candidate, responsibility, target })]
+        : []
+    }
     if (publication.cause._tag !== "CompatibleCompetingHead" || runtimeFacts.remotePublicationConfigured !== true)
       return []
     if (continuation._tag === "NeedsAuthorization") {

@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-redundant-type-constituents, typescript/no-duplicate-type-constituents -- Oxlint cannot resolve workspace-barrel types in this exhaustive mapper; TypeScript typecheck verifies them. */
 /* eslint-disable max-lines -- Exhaustive alpha-renaming keeps every closed recorded-cassette variant in one reviewable boundary. */
 import { Effect, Match, Schema, type Brand } from "effect"
 import {
@@ -105,6 +106,7 @@ import {
   type RemotePublicationCorrelation,
   IntegrationResponsibilityIdentity,
   RemotePublicationResumeRequest,
+  RemotePublicationBatchGrantRequest,
   type RemotePublicationResumeRequestId,
   remotePublicationCorrelationFor,
   type RemotePublicationProofBasis,
@@ -1835,8 +1837,8 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
-      RemotePublicationAttemptIntended: (entry) =>
-        completeFields<typeof entry>({
+      RemotePublicationAttemptIntended: (entry) => ({
+        ...completeFields<Omit<typeof entry, "batchGrantAt">>({
           _tag: "RemotePublicationAttemptIntended",
           attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
@@ -1844,6 +1846,8 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           refspec: preserveCassetteValue(entry.refspec)
         }),
+        ...(entry.batchGrantAt === undefined ? {} : { batchGrantAt: preserveCassetteValue(entry.batchGrantAt) })
+      }),
       RemotePublicationSucceeded: (entry) =>
         completeFields<typeof entry>({
           _tag: "RemotePublicationSucceeded",
@@ -1858,8 +1862,8 @@ const renameRecordedCassetteEntry = (
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
-      RemotePublicationRetained: (entry) =>
-        completeFields<typeof entry>({
+      RemotePublicationRetained: (entry) => ({
+        ...completeFields<Omit<typeof entry, "batchGrantAt">>({
           _tag: "RemotePublicationRetained",
           authorization:
             entry.authorization._tag === "InitialAttempt"
@@ -1869,6 +1873,8 @@ const renameRecordedCassetteEntry = (
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
+        ...(entry.batchGrantAt === undefined ? {} : { batchGrantAt: preserveCassetteValue(entry.batchGrantAt) })
+      }),
       RemotePublicationResumeRequested: (entry) =>
         completeFields<typeof entry>({
           _tag: "RemotePublicationResumeRequested",
@@ -1876,6 +1882,21 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           request: RemotePublicationResumeRequest.make({
+            ...entry.request,
+            responsibility: IntegrationResponsibilityIdentity.make({
+              queuedAt: entry.request.responsibility.queuedAt,
+              runId: renamed(entry.request.responsibility.runId, maps.runIds)
+            }),
+            runId: renamed(entry.request.runId, maps.runIds)
+          })
+        }),
+      RemotePublicationBatchGrantApplied: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationBatchGrantApplied",
+          direction: preserveCassetteValue(entry.direction),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: RemotePublicationBatchGrantRequest.make({
             ...entry.request,
             responsibility: IntegrationResponsibilityIdentity.make({
               queuedAt: entry.request.responsibility.queuedAt,

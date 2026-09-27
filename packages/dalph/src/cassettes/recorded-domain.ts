@@ -105,6 +105,7 @@ import {
   RemotePublicationRefspec,
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
+  RemotePublicationBatchGrantRequest,
   RemotePublicationResumeRequest,
   RemoteBaselineCorrelation,
   RemoteBaselineObservation,
@@ -390,6 +391,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   },
   RemotePublicationAttemptIntended: {
     attemptOrdinal: RemotePublicationAttemptOrdinal,
+    batchGrantAt: Schema.optionalKey(JournalPosition),
     correlation: RemotePublicationCorrelation,
     initiatedBy: WorkflowActor.cases.DalphCoordinator,
     occurrenceClassification: Schema.Literal("InitiatedAction"),
@@ -407,6 +409,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   },
   RemotePublicationRetained: {
     authorization: RemotePublicationAttemptAuthorization,
+    batchGrantAt: Schema.optionalKey(JournalPosition),
     cause: RemotePublicationRetainedCause,
     correlation: RemotePublicationCorrelation,
     occurrenceClassification: Schema.Literal("NonActionOccurrence")
@@ -416,6 +419,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     initiatedBy: WorkflowActor.cases.Operator,
     occurrenceClassification: Schema.Literal("InitiatedAction"),
     request: RemotePublicationResumeRequest
+  },
+  RemotePublicationBatchGrantApplied: {
+    direction: Schema.Literal("FullRerun"),
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    request: RemotePublicationBatchGrantRequest
   },
   RemoteBaselineReadIntended: {
     correlation: RemoteBaselineCorrelation,

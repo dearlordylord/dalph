@@ -150,6 +150,7 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         return Effect.succeed(finality)
       },
       operatorControl: {
+        applyRemotePublicationBatchGrant: () => Effect.die("unused"),
         applyRemotePublicationResume: () => Effect.die("unused"),
         applyRunCancellation: () => Effect.die("unused"),
         applyIntegrationQuarantineDirection: () => Effect.die("unused"),
@@ -193,6 +194,7 @@ it.effect("hands controlled active refresh to one bootstrap activation without n
         return Effect.succeed(finality)
       },
       operatorControl: {
+        applyRemotePublicationBatchGrant: () => Effect.die("unused"),
         applyRemotePublicationResume: () => Effect.die("unused"),
         applyRunCancellation: () => Effect.die("unused"),
         applyIntegrationQuarantineDirection: () => Effect.die("unused"),

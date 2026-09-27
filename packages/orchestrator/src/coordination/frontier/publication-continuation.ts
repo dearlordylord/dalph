@@ -36,6 +36,16 @@ export const derivePublicationContinuation = (runState: ReconstructedRunState, s
   const events = remotePublicationEventsFor(source, correlation)
   const publication = deriveRemotePublicationState(events)
   const qualified = { candidate, correlation, publication, target }
+  if (publication._tag === "PublicationRetained" && publication.cause._tag === "AttemptsExhausted") {
+    const grant = remotePublicationBatchGrantForNextAttempt(source, correlation, publication)
+    const exhausted = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).findLast(
+      ({ event }) =>
+        event._tag === "RemotePublicationRetained" && remotePublicationCorrelationEquals(event.correlation, correlation)
+    )
+    if (grant !== undefined && exhausted !== undefined && grant.event.request.exhaustionAt === exhausted.position) {
+      return { ...qualified, _tag: "GrantedExhaustion" as const }
+    }
+  }
   if (publication._tag !== "PublicationRetained" || publication.cause._tag !== "CompatibleCompetingHead") {
     return {
       ...qualified,
