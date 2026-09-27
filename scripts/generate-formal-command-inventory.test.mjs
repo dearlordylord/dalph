@@ -4,11 +4,11 @@ import { checkFormalCommandInventory, renderFormalCommandInventory } from "./gen
 import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import { quintHostedModelFamilies, quintHostedShardCount } from "./quint-hosted-shards.mjs"
 
-test("checked-in formal inventory matches the executable commands and hosted partition", async () => {
+void test("checked-in formal inventory matches the executable commands and hosted partition", async () => {
   await checkFormalCommandInventory()
 })
 
-test("formal inventory generation rejects an uncovered appended command", () => {
+void test("formal inventory generation rejects an uncovered appended command", () => {
   assert.throws(
     () =>
       renderFormalCommandInventory(
@@ -20,7 +20,7 @@ test("formal inventory generation rejects an uncovered appended command", () => 
   )
 })
 
-test("formal inventory generation rejects overlapping shard ranges", () => {
+void test("formal inventory generation rejects overlapping shard ranges", () => {
   assert.throws(
     () =>
       renderFormalCommandInventory(
