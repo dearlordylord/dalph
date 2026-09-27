@@ -431,9 +431,7 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
     runAtomicDeliveryBoundary(
       lease,
       Effect.gen(function* () {
-        const records = yield* acceptedJournal
-          .readAccepted(transition.responsibility.plannedAttempt.runId)
-          .pipe(Effect.orDie)
+        const records = yield* acceptedJournal.readAccepted(transition.responsibility.plannedAttempt.runId)
         let runPaused = false
         let taskPaused = false
         for (const { event } of journalRecordsOfKind(records, "ControlDirectionApplied")) {
@@ -451,9 +449,7 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
     .withPermit(
       transition.responsibility,
       Effect.gen(function* () {
-        const records = yield* acceptedJournal
-          .readAccepted(transition.responsibility.plannedAttempt.runId)
-          .pipe(Effect.orDie)
+        const records = yield* acceptedJournal.readAccepted(transition.responsibility.plannedAttempt.runId)
         const request = yield* activeResumeRequest(records)
         const phaseBoundary = { runObservation: publicationPhase, runSender: publicationPhase }
         if (request === undefined) {

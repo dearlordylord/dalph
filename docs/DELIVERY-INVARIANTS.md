@@ -389,7 +389,7 @@ The ordinary Run boundary is covered by
 and `ordinary publication replay preserves settled success and conclusive denial without provider work`;
 these tests make no new task/session or Git action for settlement or exact handoff replay. The resumed-proof
 completion retry is covered by the passing
-`packages/dalph/test/scenarios/production.test.ts::ordinary production Run retries resumed finality after a lost completion response`.
+`packages/dalph/test/scenarios/production.test.ts::ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination`.
 
 **D28g A compatible competing remote head authorizes one bounded same-result
 successor.** After a correlated, fresh Git observation proves that the pinned

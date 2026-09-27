@@ -1,12 +1,17 @@
 import { it } from "@effect/vitest"
 import { HashSet, Effect, Layer, Ref, Stream } from "effect"
 import { expect } from "vitest"
-import { GitCommitSha, TaskRevision } from "@dalph/contracts"
+import { GitCommitSha, RunId, TaskRevision } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import {
+  InRunJournal,
+  InRunJournalRunMismatch,
+  JournalHistoryInvalid,
+  type JournalRecord
+} from "../../workflow-journal/store.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
@@ -143,14 +148,12 @@ const acceptedJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
 const publicationAdapterLayer = (
   records: Ref.Ref<ReadonlyArray<JournalRecord>>,
   git: ReturnType<typeof RemotePublicationGit.of>,
-  journal = appendableJournal(records)
+  journal = appendableJournal(records),
+  reader = acceptedJournal(records)
 ) =>
   Layer.merge(
     Layer.merge(
-      Layer.merge(
-        Layer.succeed(AcceptedJournalReader, acceptedJournal(records)),
-        Layer.succeed(RemotePublicationGit, git)
-      ),
+      Layer.merge(Layer.succeed(AcceptedJournalReader, reader), Layer.succeed(RemotePublicationGit, git)),
       Layer.succeed(InRunJournal, journal)
     ),
     Layer.merge(Layer.succeed(Journal, unusedJournal), Layer.succeed(RemoteBaselineGit, unusedRemoteBaselineGit))
@@ -348,6 +351,70 @@ const remotePublicationTransition = () =>
     responsibility,
     target: remotePublicationTargetForTest
   })
+
+it.effect("preserves a typed accepted-journal read failure before retained-resume selection", () =>
+  Effect.gen(function* () {
+    const { records: initialRecords } = retainedResumePrefix()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const transition = remotePublicationTransition()
+    const proposal = proposalFor(transition)
+    expect(proposal).toBeDefined()
+    if (proposal === undefined) return yield* Effect.die("missing direct-publication proposal")
+    const failure = new JournalHistoryInvalid({
+      detail: "accepted prefix validation failed",
+      position: JournalPosition.make(initialRecords.length),
+      runId: fixture.runId
+    })
+    const reader = AcceptedJournalReader.of({ readAccepted: () => Effect.fail(failure) })
+
+    const observed = yield* Effect.flip(
+      executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
+        Effect.provide(publicationAdapterLayer(records, unusedRemotePublicationGit, undefined, reader))
+      )
+    )
+
+    expect(observed).toEqual(failure)
+    expect(yield* Ref.get(records)).toEqual(initialRecords)
+  })
+)
+
+it.effect("preserves a typed accepted-journal read failure at the publication boundary", () =>
+  Effect.gen(function* () {
+    const { records: initialRecords } = retainedResumePrefix()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const readCount = yield* Ref.make(0)
+    const transition = remotePublicationTransition()
+    const proposal = proposalFor(transition)
+    expect(proposal).toBeDefined()
+    if (proposal === undefined) return yield* Effect.die("missing direct-publication proposal")
+    const failure = new InRunJournalRunMismatch({
+      expectedRunId: RunId.make("another-run"),
+      requestedRunId: fixture.runId
+    })
+    const reader = AcceptedJournalReader.of({
+      readAccepted: (runId) =>
+        Ref.modify(readCount, (count) => [count, count + 1] as const).pipe(
+          Effect.flatMap((count) =>
+            count < 3
+              ? Ref.get(records).pipe(
+                  Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current))
+                )
+              : Effect.fail(failure)
+          )
+        )
+    })
+
+    const observed = yield* Effect.flip(
+      executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
+        Effect.provide(publicationAdapterLayer(records, unusedRemotePublicationGit, undefined, reader))
+      )
+    )
+
+    expect(observed).toEqual(failure)
+    expect(yield* Ref.get(readCount)).toBe(4)
+    expect(yield* Ref.get(records)).toEqual(initialRecords)
+  })
+)
 
 it.effect("ordinary Run replay leaves the exact compatible head for the normal frontier selector", () =>
   Effect.gen(function* () {

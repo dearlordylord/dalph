@@ -5633,7 +5633,7 @@ const freshExecutingObservePair = (name: string) => {
 }
 
 it.effect(
-  "holds a pending H3 baseline action across unrelated accepted work until the next activation while allowing unrelated proposals",
+  "holds a pending baseline reconciliation across unrelated accepted work until the next activation while allowing unrelated proposals",
   () =>
     Effect.scoped(
       Effect.gen(function* () {

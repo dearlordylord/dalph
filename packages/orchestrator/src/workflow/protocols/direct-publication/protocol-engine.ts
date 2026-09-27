@@ -41,6 +41,7 @@ import {
   type CurrentRemotePublicationEvidence
 } from "./transition-journal.js"
 import { RemotePublicationResumeRequestConflict, RemotePublicationResumeSubjectMismatch } from "./errors.js"
+import type { InRunJournalRunMismatch, JournalError } from "../../../workflow-journal/store.js"
 
 /** Post-resume continuation through the ordinary Run frontier. */
 export type RemotePublicationResumeDispatch =
@@ -104,8 +105,12 @@ const lastElementOffset = -1
 
 /** Exit authority around each publication phase that can start new Git work. */
 export interface RemotePublicationPhaseBoundary {
-  readonly runObservation: <A, E, R>(phase: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
-  readonly runSender: <A, E, R>(phase: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  readonly runObservation: <A, E, R>(
+    phase: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E | JournalError | InRunJournalRunMismatch, R>
+  readonly runSender: <A, E, R>(
+    phase: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E | JournalError | InRunJournalRunMismatch, R>
 }
 
 const retainedCauseForObservationFailure = (failure: RemotePublicationObservationFailure) =>
