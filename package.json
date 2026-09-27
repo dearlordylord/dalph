@@ -66,7 +66,7 @@
     "check:ci:formal:shard": "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs",
     "check:ci": "pnpm check:ci:quality && pnpm check:ci:formal",
     "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-candidate-checks.mjs",
-    "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
+    "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/generate-formal-command-inventory.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
     "test:formal:integration": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-gate.integration.test.mjs",
     "test:delivery-smoke": "node scripts/run-delivery-smoke.mjs"
   },

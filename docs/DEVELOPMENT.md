@@ -470,6 +470,16 @@ journal fact, retry or runtime cleanup changes. Output-policy tests prove bounde
 presentation and malformed-count rejection; the resume integration test proves
 that a reused prefix plus a noisy suffix qualifies with exact original counts.
 
+The executable Quint command manifest and hosted model-family ranges generate
+`packages/dalph/src/qualification/formal-command-inventory.generated.ts`.
+The production provenance schema and positive live-qualification fixtures read
+its command count and shard assignment. After changing either input, run
+`node scripts/generate-formal-command-inventory.mjs --write`. The early
+`test:formal:controls` check rejects a stale generated inventory or a missing
+or overlapping shard position before coverage. The existing negative fixture
+with a truncated profile remains independent. This is qualification tooling
+only; it changes no Dalph workflow decision or external request.
+
 A composite receipt links original prefix stages and newly executed suffix stages;
 it never invents execution receipts for skipped commands. Verified reused coverage
 is copied to the new report directory with original provenance. Newly executed
