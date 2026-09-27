@@ -13,6 +13,7 @@ import {
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
 import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
+import { assertDirectPublicationBatchGrantProjectionCommands } from "./quint-publication-batch-grant-projection-contract.mjs"
 import {
   assertQuintGateCommandContract,
   quintGateExpectedCommandCounts,
@@ -1244,6 +1245,7 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
 
   const directPublicationBatchGrantInvariants = directPublicationBatchGrantObligations.invariants
   const directPublicationBatchGrantWitnesses = directPublicationBatchGrantObligations.witnesses
+  const directPublicationBatchGrantProjectionInvariants = directPublicationBatchGrantInvariants
   run("publication exhaustion batch grant model typecheck", ["typecheck", "specs/directPublicationBatchGrant.qnt"])
   runFamily([
     {
@@ -1281,22 +1283,131 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
       ]
     },
     {
-      name: "publication exhaustion batch grant exhaustive model",
+      name: "publication exhaustion batch grant proof projection typecheck",
+      args: ["typecheck", "specs/directPublicationBatchGrant_proof.qnt"]
+    },
+    {
+      name: "publication exhaustion batch grant control projection deterministic tests",
+      args: [
+        "test",
+        "specs/directPublicationBatchGrant_control_proof_test.qnt",
+        "--main",
+        "directPublicationBatchGrantControlProofTest"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant control projection negative mutation profile",
+      args: [
+        "test",
+        "specs/directPublicationBatchGrant_control_proof_negative_test.qnt",
+        "--main",
+        "directPublicationBatchGrantControlProofNegativeTest"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant control projection sampled model",
+      args: [
+        "run",
+        "specs/directPublicationBatchGrant_proof.qnt",
+        "--main",
+        "directPublicationBatchGrantGrantControlProof",
+        "--invariants",
+        ...directPublicationBatchGrantProjectionInvariants,
+        "--witnesses",
+        "exactExhaustionReached",
+        "grantCommittedReached",
+        "pausedGrantReached",
+        "grantSessionReached",
+        "secondExhaustionReached",
+        "secondGrantReached",
+        "--max-steps",
+        "32",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "38602",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant control projection exhaustive model",
       args: [
         "verify",
-        "specs/directPublicationBatchGrant.qnt",
+        "specs/directPublicationBatchGrant_proof.qnt",
         "--main",
-        "directPublicationBatchGrant",
+        "directPublicationBatchGrantGrantControlProof",
         "--backend",
         "tlc",
         "--invariants",
-        ...directPublicationBatchGrantInvariants,
+        ...directPublicationBatchGrantProjectionInvariants,
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant batch/finality projection deterministic tests",
+      args: [
+        "test",
+        "specs/directPublicationBatchGrant_batch_finality_proof_test.qnt",
+        "--main",
+        "directPublicationBatchGrantBatchFinalityProofTest"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant batch/finality projection negative mutation profile",
+      args: [
+        "test",
+        "specs/directPublicationBatchGrant_batch_finality_proof_negative_test.qnt",
+        "--main",
+        "directPublicationBatchGrantBatchFinalityProofNegativeTest"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant batch/finality projection sampled model",
+      args: [
+        "run",
+        "specs/directPublicationBatchGrant_proof.qnt",
+        "--main",
+        "directPublicationBatchGrantBatchFinalityProof",
+        "--invariants",
+        ...directPublicationBatchGrantProjectionInvariants,
+        "--witnesses",
+        "exactExhaustionReached",
+        "grantCommittedReached",
+        "grantSessionReached",
+        "grantPushReached",
+        "exactProofReached",
+        "blockedWaitReached",
+        "settledReached",
+        "--max-steps",
+        "32",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "38603",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "publication exhaustion batch grant batch/finality projection exhaustive model",
+      args: [
+        "verify",
+        "specs/directPublicationBatchGrant_proof.qnt",
+        "--main",
+        "directPublicationBatchGrantBatchFinalityProof",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...directPublicationBatchGrantProjectionInvariants,
         "--verbosity",
         "1"
       ]
     }
   ])
   assertQuintGateCommandContract({ manifest: commands, executed: quintGateExpectedCommandCounts })
+  assertDirectPublicationBatchGrantProjectionCommands(commands)
   return freezeTree({
     version: 1,
     commands,
