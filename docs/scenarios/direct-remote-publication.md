@@ -488,6 +488,249 @@ does not edit counters, fabricate a grant, or use a grant to reuse a candidate.
 The prior history, consumed ordinals, candidate, and integration responsibility
 remain available for that later issue; unrelated targets remain eligible.
 
+### S4: Alice grants one bounded batch to the exact exhausted delivery
+
+**Starting facts.** Alice is the Operator for Run R, which remains open for
+task attempt A, accepted commit C, exact integration responsibility Q, FIFO
+position P, and publication candidate M with its target, remote lineage, and
+predecessor history. The current claim and task revision remain in the task
+tracker. The task executor
+has already run once and released task-work capacity. A separate eligible task
+B can progress. Batch 1 has reached one exact retained exhaustion occurrence O;
+its cause is either the exhausted three-session allowance or the exhausted
+three-intent allowance for the exact candidate. These are distinct histories:
+for publication-intent exhaustion, use the real
+`PublicationRetained(AttemptsExhausted)` result from
+`packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts::retains exact exhaustion without an ungranted fourth push intent`;
+for successor-generation exhaustion, retain the exact third-session occurrence
+and its predecessor evidence. Neither path may seed a fabricated exhaustion
+record. All committed session and intent history, consumed ordinals, candidate
+identity, and released process-local permits remain intact. No grant for O
+exists. Retained history establishes whether exact proof or promotion has
+already been recorded; any unresolved boundary uses fresh post-Unpause facts.
+The exhaustion and grant prove neither.
+
+Alice selects the internal **Full rerun** direction for O. Dalph validates
+R, A, Q, P, C, and the exact candidate/session/ordinal evidence that identifies
+O; the request identity makes a committed request replayable. Grant uniqueness
+is keyed to (R, Q, O), so a later same-C successor candidate selected through
+the authorized batch does not need a second grant. A different Run,
+responsibility, position, commit, or exhaustion occurrence cannot use this
+grant, and foreign candidate evidence cannot stand in for O.
+
+**Ordered boundaries.**
+
+1. Dalph reads the accepted Run and retained journal prefix, confirms that O is
+   still the exact exhausted occurrence, reconstructs the prior allowance and
+   confirms that no grant already authorizes a later batch. An unrelated
+   quarantine, incompatible history, or mismatched subject is rejected without
+   changing history.
+2. Dalph appends one durable grant receipt before any newly authorized session
+   or publication intent. Exact redelivery returns the committed result. A
+   different request identity for the same (R, Q, O) cannot append another
+   grant or authorize another batch; the required invariant is one grant for
+   that exhaustion, while the response shape for that different identity is
+   unspecified. A later exact exhaustion O2 needs a new direction.
+3. Before a new provider or Git boundary, ordinary activation reconstructs the
+   grant and history, reads current Run control and task claim/revision, proves
+   prior sender custody, checks authentication and policy, and reads only the
+   Git facts needed for the selected action. These are fresh owning-system
+   observations, not snapshots retained from before the grant. This is one
+   bounded activation, not a read-until-stable loop. If Pause is active, step 2
+   is allowed but this step and all batch work wait for Unpause as specified in
+   S7.
+4. Dalph follows the branch justified by those facts. Retained exact
+   publication proof proceeds to ordinary finality with no duplicate push or
+   Integrator session. A candidate that remains safely publishable may be
+   reused under the new push allowance. If compatible current remote history
+   makes M unsafe, Dalph may prepare one fresh successor for the same C through
+   the established #385 automatic-successor path; it does not rerun the
+   task executor. If current permission, claims, custody, authentication,
+   policy, throttling, or lineage still blocks the next action, Dalph retains
+   that precise wait and starts no session or push.
+5. The grant authorizes one later bounded batch: at most three newly fixed
+   Integrator sessions and at most three publication intents per candidate.
+   Fixation consumes a session cycle before provider contact. A committed push
+   intent consumes allowance even if Git is never called. Existing history and
+   ordinals remain immutable and monotonic; no counter is edited or reset. A
+   successor candidate has its own exact publication correlation. If Batch 2
+   exhausts, Dalph records O2 and returns to the retained wait; it does not
+   authorize Batch 3.
+
+**Visible and forbidden results.** Alice sees the exact retained exhaustion,
+one grant for that occurrence, and then either branch-specific delivery
+progress or the exact current wait. B remains eligible while R is unsettled.
+The task completes only through the existing proof, promotion, current
+permission, cleanup, and finality sequence in S8. Dalph must not count a
+committed-but-unsent intent as free, recycle an ordinal, authorize an ungranted
+fourth operation, use one grant for two batches, broaden FullRerun to unrelated
+quarantine, overlap uncertain senders, rerun task execution, infer publication
+from a grant or intent, block B, or terminate R with unsettled work.
+
+**Not applicable.** This grant does not create a task selection, claim, task
+attempt, Begin/Resume, target reconfiguration, force push, public CLI command,
+hosted CI result, or deployment result. Tracker facts are reread for permission
+and later finality; the grant changes none of them.
+
+### S5: A replacement host recovers the exact committed grant
+
+**Starting facts and trigger.** The Full rerun receipt for exact O has committed
+in R's journal, but the host stops before its acknowledgement is recorded or
+before any newly authorized boundary. The memory case starts a fresh activation over the retained in-memory layer;
+the SQLite case closes and reopens the persisted journal after host restart. The grant is history-derived;
+there is no separate authoritative batch counter.
+
+**Recovery boundaries and cuts.** A replacement host reads the accepted prefix,
+recovers the exact receipt once. If Pause P remains applied, it returns the
+same receipt without a custody query or batch boundary; Unpause is still
+required. After Unpause, current permission, claims, writer custody, and exact
+Git facts are refreshed before the S4 branch is selected.
+
+- A crash before the grant append commits leaves no grant. A retry validates O
+  again and appends only if it remains the exact current occurrence.
+- A crash after commit but before acknowledgement replays the same receipt and
+  does not append another grant or start a second batch.
+- A crash after a new session fixation restores that exact session and its
+  consumed cycle; it does not spend another cycle solely because the host died.
+- A crash after a committed publication intent preserves its ordinal. If Git
+  was not called, the intent is still consumed. If the outcome is ambiguous,
+  Dalph reconciles the exact owner and pinned remote before any later mutation;
+  process death is not proof of non-application.
+
+**Visible and forbidden results.** Restart continues R and Q with the same
+receipt and prior history, then reaches ordinary finality or remains at the
+precise unresolved constraint. It does not duplicate the direction, replay the
+task, discard history, reset the allowance, overlap senders, or treat a missing
+response as proof that an external effect did not occur.
+
+**Not applicable.** Recovery does not create a new Operator choice, public
+request protocol, task attempt, or task execution. Pause/Exit and finality rules
+remain those in S7 and S8.
+
+**Acceptance-test plan.** Add
+`packages/orchestrator/src/workflow/protocols/integration-quarantine/grant-recovery.test.ts::reconciles a committed paused exhaustion grant after lost acknowledgement in memory and reopened SQLite`
+with a precommit cut and a commit-before-ack cut. The reopened case must retain P
+and the receipt, prove no duplicate append or batch effects before Unpause,
+then resume only after fresh activation. Extend the direct-publication recovery
+and production tests for committed session/push intents under the same grant;
+assert consumed cycles and ordinals, exact reconciliation, and no task Begin.
+The existing
+`packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts::recovers a recorded full rerun without creating a second successor`
+remains the ordinary one-successor predecessor control; it does not prove
+publication-grant recovery or another batch.
+
+### S7: Alice records a grant during Pause and defers every batch effect
+
+**Starting facts and trigger.** R retains Q at P after exact exhaustion O. The
+batch-one session and intent history is intact, process-local permits are
+released, no grant for O exists, and no Exit cutoff has closed admission. Alice
+applies Pause to R first, then submits the exact internal Full rerun request.
+This order is part of the accepted behavior.
+
+**Ordered boundaries.** Dalph reads the accepted Run, Pause, and publication
+history and the candidate/session evidence that identifies O; then appends
+one durable grant receipt while Pause remains applied. For Q, this receipt is
+the only permitted Journal append during this cut; exact replay may read the
+committed receipt. It is visible, but no subsequent Q-owned append or forward
+effect occurs while Pause remains applied. Dalph starts no Integrator session,
+Git or remote read, catch-up, push, promotion, tracker mutation, or task
+execution for Q. A same-request replay returns the recorded
+result; a different request identity cannot authorize another batch. R remains
+active and cannot terminate while Q is unsettled; unrelated eligible B may
+progress.
+
+Unpause is the next activation trigger for batch work. Dalph rereads current
+control, claim/revision, sender custody, permission/policy, and the Git facts
+needed for the selected S4 branch. Facts observed before Pause do not authorize
+post-Unpause work. A still-current constraint remains a precise wait. The grant
+does not prescribe one fixed session/push shape.
+
+Exit closes admission. If it closes before the grant append commits, Dalph
+rejects the unapplied grant. If the grant committed first, the receipt and
+usage remain in history, but Exit starts no session or push during the drain.
+Already-produced results are recorded according to the existing Exit boundary;
+uncertain sender custody remains unproven. Restart still requires normal owner
+and custody checks and cannot infer another grant.
+
+**Visible and forbidden results.** Alice sees the exact grant receipt while R
+remains paused, then branch-specific progress or a precise wait after Unpause.
+No batch effect occurs during Pause or after the Exit cutoff. Dalph must not
+hide the accepted receipt, start a forward boundary under Pause, use the grant
+to bypass Exit, reset usage, duplicate a grant, or stop unrelated target B.
+
+**Acceptance-test plan.** Extend
+`packages/dalph/test/scenarios/production.test.ts` with
+`holds an exact exhaustion grant through Pause and enforces the Exit cutoff`.
+Use real exhaustion and actual Pause/grant calls. Assert one durable receipt
+while paused and zero Q-owned sessions, Git/provider calls, pushes, promotion,
+tracker mutation, or task execution until Unpause; assert fresh reads before
+Q resumes; cover Exit-before-append and Exit-after-commit. Extend the memory and
+reopened-SQLite recovery test above with Pause before the grant append, reopen
+with the same Pause and receipt, exact replay, zero batch effects, then Unpause.
+The existing ordinary-delivery Pause test is a control, not proof of grant
+ordering.
+
+**Not applicable.** Pause does not renew the allowance for O, waive claims,
+custody, authentication, policy, incompatible-history, or throttle constraints,
+or expose a public control command.
+
+### S8: A grant or intent does not prove publication or settle finality
+
+**Starting facts and trigger.** R still owns A/Q/P and exact C. A grant may be
+recorded and a batch may have started, but local promotion, current tracker
+permission, task completion, cleanup, or dependant release may remain
+unfinished. Git and the task tracker remain independent authorities.
+
+**Ordered finality boundary.** Dalph first reconciles the retained publication
+history and any uncertain sender using S4/S5. A committed grant or push intent
+is not publication proof. With exact remote proof, Dalph continues the existing
+local-promotion and completion protocols. Before tracker mutation it reads
+current task revision, claim, dependencies, and control facts. A changed
+revision, foreign or missing claim, new prerequisite, Pause, or closed/ineligible
+task retains the precise constraint. Only exact remote proof, observed local
+promotion, fresh permission, confirmed tracker completion, and required cleanup
+can settle Q; a later complete graph may then release dependants and allow R to
+terminate.
+
+**Visible and forbidden results.** Grant acceptance remains distinct from
+publication and task completion. Dalph does not close Q from a grant, intent,
+task success, or malformed/foreign proof; use stale claims; repeat an applied
+close; release a dependant from a partial graph; or terminate R while Q is
+unsettled. Restart or grant replay alone does not trigger a new remote read or
+fabricate proof.
+
+**Acceptance-test plan.** Extend
+`packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts`
+with
+`does not complete a task from an exhaustion grant without exact publication proof`.
+Assert no tracker completion or finality settlement from the grant alone. Add
+the matching formal negative
+`specs/directPublicationBatchGrant_negative_test.qnt::detectsGrantReceiptUsedAsPublicationProofTest`;
+retain the normal S8 cassette
+`packages/dalph/test/cassettes/direct-remote-publication.test.ts::publishes M before local promotion and task completion, then releases its dependant from a later complete graph`.
+These are focused checks of the grant/proof boundary, not a substitute for
+current tracker-fact and cleanup conformance.
+
+**Not applicable.** This scenario adds no remote monitor, force-push, new
+completion command, or claim policy.
+
+### #386 acceptance-test plan
+
+Every item below is planned unless named as an existing control above. Tests use
+the real exhaustion path and chronological journal prefixes; none hand-appends
+an exhaustion, receipt, or provider/Git result to manufacture a branch.
+
+| Beat | Test owner and decisive evidence |
+| --- | --- |
+| **S4: Initial and later batch bounds.** | Keep `packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts::retains exact exhaustion without an ungranted fourth push intent` and `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::thirdSessionAndThirdPushExhaustWithoutUnrequestedFourthSessionTest` as initial-batch controls only. For the exact third-session exhaustion, add `packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts::authorizes another publication-exhausted successor generation only for its exact occurrence` and `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::publicationExhaustionResetsSessionAllowanceOncePerExactGrantTest`. For the exact candidate-intent exhaustion, add `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::publicationGrantContinuesCandidateOrdinalsWithoutResetTest`. Reach the retained occurrences through the real bound; count a committed unsent intent, preserve monotonic ordinals, and keep O2 retained until its own grant. |
+| **S4: Grant identity and replay.** | Extend `packages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts` with `records one exact publication-exhaustion FullRerun grant during Pause and returns the same result for duplicate delivery`; add `keeps one durable grant and one batch authorization when the same exhaustion is submitted under a different FullRerun request ID` and `rejects FullRerun for an unrelated quarantine reason`. Bind R/Q/O and request identity; preserve unspecified response shape for a different identity while asserting no second grant or batch. |
+| **S4: Post-Unpause outcomes.** | Model distinct outcomes with `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::grantFinishesAlreadyPublishedCandidateWithoutAnotherPushTest`, `::grantReusesSafelyPublishableCandidateTest`, and `::grantFixesSameCommitSuccessorWithoutTaskRerunTest`. Add runtime seams for an already-proved M with no new session or push; safely reusable M with one permitted push and no new session; same-C successor after #385 with one authorized session; and a still-blocked permission/claim/custody/auth/policy/throttle/lineage wait. Assert exact branch effects and no task rerun. The successor case uses the established #385 automatic-successor path. |
+| **S4: Independent progress.** | Add `packages/dalph/test/scenarios/hermetic-mvp.test.ts::continues one exhausted publication responsibility through exactly one granted batch while an unrelated target progresses` and `packages/dalph/test/scenarios/hermetic-mvp.test.ts::does not rerun the task executor when a granted batch fixes a same-commit successor`; retain B progress, one Begin, Q unsettled until S8, and exact O/O2. |
+| **S5: Grant and intent recovery.** | Add `packages/orchestrator/src/workflow/protocols/integration-quarantine/grant-recovery.test.ts::reconciles a committed paused exhaustion grant after lost acknowledgement in memory and reopened SQLite` for precommit and commit-before-ack cuts. Add `packages/orchestrator/src/workflow/protocols/direct-publication/recovery.test.ts::recovers consumed and ambiguous publication intents under the same granted batch across memory and reopened SQLite` for exact session/push-intent cuts; assert no duplicate mutation, reset, second grant, or task Begin. Check memory and reopened SQLite with `packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts::publication exhaustion grant consumes one batch consistently in memory and SQLite`; compare visible outcomes and forbidden effects, not only counters. |
+| **S7: Pause and Exit.** | Add `packages/dalph/test/scenarios/production.test.ts::holds an exact exhaustion grant through Pause and enforces the Exit cutoff` and extend the grant-recovery prefixes. Exercise Pause-before-grant, receipt append during Pause, exact replay, no Q-owned forward effect until Unpause, fresh facts, Exit-before-append, and Exit-after-commit. `packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.test.ts::a paused retained Run stops before custody, head observation, or publication boundaries` remains an ordinary-delivery control, not proof of grant ordering. |
+| **S8: Proof and finality.** | Use the focused completion protocol regression and formal negative above; retain exact proof, local promotion, current tracker permission, cleanup, and later complete-graph requirements. A successful grant-only model or cassette cannot settle Q. |
+| **S4/S5/S7/S8: Formal chronology.** | Add `specs/directPublicationBatchGrant.qnt`, positive `specs/directPublicationBatchGrant_test.qnt::recordsExactPausedGrantAndDefersOneBoundedBatchUntilUnpauseTest`, and negative controls `::detectsPausedBatchStartAndExitCutoffViolationsTest`, `::detectsDuplicateOrMismatchedGrantMintingSecondBatchTest`, `::detectsDifferentRequestIdMintingSecondGrantForSameExhaustionTest`, `::detectsUnrelatedQuarantineFullRerunGrantTest`, `::detectsBudgetResetAndNonmonotonicOrdinalTest`, `::detectsGrantStartingTaskExecutionTest`, and `::detectsGrantReceiptUsedAsPublicationProofTest`. The positive model includes already-published, reusable, same-C successor, and still-blocked post-Unpause branches; branch-specific effects remain distinct. |
+
 ## Resume retained delivery after a temporary failure
 
 Issue #387 owns the transport-neutral **resume retained delivery** operation.
