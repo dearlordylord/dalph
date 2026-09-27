@@ -59,13 +59,14 @@ visible waits. Independent standards and specification reviews found no new
 semantic blocker. Its focused frontier, authorization recovery, and resume suites
 pass all 58 tests after four fixture events and their record keys were updated to
 the existing authorization schema. The production composition proof is recorded
-below. Full qualification remains blocked by package declaration generation.
+below. Package declaration generation now passes after the export repair recorded
+below; full combined qualification remains to be observed.
 
 The copied integration snapshot initially had 315 typecheck errors, reproduced
 with identical codes and source locations before and after the refactor. Focused
 repairs to those inherited declarations and fixtures are described below. No live
-integration worktree was modified. Hosted assurance selection and per-model
-formal granularity remain pending. No delivery-time improvement or live-host proof
+integration worktree was modified. Runtime-to-model ownership and hosted formal
+family selection remain conservative as described above. No delivery-time improvement or live-host proof
 is claimed.
 
 ## Qualification repair evidence
@@ -138,11 +139,10 @@ The inherited typecheck errors were repaired through missing fixture authorizati
 accurate existing variant unions, removal of a spurious externally required service,
 and an explicit dry-run scope. Of 229 focused regression tests, 228 passed together;
 the one property test that exceeded ten seconds under contention passed unchanged
-alone in 2.51 seconds. The full production package build still fails with TS4023
-`NodeInspectSymbol` errors in inferred public return types. This is an artifact
-qualification blocker, separate from runtime test success. The next diagnostic is
-to identify the originating public effect/error type in the package declarations;
-no gate or declaration check has been waived.
+alone in 2.51 seconds. At that checkpoint, the full production package build failed with TS4023
+`NodeInspectSymbol` errors in inferred public return types. That artifact
+qualification blocker was subsequently resolved by the export repair below;
+no gate or declaration check was waived.
 
 
 The declaration-emission obstruction was diagnosed after the root typecheck passed.
