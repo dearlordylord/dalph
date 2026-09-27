@@ -1,3 +1,4 @@
+import { ensureEffectTsgoPlatformBinaryExecutable } from "./effect-tsgo-platform-binary.mjs"
 import { selectAffectedQuintFamilies } from "./quint-affected-selection.mjs"
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { existsSync, lstatSync, rmSync } from "node:fs"
@@ -83,6 +84,8 @@ const main = async () => {
     acceptedExitCodes: [0]
   }
   await runBoundedCommand(preparation)
+  // Clean installs need this executable mode before diagnostics enter the frozen candidate.
+  ensureEffectTsgoPlatformBinaryExecutable()
   const git = (...gitArgs) =>
     execFileSync("git", gitArgs, { encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } }).trim()
   if (git("status", "--porcelain") !== "") throw new Error("Freeze a clean candidate checkout before qualification")
