@@ -132,3 +132,13 @@ alone in 2.51 seconds. The full production package build still fails with TS4023
 qualification blocker, separate from runtime test success. The next diagnostic is
 to identify the originating public effect/error type in the package declarations;
 no gate or declaration check has been waived.
+
+
+The declaration-emission obstruction was diagnosed after the root typecheck passed.
+The inferred workflow error union exposed the module-private
+`PlannedAttemptResumeRedeliveryRejected` class, forcing TypeScript to inline its
+unnameable Effect inspection symbol in downstream public declarations. Exporting
+that existing class and re-exporting it from the orchestrator package makes the
+public return type nameable. No runtime branch, event or schema changed. The exact
+`pnpm build` command then passed all three production packages; the earlier TS4023
+obstruction is repaired, not waived.
