@@ -717,10 +717,22 @@ it.effect("retries an exact paused grant after a precommit crash in memory", () 
     const afterCrash = yield* journal.state.get
     expect(afterCrash.position).toBe(before.position)
     expect(Array.from(journalRecordsOfKind(afterCrash.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(0)
-    const grant = yield* applyRemotePublicationBatchGrantWithAdmission(runId, journal, request)
-    expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+    const lostAcknowledgement: JournalService = {
+      ...journal,
+      appendIfAcceptedPrefixCurrent: (requestedRunId, expectedPosition, key, event) =>
+        journal
+          .appendIfAcceptedPrefixCurrent(requestedRunId, expectedPosition, key, event)
+          .pipe(Effect.flatMap(() => Effect.die("memory host stopped after the grant committed")))
+    }
+    expect(
+      (yield* Effect.exit(applyRemotePublicationBatchGrantWithAdmission(runId, lostAcknowledgement, request)))._tag
+    ).toBe("Failure")
     const afterRetry = yield* journal.state.get
-    expect(Array.from(journalRecordsOfKind(afterRetry.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(1)
+    const grantRecords = Array.from(journalRecordsOfKind(afterRetry.prefix, "RemotePublicationBatchGrantApplied"))
+    expect(grantRecords).toHaveLength(1)
+    const replay = yield* applyRemotePublicationBatchGrantWithAdmission(runId, journal, request)
+    expect(replay._tag).toBe("BatchGrantReplay")
+    expect(replay.result.acceptedAt).toBe(grantRecords[0]?.position)
     expect(Array.from(journalRecordsOfKind(afterRetry.prefix, "IntegratorSessionFixed"))).toHaveLength(
       Array.from(journalRecordsOfKind(before.prefix, "IntegratorSessionFixed")).length
     )
@@ -757,6 +769,19 @@ it.effect("replays an exact batch grant from a reopened SQLite journal after los
           }
           yield* applyRealPause(inRunJournal, acceptedJournal)
           const request = grantRequest("sqlite-exact-batch-grant", retained.position)
+          const beforeGrant = yield* journal.state.get
+          const precommitCrash: JournalService = {
+            ...journal,
+            appendIfAcceptedPrefixCurrent: () => Effect.die("SQLite host stopped before the grant append")
+          }
+          expect(
+            (yield* Effect.exit(applyRemotePublicationBatchGrantWithAdmission(runId, precommitCrash, request)))._tag
+          ).toBe("Failure")
+          const afterPrecommitCrash = yield* journal.state.get
+          expect(afterPrecommitCrash.position).toBe(beforeGrant.position)
+          expect(
+            Array.from(journalRecordsOfKind(afterPrecommitCrash.prefix, "RemotePublicationBatchGrantApplied"))
+          ).toHaveLength(0)
           const lostAcknowledgement: JournalService = {
             ...journal,
             appendIfAcceptedPrefixCurrent: (requestedRunId, expectedPosition, key, event) =>
