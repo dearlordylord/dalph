@@ -164,6 +164,24 @@ sys.exit(124 if phase!='running' else (code if code is not None else 1))
     timeout: reap ? (reaperSeconds + 10) * 1_000 : 20_000
   })
 }
+const launchAdmitted = (root, commandArguments) => {
+  const env = withoutInheritedCustody(process.env)
+  for (const key of [
+    "DALPH_COVERAGE_BASE_SHA",
+    "DALPH_GATE_GIT_HISTORY",
+    "DALPH_GATE_RECOVERY_MODE",
+    "DALPH_QUALIFICATION_ENV_CAPTURE",
+    "DALPH_RUN_REAL_CODEX_QUALIFICATION",
+    "npm_execpath"
+  ])
+    delete env[key]
+  return spawnSync(process.execPath, [wrapper, "--", ...commandArguments], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    timeout: 20_000
+  })
+}
 const runs = (root) => {
   const location = repositoryLocation(root)
   return readdirSync(join(location.custodyRoot, "runs"))

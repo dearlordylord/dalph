@@ -190,3 +190,11 @@ typecheck, then stopped on three inherited formatting mismatches. A focused
 `controlled-workflow.ts`, and `occurrence-projection.ts`; this supports formatter
 normalization rather than semantic lint failure. After formatting those files,
 the identical check exited zero. No behavior changed and no test was removed.
+
+Combined run `d506ac22-95c9-43fe-82cd-e2a4dd1c4f87` passed artifacts, typecheck,
+lint, Lab, dependency analysis, coverage controls, custody controls and previous-
+boot controls, then a fixture failed with `ReferenceError: launchAdmitted is not
+defined`. The exact focused test reproduced that exception before any assertion,
+distinguishing a missing helper from a gate behavior failure. Restoring the
+existing admitted-command fixture helper made that focused case pass, followed
+by all 193 resume/input/control tests. The original failed run remains unproven.
