@@ -415,12 +415,17 @@ export const remotePublicationSucceededRecordKey = (requestId: RemotePublication
 /** Stable journal key for a conclusive publication wait that preserves its exact candidate. */
 export const remotePublicationRetainedRecordKey = (
   requestId: RemotePublicationRequestId,
-  authorization: RemotePublicationAttemptAuthorization
+  authorization: RemotePublicationAttemptAuthorization,
+  batchGrantAt?: JournalPosition
 ): JournalRecordKey =>
   JournalRecordKey.make(
-    authorization._tag === "InitialAttempt"
-      ? `remote-publication-retained:${requestId}`
-      : `remote-publication:${requestId}:retained-after-resume:${authorization.requestId}`
+    batchGrantAt !== undefined
+      ? authorization._tag === "InitialAttempt"
+        ? `remote-publication:${requestId}:retained-after-batch-grant:${batchGrantAt}:initial`
+        : `remote-publication:${requestId}:retained-after-batch-grant:${batchGrantAt}:resume:${authorization.requestId}`
+      : authorization._tag === "InitialAttempt"
+        ? `remote-publication-retained:${requestId}`
+        : `remote-publication:${requestId}:retained-after-resume:${authorization.requestId}`
   )
 
 /** Stable Run-wide key for one exact Operator resume receipt, across candidate successors. */

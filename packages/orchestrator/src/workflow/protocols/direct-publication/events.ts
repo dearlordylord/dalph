@@ -269,6 +269,8 @@ export type RemotePublicationIntendedEvent = typeof RemotePublicationIntendedEve
 /** Durable numbered intent is appended before an exact push may cross Git. */
 export const RemotePublicationAttemptIntendedEvent = Schema.TaggedStruct("RemotePublicationAttemptIntended", {
   attemptOrdinal: RemotePublicationAttemptOrdinal,
+  /** Exact accepted grant that opens this intent's later publication batch. */
+  batchGrantAt: Schema.optionalKey(JournalPosition),
   correlation: RemotePublicationCorrelation,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
@@ -332,6 +334,8 @@ export type RemotePublicationRetainedCause = typeof RemotePublicationRetainedCau
 
 /** Durable wait after a conclusive read or push result; no retry follows without a later owner event. */
 export const RemotePublicationRetainedEvent = Schema.TaggedStruct("RemotePublicationRetained", {
+  /** Exact accepted grant whose batch produced this retained outcome, when granted. */
+  batchGrantAt: Schema.optionalKey(JournalPosition),
   cause: RemotePublicationRetainedCause,
   correlation: RemotePublicationCorrelation,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),

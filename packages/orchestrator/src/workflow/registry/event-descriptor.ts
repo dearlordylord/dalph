@@ -493,7 +493,11 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     }),
     RemotePublicationRetained: (event) => ({
       _tag: "GenericEventDescriptor",
-      expectedKey: remotePublicationRetainedRecordKey(event.correlation.requestId, event.authorization)
+      expectedKey: remotePublicationRetainedRecordKey(
+        event.correlation.requestId,
+        event.authorization,
+        event.batchGrantAt
+      )
     }),
     RemotePublicationResumeRequested: (event) => ({
       _tag: "GenericEventDescriptor",

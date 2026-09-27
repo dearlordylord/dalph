@@ -232,8 +232,7 @@ export type IntegratorSuccessorSessionFixedEvent = typeof IntegratorSuccessorSes
 
 /** Generation for an automatically authorized competing-head session after the original session. */
 export const IntegratorAutomaticSuccessorGeneration = Schema.Int.check(
-  Schema.isGreaterThan(firstFullRerunSuccessorGeneration - 1),
-  Schema.isLessThanOrEqualTo(maximumIntegratorSessionsPerResponsibility)
+  Schema.isGreaterThan(firstFullRerunSuccessorGeneration - 1)
 ).pipe(Schema.brand("IntegratorAutomaticSuccessorGeneration"))
 export type IntegratorAutomaticSuccessorGeneration = typeof IntegratorAutomaticSuccessorGeneration.Type
 
@@ -243,6 +242,8 @@ export const IntegratorAutomaticSuccessorSessionFixedEvent = Schema.TaggedStruct
   {
     authorizationAt: JournalPosition,
     predecessor: IntegratorSessionCorrelation,
+    /** Exact publication batch grant when this fixation consumes its session allowance. */
+    publicationBatchGrantAt: Schema.optionalKey(JournalPosition),
     successor: IntegratorSessionCorrelation,
     successorGeneration: IntegratorAutomaticSuccessorGeneration,
     version: Schema.Literal(workflowJournalEventVersion)

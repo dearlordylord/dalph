@@ -21,12 +21,14 @@ import {
   integrationResponsibilityEquivalence
 } from "../protocols/integration-admission/responsibility.js"
 import {
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation,
   integratorSuccessorResponsibilityMatches
 } from "../protocols/integrator/events.js"
 import {
   integratorSessionCapacityFor,
+  maximumIntegratorSessionsPerPublicationBatch,
   type IntegratorSessionFixation
 } from "../protocols/integrator/session-capacity.js"
 import {
@@ -1289,7 +1291,7 @@ type HistoricalProjectionContext = ProjectionContext & {
   readonly integratorCandidateIntents: Map<string, IntegratorCandidateIntentJournalEvent>
   readonly publicationIntents: Map<string, RemotePublicationIntendedEvent>
   readonly publicationAttemptIntents: Map<string, RemotePublicationAttemptIntendedEvent>
-  readonly publicationRetained: Map<string, RemotePublicationRetainedEvent>
+  readonly publicationRetained: Map<string, HistoricalPublicationRetained>
   /** Exact proof may precede a finality-only resume receipt after publication has succeeded. */
   readonly publicationSucceeded: Map<string, HistoricalPublicationSuccess>
   readonly publicationResumeRequests: Map<string, RemotePublicationResumeRequestedEvent>
@@ -1304,6 +1306,10 @@ type HistoricalProjectionContext = ProjectionContext & {
 }
 
 type HistoricalPublicationSuccess = { readonly event: RemotePublicationSucceededEvent; readonly runId: RunId }
+type HistoricalPublicationRetained = {
+  readonly event: RemotePublicationRetainedEvent
+  readonly position: JournalPosition
+}
 
 const historicalTaskClaimEventKinds = {
   TaskClaimAcquired: true,
@@ -1744,6 +1750,12 @@ const projectHistoricalSuccessorSession = (
       "successor session " + event.successor.sessionId + " has no earlier predecessor session"
     )
   }
+  if (
+    integratorSessionCapacityFor(event.predecessor, integratorSessionFixationsFromOccurrences(context))._tag !==
+    "Available"
+  ) {
+    return historicalFailure(record, "quarantine FullRerun successor exceeds the ungranted three-session limit")
+  }
   const quarantined = context.occurrences.some(
     (occurrence) => occurrence._tag === "IntegrationQuarantined" && occurrence.recordedAt === event.quarantineAt
   )
@@ -1849,21 +1861,27 @@ const projectHistoricalAutomaticSuccessorSession = (
         plannedTaskAttemptEquivalence(occurrence.operation.plannedAttempt, event.successor.plannedAttempt) &&
         integrationTargetEqual(occurrence.operation.integrationTarget, event.successor.integrationTarget)
     )
-  const sessionFixations: ReadonlyArray<IntegratorSessionFixation> =
-    context.occurrences.flatMap<IntegratorSessionFixation>((occurrence) => {
-      if (occurrence._tag === "IntegratorSessionFixed") {
-        return [{ _tag: "Initial" as const, correlation: occurrence.correlation }]
-      }
-      if (
-        occurrence._tag === "IntegratorSuccessorSessionFixed" ||
-        occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed"
-      ) {
-        return [{ _tag: "Successor" as const, predecessor: occurrence.predecessor, successor: occurrence.successor }]
-      }
-      return []
-    })
-  const capacity = integratorSessionCapacityFor(event.predecessor, sessionFixations)
-  const expectedGeneration = capacity._tag === "Available" ? capacity.nextGeneration : undefined
+  const capacity = integratorSessionCapacityFor(event.predecessor, integratorSessionFixationsFromOccurrences(context))
+  const latestGrant = latestPublicationBatchGrantFor(context, authorization.correlation, record.position)
+  const grantMatches = event.publicationBatchGrantAt === latestGrant?.recordedAt
+  const sessionsConsumedByGrant =
+    latestGrant === undefined
+      ? 0
+      : context.occurrences.filter(
+          (occurrence) =>
+            occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+            occurrence.recordedAt > latestGrant.recordedAt &&
+            occurrence.successor.plannedAttempt.runId === event.predecessor.plannedAttempt.runId &&
+            occurrence.successor.queuedAt === event.predecessor.queuedAt
+        ).length
+  const expectedGeneration =
+    latestGrant === undefined
+      ? capacity._tag === "Available"
+        ? capacity.nextGeneration
+        : undefined
+      : capacity.fixedSessionIds.size > 0 && sessionsConsumedByGrant < maximumIntegratorSessionsPerPublicationBatch
+        ? IntegratorAutomaticSuccessorGeneration.make(capacity.fixedSessionIds.size + 1)
+        : undefined
   if (
     record.runId !== event.predecessor.plannedAttempt.runId ||
     fixedSession === undefined ||
@@ -1883,6 +1901,7 @@ const projectHistoricalAutomaticSuccessorSession = (
     !integratorSessionCorrelationsEqual(event.successor, expectedSuccessor) ||
     record.key !== integratorAutomaticSuccessorSessionFixedRecordKey(event.predecessor, event.authorizationAt) ||
     context.integratorSessions.has(integratorSessionKey(event.successor)) ||
+    !grantMatches ||
     expectedGeneration === undefined ||
     event.successorGeneration !== expectedGeneration
   ) {
@@ -2338,6 +2357,37 @@ type HistoricalPublicationResumeRequestedEvent = Extract<
 
 const publicationAttemptKey = (requestId: string, ordinal: number): string => JSON.stringify([requestId, ordinal])
 
+const latestPublicationBatchGrantFor = (
+  context: HistoricalProjectionContext,
+  correlation: RemotePublicationIntendedEvent["correlation"],
+  beforePosition: JournalPosition
+) =>
+  context.occurrences
+    .filter(
+      (occurrence) =>
+        occurrence._tag === "RemotePublicationBatchGrantApplied" &&
+        occurrence.recordedAt < beforePosition &&
+        occurrence.request.runId === remotePublicationRunIdOf(correlation) &&
+        occurrence.request.responsibility.queuedAt === correlation.qualifiedCandidate.run.session.queuedAt
+    )
+    .at(lastArrayElementOffset)
+
+const integratorSessionFixationsFromOccurrences = (
+  context: HistoricalProjectionContext
+): ReadonlyArray<IntegratorSessionFixation> =>
+  context.occurrences.flatMap<IntegratorSessionFixation>((occurrence) => {
+    if (occurrence._tag === "IntegratorSessionFixed") {
+      return [{ _tag: "Initial" as const, correlation: occurrence.correlation }]
+    }
+    if (
+      occurrence._tag === "IntegratorSuccessorSessionFixed" ||
+      occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed"
+    ) {
+      return [{ _tag: "Successor" as const, predecessor: occurrence.predecessor, successor: occurrence.successor }]
+    }
+    return []
+  })
+
 const sameRemotePublicationTarget = (left: RemotePublicationTarget, right: RemotePublicationTarget): boolean =>
   left.endpoint === right.endpoint && left.branch === right.branch
 
@@ -2447,6 +2497,20 @@ const projectHistoricalPublicationAttempt = (
   if (context.publicationAttemptIntents.has(attemptKey)) {
     return historicalFailure(record, "duplicate publication attempt " + attemptKey)
   }
+  const latestGrant = latestPublicationBatchGrantFor(context, event.correlation, record.position)
+  if (event.batchGrantAt !== latestGrant?.recordedAt) {
+    return historicalFailure(record, "publication attempt must identify the latest exact responsibility batch grant")
+  }
+  const priorAttempts = Array.from(context.publicationAttemptIntents.values()).filter(
+    (attempt) => attempt.correlation.requestId === requestId
+  )
+  if (Number(event.attemptOrdinal) !== priorAttempts.length + 1) {
+    return historicalFailure(record, "publication attempt ordinal must continue the exact candidate history")
+  }
+  const attemptsInBatch = priorAttempts.filter((attempt) => attempt.batchGrantAt === event.batchGrantAt)
+  if (attemptsInBatch.length >= remotePublicationAttemptLimit) {
+    return historicalFailure(record, "publication attempt exceeds the exact batch allowance")
+  }
   context.publicationAttemptIntents.set(attemptKey, event)
   return Effect.succeed(
     RemotePublicationAttemptRequested.make({
@@ -2500,7 +2564,17 @@ const projectHistoricalPublicationRetained = (
   if (context.publicationRetained.has(requestId)) {
     return historicalFailure(record, "publication " + requestId + " was retained twice without a resume receipt")
   }
-  context.publicationRetained.set(requestId, event)
+  const latestGrant = latestPublicationBatchGrantFor(context, event.correlation, record.position)
+  if (event.batchGrantAt !== latestGrant?.recordedAt) {
+    return historicalFailure(record, "retained publication must identify the latest exact responsibility batch grant")
+  }
+  const attemptsInBatch = Array.from(context.publicationAttemptIntents.values()).filter(
+    (attempt) => attempt.correlation.requestId === requestId && attempt.batchGrantAt === event.batchGrantAt
+  ).length
+  if (event.cause._tag === "AttemptsExhausted" && attemptsInBatch !== remotePublicationAttemptLimit) {
+    return historicalFailure(record, "publication exhaustion must follow the exact batch attempt limit")
+  }
+  context.publicationRetained.set(requestId, { event, position: record.position })
   return Effect.succeed(
     RemotePublicationRetained.make({
       cause: event.cause,
@@ -2520,7 +2594,8 @@ const projectHistoricalPublicationResumeRequested = (
   const publicationRequestId = event.correlation.requestId
   const receiptId = event.request.requestId
   const intent = context.publicationIntents.get(publicationRequestId)
-  const retained = context.publicationRetained.get(publicationRequestId)
+  const retainedRecord = context.publicationRetained.get(publicationRequestId)
+  const retained = retainedRecord?.event
   const succeeded = context.publicationSucceeded.get(publicationRequestId)
   const expectedRunId = remotePublicationRunIdOf(event.correlation)
   const exactSuccessPredecessor =
@@ -2556,7 +2631,8 @@ const projectHistoricalPublicationResumeRequested = (
       )
     }
     const attemptsBeforeReceipt = Array.from(context.publicationAttemptIntents.values()).filter(
-      (attempt) => attempt.correlation.requestId === publicationRequestId
+      (attempt) =>
+        attempt.correlation.requestId === publicationRequestId && attempt.batchGrantAt === retained.batchGrantAt
     ).length
     if (attemptsBeforeReceipt >= remotePublicationAttemptLimit) {
       return historicalFailure(record, "publication resume receipt cannot override the exhausted attempt allowance")
@@ -2865,7 +2941,8 @@ const projectHistoricalPromotion = (
 
 const projectHistoricalBoundary = (
   record: JournalRecord,
-  event: HistoricalBoundaryEvent
+  event: HistoricalBoundaryEvent,
+  context: HistoricalProjectionContext
 ): HistoricalProjectionResult => {
   if (event._tag === "IntegrationQuarantined") {
     return Effect.succeed(
@@ -2894,6 +2971,33 @@ const projectHistoricalBoundary = (
     if (event.request.runId !== record.runId || event.request.responsibility.runId !== record.runId) {
       return historicalFailure(record, "publication batch grant must name the exact containing Run")
     }
+    const exhaustion = context.occurrences.find(
+      (occurrence) =>
+        occurrence._tag === "RemotePublicationRetained" && occurrence.recordedAt === event.request.exhaustionAt
+    )
+    if (
+      exhaustion?._tag !== "RemotePublicationRetained" ||
+      exhaustion.recordedAt >= record.position ||
+      exhaustion.runId !== record.runId ||
+      exhaustion.correlation.qualifiedCandidate.run.session.queuedAt !== event.request.responsibility.queuedAt ||
+      (exhaustion.cause._tag !== "AttemptsExhausted" && exhaustion.cause._tag !== "CompatibleCompetingHead")
+    ) {
+      return historicalFailure(record, "publication batch grant must identify its exact earlier exhaustion occurrence")
+    }
+    if (
+      context.occurrences.some(
+        (occurrence) =>
+          occurrence._tag === "RemotePublicationBatchGrantApplied" &&
+          occurrence.request.exhaustionAt === event.request.exhaustionAt
+      )
+    ) {
+      return historicalFailure(record, "publication exhaustion occurrence already has a batch grant")
+    }
+    const retained = context.publicationRetained.get(exhaustion.correlation.requestId)
+    if (retained?.position !== exhaustion.recordedAt || retained.event.cause._tag !== exhaustion.cause._tag) {
+      return historicalFailure(record, "publication batch grant cannot release a superseded retained occurrence")
+    }
+    context.publicationRetained.delete(exhaustion.correlation.requestId)
     return Effect.succeed(
       RemotePublicationBatchGrantApplied.make({
         direction: event.direction,
@@ -2972,7 +3076,7 @@ const projectHistoricalOccurrence = (
   if (isHistoricalRemoteBaselineEvent(event)) return projectHistoricalRemoteBaseline(record, event, context)
   if (isHistoricalPublicationEvent(event)) return projectHistoricalPublication(record, event, context)
   if (isHistoricalPromotionEvent(event)) return projectHistoricalPromotion(record, event, context)
-  if (isHistoricalBoundaryEvent(event)) return projectHistoricalBoundary(record, event)
+  if (isHistoricalBoundaryEvent(event)) return projectHistoricalBoundary(record, event, context)
   if (isHistoricalFinalityStepEvent(event)) return projectHistoricalFinalityStep(record, event)
   return Effect.void
 }
@@ -3375,7 +3479,7 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
     publicationAdmissionReadIntents: new Map<string, RemotePublicationAdmissionReadIntendedEvent>(),
     publicationAttemptIntents: new Map<string, RemotePublicationAttemptIntendedEvent>(),
     publicationIntents: new Map<string, RemotePublicationIntendedEvent>(),
-    publicationRetained: new Map<string, RemotePublicationRetainedEvent>(),
+    publicationRetained: new Map<string, HistoricalPublicationRetained>(),
     publicationSucceeded: new Map<string, HistoricalPublicationSuccess>(),
     publicationResumeRequests: new Map<string, RemotePublicationResumeRequestedEvent>(),
     remoteBaselineReadIntents: new Map<string, RemoteBaselineReadIntendedEvent>(),

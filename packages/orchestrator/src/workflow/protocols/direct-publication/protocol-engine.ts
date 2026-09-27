@@ -36,6 +36,7 @@ import {
   appendRemotePublicationResumeRequest,
   appendRemotePublicationSuccess,
   readAcceptedRemotePublicationEvidence,
+  remotePublicationBatchGrantForNextAttempt,
   remotePublicationEventsFor,
   validateRemotePublicationState,
   type CurrentRemotePublicationEvidence
@@ -129,12 +130,11 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     phaseBoundary: RemotePublicationPhaseBoundary
   ) {
     const correlation = remotePublicationCorrelationFor(candidate, target)
-    const reconstructed = yield* validateRemotePublicationState(
-      yield* readEvidence(candidate.run.session.plannedAttempt.runId),
-      correlation
-    )
+    const source = yield* readEvidence(candidate.run.session.plannedAttempt.runId)
+    const reconstructed = yield* validateRemotePublicationState(source, correlation)
     if (reconstructed._tag === "PublicationSucceeded") return reconstructed
-    if (reconstructed._tag === "PublicationRetained") return reconstructed
+    const grantForNextAttempt = remotePublicationBatchGrantForNextAttempt(source, correlation, reconstructed)
+    if (reconstructed._tag === "PublicationRetained" && grantForNextAttempt === undefined) return reconstructed
     const initialAuthorization = RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
     const authorization =
       reconstructed._tag === "PublicationResumeReady"
@@ -142,24 +142,53 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         : reconstructed._tag === "PublicationPending"
           ? reconstructed.authorization
           : initialAuthorization
+    const grantedBatchAt = grantForNextAttempt?.position
+    const initialAttemptOrdinals =
+      reconstructed._tag === "PublicationAbsent" || reconstructed._tag === "PublicationRetained"
+        ? []
+        : (reconstructed.attemptOrdinalsInBatch ?? reconstructed.attemptOrdinals)
     let pendingState: Extract<RemotePublicationStateType, { readonly _tag: "PublicationPending" }> =
       reconstructed._tag === "PublicationAbsent"
         ? yield* appendRemotePublicationIntent(correlation).pipe(
             Effect.as(
               RemotePublicationState.cases.PublicationPending.make({
                 attemptOrdinals: [],
+                attemptOrdinalsInBatch: [],
                 authorization: initialAuthorization,
+                ...(grantedBatchAt === undefined ? {} : { batchGrantAt: grantedBatchAt }),
                 correlation
               })
             )
           )
-        : reconstructed._tag === "PublicationResumeReady"
+        : reconstructed._tag === "PublicationRetained"
           ? RemotePublicationState.cases.PublicationPending.make({
-              attemptOrdinals: reconstructed.attemptOrdinals,
-              authorization,
+              attemptOrdinals: remotePublicationEventsFor(source, correlation).flatMap((event) =>
+                event._tag === "RemotePublicationAttemptIntended" ? [event.attemptOrdinal] : []
+              ),
+              attemptOrdinalsInBatch: [],
+              authorization: initialAuthorization,
+              ...(grantedBatchAt === undefined ? {} : { batchGrantAt: grantedBatchAt }),
               correlation: reconstructed.correlation
             })
-          : reconstructed
+          : reconstructed._tag === "PublicationResumeReady"
+            ? RemotePublicationState.cases.PublicationPending.make({
+                attemptOrdinals: reconstructed.attemptOrdinals,
+                attemptOrdinalsInBatch: initialAttemptOrdinals,
+                authorization,
+                ...(reconstructed.batchGrantAt === undefined ? {} : { batchGrantAt: reconstructed.batchGrantAt }),
+                correlation: reconstructed.correlation
+              })
+            : reconstructed.attemptOrdinals.length === 0 && grantedBatchAt !== undefined
+              ? RemotePublicationState.cases.PublicationPending.make({
+                  ...reconstructed,
+                  attemptOrdinalsInBatch: [],
+                  batchGrantAt: grantedBatchAt
+                })
+              : reconstructed
+    const pendingAttemptAtActivation =
+      reconstructed._tag === "PublicationPending" || reconstructed._tag === "PublicationResumeReady"
+        ? reconstructed.attemptOrdinals.at(lastElementOffset)
+        : undefined
     const git = yield* RemotePublicationGit
     const request = remotePublicationGitRequestFor(correlation)
     const prepareAttemptIntent = Effect.fn("RemotePublication.prepareAttemptIntent")(function* (
@@ -170,18 +199,25 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         .pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }))
       if (!prepared) {
         const cause = RemotePublicationRetainedCause.cases.PushCustodyUnproven.make({})
-        yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
+        yield* appendRemotePublicationRetained(
+          correlation,
+          cause,
+          pendingState.authorization,
+          pendingState.batchGrantAt
+        )
         return RemotePublicationState.cases.PublicationRetained.make({
+          attemptOrdinalsInBatch: pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals,
           authorization: pendingState.authorization,
+          ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
           cause,
           correlation
         })
       }
-      yield* appendRemotePublicationAttemptIntent(correlation, attemptOrdinal)
+      yield* appendRemotePublicationAttemptIntent(correlation, attemptOrdinal, pendingState.batchGrantAt)
     })
     const observationResult = yield* phaseBoundary.runObservation(
       Effect.gen(function* () {
-        const pendingOrdinalAtActivation = pendingState.attemptOrdinals.at(lastElementOffset)
+        const pendingOrdinalAtActivation = pendingAttemptAtActivation
         if (pendingOrdinalAtActivation !== undefined) {
           const custody = yield* git
             .reconcileSenderCustody(request, pendingOrdinalAtActivation)
@@ -193,7 +229,12 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
             )
           if (custody._tag === "Unproven") {
             const cause = RemotePublicationRetainedCause.cases.PushCustodyUnproven.make({})
-            yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
+            yield* appendRemotePublicationRetained(
+              correlation,
+              cause,
+              pendingState.authorization,
+              pendingState.batchGrantAt
+            )
             return { _tag: "Retained" as const, cause }
           }
         }
@@ -205,14 +246,19 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         )
         if (observationResult._tag === "Unavailable") {
           const cause = retainedCauseForObservationFailure(observationResult.failure)
-          yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
+          yield* appendRemotePublicationRetained(
+            correlation,
+            cause,
+            pendingState.authorization,
+            pendingState.batchGrantAt
+          )
           return { _tag: "Retained" as const, cause }
         }
         if (
           observationResult.observation._tag === "CandidateCurrent" ||
           observationResult.observation._tag === "CandidateAncestor"
         ) {
-          const existingOrdinal = pendingState.attemptOrdinals.at(lastElementOffset)
+          const existingOrdinal = pendingAttemptAtActivation
           const attemptOrdinal =
             existingOrdinal === undefined
               ? RemotePublicationAttemptOrdinal.make(pendingState.attemptOrdinals.length + 1)
@@ -243,7 +289,9 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     if (observationResult._tag === "SucceededOrRetained") return observationResult.state
     if (observationResult._tag === "Retained") {
       return RemotePublicationState.cases.PublicationRetained.make({
+        attemptOrdinalsInBatch: pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals,
         authorization: pendingState.authorization,
+        ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
         cause: observationResult.cause,
         correlation
       })
@@ -263,18 +311,32 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
                 ? RemotePublicationRetainedCause.cases.TargetMissing.make({})
                 : undefined
         if (retainedCause !== undefined) {
-          yield* appendRemotePublicationRetained(correlation, retainedCause, pendingState.authorization)
+          yield* appendRemotePublicationRetained(
+            correlation,
+            retainedCause,
+            pendingState.authorization,
+            pendingState.batchGrantAt
+          )
           return RemotePublicationState.cases.PublicationRetained.make({
+            attemptOrdinalsInBatch: pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals,
             authorization: pendingState.authorization,
+            ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
             cause: retainedCause,
             correlation
           })
         }
         if (remotePublicationAttemptsExhausted(pendingState)) {
           const cause = RemotePublicationRetainedCause.cases.AttemptsExhausted.make({})
-          yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
+          yield* appendRemotePublicationRetained(
+            correlation,
+            cause,
+            pendingState.authorization,
+            pendingState.batchGrantAt
+          )
           return RemotePublicationState.cases.PublicationRetained.make({
+            attemptOrdinalsInBatch: pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals,
             authorization: pendingState.authorization,
+            ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
             cause,
             correlation
           })
@@ -291,15 +353,27 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         if (pushResult._tag === "Failure") {
           pendingState = RemotePublicationState.cases.PublicationPending.make({
             attemptOrdinals: [...pendingState.attemptOrdinals, attemptOrdinal],
+            attemptOrdinalsInBatch: [
+              ...(pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals),
+              attemptOrdinal
+            ],
             authorization: pendingState.authorization,
+            ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
             correlation
           })
           if (pushResult.failure.reason === "ResponseDeadline" || pushResult.failure.reason === "TransportUnavailable")
             return pendingState
           const cause = retainedCauseForPushFailure(pushResult.failure)
-          yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
+          yield* appendRemotePublicationRetained(
+            correlation,
+            cause,
+            pendingState.authorization,
+            pendingState.batchGrantAt
+          )
           return RemotePublicationState.cases.PublicationRetained.make({
+            attemptOrdinalsInBatch: pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals,
             authorization: pendingState.authorization,
+            ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
             cause,
             correlation
           })
@@ -317,7 +391,12 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
           yield* appendRemotePublicationAttemptRejection(correlation, attemptOrdinal)
           pendingState = RemotePublicationState.cases.PublicationPending.make({
             attemptOrdinals: [...pendingState.attemptOrdinals, attemptOrdinal],
+            attemptOrdinalsInBatch: [
+              ...(pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals),
+              attemptOrdinal
+            ],
             authorization: pendingState.authorization,
+            ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
             correlation
           })
           return pendingState
@@ -330,9 +409,16 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
               : result.cause === "Policy"
                 ? RemotePublicationRetainedCause.cases.PolicyDenied.make({})
                 : RemotePublicationRetainedCause.cases.RemoteDenied.make({})
-        yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
+        yield* appendRemotePublicationRetained(
+          correlation,
+          cause,
+          pendingState.authorization,
+          pendingState.batchGrantAt
+        )
         return RemotePublicationState.cases.PublicationRetained.make({
+          attemptOrdinalsInBatch: pendingState.attemptOrdinalsInBatch ?? pendingState.attemptOrdinals,
           authorization: pendingState.authorization,
+          ...(pendingState.batchGrantAt === undefined ? {} : { batchGrantAt: pendingState.batchGrantAt }),
           cause,
           correlation
         })
@@ -431,7 +517,9 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     if (state._tag === "PublicationSucceeded")
       return { state, activated: !isIntegrationFinalitySettledForCandidate(source, candidate) }
     if (state._tag !== "PublicationRetained") return { state, activated: false }
-    const priorAttemptCount = events.filter((event) => event._tag === "RemotePublicationAttemptIntended").length
+    const priorAttemptCount =
+      state.attemptOrdinalsInBatch?.length ??
+      events.filter((event) => event._tag === "RemotePublicationAttemptIntended").length
     if (!remotePublicationRetainedCauseIsResumable(state.cause) || priorAttemptCount >= remotePublicationAttemptLimit)
       return { state, activated: false }
 

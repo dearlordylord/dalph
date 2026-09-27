@@ -31,7 +31,11 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionId
 } from "./events.js"
-import { integratorSessionCapacityForJournal } from "./session-capacity.js"
+import {
+  integratorSessionCapacityAfterPublicationBatchGrantForJournal,
+  integratorSessionCapacityForJournal,
+  latestPublicationBatchGrantAtForResponsibility
+} from "./session-capacity.js"
 import type { IntegratorAutomaticSuccessorPreparationInput } from "./session.js"
 import { IntegratorJournalContradiction } from "./journal-errors.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
@@ -145,11 +149,13 @@ export const integratorAutomaticSuccessorPreparationIsCurrent = (
 const eventFor = (
   input: IntegratorAutomaticSuccessorPreparationInput,
   successor: IntegratorSessionCorrelation,
-  generation: IntegratorAutomaticSuccessorGeneration
+  generation: IntegratorAutomaticSuccessorGeneration,
+  publicationBatchGrantAt?: JournalPosition
 ) =>
   IntegratorAutomaticSuccessorSessionFixedEvent.make({
     authorizationAt: input.authorizationAt,
     predecessor: input.predecessor,
+    ...(publicationBatchGrantAt === undefined ? {} : { publicationBatchGrantAt }),
     successor,
     successorGeneration: generation,
     version: workflowJournalEventVersion
@@ -214,11 +220,18 @@ export const validateAutomaticSuccessorSessionFixedRecord = (
     targetLineageObservedAt: lineage.position
   }
   const successor = integratorAutomaticSuccessorCorrelationFor(input)
-  const capacity = integratorSessionCapacityForJournal(priorRecords, predecessor)
+  const latestGrantAt = latestPublicationBatchGrantAtForResponsibility(priorRecords, predecessor)
+  if (record.event.publicationBatchGrantAt !== latestGrantAt) {
+    return { _tag: "Invalid", detail: "automatic successor must identify the active publication batch grant" }
+  }
+  const capacity =
+    latestGrantAt === undefined
+      ? integratorSessionCapacityForJournal(priorRecords, predecessor)
+      : integratorSessionCapacityAfterPublicationBatchGrantForJournal(priorRecords, predecessor, latestGrantAt)
   if (capacity._tag !== "Available") {
     return { _tag: "Invalid", detail: "automatic successor event exceeds the fixed-session capacity" }
   }
-  const expectedEvent = eventFor(input, successor, capacity.nextGeneration)
+  const expectedEvent = eventFor(input, successor, capacity.nextGeneration, latestGrantAt)
   const expectedKey = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, record.event.authorizationAt)
   if (
     !exactFixedSessionExists(priorRecords, predecessor) ||
@@ -253,7 +266,15 @@ export const prepareIntegratorAutomaticSuccessorSessionAppend = Effect.fn(
       "automatic successor requires its exact fixed predecessor, authorization, ready baseline, and fresh lineage"
     )
   }
-  const capacity = integratorSessionCapacityForJournal(premiseRecords, predecessor)
+  const publicationBatchGrantAt = latestPublicationBatchGrantAtForResponsibility(premiseRecords, predecessor)
+  const capacity =
+    publicationBatchGrantAt === undefined
+      ? integratorSessionCapacityForJournal(premiseRecords, predecessor)
+      : integratorSessionCapacityAfterPublicationBatchGrantForJournal(
+          premiseRecords,
+          predecessor,
+          publicationBatchGrantAt
+        )
   if (capacity._tag === "Exhausted") {
     return yield* reject(predecessor, "Integrator responsibility has reached its three-session aggregate bound")
   }
@@ -261,12 +282,12 @@ export const prepareIntegratorAutomaticSuccessorSessionAppend = Effect.fn(
     return yield* reject(predecessor, "automatic successor requires a fixed predecessor session")
   }
   if (existing._tag === "Found") {
-    const existingEvent = eventFor(input, successor, capacity.nextGeneration)
+    const existingEvent = eventFor(input, successor, capacity.nextGeneration, publicationBatchGrantAt)
     return integratorAutomaticSuccessorAppendRecordMatches(existing.record, key, existingEvent)
       ? ({ _tag: "Existing", record: existing.record } as const)
       : yield* reject(predecessor, "automatic successor key contains a foreign or contradictory fixed event")
   }
-  const event = eventFor(input, successor, capacity.nextGeneration)
+  const event = eventFor(input, successor, capacity.nextGeneration, publicationBatchGrantAt)
   const predecessorAlreadyHasSuccessor = [
     ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
     ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")

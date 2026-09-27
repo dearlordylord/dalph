@@ -7,10 +7,11 @@ import { WorkflowActor } from "../../registry/actor.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
 import { Journal, journalLayer, type JournalStorageBoundary } from "../../../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journal/identity.js"
-import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer, sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { OperationId } from "../../identity.js"
@@ -22,6 +23,12 @@ import {
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantinedEvent
 } from "../integration-quarantine/events.js"
+import { IntegrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
+import { applyRemotePublicationBatchGrantWithAdmission } from "../direct-publication/batch-grant-control.js"
+import {
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId
+} from "../direct-publication/events.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -41,7 +48,7 @@ import {
   prepareIntegratorAutomaticSuccessorSessionAppend,
   validateAutomaticSuccessorSessionFixedRecord
 } from "./automatic-successor-session.js"
-import { integratorSessionCapacityFor } from "./session-capacity.js"
+import { integratorSessionCapacityFor, integratorSessionCapacityForJournal } from "./session-capacity.js"
 import { evaluateIntegratorRetryAuthorization } from "./retry-authorization.js"
 import { deriveCurrentIntegratorState } from "./state.js"
 import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
@@ -69,6 +76,83 @@ const seedStoreWithPrefix = Effect.fn("AutomaticSuccessorSessionTest.seedStoreWi
 
 const existingAutomaticSuccessorCount = (records: ReadonlyArray<JournalRecord>): number =>
   records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed").length
+
+it.effect("reconstructs a fourth automatic successor only after its exact publication batch grant", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const s2 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+    if (s2._tag !== "Append") return yield* Effect.die("the accepted prefix must fix S2")
+    fixture.append(s2.event)
+
+    const secondGeneration = appendAutomaticSuccessorGeneration(
+      fixture,
+      s2.event.successor,
+      GitCommitSha.make("8".repeat(40)),
+      IntegratorAutomaticSuccessorGeneration.make(2)
+    )
+    const s3 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      secondGeneration.input,
+      secondGeneration.reduction.prefix
+    )
+    if (s3._tag !== "Append") return yield* Effect.die("the ungranted limit must allow exactly S3")
+    fixture.append(s3.event)
+
+    const thirdGeneration = appendAutomaticSuccessorGeneration(
+      fixture,
+      s3.event.successor,
+      GitCommitSha.make("9".repeat(40)),
+      IntegratorAutomaticSuccessorGeneration.make(3)
+    )
+    expect(integratorSessionCapacityForJournal(fixture.records(), fixture.input.predecessor)._tag).toBe("Exhausted")
+    const ungrantedS4 = yield* Effect.exit(
+      prepareIntegratorAutomaticSuccessorSessionAppend(thirdGeneration.input, thirdGeneration.reduction.prefix)
+    )
+    expect(ungrantedS4._tag).toBe("Failure")
+    const exhaustion = fixture
+      .records()
+      .findLast(
+        ({ event }) => event._tag === "RemotePublicationRetained" && event.cause._tag === "CompatibleCompetingHead"
+      )
+    if (exhaustion?.event._tag !== "RemotePublicationRetained") {
+      return yield* Effect.die("S3 must have its own compatible competing-head retained occurrence")
+    }
+
+    const context = yield* Layer.build(
+      liveJournalTestLayer({ records: fixture.records(), runId: fixture.runId, target: fixture.accepted.trackerTarget })
+    )
+    const journal = Context.get(context, Journal)
+    const inRunJournal = Context.get(context, InRunJournal)
+    const grant = yield* applyRemotePublicationBatchGrantWithAdmission(
+      fixture.runId,
+      journal,
+      RemotePublicationBatchGrantRequest.make({
+        exhaustionAt: exhaustion.position,
+        requestId: RemotePublicationBatchGrantRequestId.make("automatic-successor-batch-grant"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: fixture.input.predecessor.queuedAt,
+          runId: fixture.runId
+        }),
+        runId: fixture.runId,
+        schemaVersion: 1
+      })
+    )
+    expect(grant._tag).toBe("NewlyRecordedBatchGrant")
+
+    const acceptedGrantPrefix = yield* journal.state.get
+    const s4 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      thirdGeneration.input,
+      acceptedGrantPrefix.prefix
+    )
+    if (s4._tag !== "Append") return yield* Effect.die("the exact grant must authorize S4")
+    expect(s4.event.publicationBatchGrantAt).toBe(grant.result.acceptedAt)
+    expect(s4.event.successorGeneration).toBe(4)
+    yield* inRunJournal.append(fixture.runId, s4.key, s4.event)
+
+    const extendedPrefix = yield* journal.state.get
+    const current = deriveCurrentIntegratorState(extendedPrefix.prefix, fixture.accepted.responsibility)
+    expect(current).toMatchObject({ _tag: "RunUnfinished", run: { session: s4.event.successor } })
+  })
+)
 
 it("counts predecessor and successor identities together against the shared session capacity", () => {
   const predecessor = makeSuccessorPrefix().input.predecessor

@@ -3,6 +3,8 @@ import type { StartedIntegrationResponsibility } from "../integration-admission/
 import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
   journalRecordByKey,
   journalRecordsOfKind,
   type JournalHistorySource
@@ -16,14 +18,14 @@ import {
   IntegratorRunQualifiedCandidate,
   type IntegratorRunState,
   type IntegratorSessionCorrelation,
-  integratorRetryRunOrdinal,
-  maximumIntegratorSessionsPerResponsibility
+  integratorRetryRunOrdinal
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
 import { integratorRunTwoAuthorizationIssue } from "./retry-authorization.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
 import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
+import { integratorSessionCapacityForJournal } from "./session-capacity.js"
 export { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
@@ -145,7 +147,6 @@ const activeSuccessorFor = (
     } => {
   let active = predecessor
   let relation: "Automatic" | "FullRerun" = "FullRerun"
-  let successorCount = 0
   let advanced = false
   const visited = new Set<string>()
   for (;;) {
@@ -178,6 +179,12 @@ const activeSuccessorFor = (
     const record = related[0]
     if (record === undefined) return { _tag: "Invalid", detail: "successor relation disappeared during reconstruction" }
     if (record.event._tag === "IntegratorSuccessorSessionFixed") {
+      const priorRecords = isJournalRecordEvidence(records)
+        ? journalEvidenceBefore(records, record.position)
+        : records.filter((candidate) => candidate.position < record.position)
+      if (integratorSessionCapacityForJournal(priorRecords, active)._tag !== "Available") {
+        return { _tag: "Invalid", detail: "FullRerun successor exceeds the three-session bound" }
+      }
       const validated = evaluateIntegratorFullRerunSuccessor(records, record, active)
       if (validated._tag !== "Valid") return validated
       active = validated.successor
@@ -191,13 +198,6 @@ const activeSuccessorFor = (
       return { _tag: "Invalid", detail: "successor relation has an unexpected event kind" }
     }
     advanced = true
-    successorCount += 1
-    if (successorCount + 1 >= maximumIntegratorSessionsPerResponsibility && visited.has(active.sessionId)) {
-      return { _tag: "Invalid", detail: "Integrator successor relations exceed the three-session bound" }
-    }
-    if (successorCount + 1 > maximumIntegratorSessionsPerResponsibility) {
-      return { _tag: "Invalid", detail: "Integrator successor relations exceed the three-session bound" }
-    }
   }
 }
 

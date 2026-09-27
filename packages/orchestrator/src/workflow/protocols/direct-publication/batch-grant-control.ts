@@ -16,7 +16,10 @@ import {
   integrationResponsibilityEquivalence,
   StartedIntegrationResponsibility
 } from "../integration-admission/responsibility.js"
-import { integratorSessionCapacityForJournal } from "../integrator/session-capacity.js"
+import {
+  integratorSessionCapacityAfterPublicationBatchGrantForJournal,
+  integratorSessionCapacityForJournal
+} from "../integrator/session-capacity.js"
 import { deriveCurrentIntegratorState, integratorRunQualifiedCandidateFromState } from "../integrator/state.js"
 import {
   RemotePublicationBatchGrantAppliedEvent,
@@ -28,7 +31,7 @@ import {
   type RemotePublicationBatchGrantRequest as RemotePublicationBatchGrantRequestValue
 } from "./events.js"
 import { RemotePublicationBatchGrantRequestConflict, RemotePublicationBatchGrantSubjectMismatch } from "./errors.js"
-import { remotePublicationEventsFor, validateRemotePublicationState } from "./transition-journal.js"
+import { validateRemotePublicationState } from "./transition-journal.js"
 
 const lastElementOffset = -1 // eslint-disable-line no-magic-numbers -- select the exact latest retained occurrence
 
@@ -186,15 +189,26 @@ const publicationExhaustionIsCurrent = Effect.fn("RemotePublicationBatchGrant.ve
   if (matchingRetained.at(lastElementOffset)?.position !== occurrence.position) return false
 
   const state = yield* validateRemotePublicationState(prefix, correlation)
-  if (state._tag !== "PublicationRetained" || state.cause._tag !== cause._tag) return false
+  if (
+    state._tag !== "PublicationRetained" ||
+    state.cause._tag !== cause._tag ||
+    occurrence.event.batchGrantAt !== state.batchGrantAt
+  ) {
+    return false
+  }
   if (cause._tag === "AttemptsExhausted") {
-    const attempts = remotePublicationEventsFor(prefix, correlation).filter(
-      (event) => event._tag === "RemotePublicationAttemptIntended"
-    )
-    return attempts.length === remotePublicationAttemptLimit
+    return (state.attemptOrdinalsInBatch ?? []).length === remotePublicationAttemptLimit
   }
   if (cause._tag === "CompatibleCompetingHead") {
-    return integratorSessionCapacityForJournal(prefix, correlation.qualifiedCandidate.run.session)._tag === "Exhausted"
+    const capacity =
+      state.batchGrantAt === undefined
+        ? integratorSessionCapacityForJournal(prefix, correlation.qualifiedCandidate.run.session)
+        : integratorSessionCapacityAfterPublicationBatchGrantForJournal(
+            prefix,
+            correlation.qualifiedCandidate.run.session,
+            state.batchGrantAt
+          )
+    return capacity._tag === "Exhausted"
   }
   return false
 })

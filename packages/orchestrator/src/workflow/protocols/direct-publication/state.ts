@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import {
+  RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptLimit,
   RemotePublicationAttemptOrdinal,
   RemotePublicationAttemptAuthorization,
@@ -19,16 +20,22 @@ export const RemotePublicationState = Schema.TaggedUnion({
   PublicationPending: {
     authorization: RemotePublicationAttemptAuthorization,
     attemptOrdinals: Schema.Array(RemotePublicationAttemptOrdinal),
+    attemptOrdinalsInBatch: Schema.optionalKey(Schema.Array(RemotePublicationAttemptOrdinal)),
+    batchGrantAt: Schema.optionalKey(RemotePublicationAttemptIntendedEvent.fields.batchGrantAt),
     correlation: RemotePublicationCorrelation
   },
   PublicationResumeReady: {
     attemptOrdinals: Schema.Array(RemotePublicationAttemptOrdinal),
+    attemptOrdinalsInBatch: Schema.optionalKey(Schema.Array(RemotePublicationAttemptOrdinal)),
+    batchGrantAt: Schema.optionalKey(RemotePublicationAttemptIntendedEvent.fields.batchGrantAt),
     correlation: RemotePublicationCorrelation,
     request: RemotePublicationResumeRequest
   },
   PublicationSucceeded: { correlation: RemotePublicationCorrelation, proof: RemotePublicationProofBasis },
   PublicationRetained: {
     authorization: RemotePublicationAttemptAuthorization,
+    attemptOrdinalsInBatch: Schema.optionalKey(Schema.Array(RemotePublicationAttemptOrdinal)),
+    batchGrantAt: Schema.optionalKey(RemotePublicationAttemptIntendedEvent.fields.batchGrantAt),
     cause: RemotePublicationRetainedCause,
     correlation: RemotePublicationCorrelation
   }
@@ -39,7 +46,6 @@ const attemptOrdinalOfProof = (proof: RemotePublicationProofBasis): RemotePublic
   proof.attemptOrdinal
 
 const contiguousAttemptsIssue = (attempts: ReadonlyArray<RemotePublicationAttemptOrdinal>): string | undefined => {
-  if (attempts.length > remotePublicationAttemptLimit) return "publication history exceeds the accepted attempt limit"
   for (const [index, ordinal] of attempts.entries()) {
     if (Number(ordinal) !== index + 1) return "publication attempt ordinals must begin at one and remain contiguous"
   }
@@ -58,15 +64,24 @@ export const remotePublicationRetainedCauseIsResumable = (cause: RemotePublicati
   cause._tag === "TargetMissing"
 
 type ReductionPhase =
-  | { readonly _tag: "Pending"; readonly authorization: RemotePublicationAttemptAuthorization }
+  | {
+      readonly _tag: "Pending"
+      readonly attemptOrdinalsInBatch: ReadonlyArray<RemotePublicationAttemptOrdinal>
+      readonly authorization: RemotePublicationAttemptAuthorization
+      readonly batchGrantAt?: RemotePublicationAttemptIntendedEvent["batchGrantAt"]
+    }
   | {
       readonly _tag: "ResumeReady"
       readonly cause: RemotePublicationRetainedCause
+      readonly attemptOrdinalsInBatch: ReadonlyArray<RemotePublicationAttemptOrdinal>
+      readonly batchGrantAt?: RemotePublicationAttemptIntendedEvent["batchGrantAt"]
       readonly request: RemotePublicationResumeRequest
     }
   | {
       readonly _tag: "Retained"
       readonly authorization: RemotePublicationAttemptAuthorization
+      readonly attemptOrdinalsInBatch: ReadonlyArray<RemotePublicationAttemptOrdinal>
+      readonly batchGrantAt?: RemotePublicationAttemptIntendedEvent["batchGrantAt"]
       readonly cause: RemotePublicationRetainedCause
     }
   | { readonly _tag: "Succeeded"; readonly proof: RemotePublicationProofBasis }
@@ -105,6 +120,16 @@ export const deriveRemotePublicationState = (
   const attempts = events.flatMap((event) =>
     event._tag === "RemotePublicationAttemptIntended" ? [event.attemptOrdinal] : []
   )
+  const attemptsPerBatch = new Map<string, number>()
+  for (const event of events) {
+    if (event._tag !== "RemotePublicationAttemptIntended") continue
+    const batchKey = event.batchGrantAt === undefined ? "initial" : String(event.batchGrantAt)
+    const count = (attemptsPerBatch.get(batchKey) ?? 0) + 1
+    if (count > remotePublicationAttemptLimit) {
+      return contradiction("publication history exceeds the accepted three-intent allowance for one batch")
+    }
+    attemptsPerBatch.set(batchKey, count)
+  }
   if (
     events.some(
       (event) =>
@@ -135,6 +160,7 @@ export const deriveRemotePublicationState = (
   const seenResumeRequestIds = new Set<string>()
   let phase: ReductionPhase = {
     _tag: "Pending",
+    attemptOrdinalsInBatch: [],
     authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
   }
   for (const [index, event] of events.entries()) {
@@ -156,14 +182,34 @@ export const deriveRemotePublicationState = (
       return contradiction("publication history has more than one outer intent")
     }
     if (event._tag === "RemotePublicationAttemptIntended") {
-      if (phase._tag !== "Pending" && phase._tag !== "ResumeReady") {
-        return contradiction("publication attempt after retained outcome requires a new exact resume receipt")
+      const nextBatchGrantAt = event.batchGrantAt
+      if (phase._tag === "Retained") {
+        if (nextBatchGrantAt === undefined || nextBatchGrantAt === phase.batchGrantAt) {
+          return contradiction(
+            "publication attempt after retained outcome requires a new exact batch grant or resume receipt"
+          )
+        }
+        phase = {
+          _tag: "Pending",
+          attemptOrdinalsInBatch: [],
+          authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+          batchGrantAt: nextBatchGrantAt
+        }
+      } else if (phase._tag === "Pending" && attempts.length === 0 && nextBatchGrantAt !== undefined) {
+        phase = { ...phase, batchGrantAt: nextBatchGrantAt }
+      } else if (nextBatchGrantAt !== phase.batchGrantAt) {
+        return contradiction("publication attempt cannot change its batch grant within an active batch")
       }
       const authorization: RemotePublicationAttemptAuthorization =
         phase._tag === "ResumeReady"
           ? RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: phase.request.requestId })
           : phase.authorization
-      phase = { _tag: "Pending", authorization }
+      phase = {
+        _tag: "Pending",
+        attemptOrdinalsInBatch: [...phase.attemptOrdinalsInBatch, event.attemptOrdinal],
+        authorization,
+        ...(phase.batchGrantAt === undefined ? {} : { batchGrantAt: phase.batchGrantAt })
+      }
       continue
     }
     if (event._tag === "RemotePublicationAttemptRejectedNonFastForward") {
@@ -183,20 +229,31 @@ export const deriveRemotePublicationState = (
     if (event._tag === "RemotePublicationRetained") {
       const matchesAuthorization =
         phase._tag === "Pending"
-          ? event.authorization._tag === phase.authorization._tag &&
+          ? event.batchGrantAt === phase.batchGrantAt &&
+            event.authorization._tag === phase.authorization._tag &&
             (event.authorization._tag === "InitialAttempt" ||
               (phase.authorization._tag === "ResumeRequest" &&
                 event.authorization.requestId === phase.authorization.requestId))
           : phase._tag === "ResumeReady" &&
+            event.batchGrantAt === phase.batchGrantAt &&
             event.authorization._tag === "ResumeRequest" &&
             event.authorization.requestId === phase.request.requestId
       if (!matchesAuthorization) {
         return contradiction("publication retained outcome must identify its exact active authorization")
       }
-      if (event.cause._tag === "AttemptsExhausted" && attempts.length !== remotePublicationAttemptLimit) {
+      if (
+        event.cause._tag === "AttemptsExhausted" &&
+        phase.attemptOrdinalsInBatch.length !== remotePublicationAttemptLimit
+      ) {
         return contradiction("publication exhaustion requires the exact accepted attempt limit")
       }
-      phase = { _tag: "Retained", authorization: event.authorization, cause: event.cause }
+      phase = {
+        _tag: "Retained",
+        authorization: event.authorization,
+        attemptOrdinalsInBatch: phase.attemptOrdinalsInBatch,
+        ...(phase.batchGrantAt === undefined ? {} : { batchGrantAt: phase.batchGrantAt }),
+        cause: event.cause
+      }
       continue
     }
     if (event._tag === "RemotePublicationResumeRequested") {
@@ -212,16 +269,19 @@ export const deriveRemotePublicationState = (
         return contradiction("publication resume request identity is duplicated")
       }
       seenResumeRequestIds.add(request.requestId)
-      const attemptsBeforeReceipt = events
-        .slice(0, index)
-        .filter((prior) => prior._tag === "RemotePublicationAttemptIntended").length
       if (!remotePublicationRetainedCauseIsResumable(phase.cause)) {
         return contradiction(`publication resume receipt cannot override retained cause ${phase.cause._tag}`)
       }
-      if (attemptsBeforeReceipt >= remotePublicationAttemptLimit) {
+      if (phase.attemptOrdinalsInBatch.length >= remotePublicationAttemptLimit) {
         return contradiction("publication resume receipt cannot override the exhausted attempt allowance")
       }
-      phase = { _tag: "ResumeReady", cause: phase.cause, request }
+      phase = {
+        _tag: "ResumeReady",
+        cause: phase.cause,
+        attemptOrdinalsInBatch: phase.attemptOrdinalsInBatch,
+        ...(phase.batchGrantAt === undefined ? {} : { batchGrantAt: phase.batchGrantAt }),
+        request
+      }
       continue
     }
     if (event._tag === "RemotePublicationSucceeded") {
@@ -272,17 +332,23 @@ export const deriveRemotePublicationState = (
       return RemotePublicationState.cases.PublicationPending.make({
         authorization: phase.authorization,
         attemptOrdinals: [...attempts],
+        attemptOrdinalsInBatch: [...phase.attemptOrdinalsInBatch],
+        ...(phase.batchGrantAt === undefined ? {} : { batchGrantAt: phase.batchGrantAt }),
         correlation: intent.correlation
       })
     case "ResumeReady":
       return RemotePublicationState.cases.PublicationResumeReady.make({
         attemptOrdinals: [...attempts],
+        attemptOrdinalsInBatch: [...phase.attemptOrdinalsInBatch],
+        ...(phase.batchGrantAt === undefined ? {} : { batchGrantAt: phase.batchGrantAt }),
         correlation: intent.correlation,
         request: phase.request
       })
     case "Retained":
       return RemotePublicationState.cases.PublicationRetained.make({
         authorization: phase.authorization,
+        attemptOrdinalsInBatch: [...phase.attemptOrdinalsInBatch],
+        ...(phase.batchGrantAt === undefined ? {} : { batchGrantAt: phase.batchGrantAt }),
         cause: phase.cause,
         correlation: intent.correlation
       })
@@ -296,4 +362,5 @@ export const deriveRemotePublicationState = (
 
 export const remotePublicationAttemptsExhausted = (state: RemotePublicationState): boolean =>
   state._tag === "PublicationPending" &&
-  state.attemptOrdinals.length === RemotePublicationAttemptLimit.make(remotePublicationAttemptLimit)
+  (state.attemptOrdinalsInBatch?.length ?? state.attemptOrdinals.length) ===
+    RemotePublicationAttemptLimit.make(remotePublicationAttemptLimit)
