@@ -151,6 +151,12 @@ it.effect("reconstructs a fourth automatic successor only after its exact public
     const extendedPrefix = yield* journal.state.get
     const current = deriveCurrentIntegratorState(extendedPrefix.prefix, fixture.accepted.responsibility)
     expect(current).toMatchObject({ _tag: "RunUnfinished", run: { session: s4.event.successor } })
+    const recovered = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      thirdGeneration.input,
+      extendedPrefix.prefix
+    )
+    expect(recovered).toMatchObject({ _tag: "Existing", record: { position: extendedPrefix.position } })
+    expect(existingAutomaticSuccessorCount(yield* inRunJournal.read(fixture.runId))).toBe(3)
   })
 )
 

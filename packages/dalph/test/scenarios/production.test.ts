@@ -3343,24 +3343,67 @@ it.effect("production Run defers a real exhausted publication batch through Paus
       expect(pausedRecords.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(3)
       expect(pausedRecords.filter(({ event }) => event._tag === "RemotePublicationBatchGrantApplied")).toHaveLength(1)
 
-      const exitDatabase = JournalDatabaseLocator.make(`${directory}/exit-after-grant.sqlite`)
-      yield* Effect.gen(function* () {
-        const store = yield* JournalStore
-        const [began, ...remaining] = pausedRecords
-        if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("paused prefix must begin the Run")
-        yield* store.beginRun(
-          accepted.runId,
-          began.event.target,
-          began.event.initialControlPolicy,
-          began.event.remotePublicationTarget
-        )
-        for (const record of remaining) {
-          if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
-            return yield* Effect.die("paused grant suffix has no lifecycle event")
+      const seedExitPrefix = (records: ReadonlyArray<JournalRecord>, filename: JournalDatabaseLocator) =>
+        Effect.gen(function* () {
+          const store = yield* JournalStore
+          const [began, ...remaining] = records
+          if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("paused prefix must begin the Run")
+          yield* store.beginRun(
+            accepted.runId,
+            began.event.target,
+            began.event.initialControlPolicy,
+            began.event.remotePublicationTarget
+          )
+          for (const record of remaining) {
+            if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+              return yield* Effect.die("Exit fixture has no lifecycle event in its suffix")
+            }
+            yield* store.append(accepted.runId, record.key, record.event)
           }
-          yield* store.append(accepted.runId, record.key, record.event)
-        }
-      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: exitDatabase })))
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+      const beforeGrantExitDatabase = JournalDatabaseLocator.make(`${directory}/exit-before-grant.sqlite`)
+      yield* seedExitPrefix(exhaustionRecords, beforeGrantExitDatabase)
+      const beforeGrantExitActivity = yield* Ref.get(activity)
+      yield* Effect.gen(function* () {
+        const bootstrap = yield* JournaledRunBootstrap
+        const shell = yield* ApplicationExitShell
+        yield* bootstrap.operatorControl.applyControlDirection({
+          direction: "Pause",
+          subject: { _tag: "Run", runId: accepted.runId }
+        })
+        expect(yield* shell.requestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
+        const request = RemotePublicationBatchGrantRequest.make({
+          exhaustionAt: exhaustion.position,
+          requestId: RemotePublicationBatchGrantRequestId.make("production-exit-before-batch-grant"),
+          responsibility: IntegrationResponsibilityIdentity.make({
+            queuedAt: accepted.responsibility.queuedAt,
+            runId: accepted.runId
+          }),
+          runId: accepted.runId,
+          schemaVersion: 1
+        })
+        expect(yield* Effect.flip(bootstrap.operatorControl.applyRemotePublicationBatchGrant(request))).toMatchObject({
+          _tag: "ApplicationExiting"
+        })
+        yield* run().pipe(Effect.exit)
+      }).pipe(
+        Effect.provide(application),
+        Effect.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: beforeGrantExitDatabase }))
+        )
+      )
+      const beforeGrantExitRecords = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(accepted.runId)
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: beforeGrantExitDatabase })))
+      expect(
+        beforeGrantExitRecords.filter(({ event }) => event._tag === "RemotePublicationBatchGrantApplied")
+      ).toHaveLength(0)
+      expect(beforeGrantExitRecords.filter(({ event }) => event._tag === "ControlDirectionApplied")).toHaveLength(1)
+      expect(yield* Ref.get(activity)).toEqual(beforeGrantExitActivity)
+      expect(yield* Ref.get(localGitCalls)).toEqual([])
+
+      const exitDatabase = JournalDatabaseLocator.make(`${directory}/exit-after-grant.sqlite`)
+      yield* seedExitPrefix(pausedRecords, exitDatabase)
       const beforeExit = yield* Ref.get(activity)
       yield* Effect.gen(function* () {
         const shell = yield* ApplicationExitShell
