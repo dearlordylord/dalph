@@ -150,6 +150,7 @@ const main = async () => {
     effectiveEnvironment: environment,
     generatedOutputRoots: [
       ".scratch",
+      "tmp",
       "coverage",
       "dist",
       "packages/contracts/dist",

@@ -218,3 +218,14 @@ focused routing diagnostic exited 1 and printed the differing package command.
 The package now routes through `run-delivery-repeatability.mjs`, matching the
 three-sample smoke runner's production implementation; a routing regression test
 retains that boundary. No accepted delivery checkpoint assertion was removed.
+
+
+Combined run `bff9d3fa-d163-49bb-ac5e-d15a5d5dfc50` completed all preflight
+checks and the full formal portfolio in 627 seconds, then its input observer
+rejected Quint's creation of the generated `tmp/` directory. A focused canonical
+artifact-preparation command in a fresh temporary directory exited zero with
+`No violation found` and reproduced that exact directory event. The candidate now
+declares candidate-root `tmp/` as generated output and ignores it in Git. Tracked source remains
+observed. The full run still has no qualification credit; a focused repair check
+must allow the generated directory and reject an unrelated source write before
+another full attempt.
