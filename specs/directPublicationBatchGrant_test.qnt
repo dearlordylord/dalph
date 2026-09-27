@@ -32,6 +32,7 @@ module directPublicationBatchGrantTest {
         state.grantedSessionsUsed == 0,
         state.grantedPushesUsed == 0,
         state.pausedForwardEffects == 0,
+        state.qForwardEffectOrdinal > 0,
         pauseDefersQForwardEffects,
       })
       .then(progressUnrelatedResponsibility)
@@ -111,6 +112,148 @@ module directPublicationBatchGrantTest {
         state.grantedSessionsUsed == 0,
         state.grantedPushesUsed == 0,
         grantIsBoundToRetainedExhaustion,
+      })
+  }
+
+  run crashAfterSessionFixationResumesSameSessionWithoutRepetitionTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .then(acknowledgeGrant)
+      .then(startGrantedSuccessorSession)
+      .expect(and {
+        state.phase == GrantSessionOpen,
+        state.hostLive,
+        state.currentSessionOrdinal == 4,
+        state.grantedSessionsUsed == 1,
+        state.grantSessionEvents == 1,
+      })
+      .then(crashAfterGrantSessionFixation)
+      .expect(and {
+        not(state.hostLive),
+        state.currentSessionOrdinal == 4,
+        state.grantedSessionsUsed == 1,
+        state.grantSessionEvents == 1,
+      })
+      .then(restartHost)
+      .expect(and {
+        state.hostLive,
+        state.activation == 2,
+        state.phase == GrantSessionOpen,
+        state.currentSessionOrdinal == 4,
+        state.grantedSessionsUsed == 1,
+        state.grantSessionEvents == 1,
+      })
+      .then(recordGrantedPushIntent)
+      .expect(and {
+        state.phase == GrantIntentPending,
+        state.currentSessionOrdinal == 4,
+        state.grantedSessionsUsed == 1,
+        state.grantedPushesUsed == 1,
+        state.grantSessionEvents == 1,
+        state.grantPushEvents == 1,
+      })
+  }
+
+  run crashAfterCommittedGrantIntentReconcilesOriginalOrdinalTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .then(acknowledgeGrant)
+      .then(startGrantedSuccessorSession)
+      .then(recordGrantedPushIntent)
+      .expect(and {
+        state.phase == GrantIntentPending,
+        state.pushObservation == UnresolvedPushIntent,
+        state.currentPushOrdinal == 4,
+        state.grantedPushesUsed == 1,
+        state.grantPushEvents == 1,
+      })
+      .then(crashAfterCommittedGrantIntent)
+      .expect(and {
+        not(state.hostLive),
+        state.phase == GrantIntentPending,
+        state.currentPushOrdinal == 4,
+        state.grantedPushesUsed == 1,
+        state.grantPushEvents == 1,
+      })
+      .then(restartHost)
+      .then(resolveGrantedIntentWithoutProof)
+      .expect(and {
+        state.hostLive,
+        state.activation == 2,
+        state.phase == GrantBatchReady,
+        state.pushObservation == Unapplied,
+        state.currentPushOrdinal == 4,
+        state.grantedPushesUsed == 1,
+        state.grantPushEvents == 1,
+        state.grantSessionEvents == 1,
+        state.qForwardEffectOrdinal > 0,
+        cumulativeOrdinalsAreNotReset,
+        batchBoundsHold,
+      })
+  }
+
+  run exactGrantReplayBeforeAcknowledgementEnablesOneBatchTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .expect(state.phase == GrantRecorded and not(state.grantAcknowledged))
+      .then(replaySameGrantRequest)
+      .expect(and {
+        state.phase == GrantBatchReady,
+        state.grantAcknowledged,
+        state.grantCount == 1,
+        state.grantReceiptId == FIRST_GRANT_RECEIPT,
+        state.sameRequestReplays == 1,
+        grantAcknowledgementMatchesProgress,
+        grantReceiptIsVisibleBeforeForwardEffects,
+      })
+      .then(startGrantedSuccessorSession)
+      .expect(and {
+        state.grantedSessionsUsed == 1,
+        state.grantSessionEvents == 1,
+        state.qForwardEffectOrdinal > 0,
+        grantAcknowledgementMatchesProgress,
       })
   }
 

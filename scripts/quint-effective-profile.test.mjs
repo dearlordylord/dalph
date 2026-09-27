@@ -72,7 +72,7 @@ void test("materializes the independent complete 120 obligations before any laun
   // obligation lists, even when those additions do not change command count.
   assert.equal(
     createHash("sha256").update(JSON.stringify(commandContract)).digest("hex"),
-    "eba28218083c599f44add412e7328f03231a1ec8c7641d8a694dfb0dde5f8824"
+    "7ad78c785f9c58ee9cfb78010e961e9ef54fdc64b4aacecbd584d445e56229b1"
   )
   const counts = Object.fromEntries(
     ["typecheck", "test", "sampled-run", "verify"].map((kind) => [

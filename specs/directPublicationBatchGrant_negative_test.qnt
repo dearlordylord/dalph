@@ -4,15 +4,60 @@
 module directPublicationBatchGrantNegativeTest {
   import directPublicationBatchGrant.* from "./directPublicationBatchGrant"
 
-  action mutateQForwardEffectDuringPause: bool = all {
-    state.lifecycle == Paused,
-    state.grantCount == 1,
-    state' = { ...state, pausedForwardEffects: state.pausedForwardEffects + 1 },
+  action mutateSessionStartWithoutLifecycleGuard: bool = all {
+    state.phase == GrantBatchReady,
+    state.lifecycle == Paused or state.lifecycle == ExitCutoff,
+    state.hostLive,
+    state.grantAcknowledged,
+    state.grantOccurrence == state.exhaustionOccurrence,
+    state.grantedSessionsUsed < MAX_BATCH_SESSIONS,
+    state.selectedPostGrantPath == NoPostGrantPath or state.selectedPostGrantPath == SameCommitSuccessor,
+    state.postGrantPath == state.selectedPostGrantPath,
+    state' = recordQForwardEffect(state, {
+      ...state,
+      phase: GrantSessionOpen,
+      grantedSessionsUsed: state.grantedSessionsUsed + 1,
+      grantSessionEvents: state.grantSessionEvents + 1,
+      totalSessionOrdinal: state.totalSessionOrdinal + 1,
+      currentSessionOrdinal: state.totalSessionOrdinal + 1,
+      postGrantPath: SameCommitSuccessor,
+      selectedPostGrantPath: SameCommitSuccessor,
+    }),
   }
 
-  action mutateQForwardEffectAfterExit: bool = all {
-    state.lifecycle == ExitCutoff,
-    state' = { ...state, exitForwardEffects: state.exitForwardEffects + 1 },
+  action mutateIntentCommitWithoutLifecycleGuard: bool = all {
+    state.phase == GrantSessionOpen,
+    state.lifecycle == Paused or state.lifecycle == ExitCutoff,
+    state.hostLive,
+    state.grantAcknowledged,
+    state.grantedPushesUsed < MAX_BATCH_PUSH_INTENTS,
+    state' = recordQForwardEffect(state, {
+      ...state,
+      phase: GrantIntentPending,
+      grantedPushesUsed: state.grantedPushesUsed + 1,
+      grantPushEvents: state.grantPushEvents + 1,
+      totalPushIntentOrdinal: state.totalPushIntentOrdinal + 1,
+      currentPushOrdinal: state.totalPushIntentOrdinal + 1,
+      pushObservation: UnresolvedPushIntent,
+    }),
+  }
+
+  action mutateReplayBeforeAcknowledgementWithoutPhaseAdvance: bool = all {
+    state.phase == GrantRecorded,
+    state.grantCount > 0,
+    not(state.grantAcknowledged),
+    state.sameRequestReplays == 0,
+    state.requestId == state.grantRequestId,
+    state.grantOccurrence == state.exhaustionOccurrence,
+    state' = {
+      ...state,
+      grantAcknowledged: true,
+      sameRequestReplays: state.sameRequestReplays + 1,
+      lastReplayRequestId: state.requestId,
+      lastReplayReceiptId: state.grantReceiptId,
+      lastReplayGrantRequestId: state.grantRequestId,
+      lastReplayOccurrence: state.grantOccurrence,
+    },
   }
 
   action mintDuplicateGrantForSameOccurrence: bool = all {
@@ -123,7 +168,7 @@ module directPublicationBatchGrantNegativeTest {
     },
   }
 
-  run detectsPausedBatchStartAndExitCutoffViolationsTest = {
+  run detectsGuardRemovedSessionStartDuringPauseTest = {
     init
       .then(startInitialSession)
       .then(recordInitialPushIntent)
@@ -142,12 +187,104 @@ module directPublicationBatchGrantNegativeTest {
       .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
       .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
       .then(acknowledgeGrant)
-      .then(mutateQForwardEffectDuringPause)
+      .then(mutateSessionStartWithoutLifecycleGuard)
       .expect(not(pauseDefersQForwardEffects))
-      .then(applyUnpause)
+  }
+
+  run detectsGuardRemovedIntentCommitDuringPauseTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .then(acknowledgeGrant)
+      .then(startGrantedSuccessorSession)
+      .then(applyPause)
+      .then(mutateIntentCommitWithoutLifecycleGuard)
+      .expect(not(pauseDefersQForwardEffects))
+  }
+
+  run detectsGuardRemovedSessionStartAfterExitTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .then(acknowledgeGrant)
       .then(applyExitCutoff)
-      .then(mutateQForwardEffectAfterExit)
+      .then(mutateSessionStartWithoutLifecycleGuard)
       .expect(not(exitCutoffStopsQForwardEffects))
+  }
+
+  run detectsGuardRemovedIntentCommitAfterExitTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .then(acknowledgeGrant)
+      .then(startGrantedSuccessorSession)
+      .then(applyExitCutoff)
+      .then(mutateIntentCommitWithoutLifecycleGuard)
+      .expect(not(exitCutoffStopsQForwardEffects))
+  }
+
+  run detectsReplayBeforeAcknowledgementMustAdvanceGrantPhaseTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .then(mutateReplayBeforeAcknowledgementWithoutPhaseAdvance)
+      .expect(and {
+        state.phase == GrantRecorded,
+        state.grantAcknowledged,
+        not(grantAcknowledgementMatchesProgress),
+      })
   }
 
   run detectsDuplicateOrMismatchedGrantMintingSecondBatchTest = {

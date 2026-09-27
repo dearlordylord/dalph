@@ -84,6 +84,7 @@ module directPublicationBatchGrant {
     successorCandidateSessionOrdinal: int,
     pausedForwardEffects: int,
     exitForwardEffects: int,
+    qForwardEffectOrdinal: int,
     unrelatedProgress: int,
   }
 
@@ -102,6 +103,16 @@ module directPublicationBatchGrant {
   pure val SECOND_REQUEST_ID = 101
   pure val FIRST_GRANT_RECEIPT = 200
   pure val SECOND_GRANT_RECEIPT = 201
+
+  // Every modeled Q-owned forward boundary records its ordinal and notes
+  // whether it crossed while Pause or Exit was active. Grant receipt append,
+  // replay, and recovery are control-plane operations and do not use this.
+  pure def recordQForwardEffect(before: State, after: State): State = {
+    ...after,
+    pausedForwardEffects: before.pausedForwardEffects + (if (before.lifecycle == Paused) 1 else 0),
+    exitForwardEffects: before.exitForwardEffects + (if (before.lifecycle == ExitCutoff) 1 else 0),
+    qForwardEffectOrdinal: before.qForwardEffectOrdinal + 1,
+  }
 
   // These properties restate accepted outcomes from retained facts. They are
   // not transition guards, so mutant transitions can violate them in tests.
@@ -135,6 +146,12 @@ module directPublicationBatchGrant {
     state.grantCount == 0
       or (state.grantOccurrence == 1 and state.grantReceiptId == FIRST_GRANT_RECEIPT)
       or (state.grantOccurrence == 2 and state.grantReceiptId == SECOND_GRANT_RECEIPT)
+
+  val grantAcknowledgementMatchesProgress: bool = and {
+    not(state.phase == GrantRecorded and state.grantAcknowledged),
+    state.phase != GrantBatchReady or state.grantAcknowledged,
+    not(state.grantAcknowledged) or state.grantCount > 0,
+  }
 
   val batchBoundsHold: bool = and {
     state.initialSessions >= 0,
@@ -283,6 +300,7 @@ module directPublicationBatchGrant {
       successorCandidateSessionOrdinal: 0,
       pausedForwardEffects: 0,
       exitForwardEffects: 0,
+      qForwardEffectOrdinal: 0,
       unrelatedProgress: 0,
     },
   }
@@ -292,52 +310,59 @@ module directPublicationBatchGrant {
     state.lifecycle == Running,
     state.hostLive,
     state.initialSessions < MAX_BATCH_SESSIONS,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: InitialSessionOpen,
       initialSessions: state.initialSessions + 1,
       initialSessionOpen: true,
       totalSessionOrdinal: state.totalSessionOrdinal + 1,
       currentSessionOrdinal: state.totalSessionOrdinal + 1,
-    },
+    }),
   }
 
   action closeInitialSession: bool = all {
     state.phase == InitialSessionOpen,
     state.initialSessionOpen,
-    state' = { ...state, phase: InitialBatchReady, initialSessionOpen: false },
+    state.lifecycle == Running,
+    state.hostLive,
+    state' = recordQForwardEffect(state, { ...state, phase: InitialBatchReady, initialSessionOpen: false }),
   }
 
   action recordInitialPushIntent: bool = all {
     state.phase == InitialSessionOpen,
     state.initialSessionOpen,
     state.lifecycle == Running,
+    state.hostLive,
     state.initialPushIntents < MAX_BATCH_PUSH_INTENTS,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: InitialIntentPending,
       initialPushIntents: state.initialPushIntents + 1,
       totalPushIntentOrdinal: state.totalPushIntentOrdinal + 1,
       currentPushOrdinal: state.totalPushIntentOrdinal + 1,
       pushObservation: UnresolvedPushIntent,
-    },
+    }),
   }
 
   action resolveInitialIntentWithoutProof: bool = all {
     state.phase == InitialIntentPending,
     state.pushObservation == UnresolvedPushIntent,
-    state' = {
+    state.lifecycle == Running,
+    state.hostLive,
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: InitialSessionOpen,
       pushObservation: Unapplied,
-    },
+    }),
   }
 
   action retainInitialPublicationExhaustion: bool = all {
     state.phase == InitialBatchReady or state.phase == InitialSessionOpen,
     state.exhaustionOccurrence == 0,
+    state.lifecycle == Running,
+    state.hostLive,
     state.initialSessions == MAX_BATCH_SESSIONS or state.initialPushIntents == MAX_BATCH_PUSH_INTENTS,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: Exhausted,
       initialSessionOpen: false,
@@ -346,7 +371,7 @@ module directPublicationBatchGrant {
         ThirdSessionExhaustion
       else ThirdPushIntentExhaustion,
       grantsForOccurrence: 0,
-    },
+    }),
   }
 
   action applyPause: bool = all {
@@ -430,6 +455,7 @@ module directPublicationBatchGrant {
     state.grantOccurrence == state.exhaustionOccurrence,
     state' = {
       ...state,
+      phase: if (state.phase == GrantRecorded) GrantBatchReady else state.phase,
       grantAcknowledged: true,
       sameRequestReplays: state.sameRequestReplays + 1,
       lastReplayRequestId: state.requestId,
@@ -487,6 +513,23 @@ module directPublicationBatchGrant {
     state' = { ...state, hostLive: false },
   }
 
+  action crashAfterGrantSessionFixation: bool = all {
+    state.phase == GrantSessionOpen,
+    state.hostLive,
+    state.grantAcknowledged,
+    state.grantedSessionsUsed > 0,
+    state' = { ...state, hostLive: false },
+  }
+
+  action crashAfterCommittedGrantIntent: bool = all {
+    state.phase == GrantIntentPending,
+    state.hostLive,
+    state.grantAcknowledged,
+    state.pushObservation == UnresolvedPushIntent,
+    state.grantedPushesUsed > 0,
+    state' = { ...state, hostLive: false },
+  }
+
   action restartHost: bool = all {
     not(state.hostLive),
     state.activation < MAX_ACTIVATIONS,
@@ -514,7 +557,7 @@ module directPublicationBatchGrant {
 
   action startGrantedSuccessorSession: bool = all {
     grantedSuccessorSessionAllowed,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: GrantSessionOpen,
       grantedSessionsUsed: state.grantedSessionsUsed + 1,
@@ -523,15 +566,16 @@ module directPublicationBatchGrant {
       currentSessionOrdinal: state.totalSessionOrdinal + 1,
       postGrantPath: SameCommitSuccessor,
       selectedPostGrantPath: SameCommitSuccessor,
-    },
+    }),
   }
 
   action recordGrantedPushIntent: bool = all {
     state.phase == GrantSessionOpen,
     state.lifecycle == Running,
+    state.hostLive,
     state.grantAcknowledged,
     state.grantedPushesUsed < MAX_BATCH_PUSH_INTENTS,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: GrantIntentPending,
       grantedPushesUsed: state.grantedPushesUsed + 1,
@@ -539,33 +583,35 @@ module directPublicationBatchGrant {
       totalPushIntentOrdinal: state.totalPushIntentOrdinal + 1,
       currentPushOrdinal: state.totalPushIntentOrdinal + 1,
       pushObservation: UnresolvedPushIntent,
-    },
+    }),
   }
 
   action resolveGrantedIntentWithoutProof: bool = all {
     state.phase == GrantIntentPending,
     state.pushObservation == UnresolvedPushIntent,
     state.lifecycle == Running,
-    state' = {
+    state.hostLive,
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: GrantBatchReady,
       pushObservation: Unapplied,
-    },
+    }),
   }
 
   action observeExactPushPublicationProof: bool = all {
     state.phase == GrantIntentPending,
     state.pushObservation == UnresolvedPushIntent,
     state.lifecycle == Running,
+    state.hostLive,
     state.selectedPostGrantPath == ReusableCandidate or state.selectedPostGrantPath == SameCommitSuccessor,
     state.postGrantPath == state.selectedPostGrantPath,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: ExactPublicationProofRecorded,
       pushObservation: ExactRemoteProof,
       exactRemoteProof: true,
       proofFromGrant: false,
-    },
+    }),
   }
 
   val alreadyPublishedReconciliationAllowed: bool = all {
@@ -580,14 +626,15 @@ module directPublicationBatchGrant {
 
   action reconcileAlreadyPublishedCandidate: bool = all {
     alreadyPublishedReconciliationAllowed,
-    state' = {
+    state.hostLive,
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: ExactPublicationProofRecorded,
       exactRemoteProof: true,
       proofFromGrant: false,
       postGrantPath: AlreadyPublished,
       selectedPostGrantPath: AlreadyPublished,
-    },
+    }),
   }
 
   val reusableCandidatePushIntentAllowed: bool = all {
@@ -602,7 +649,8 @@ module directPublicationBatchGrant {
 
   action recordReusableCandidatePushIntent: bool = all {
     reusableCandidatePushIntentAllowed,
-    state' = {
+    state.hostLive,
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: GrantIntentPending,
       grantedPushesUsed: state.grantedPushesUsed + 1,
@@ -612,51 +660,56 @@ module directPublicationBatchGrant {
       pushObservation: UnresolvedPushIntent,
       postGrantPath: ReusableCandidate,
       selectedPostGrantPath: ReusableCandidate,
-    },
+    }),
   }
 
   action retainBlockedConstraint: bool = all {
     state.phase == GrantBatchReady,
     state.lifecycle == Running,
-    state' = {
+    state.hostLive,
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: GrantWaiting,
       postGrantPath: BlockedConstraint,
       selectedPostGrantPath: if (state.selectedPostGrantPath == NoPostGrantPath)
         BlockedConstraint
       else state.selectedPostGrantPath,
-    },
+    }),
   }
 
   action closeGrantSessionWithoutIntent: bool = all {
     state.phase == GrantSessionOpen,
     state.lifecycle == Running,
-    state' = { ...state, phase: GrantBatchReady },
+    state.hostLive,
+    state' = recordQForwardEffect(state, { ...state, phase: GrantBatchReady }),
   }
 
   action recordSameCommitSuccessorCandidate: bool = all {
     state.phase == GrantSessionOpen,
     state.lifecycle == Running,
+    state.hostLive,
     state.grantedSessionsUsed > 0,
     state.selectedPostGrantPath == SameCommitSuccessor,
     state.postGrantPath == SameCommitSuccessor,
     state.successorCandidateSessionOrdinal != state.currentSessionOrdinal,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       successorParent: BASE_CANDIDATE,
       successorSecondParent: ACCEPTED_TASK_COMMIT,
       successorCandidateRecorded: true,
       successorCandidateSessions: state.successorCandidateSessions.union(Set(state.currentSessionOrdinal)),
       successorCandidateSessionOrdinal: state.currentSessionOrdinal,
-    },
+    }),
   }
 
   action retainNextPublicationExhaustion: bool = all {
     state.phase == GrantBatchReady,
+    state.lifecycle == Running,
+    state.hostLive,
     state.exhaustionOccurrence == state.grantOccurrence,
     state.exhaustionOccurrence < MAX_EXHAUSTION_OCCURRENCES,
     state.grantedSessionsUsed == MAX_BATCH_SESSIONS or state.grantedPushesUsed == MAX_BATCH_PUSH_INTENTS,
-    state' = {
+    state' = recordQForwardEffect(state, {
       ...state,
       phase: Exhausted,
       exhaustionOccurrence: state.exhaustionOccurrence + 1,
@@ -668,7 +721,7 @@ module directPublicationBatchGrant {
       requestId: 0,
       requestDirection: NoDirection,
       requestOccurrence: 0,
-    },
+    }),
   }
 
   action progressUnrelatedResponsibility: bool = all {
@@ -681,13 +734,15 @@ module directPublicationBatchGrant {
     state.phase == ExactPublicationProofRecorded,
     state.exactRemoteProof,
     state.lifecycle == Running,
-    state' = { ...state, phase: LocalPromotionRecorded, localPromotion: true },
+    state.hostLive,
+    state' = recordQForwardEffect(state, { ...state, phase: LocalPromotionRecorded, localPromotion: true }),
   }
 
   action refreshTaskPermission: bool = all {
     state.phase == LocalPromotionRecorded,
     state.lifecycle == Running,
-    state' = { ...state, phase: FreshTaskPermissionRecorded, freshTaskPermission: true },
+    state.hostLive,
+    state' = recordQForwardEffect(state, { ...state, phase: FreshTaskPermissionRecorded, freshTaskPermission: true }),
   }
 
   action completeTaskFromExactProof: bool = all {
@@ -696,13 +751,16 @@ module directPublicationBatchGrant {
     state.localPromotion,
     state.freshTaskPermission,
     state.lifecycle == Running,
-    state' = { ...state, phase: TaskCompletionRecorded, taskCompleted: true },
+    state.hostLive,
+    state' = recordQForwardEffect(state, { ...state, phase: TaskCompletionRecorded, taskCompleted: true }),
   }
 
   action recordExactCleanup: bool = all {
     state.phase == TaskCompletionRecorded,
     state.taskCompleted,
-    state' = { ...state, cleanupComplete: true },
+    state.lifecycle == Running,
+    state.hostLive,
+    state' = recordQForwardEffect(state, { ...state, cleanupComplete: true }),
   }
 
   action settleResponsibility: bool = all {
@@ -710,7 +768,9 @@ module directPublicationBatchGrant {
     state.taskCompleted,
     state.cleanupComplete,
     state.exactRemoteProof,
-    state' = { ...state, phase: ResponsibilitySettled, responsibilitySettled: true },
+    state.lifecycle == Running,
+    state.hostLive,
+    state' = recordQForwardEffect(state, { ...state, phase: ResponsibilitySettled, responsibilitySettled: true }),
   }
 
   action terminateRunAfterResponsibilitySettlement: bool = all {
@@ -737,6 +797,8 @@ module directPublicationBatchGrant {
     crashBeforeGrantAppend,
     rejectPendingGrantAtExitCutoff,
     crashAfterGrantAppendBeforeAck,
+    crashAfterGrantSessionFixation,
+    crashAfterCommittedGrantIntent,
     restartHost,
     recoverCommittedGrant,
     startGrantedSuccessorSession,

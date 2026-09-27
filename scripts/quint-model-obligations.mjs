@@ -766,6 +766,7 @@ export const directPublicationBatchGrantObligations = Object.freeze({
     "grantIsBoundToRetainedExhaustion",
     "oneGrantPerExactOccurrence",
     "grantReceiptMatchesExactOccurrence",
+    "grantAcknowledgementMatchesProgress",
     "grantReplayIsIdempotent",
     "batchBoundsHold",
     "cumulativeOrdinalsAreNotReset",
