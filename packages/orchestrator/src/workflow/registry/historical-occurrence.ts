@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The closed historical occurrence registry stays exhaustive and centralized. */
 import { Schema } from "effect"
 import { PlannedTaskAttempt, RunId } from "@dalph/contracts"
 import {
@@ -63,6 +64,7 @@ import {
   LocalTargetCatchUpObserved,
   RemoteBaselineObserved,
   RemoteBaselineReadInitiated,
+  RemotePublicationBatchGrantApplied,
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
@@ -85,6 +87,7 @@ export {
   LocalTargetCatchUpObserved,
   RemoteBaselineObserved,
   RemoteBaselineReadInitiated,
+  RemotePublicationBatchGrantApplied,
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
@@ -444,6 +447,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   IntegratorRunStarted,
   IntegratorSessionFixed,
   IntegratorSuccessorSessionFixed,
+  RemotePublicationBatchGrantApplied,
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,

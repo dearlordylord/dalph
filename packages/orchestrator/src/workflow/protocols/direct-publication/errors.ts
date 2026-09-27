@@ -1,6 +1,10 @@
 import { Schema } from "effect"
 import { RunId } from "@dalph/contracts"
-import { RemotePublicationRequestId, RemotePublicationResumeRequestId } from "./events.js"
+import {
+  RemotePublicationBatchGrantRequestId,
+  RemotePublicationRequestId,
+  RemotePublicationResumeRequestId
+} from "./events.js"
 
 /** Durable direct-publication history cannot be reduced to one exact request. */
 export class RemotePublicationHistoryContradiction extends Schema.TaggedError<RemotePublicationHistoryContradiction>()(
@@ -24,4 +28,16 @@ export class RemotePublicationResumeRequestConflict extends Schema.TaggedError<R
 export class RemotePublicationResumeSubjectMismatch extends Schema.TaggedError<RemotePublicationResumeSubjectMismatch>()(
   "RemotePublicationResumeSubjectMismatch",
   { requestId: RemotePublicationResumeRequestId, runId: RunId }
+) {}
+
+/** One batch-grant request identity was redelivered with unequal exact exhaustion facts. */
+export class RemotePublicationBatchGrantRequestConflict extends Schema.TaggedError<RemotePublicationBatchGrantRequestConflict>()(
+  "RemotePublicationBatchGrantRequestConflict",
+  { requestId: RemotePublicationBatchGrantRequestId }
+) {}
+
+/** A batch grant does not name the exact retained publication exhaustion in this Run. */
+export class RemotePublicationBatchGrantSubjectMismatch extends Schema.TaggedError<RemotePublicationBatchGrantSubjectMismatch>()(
+  "RemotePublicationBatchGrantSubjectMismatch",
+  { requestId: RemotePublicationBatchGrantRequestId, runId: RunId }
 ) {}

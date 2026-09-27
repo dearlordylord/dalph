@@ -137,6 +137,7 @@ const {
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationAttemptRequested,
+  RemotePublicationBatchGrantApplied,
   RemotePublicationRequested,
   RemotePublicationRetained,
   RemotePublicationSucceeded,
@@ -845,6 +846,7 @@ const nonProjectedJournalEventKinds = {
   RemoteBaselineReadIntended: true,
   RemotePublicationAdmissionObserved: true,
   RemotePublicationAdmissionReadIntended: true,
+  RemotePublicationBatchGrantApplied: true,
   RemotePublicationAttemptIntended: true,
   RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
@@ -971,6 +973,7 @@ const historicalJournalEventKinds = {
   RemoteBaselineReadIntended: true,
   RemotePublicationAdmissionObserved: true,
   RemotePublicationAdmissionReadIntended: true,
+  RemotePublicationBatchGrantApplied: true,
   RemotePublicationAttemptIntended: true,
   RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
@@ -1359,7 +1362,8 @@ const historicalPromotionEventKinds = {
 const historicalBoundaryEventKinds = {
   IntegrationProviderRunActivityAbsent: true,
   IntegrationQuarantineDirectionApplied: true,
-  IntegrationQuarantined: true
+  IntegrationQuarantined: true,
+  RemotePublicationBatchGrantApplied: true
 } as const
 
 const historicalFinalityStepEventKinds = {
@@ -2882,6 +2886,21 @@ const projectHistoricalBoundary = (
         occurrenceClassification: "NonActionOccurrence",
         recordedAt: record.position,
         run: event.run,
+        runId: record.runId
+      })
+    )
+  }
+  if (event._tag === "RemotePublicationBatchGrantApplied") {
+    if (event.request.runId !== record.runId || event.request.responsibility.runId !== record.runId) {
+      return historicalFailure(record, "publication batch grant must name the exact containing Run")
+    }
+    return Effect.succeed(
+      RemotePublicationBatchGrantApplied.make({
+        direction: event.direction,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        recordedAt: record.position,
+        request: event.request,
         runId: record.runId
       })
     )

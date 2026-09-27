@@ -206,6 +206,8 @@ import {
   RemotePublicationAttemptAuthorization,
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptOrdinal,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId,
   RemotePublicationGit,
   RemotePublicationGitObservation,
   RemotePublicationIntendedEvent,
@@ -3185,6 +3187,22 @@ it.effect("an accepted resume request preserves Run Pause and Exit boundaries", 
       yield* bootstrap.applicationExitRequestBoundary.requestExit
       expect(
         yield* Effect.flip(bootstrap.operatorControl.applyRemotePublicationResume(requestAfterExit))
+      ).toMatchObject({ _tag: "ApplicationExiting" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(
+        afterAccepted.map(({ event }) => event._tag)
+      )
+      const batchGrantAfterExitRequest = RemotePublicationBatchGrantRequest.make({
+        exhaustionAt: JournalPosition.make(afterAccepted.length),
+        requestId: RemotePublicationBatchGrantRequestId.make("journaled-bootstrap-batch-grant-after-exit"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: integrationFinalityFixture.qualifiedCandidate.run.session.queuedAt,
+          runId
+        }),
+        runId,
+        schemaVersion: 1
+      })
+      expect(
+        yield* Effect.flip(bootstrap.operatorControl.applyRemotePublicationBatchGrant(batchGrantAfterExitRequest))
       ).toMatchObject({ _tag: "ApplicationExiting" })
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(
         afterAccepted.map(({ event }) => event._tag)

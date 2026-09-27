@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Durable workflow record keys stay in one complete, searchable vocabulary. */
 import { type AttemptId } from "@dalph/contracts"
 import type { RemoteBaselineId } from "../workflow/protocols/direct-publication/baseline-events.js"
 import { type OperationId } from "../workflow/identity.js"
@@ -44,6 +45,7 @@ import type {
   RemotePublicationAttemptOrdinal,
   RemotePublicationAttemptAuthorization,
   RemotePublicationAdmissionId,
+  RemotePublicationBatchGrantRequest,
   RemotePublicationRequestId,
   RemotePublicationResumeRequestId
 } from "../workflow/protocols/direct-publication/events.js"
@@ -425,6 +427,12 @@ export const remotePublicationRetainedRecordKey = (
 export const remotePublicationResumeRequestedRecordKey = (
   resumeRequestId: RemotePublicationResumeRequestId
 ): JournalRecordKey => JournalRecordKey.make(`remote-publication-resume:${resumeRequestId}`)
+
+/** Stable uniqueness key for one exact (Run, responsibility, exhaustion occurrence) batch grant. */
+export const remotePublicationBatchGrantRecordKey = (request: RemotePublicationBatchGrantRequest): JournalRecordKey =>
+  JournalRecordKey.make(
+    `remote-publication-batch-grant:${request.runId.length}:${request.runId}:${request.responsibility.queuedAt}:${request.exhaustionAt}`
+  )
 
 const targetPromotionRecordKeyPrefix = (requestId: TargetPromotionRequestId): string => `target-promotion:${requestId}`
 

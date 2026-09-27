@@ -35,10 +35,13 @@ import {
 import type { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import type { RemotePublicationAdmissionRejected } from "../../workflow/protocols/direct-publication/admission.js"
 import type { RemotePublicationResumeControlResult } from "../../workflow/protocols/direct-publication/resume-control.js"
+import type { RemotePublicationBatchGrantReceipt } from "../../workflow/protocols/direct-publication/batch-grant-control.js"
 import type {
   RemotePublicationHistoryContradiction,
   RemotePublicationResumeRequestConflict,
-  RemotePublicationResumeSubjectMismatch
+  RemotePublicationResumeSubjectMismatch,
+  RemotePublicationBatchGrantRequestConflict,
+  RemotePublicationBatchGrantSubjectMismatch
 } from "../../workflow/protocols/direct-publication/errors.js"
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import type { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
@@ -157,6 +160,8 @@ export type JournaledRunBootstrapError =
   | RemotePublicationHistoryContradiction
   | RemotePublicationResumeRequestConflict
   | RemotePublicationResumeSubjectMismatch
+  | RemotePublicationBatchGrantRequestConflict
+  | RemotePublicationBatchGrantSubjectMismatch
 
 /** A fixed production composition was asked to begin a different Run identity. */
 export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRunIdentityMismatch>()(
@@ -220,6 +225,16 @@ export interface JournaledRunBootstrapService {
       input: unknown
     ) => Effect.Effect<
       RemotePublicationResumeControlResult,
+      | Schema.SchemaError
+      | JournaledRunBootstrapError
+      | JournaledRunIdentityMismatch
+      | JournaledRunNotActive
+      | ApplicationExiting
+    >
+    readonly applyRemotePublicationBatchGrant: (
+      input: unknown
+    ) => Effect.Effect<
+      RemotePublicationBatchGrantReceipt,
       | Schema.SchemaError
       | JournaledRunBootstrapError
       | JournaledRunIdentityMismatch

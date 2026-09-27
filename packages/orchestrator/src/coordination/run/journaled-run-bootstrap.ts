@@ -102,6 +102,10 @@ import {
   applyRemotePublicationResumeWithAdmission,
   type RemotePublicationResumeAdmission
 } from "../../workflow/protocols/direct-publication/resume-control.js"
+import {
+  applyRemotePublicationBatchGrantWithAdmission,
+  type RemotePublicationBatchGrantAdmission
+} from "../../workflow/protocols/direct-publication/batch-grant-control.js"
 
 import {
   AppliedRunCancellation,
@@ -1070,11 +1074,40 @@ export const journaledRunBootstrapLayer = (
             )
           : Effect.void
 
+      const notifyAcceptedRemotePublicationBatchGrant = (admission: RemotePublicationBatchGrantAdmission) =>
+        admission._tag === "NewlyRecordedBatchGrant"
+          ? Ref.get(acceptedRunReactivationObservers).pipe(
+              Effect.flatMap((observer) =>
+                Option.match(observer, {
+                  onNone: () => Effect.void,
+                  onSome: ({ acceptedFactPublication }) =>
+                    acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
+                })
+              )
+            )
+          : Effect.void
+
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
         applyRemotePublicationResume: (input) => {
           const applyTo = (journal: Journal["Service"]) =>
             applyRemotePublicationResumeWithAdmission(expectedRunId, journal, input).pipe(
               Effect.tap(notifyAcceptedRemotePublicationResume),
+              Effect.map(({ result }) => result)
+            )
+          return withRuntimeControls(({ journal }) => applyTo(journal)).pipe(
+            Effect.catchTag("JournaledRunNotActive", () =>
+              Effect.gen(function* () {
+                const holder = yield* establishStoredJournal()
+                if (Option.isNone(holder)) return yield* new WorkflowRunNotBegan({ runId: expectedRunId })
+                return yield* withJournalControl(applyTo(holder.value.journal))
+              })
+            )
+          )
+        },
+        applyRemotePublicationBatchGrant: (input) => {
+          const applyTo = (journal: Journal["Service"]) =>
+            applyRemotePublicationBatchGrantWithAdmission(expectedRunId, journal, input).pipe(
+              Effect.tap(notifyAcceptedRemotePublicationBatchGrant),
               Effect.map(({ result }) => result)
             )
           return withRuntimeControls(({ journal }) => applyTo(journal)).pipe(

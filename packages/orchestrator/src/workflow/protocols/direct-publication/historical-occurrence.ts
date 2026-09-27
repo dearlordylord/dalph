@@ -6,6 +6,7 @@ import {
   RemotePublicationAdmissionId,
   RemotePublicationAdmissionObservation,
   RemotePublicationAttemptOrdinal,
+  RemotePublicationBatchGrantRequest,
   RemotePublicationCorrelation,
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
@@ -103,6 +104,17 @@ export const RemotePublicationResumeRequested = Schema.TaggedStruct("RemotePubli
   runId: RunId
 })
 export type RemotePublicationResumeRequested = typeof RemotePublicationResumeRequested.Type
+
+/** The Operator's durable Full rerun choice for one exact publication exhaustion. */
+export const RemotePublicationBatchGrantApplied = Schema.TaggedStruct("RemotePublicationBatchGrantApplied", {
+  direction: Schema.Literal("FullRerun"),
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  recordedAt: JournalPosition,
+  request: RemotePublicationBatchGrantRequest,
+  runId: RunId
+})
+export type RemotePublicationBatchGrantApplied = typeof RemotePublicationBatchGrantApplied.Type
 
 /** Dalph recorded the exact remote-baseline read before local catch-up or publication. */
 export const RemoteBaselineReadInitiated = Schema.TaggedStruct("RemoteBaselineReadInitiated", {

@@ -76,6 +76,7 @@ import {
   integratorAutomaticSuccessorSessionFixedRecordKey,
   remotePublicationAdmissionObservedRecordKey,
   remotePublicationAdmissionReadIntendedRecordKey,
+  remotePublicationBatchGrantRecordKey,
   remotePublicationAttemptIntendedRecordKey,
   remotePublicationAttemptRejectedRecordKey,
   remotePublicationIntendedRecordKey,
@@ -497,6 +498,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     RemotePublicationResumeRequested: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: remotePublicationResumeRequestedRecordKey(event.request.requestId)
+    }),
+    RemotePublicationBatchGrantApplied: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationBatchGrantRecordKey(event.request)
     }),
     WorktreeCleanupAuthorized: (event) => ({
       _tag: "GenericEventDescriptor",
