@@ -208,3 +208,13 @@ evaluator provenance for nonempty shards. An empty shard is evidence of no selec
 commands, not a missing report. The aggregate job now installs pinned dependencies
 before source discovery. Tests cover missing reports/commands, wrong families,
 missing witness output, and canonical full-portfolio compatibility.
+
+
+Run `087b4b53-8862-4554-9a97-5cde52f31e7e` was stopped explicitly, without
+qualification credit, when a read-only audit found the inherited package command
+ran twenty iterations in one Vitest process instead of the shared fresh-process
+runner expected by hosted evidence. Exact-owner SIGTERM settled custody. The
+focused routing diagnostic exited 1 and printed the differing package command.
+The package now routes through `run-delivery-repeatability.mjs`, matching the
+three-sample smoke runner's production implementation; a routing regression test
+retains that boundary. No accepted delivery checkpoint assertion was removed.

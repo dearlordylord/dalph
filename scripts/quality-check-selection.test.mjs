@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { selectQualityStages } from "./quality-check-selection.mjs"
@@ -55,4 +56,10 @@ void test("cassette and projection changes retain their unique catalog and Lab a
     "prototypes/reducer-lab/src/main.ts"
   ])
     for (const id of ["recorded-catalog", "reducer-lab"]) assert.ok(ids([path]).includes(id), `${path}: ${id}`)
+})
+
+void test("deep sampling routes through the same fresh-process runner as smoke evidence", () => {
+  const scripts = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts
+  assert.equal(scripts["test:delivery-repeatability"], "node scripts/run-delivery-repeatability.mjs")
+  assert.equal(scripts["test:delivery-smoke"], "node scripts/run-delivery-smoke.mjs")
 })
