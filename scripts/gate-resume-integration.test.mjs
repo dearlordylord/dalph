@@ -164,6 +164,24 @@ sys.exit(124 if phase!='running' else (code if code is not None else 1))
     timeout: reap ? (reaperSeconds + 10) * 1_000 : 20_000
   })
 }
+const launchAdmitted = (root, commandArguments) => {
+  const env = withoutInheritedCustody(process.env)
+  for (const key of [
+    "DALPH_COVERAGE_BASE_SHA",
+    "DALPH_GATE_GIT_HISTORY",
+    "DALPH_GATE_RECOVERY_MODE",
+    "DALPH_QUALIFICATION_ENV_CAPTURE",
+    "DALPH_RUN_REAL_CODEX_QUALIFICATION",
+    "npm_execpath"
+  ])
+    delete env[key]
+  return spawnSync(process.execPath, [wrapper, "--", ...commandArguments], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    timeout: 20_000
+  })
+}
 const runs = (root) => {
   const location = repositoryLocation(root)
   return readdirSync(join(location.custodyRoot, "runs"))
@@ -225,6 +243,41 @@ finally: os.close(handle)
 `
   return spawnSync("python3", ["-c", source, String(pid), startIdentity], { encoding: "utf8", timeout: 3_000 })
 }
+void test("a failed full gate retains its failure and accepts actual repaired tests without a permit", () => {
+  const f = fixture()
+  try {
+    const gate = join(f.root, "scripts", "run-quality-gate.mjs")
+    const reproducer = join(f.root, "scripts", "focused-reproducer.mjs")
+    const repair = join(f.root, "repair.marker")
+    const baseSha = f.git("rev-parse", "HEAD^")
+    writeFileSync(
+      reproducer,
+      `import {existsSync} from 'node:fs';if(!existsSync(${JSON.stringify(repair)})){console.error('controlled obstruction');process.exitCode=9}\n`
+    )
+    writeFileSync(
+      gate,
+      `import {executeResumableQualityGate} from './gate-quality-run.mjs';import {runBoundedCommand} from './run-bounded-command.mjs';
+const baseSha=process.argv.find(argument=>argument.startsWith('--candidate='))?.slice('--candidate='.length);if(!baseSha)throw Error('missing candidate');
+const execution={executable:process.execPath,args:[${JSON.stringify(reproducer)}],cwd:process.cwd(),name:'focused controlled obstruction',timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000};
+const stage={id:'controlled-obstruction',name:'focused controlled obstruction',boundary:'qualification',args:execution.args,timeout:10000,artifactRoots:[],execution};
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1],...process.argv.slice(2)],baseSha,stageManifest:[stage],toolExecutables:[],formalClassification:{version:1,status:'unaffected',baseSha,headSha:undefined,changedPaths:['application-only-input'],affectedPaths:[]}};
+await executeResumableQualityGate({logicalInvocation,stageManifest:[stage],prepareFreshInputs:()=>{},runStage:()=>runBoundedCommand(execution)});\n`
+    )
+    const fullCommand = [process.execPath, gate, "--local-handoff", `--candidate=${baseSha}`]
+    const failed = launchAdmitted(f.root, fullCommand)
+    assert.equal(failed.status, 1, failed.stderr)
+    assert.match(failed.stderr, /controlled obstruction/u)
+    const stillBroken = spawnSync(process.execPath, [reproducer], { cwd: f.root, encoding: "utf8" })
+    assert.equal(stillBroken.status, 9)
+    writeFileSync(repair, "repaired\n")
+    const repaired = spawnSync(process.execPath, [reproducer], { cwd: f.root, encoding: "utf8" })
+    assert.equal(repaired.status, 0, repaired.stderr)
+    const passed = launchAdmitted(f.root, fullCommand)
+    assert.equal(passed.status, 0, passed.stderr)
+  } finally {
+    f.cleanup()
+  }
+})
 void test("an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow", () => {
   const f = fixture()
   let completed = false

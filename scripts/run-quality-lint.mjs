@@ -59,8 +59,4 @@ if (selectedFiles.length > 0) {
   ])
 }
 
-if (requestedFiles.length === 0 && !changedOnly && !fix) {
-  run(process.execPath, [join(process.cwd(), "scripts", "check-unused-exports.mjs")])
-}
-
 if (failedChecks > 0) process.exitCode = 1

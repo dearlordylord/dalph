@@ -13,8 +13,6 @@ const structuralCommands = [
   "lint:code",
   "check:lab",
   "check:circular",
-  "check:complexity",
-  "check:duplicates",
   "test:coverage:explanation",
   "test:gate-custody",
   "test:gate-previous-boot-reconcile",
@@ -40,11 +38,11 @@ it(
     expect(structuralCommands).not.toContain("test:mbt")
     const { invocations, result } = await runQualityGateFixture({
       fixtureName: "preflight-failures",
-      failureCommands: ["lint:code", "check:complexity", "check:artifacts"]
+      failureCommands: ["lint:code", "typecheck", "check:artifacts"]
     })
     expect(invocations).toEqual(structuralCommands)
     expect(result.output).toContain("3 failed stages")
-    for (const command of ["lint:code", "check:complexity", "check:artifacts"])
+    for (const command of ["lint:code", "typecheck", "check:artifacts"])
       expect(result.output).toContain(`Preflight failed: pnpm ${command}`)
     expect(result.output).toContain("qualification stages did not start")
   },

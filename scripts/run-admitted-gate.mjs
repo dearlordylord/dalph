@@ -39,12 +39,15 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
   throw new Error("Ambient qualification environment capture is outside supported gate custody")
 if (inherited !== undefined) throw new Error("The fresh custody runner cannot inherit an active run")
 const location = repositoryLocation()
-const deadline = resolveGateDeadline({ configured: process.env[gateDeadlineEnvironmentName] })
 requireWorktreeLock(location.worktreeLock)
 if (existsSync(location.worktreeFence)) {
   const fence = readRecord(location.worktreeFence)
   throw new Error(`Worktree requires reconciliation of gate run ${fence.runId}; no writer launched`)
 }
+const isLocalFullQualityCommand =
+  commandArguments.includes("--local-handoff") &&
+  resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs")
+const deadline = resolveGateDeadline({ configured: process.env[gateDeadlineEnvironmentName] })
 const slots = gateSlots({
   lockDirectory: location.commonDirectory,
   slotCount: resolveGateSlotCount({ configured: process.env[gateSlotCountEnvironmentName] })
@@ -101,9 +104,7 @@ const run = {
   ownerPid: process.pid,
   commandArguments,
   deadline,
-  requiresQualityComposite:
-    commandArguments.includes("--local-handoff") &&
-    resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs"),
+  requiresQualityComposite: isLocalFullQualityCommand,
   startedAt: wallClockTimestamp(),
   queueMilliseconds: epochMilliseconds() - startedWaiting
 }
@@ -175,13 +176,13 @@ try {
     console.error("Gate qualification UNPROVEN: terminal evidence is incomplete")
     commandExit = 1
   }
-  for (const path of [ownedSlot.fence, location.worktreeFence]) {
-    if (readRecord(path).runId !== runId) throw new Error("Gate fence changed; cannot clear another run's custody")
-    removeRecord(path)
-  }
   if (!sourceUnchanged) {
     console.error("Candidate inputs changed during qualification; result is UNPROVEN")
     commandExit = 1
+  }
+  for (const path of [ownedSlot.fence, location.worktreeFence]) {
+    if (readRecord(path).runId !== runId) throw new Error("Gate fence changed; cannot clear another run's custody")
+    removeRecord(path)
   }
 } catch (error) {
   console.error(`[gate-run] ${runId} remains fenced: ${error.message}`)

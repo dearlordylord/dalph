@@ -1,3 +1,4 @@
+import { createAffectedQuintSelection } from "./quint-affected-selection.mjs"
 import { createRequire } from "node:module"
 import { performance } from "node:perf_hooks"
 import { readFile } from "node:fs/promises"
@@ -49,7 +50,8 @@ export const runQuintEffectiveProfile = async ({
   runCommand = runBoundedCommand,
   readProvenance = readQuintEvaluatorProvenance,
   assertArtifactPrepared = assertTlcArtifactPrepared,
-  hostedShard
+  hostedShard,
+  affectedFamilies
 } = {}) => {
   assertQuintEffectiveProfile(profile, { purpose })
   // Execute a fresh frozen canonical copy, so caller mutation after validation
@@ -61,8 +63,10 @@ export const runQuintEffectiveProfile = async ({
   const shard =
     hostedShard === undefined
       ? undefined
-      : (assertCompleteQuintHostedPartition(profile), createQuintHostedShard(profile, hostedShard))
-  const executionSteps = shard?.steps ?? profile.steps
+      : (assertCompleteQuintHostedPartition(profile), createQuintHostedShard(profile, hostedShard, affectedFamilies))
+  const selection =
+    shard ?? (affectedFamilies === undefined ? undefined : createAffectedQuintSelection(profile, affectedFamilies))
+  const executionSteps = selection?.steps ?? profile.steps
   if (serverEndpoint !== undefined && environment === undefined) {
     throw new Error("An owned Quint endpoint requires an explicit sanitized environment")
   }
@@ -93,6 +97,7 @@ export const runQuintEffectiveProfile = async ({
     entryPoint: quintEntryPoint,
     profile,
     ...(shard === undefined ? {} : { shard }),
+    ...(affectedFamilies === undefined || shard !== undefined ? {} : { affectedSelection: selection }),
     serverEndpoint: serverEndpoint ?? null,
     commands: commands.filter((command) => command !== undefined),
     timing: { records: timing.records(), aggregates: timing.aggregates() },
@@ -228,10 +233,10 @@ export const runQuintEffectiveProfile = async ({
       "sampled-run": phases["sampled-run"].count,
       verify: phases.verify.count
     }
-    if (shard === undefined) {
+    if (selection === undefined) {
       assertQuintGateCommandContract({ manifest: profile.commands, executed })
     } else {
-      const selectedCommands = shard.positions.map((position) => profile.commands[position])
+      const selectedCommands = selection.positions.map((position) => profile.commands[position])
       const expected = Object.fromEntries(
         ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
           kind,
@@ -242,11 +247,11 @@ export const runQuintEffectiveProfile = async ({
         executed.total !== selectedCommands.length ||
         Object.entries(expected).some(([kind, count]) => executed[kind] !== count)
       ) {
-        throw new Error(`Hosted Quint shard ${shard.shard} command contract mismatch`)
+        throw new Error("Selected Quint command contract mismatch")
       }
     }
     const report = buildReport()
-    const resultName = shard === undefined ? "Complete Quint model gate" : `Hosted Quint shard ${shard.shard} evidence`
+    const resultName = selection === undefined ? "Complete Quint model gate" : "Selected Quint model evidence"
     write(
       `\n${resultName}: ${(report.elapsedMilliseconds / 1000).toFixed(2)}s (budget ${profile.policy.regressionBudgetMilliseconds / 1000}s)\n`
     )
@@ -273,5 +278,7 @@ export const runQuintEffectiveProfile = async ({
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (process.env.npm_execpath === undefined) throw new Error("Run this model gate through pnpm")
   assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
-  await runQuintEffectiveProfile()
+  const args = process.argv.slice(2)
+  if (args.some((arg) => !arg.startsWith("--family="))) throw new Error("Expected --family=<model family>")
+  await runQuintEffectiveProfile({ affectedFamilies: args.length === 0 ? undefined : args.map((arg) => arg.slice(9)) })
 }

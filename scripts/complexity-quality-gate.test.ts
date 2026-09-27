@@ -17,7 +17,7 @@ it("passes the resolved hosted base to the bounded complexity stage", () => {
 })
 
 it(
-  "gives coverage and complexity the same canonical explicit-candidate base",
+  "forwards the canonical coverage base without a mandatory complexity pass",
   async () => {
     const baseSha = execFileSync("git", ["rev-parse", "HEAD^"], { encoding: "utf8" }).trim()
     const { invocationArguments, invocationCoverageBases, result } = await runQualityGateFixture({
@@ -29,7 +29,7 @@ it(
     })
 
     expect(result.exitCode).toBe(0)
-    expect(invocationArguments).toContainEqual(["check:complexity", `--candidate=${baseSha}`])
+    expect(invocationArguments).not.toContainEqual(["check:complexity", `--candidate=${baseSha}`])
     expect(invocationCoverageBases).toContainEqual(["test", baseSha])
     expect(qualityGateTestEnvironment(baseSha, { DALPH_COVERAGE_BASE_SHA: "stale" }).DALPH_COVERAGE_BASE_SHA).toBe(
       baseSha
@@ -48,7 +48,7 @@ it(
     })
 
     expect(result.exitCode).toBe(0)
-    expect(invocationArguments).toContainEqual(["check:complexity", `--candidate=${baseSha}`])
+    expect(invocationArguments).not.toContainEqual(["check:complexity", `--candidate=${baseSha}`])
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )

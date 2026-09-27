@@ -60,5 +60,5 @@ it("keeps the exact combined exclusions out of ordinary tests and in coverage", 
     "packages/dalph/src/application/production-public-recovery.integration.test.ts"
   ])
   expect(coverage.test?.include).toEqual(ordinary.test?.include)
-  expect(coverage.test?.coverage?.thresholds).toEqual({ branches: 75, functions: 75, lines: 75, statements: 75 })
+  expect(coverage.test?.coverage?.thresholds).toBeUndefined()
 })

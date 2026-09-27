@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
-import { type Layer, Context, Effect, Ref, Schema, type Stream } from "effect"
+import { Context, Effect, type Layer, Ref, Schema, type Stream } from "effect"
 import { journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
 import { DeliveryCleanupBoundary } from "../delivery/delivery-cleanup-boundary.js"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"

@@ -597,3 +597,37 @@ void test("hosted and guarded local execution reject each other's profile and ar
   }
   assert.throws(() => createQuintEffectiveProfile({ purpose: "arbitrary" }), /supported execution purpose/)
 })
+
+void test("affected execution retains canonical verdicts and reports only selected positions", async () => {
+  const profile = createQuintEffectiveProfile()
+  const launches = []
+  const report = await runQuintEffectiveProfile({
+    ...controls(profile, launches),
+    affectedFamilies: ["Run activation"]
+  })
+  assert.deepEqual(
+    report.commands.map(({ position }) => position),
+    report.affectedSelection.positions
+  )
+  assert.equal(report.commands.length, 5)
+  for (const hostedShard of [0, 1]) {
+    const hosted = await runQuintEffectiveProfile({
+      ...controls(profile, []),
+      affectedFamilies: ["Run activation"],
+      hostedShard
+    })
+    assert.deepEqual(
+      hosted.commands.map(({ position }) => position),
+      hosted.shard.positions
+    )
+    assert.equal(hosted.commands.length, hostedShard === 0 ? 5 : 0)
+  }
+  await assert.rejects(
+    runQuintEffectiveProfile({
+      ...controls(profile, []),
+      affectedFamilies: ["Run activation"],
+      runCommand: async () => ({ exitCode: 0, output: "" })
+    }),
+    /witness|verdict|output|TLC|Quint/i
+  )
+})

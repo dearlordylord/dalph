@@ -61,6 +61,10 @@ const dispatch = ({
     ])
       copyFileSync(new URL(file, import.meta.url), join(root, file))
     writeFileSync(
+      join(root, "changed-files.mjs"),
+      "export const completeFormalChangedPaths=()=>({changedFiles:['scripts/controlled.mjs']})"
+    )
+    writeFileSync(
       join(root, "classify-docs-only-change.mjs"),
       classificationFailure
         ? "export const classifyFormalChangeBetween=()=>{throw new Error('controlled unavailable projection')}"

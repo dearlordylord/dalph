@@ -1,11 +1,6 @@
 import { env as processEnvironment } from "node:process"
 import { defineConfig } from "vitest/config"
 import { fileURLToPath } from "node:url"
-import { coveragePolicy } from "./scripts/coverage-policy.mjs"
-
-const coverageThresholds = Object.fromEntries(
-  coveragePolicy.metrics.map((metric) => [metric, coveragePolicy.globalThresholds[metric]])
-)
 
 const mbtTestPattern = "packages/**/*.mbt.test.ts"
 const acceptedResultIntegrationMbtTestPattern =
@@ -52,8 +47,7 @@ export default defineConfig(({ mode }) => ({
       include: ["src/**/*.ts", "packages/*/src/**/*.ts"],
       provider: "v8",
       reportsDirectory: processEnvironment["DALPH_COVERAGE_DIRECTORY"] ?? "coverage",
-      reporter: ["text", "json", "html"],
-      thresholds: coverageThresholds
+      reporter: ["text", "json", "html"]
     },
     environment: "node",
     exclude: [

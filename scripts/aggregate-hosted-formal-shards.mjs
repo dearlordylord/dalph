@@ -1,3 +1,4 @@
+import { hostedAffectedQuintFamilies } from "./quint-affected-selection.mjs"
 import { readFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 
@@ -6,6 +7,7 @@ import { assertQuintGateCommandContract } from "./quint-gate-command-contract.mj
 import { assertCleanTemporalVerdict, assertViolatedTemporalVerdict } from "./quint-temporal-gate.mjs"
 import {
   assertCompleteQuintHostedPartition,
+  createQuintHostedShard,
   assertQuintHostedCommandCustody,
   quintHostedProfileDigest,
   quintHostedShardCount,
@@ -78,10 +80,13 @@ const validateCommand = (actual, expected) => {
 }
 
 /** Validate complete successful evidence from one exact GitHub matrix cell. */
-export const aggregateHostedFormalShards = ({ binding, envelopes }) => {
+export const aggregateHostedFormalShards = ({ affectedFamilies, binding, envelopes }) => {
   const profile = createQuintEffectiveProfile()
   assertQuintEffectiveProfile(profile)
-  const shards = assertCompleteQuintHostedPartition(profile)
+  assertCompleteQuintHostedPartition(profile)
+  const shards = Array.from({ length: quintHostedShardCount }, (_, shard) =>
+    createQuintHostedShard(profile, shard, affectedFamilies)
+  )
   if (!Array.isArray(envelopes) || envelopes.length !== quintHostedShardCount) {
     throw new Error(`Hosted Quint aggregate requires exactly ${quintHostedShardCount} shard reports`)
   }
@@ -117,12 +122,12 @@ export const aggregateHostedFormalShards = ({ binding, envelopes }) => {
     ) {
       throw new Error(`Hosted Quint aggregate rejected shard ${String(envelope.shard)} report structure`)
     }
-    const evaluator = provenanceIdentity(report.provenance)
+    const evaluator = expectedShard.positions.length === 0 ? undefined : provenanceIdentity(report.provenance)
     assertQuintHostedCommandCustody(report)
-    if (commonProvenance !== undefined && !same(commonProvenance, evaluator)) {
+    if (evaluator !== undefined && commonProvenance !== undefined && !same(commonProvenance, evaluator)) {
       throw new Error("Hosted Quint aggregate received mixed evaluator provenance")
     }
-    commonProvenance = evaluator
+    if (evaluator !== undefined) commonProvenance = evaluator
     for (const [index, position] of expectedShard.positions.entries()) {
       const expected = profile.commands[position]
       validateCommand(report.commands[index], expected)
@@ -169,17 +174,20 @@ export const aggregateHostedFormalShards = ({ binding, envelopes }) => {
   if (new Set(commands.map(({ obligationId }) => obligationId)).size !== commands.length) {
     throw new Error("Hosted Quint aggregate rejected duplicate command custody")
   }
-  for (const [position, command] of commands.entries()) validateCommand(command, profile.commands[position])
-  assertQuintGateCommandContract({
-    manifest: profile.commands,
-    executed: {
-      total: commands.length,
-      typecheck: commands.filter(({ kind }) => kind === "typecheck").length,
-      test: commands.filter(({ kind }) => kind === "test").length,
-      "sampled-run": commands.filter(({ kind }) => kind === "sampled-run").length,
-      verify: commands.filter(({ kind }) => kind === "verify").length
-    }
-  })
+  const expectedPositions = shards.flatMap(({ positions }) => positions).sort((a, b) => a - b)
+  for (const [index, command] of commands.entries())
+    validateCommand(command, profile.commands[expectedPositions[index]])
+  if (affectedFamilies === undefined)
+    assertQuintGateCommandContract({
+      manifest: profile.commands,
+      executed: {
+        total: commands.length,
+        typecheck: commands.filter(({ kind }) => kind === "typecheck").length,
+        test: commands.filter(({ kind }) => kind === "test").length,
+        "sampled-run": commands.filter(({ kind }) => kind === "sampled-run").length,
+        verify: commands.filter(({ kind }) => kind === "verify").length
+      }
+    })
   const commandEvidence = commands.map((command) => {
     const envelope = byShard.get(shardForCommandPosition(shards, command.position))
     const index = envelope.report.commands.findIndex(({ position }) => position === command.position)
@@ -204,8 +212,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const envelopes = await Promise.all(
     process.argv.slice(2).map(async (path) => JSON.parse(await readFile(path, "utf8")))
   )
-  const result = aggregateHostedFormalShards({ binding: readQuintHostedShardBinding(), envelopes })
+  const binding = readQuintHostedShardBinding()
+  const affectedFamilies = await hostedAffectedQuintFamilies({ binding, profile: createQuintEffectiveProfile() })
+  const result = aggregateHostedFormalShards({ binding, envelopes, affectedFamilies })
   process.stdout.write(
-    `Complete hosted Quint evidence: ${result.commands} commands across ${quintHostedShardCount} shards\n`
+    `Selected hosted Quint evidence: ${result.commands} commands across ${quintHostedShardCount} shards\n`
   )
 }

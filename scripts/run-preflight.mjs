@@ -1,6 +1,7 @@
+import { completeFormalChangedPaths } from "./changed-files.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
-import { boundedQualityGateCommand, preflightQualityGates } from "./quality-gate-stage-policy.mjs"
+import { boundedQualityGateCommand, fullQualityGateManifest } from "./quality-gate-stage-policy.mjs"
 import { resolveQualityGateBase } from "./resolve-quality-gate-base.mjs"
 
 // Admitted structural checks always inspect formatter inputs without incremental result reuse.
@@ -14,7 +15,12 @@ const baseSha = resolveQualityGateBase({
   hostedBase: process.env.DALPH_COVERAGE_BASE_SHA
 })
 const result = await runPreflightCensus({
-  gates: preflightQualityGates(baseSha),
+  gates: fullQualityGateManifest(baseSha, {
+    nodeExecutable: process.execPath,
+    pnpmEntryPoint,
+    worktree: process.cwd(),
+    changedPaths: completeFormalChangedPaths(baseSha).changedFiles
+  }).filter((stage) => stage.boundary === "preflight"),
   runStage: (gate) =>
     runBoundedCommand(boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint }))
 })
