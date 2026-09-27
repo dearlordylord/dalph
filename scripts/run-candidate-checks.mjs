@@ -115,7 +115,7 @@ const main = async () => {
           {
             id: "affected-formal",
             name: "affected formal proof",
-            args: ["check:ci:formal", ...(affectedFamilies ?? []).map((name) => `--family=${name}`)],
+            args: ["check:ci:formal", "--local-guarded", ...(affectedFamilies ?? []).map((name) => `--family=${name}`)],
             timeout: 35 * 60_000
           }
         ]

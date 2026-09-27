@@ -274,11 +274,21 @@ export const runQuintEffectiveProfile = async ({
   }
 }
 
+/** Local candidate execution selects the existing finite local allowance; hosted remains the default. */
+export const quintInvocationFromArguments = (args) => {
+  const local = args[0] === "--local-guarded"
+  const families = local ? args.slice(1) : args
+  if (families.some((arg) => !arg.startsWith("--family=") || arg.length === 9))
+    throw new Error("Expected optional --local-guarded followed by --family=<model family>")
+  return {
+    purpose: local ? "local-guarded" : "hosted",
+    affectedFamilies: families.length === 0 ? undefined : families.map((arg) => arg.slice(9))
+  }
+}
+
 // Importing this module constructs no child process and executes no checker.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (process.env.npm_execpath === undefined) throw new Error("Run this model gate through pnpm")
   assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
-  const args = process.argv.slice(2)
-  if (args.some((arg) => !arg.startsWith("--family="))) throw new Error("Expected --family=<model family>")
-  await runQuintEffectiveProfile({ affectedFamilies: args.length === 0 ? undefined : args.map((arg) => arg.slice(9)) })
+  await runQuintEffectiveProfile(quintInvocationFromArguments(process.argv.slice(2)))
 }

@@ -5,7 +5,7 @@ import { promisify } from "node:util"
 import { test } from "node:test"
 
 import { createQuintEffectiveProfile, assertQuintEffectiveProfile } from "./quint-effective-profile.mjs"
-import { runQuintEffectiveProfile } from "./check-quint-models.mjs"
+import { quintInvocationFromArguments, runQuintEffectiveProfile } from "./check-quint-models.mjs"
 import { createFormalProgressLifecycle } from "./formal-progress-events.mjs"
 import { quintGateExpectedCommandCounts } from "./quint-gate-command-contract.mjs"
 import { createQuintHostedShard } from "./quint-hosted-shards.mjs"
@@ -630,4 +630,19 @@ void test("affected execution retains canonical verdicts and reports only select
     }),
     /witness|verdict|output|TLC|Quint/i
   )
+})
+
+void test("local command selection preserves hosted limits and the complete proof inventory", () => {
+  const hosted = createQuintEffectiveProfile(quintInvocationFromArguments([]))
+  const local = createQuintEffectiveProfile(quintInvocationFromArguments(["--local-guarded"]))
+  assert.equal(hosted.policy.safetyTimeoutMilliseconds, 720000)
+  assert.equal(local.policy.safetyTimeoutMilliseconds, 1800000)
+  assert.deepEqual(local.commands, hosted.commands)
+  assert.deepEqual(local.steps, hosted.steps)
+  assert.deepEqual(quintInvocationFromArguments(["--local-guarded", "--family=integration-finality"]), {
+    purpose: "local-guarded",
+    affectedFamilies: ["integration-finality"]
+  })
+  for (const args of [["--local-guarded", "--local-guarded"], ["--family="], ["--purpose=arbitrary"]])
+    assert.throws(() => quintInvocationFromArguments(args), /Expected/)
 })
