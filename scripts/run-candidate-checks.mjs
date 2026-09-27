@@ -71,6 +71,18 @@ const main = async () => {
     throw new Error("Candidate checks require exact-worktree admission")
   const pnpmEntryPoint = process.env.npm_execpath
   if (pnpmEntryPoint === undefined) throw new Error("Run candidate checks through pnpm")
+  // pnpm may refresh its derived workspace metadata after a package manifest edit.
+  // Prepare that cache before freezing inputs; stale dependencies fail without installing.
+  const preparation = {
+    executable: process.execPath,
+    args: [pnpmEntryPoint, "--config.verify-deps-before-run=error", "exec", "node", "--eval", "void 0"],
+    cwd: process.cwd(),
+    name: "Validate installed dependencies before input observation",
+    relayParentSignals: true,
+    timeoutMilliseconds: 30_000,
+    acceptedExitCodes: [0]
+  }
+  await runBoundedCommand(preparation)
   const git = (...gitArgs) =>
     execFileSync("git", gitArgs, { encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } }).trim()
   if (git("status", "--porcelain") !== "") throw new Error("Freeze a clean candidate checkout before qualification")
@@ -110,7 +122,7 @@ const main = async () => {
     pnpmEntryPoint,
     process.cwd()
   )
-  const identity = { version: 1, worktree: process.cwd(), baseSha, candidateHeadSha, formal, changedPaths }
+  const identity = { version: 1, worktree: process.cwd(), baseSha, candidateHeadSha, formal, changedPaths, preparation }
   const report = join(context.run.reportDirectory, "candidate-checks.json")
   const environment = {
     ...qualityGateTestEnvironment(baseSha),

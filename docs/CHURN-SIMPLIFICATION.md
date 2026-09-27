@@ -171,3 +171,15 @@ writer fences from delayed fixture startup: the unchanged test passed every fenc
 reconciliation and resumed-progress assertion in under one second. The fixture
 startup allowance is now 30 seconds; production limits and assertions are intact.
 The identical repaired focused test and all 55 custody tests passed afterward.
+
+
+Run `ca3ad768-0786-4473-b3a9-d7316508a8f0` stopped after artifact preparation
+because pnpm refreshed `node_modules/.pnpm-workspace-state-v1.json`. The focused
+diagnostic invalidated only the derived timestamp, advanced a manifest timestamp
+without changing bytes, and observed the same filesystem event from pnpm's
+successful dependency check. Repeating that exact check after preparation produced
+no input event. This distinguishes cache refresh from dependency mutation. The
+runner now executes a bounded dependency validation before freezing inputs;
+it refuses stale dependencies and never installs them. The observer still protects
+all dependency files, including this metadata. The preparation command is retained
+in the candidate record. No qualification credit is claimed for the failed run.
