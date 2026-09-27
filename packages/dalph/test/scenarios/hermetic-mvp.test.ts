@@ -728,19 +728,26 @@ const runHermeticMvpJourney = (
         )
       )
       const terminated = yield* Ref.make(false)
+      const publicationBatchObserved = yield* Ref.make(false)
       const lastWorkflowDecision = yield* Ref.make<Option.Option<string>>(Option.none())
       const activationDriver = Effect.forEach(
         Array.from({ length: maxActivationPasses }),
         () =>
           Ref.get(terminated).pipe(
             Effect.flatMap((done) =>
-              done
-                ? Effect.void
-                : Effect.gen(function* () {
-                    const decision = yield* activate
-                    yield* Ref.set(lastWorkflowDecision, Option.some(JSON.stringify(decision)))
-                    if (decision._tag === "RunMayTerminate") yield* Ref.set(terminated, true)
-                  })
+              Effect.gen(function* () {
+                if (done || (yield* Ref.get(publicationBatchObserved))) return
+                const decision = yield* activate
+                yield* Ref.set(lastWorkflowDecision, Option.some(JSON.stringify(decision)))
+                if (decision._tag === "RunMayTerminate") yield* Ref.set(terminated, true)
+                if (
+                  exhaustAutomaticSuccessorBounds &&
+                  decision._tag === "RunMustRemainActive" &&
+                  (yield* Ref.get(candidatePublicationPushCalls)) === 3
+                ) {
+                  yield* Ref.set(publicationBatchObserved, true)
+                }
+              })
             )
           ),
         { discard: true }
@@ -781,6 +788,9 @@ const runHermeticMvpJourney = (
         expect(yield* fileSystem.exists(worktree)).toBe(true)
       }
 
+      // Reactivate after the third push before checking the exact retained journal state and no fourth action.
+      // The retained outcome is intentionally active, so termination cannot stop this fixture.
+      yield* Ref.set(publicationBatchObserved, false)
       yield* activationDriver
       if (exhaustAutomaticSuccessorBounds) {
         const records = yield* Effect.gen(function* () {

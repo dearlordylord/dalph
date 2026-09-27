@@ -46,6 +46,9 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 ## Verification and closure
 
+- Delegate `check:all` and other gates to a subagent. Measure and report each
+  gate's elapsed wall-clock time.
+
 - After a failed qualification, run the actual failing test, repair its cause,
   and observe the repaired test passing before another full run. Logs are
   diagnostic evidence; no diagnosis declaration or repair permit admits a run.
