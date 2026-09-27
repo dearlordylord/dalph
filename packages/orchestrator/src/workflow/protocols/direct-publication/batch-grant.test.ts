@@ -9,6 +9,7 @@ import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journ
 import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
+import { publicationPremiseFor } from "../integration-finality/publication-premise.js"
 import { integratorCorrelationFor, integratorRunCorrelationForSession } from "../integrator/session.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
@@ -281,6 +282,7 @@ it.effect(
       )
       expect(newlyRecorded.result.exhaustionAt).toBe(retained.position)
       expect(Array.from(journalRecordsOfKind(afterGrant.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(1)
+      expect(publicationPremiseFor(afterGrant.prefix, qualified.claim)).toBe("Missing")
       expect(
         Array.from(journalRecordsOfKind(afterGrant.prefix, "ControlDirectionApplied")).at(-1)?.event
       ).toMatchObject({ direction: "Pause", subject: { _tag: "Run", runId } })
