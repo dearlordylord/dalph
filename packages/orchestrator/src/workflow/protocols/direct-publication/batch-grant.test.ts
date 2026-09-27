@@ -10,6 +10,11 @@ import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqli
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import { publicationPremiseFor } from "../integration-finality/publication-premise.js"
+import { type CompletionTaskBoundaryService, completionTaskRequestFor } from "../integration-finality/events.js"
+import {
+  CompletionTaskPreconditionConflict,
+  runCompletionTaskProtocol
+} from "../integration-finality/completion-task-protocol.js"
 import { integratorCorrelationFor, integratorRunCorrelationForSession } from "../integrator/session.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
@@ -291,6 +296,29 @@ it.effect(
       expect(newlyRecorded.result.exhaustionAt).toBe(retained.position)
       expect(Array.from(journalRecordsOfKind(afterGrant.prefix, "RemotePublicationBatchGrantApplied"))).toHaveLength(1)
       expect(publicationPremiseFor(afterGrant.prefix, qualified.claim)).toBe("Missing")
+      const completionCalls = yield* Ref.make(0)
+      const authorizationCalls = yield* Ref.make(0)
+      const completionBoundary: CompletionTaskBoundaryService = {
+        completeTask: () =>
+          Ref.update(completionCalls, (count) => count + 1).pipe(
+            Effect.andThen(Effect.die("grant cannot complete the task"))
+          ),
+        readCompletionRequest: () => Effect.die("grant cannot reconcile a completion request"),
+        readFocusedTaskCompletion: () => Effect.die("grant cannot authorize task completion")
+      }
+      const completionFailure = yield* runCompletionTaskProtocol(
+        completionBoundary,
+        completionTaskRequestFor(qualified.claim),
+        accepted.trackerTarget,
+        () =>
+          Ref.update(authorizationCalls, (count) => count + 1).pipe(
+            Effect.andThen(Effect.die("grant cannot authorize task completion"))
+          )
+      ).pipe(Effect.provide(context), Effect.flip)
+      expect(completionFailure).toBeInstanceOf(CompletionTaskPreconditionConflict)
+      expect(completionFailure).toMatchObject({ reason: "RemotePublicationMissing" })
+      expect(yield* Ref.get(completionCalls)).toBe(0)
+      expect(yield* Ref.get(authorizationCalls)).toBe(0)
       expect(
         Array.from(journalRecordsOfKind(afterGrant.prefix, "ControlDirectionApplied")).at(-1)?.event
       ).toMatchObject({ direction: "Pause", subject: { _tag: "Run", runId } })

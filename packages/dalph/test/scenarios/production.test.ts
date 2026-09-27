@@ -3343,6 +3343,40 @@ it.effect("production Run defers a real exhausted publication batch through Paus
       expect(pausedRecords.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(3)
       expect(pausedRecords.filter(({ event }) => event._tag === "RemotePublicationBatchGrantApplied")).toHaveLength(1)
 
+      const exitDatabase = JournalDatabaseLocator.make(`${directory}/exit-after-grant.sqlite`)
+      yield* Effect.gen(function* () {
+        const store = yield* JournalStore
+        const [began, ...remaining] = pausedRecords
+        if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("paused prefix must begin the Run")
+        yield* store.beginRun(
+          accepted.runId,
+          began.event.target,
+          began.event.initialControlPolicy,
+          began.event.remotePublicationTarget
+        )
+        for (const record of remaining) {
+          if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+            return yield* Effect.die("paused grant suffix has no lifecycle event")
+          }
+          yield* store.append(accepted.runId, record.key, record.event)
+        }
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: exitDatabase })))
+      const beforeExit = yield* Ref.get(activity)
+      yield* Effect.gen(function* () {
+        const shell = yield* ApplicationExitShell
+        expect(yield* shell.requestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
+        yield* run().pipe(Effect.exit)
+      }).pipe(
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: exitDatabase })))
+      )
+      const exitRecords = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(accepted.runId)
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: exitDatabase })))
+      expect(exitRecords).toEqual(pausedRecords)
+      expect(yield* Ref.get(activity)).toEqual(beforeExit)
+      expect(yield* Ref.get(localGitCalls)).toEqual([])
+
       const resumedDecision = yield* Effect.gen(function* () {
         const bootstrap = yield* JournaledRunBootstrap
         yield* bootstrap.operatorControl.applyControlDirection({
