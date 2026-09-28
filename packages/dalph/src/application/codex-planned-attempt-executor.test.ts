@@ -1483,6 +1483,38 @@ it.effect("a typed held-terminal projection failure stops targeted census checks
   )
 )
 
+it.effect("does not schedule held-terminal cadence after an unreadable activity census", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const activityCensusReads = yield* Ref.make(0)
+      const harness = makeHarness({ afterActivityCensus: () => Ref.update(activityCensusReads, (count) => count + 1) })
+      const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
+        ownedActivityObservationInterval: CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+      })
+      const readsAtAttachment = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.complete(finalResponse(head))
+        harness.setActivityCensus({ _tag: "Unreadable", detail: "exact thread identity is missing" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const initialReads = yield* Ref.get(activityCensusReads)
+        const changes = yield* Stream.runCollect(attachment.changes).pipe(Effect.forkChild)
+
+        yield* TestClock.adjust(Duration.seconds(5))
+        yield* Effect.yieldNow
+
+        const finalReads = yield* Ref.get(activityCensusReads)
+        yield* attachment.close
+        yield* Fiber.interrupt(changes)
+        return { finalReads, initialReads }
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)))
+
+      expect(readsAtAttachment.finalReads).toBe(readsAtAttachment.initialReads)
+    })
+  )
+)
+
 it.effect("current-first attachment cannot miss a terminal change between projection and await", () =>
   Effect.scoped(
     Effect.gen(function* () {

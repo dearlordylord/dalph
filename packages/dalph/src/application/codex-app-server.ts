@@ -371,9 +371,10 @@ export type CodexOwnedActivityCensusProjection =
  * Selects which process facts one activity observation may own.
  *
  * An Integrator session owns only the exact thread and its reported terminal
- * processes. A planned task attempt additionally owns descendants carrying
- * the app-server's exact launch token, which is required to recover escaped
- * task processes after the app-server leader disappears.
+ * processes. A planned task attempt additionally owns escaped descendants
+ * carrying both the app-server's exact launch token and the exact Codex thread
+ * identity, which recovers task processes after the app-server leader exits
+ * without adopting another thread's helpers.
  */
 type CodexOwnedActivityScope = "IntegratorSession" | "PlannedAttempt"
 
@@ -563,6 +564,7 @@ export const processWasAbsent = (error: unknown): boolean => {
 
 const processIdentitySeparator = "|"
 const codexServerIncarnationEnvironment = "DALPH_CODEX_SERVER_INCARNATION"
+const codexThreadIdentityEnvironment = "CODEX_THREAD_ID"
 const processStatAfterCommandOffset = 2
 const linuxProcessStatStartTimeFieldIndex = 19
 
@@ -906,6 +908,39 @@ const environmentCarriesToken = (
     ? environment.split("\u0000").includes(tokenEntry)
     : environment.split(/\s+/).includes(tokenEntry)
 
+const tokenMemberForThread = (
+  stat: LinuxProcessStat,
+  environment: string,
+  token: CodexServerIncarnation,
+  threadId: CodexThreadId | undefined,
+  platform: CodexProcessNativeService["platform"]
+): TokenMemberObservation => {
+  if (!environmentCarriesToken(environment, `${codexServerIncarnationEnvironment}=${token}`, platform)) {
+    return undefined
+  }
+  if (threadId === undefined) {
+    return {
+      pid: stat.pid,
+      parentPid: stat.parentPid,
+      processGroupId: stat.processGroupId,
+      startIdentity: stat.startIdentity
+    }
+  }
+  const entries = platform === "linux" ? environment.split("\u0000") : environment.split(/\s+/)
+  const threadPrefix = `${codexThreadIdentityEnvironment}=`
+  const threadEntries = entries.filter((entry) => entry.startsWith(threadPrefix))
+  if (threadEntries.length !== 1 || threadEntries[0]?.length === threadPrefix.length) {
+    return { detail: `process ${stat.pid} has no exact Codex thread identity` }
+  }
+  if (threadEntries[0]?.slice(threadPrefix.length) !== threadId) return undefined
+  return {
+    pid: stat.pid,
+    parentPid: stat.parentPid,
+    processGroupId: stat.processGroupId,
+    startIdentity: stat.startIdentity
+  }
+}
+
 type DarwinProcessCommandsObservation =
   | { readonly commands: ReadonlyMap<number, string> }
   | { readonly failure: { readonly detail: string } }
@@ -963,6 +998,7 @@ const tokenReadFailure = async (
 const readTokenMember = async (
   stat: LinuxProcessStat,
   token: CodexServerIncarnation,
+  threadId: CodexThreadId | undefined,
   native: CodexProcessNativeService
 ): Promise<TokenMemberObservation> => {
   try {
@@ -971,15 +1007,7 @@ const readTokenMember = async (
       native.platform === "linux"
         ? await native.readFile(`/proc/${stat.pid}/environ`)
         : (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(stat.pid)])).stdout
-    if (!environmentCarriesToken(environment, `${codexServerIncarnationEnvironment}=${token}`, native.platform)) {
-      return undefined
-    }
-    return {
-      pid: stat.pid,
-      parentPid: stat.parentPid,
-      processGroupId: stat.processGroupId,
-      startIdentity: stat.startIdentity
-    }
+    return tokenMemberForThread(stat, environment, token, threadId, native.platform)
   } catch (error) {
     return tokenReadFailure(stat.pid, error, native)
   }
@@ -989,23 +1017,16 @@ const readTokenMember = async (
 const readDarwinTokenMembers = async (
   stats: ReadonlyArray<LinuxProcessStat>,
   token: CodexServerIncarnation,
+  threadId: CodexThreadId | undefined,
   native: CodexProcessNativeService
 ): Promise<ReadonlyArray<TokenMemberObservation>> => {
   const observation = await readDarwinProcessCommands(native)
   if ("failure" in observation) return [observation.failure]
-  const tokenEntry = `${codexServerIncarnationEnvironment}=${token}`
   return stats.flatMap((stat) => {
     const command = observation.commands.get(stat.pid)
-    return command !== undefined && environmentCarriesToken(command, tokenEntry, "darwin")
-      ? [
-          {
-            pid: stat.pid,
-            parentPid: stat.parentPid,
-            processGroupId: stat.processGroupId,
-            startIdentity: stat.startIdentity
-          }
-        ]
-      : []
+    if (command === undefined) return []
+    const member = tokenMemberForThread(stat, command, token, threadId, "darwin")
+    return member === undefined ? [] : [member]
   })
 }
 /* v8 ignore stop -- @preserve */
@@ -1075,7 +1096,8 @@ const observeOwnedActivityProcesses = async (
   roots: ReadonlyArray<number>,
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   incarnation?: CodexServerIncarnation,
-  appServerPid?: number
+  appServerPid?: number,
+  threadId?: CodexThreadId
 ): Promise<OwnedActivityProcessProjection> => {
   if (roots.length === 0 && incarnation === undefined) return { _tag: "Absent" }
   if (native.platform !== "linux" && native.platform !== "darwin") {
@@ -1093,12 +1115,17 @@ const observeOwnedActivityProcesses = async (
   const projectedMembers = projection._tag === "ExactLive" ? projection.members : []
   /* v8 ignore start -- @preserve Durable-token and escaped-child branches run in the real Linux/macOS qualification gate. */
   const token = incarnation === undefined ? undefined : durableIncarnationToken(incarnation)
+  const tokenCandidateStats = [...byPid.values()].filter(
+    (stat) =>
+      stat.pid !== appServerPid &&
+      (appServerProcessGroupId === undefined || stat.processGroupId !== appServerProcessGroupId)
+  )
   const tokenMembers =
     token === undefined
       ? []
       : native.platform === "darwin"
-        ? await readDarwinTokenMembers([...byPid.values()], token, native)
-        : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native)))
+        ? await readDarwinTokenMembers(tokenCandidateStats, token, threadId, native)
+        : await Promise.all(tokenCandidateStats.map((stat) => readTokenMember(stat, token, threadId, native)))
   const tokenFailure = tokenMembers.find((member) => member !== undefined && "detail" in member)
   if (tokenFailure !== undefined && "detail" in tokenFailure) return { _tag: "Unreadable", detail: tokenFailure.detail }
   const exactTokenMembers = tokenMembers.filter(
@@ -1230,7 +1257,8 @@ export const makeNodeCodexOwnedActivityCensusService = (
           processRootsForBackgroundTerminals(backgroundTerminals),
           native,
           scope === "PlannedAttempt" ? incarnation : undefined,
-          appServerPid
+          appServerPid,
+          scope === "PlannedAttempt" ? thread.id : undefined
         )
         if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
           return processProjection

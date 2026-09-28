@@ -433,3 +433,174 @@ gate established a child stdout classification problem only. No claim is made
 about whether the preserved live S1 received or mapped `turn/completed`; its
 cause remains inconclusive without wire receipt evidence. No full gate, fresh
 S1, or preserved Run retry was performed here.
+
+## Focused #386 process-attribution diagnostic — 2026-09-28
+
+Repair worktree: `/workspace/typescript/dalph-worktrees/issue-386-thread-attribution-repair-r1`,
+branch `work/issue-386-thread-attribution-repair-r1`, exact clean source
+`1f1dfb5133bca514ba598c7c657d386433984d8e`. The full candidate's planned Base
+remains `7d4c545f5ad7a1ebff3d32940877c514083f297e`. The preserved S1 Run and
+its retained evidence are not changed or retried here.
+
+**Accepted outcome.** The passive-observation scenario's scheduling
+clarification requires both the application incarnation and exact Codex
+thread identity before an escaped descendant can keep a planned attempt
+Executing. A foreign thread cannot hold A's position. A missing identity is
+typed unresolved and cannot start the terminal held-activity cadence. The
+existing public census test is not proof of this outcome: it passes
+`IntegratorSession`, whose census deliberately omits the incarnation token,
+and its fake processes have no root/child relation.
+
+**Question.** In the production `PlannedAttempt` census, does a live helper
+with the current app-server incarnation but a different `CODEX_THREAD_ID`
+keep thread A's projection `ExactLive` (A), or does an exact-thread-aware
+census exclude it, leaving the completion lifecycle path to settle A (B)?
+Does a token-bearing helper with no thread identity instead return a typed
+unresolved projection (C), so no held-terminal cadence is eligible?
+
+**Distinguishing observation.** Add controlled Linux proc fixtures that call
+`makeNodeCodexOwnedActivityCensusService(..., appServerPid, incarnation)` with
+scope `PlannedAttempt`, an idle exact thread A, and a server-root/helper-child
+process relation where the helper has left the server process group. Run
+separate foreign-thread, missing-thread, and exact-thread cases. The foreign
+case expects `Absent`; missing-thread expects `Unreadable`; exact-thread
+expects the helper as `ProcessGroupDescendant` and then `Absent` after it exits.
+The adjacent accepted cadence tests check that only terminal plus fresh
+`ExactLive` starts cadence, and a typed census failure stops it.
+
+**Predictions before the baseline run.** Run exactly:
+
+```sh
+pnpm exec vitest run packages/dalph/src/application/codex-app-server-public.test.ts --testNamePattern='planned-attempt census (excludes foreign-thread helpers|keeps missing-thread helpers unresolved|counts exact-thread escaped helpers)' --maxWorkers=1
+```
+
+- **A prediction (token-only attribution defect):** exit 1. The foreign case
+  receives `_tag: "ExactLive"` with only the foreign helper's PID where it
+  expected `_tag: "Absent"`; the missing case likewise receives `ExactLive`
+  instead of typed `Unreadable`. The exact-thread exit control passes.
+- **B prediction (fixture or contract mismatch):** the foreign case returns
+  `Absent`; the exact-thread child is not attributed as
+  `ProcessGroupDescendant`, or the native process observation is typed
+  `Unreadable` for a fixture defect. This does not justify the proposed
+  thread filter; repair the fixture/contract mapping before editing runtime.
+- **C prediction (fail-closed missing identity):** the foreign case returns
+  `Absent`, the missing case returns typed `Unreadable`, and the exact-thread
+  case returns `ExactLive` until the child is removed. The three tests pass;
+  the separately mapped cadence test must still show no later census read on
+  a typed projection failure.
+
+Expected duration is under two minutes. Baseline command window:
+`2026-09-28T04:32:30Z` to `2026-09-28T04:34:30Z`. Fixture-and-audit repair is
+separately time-boxed from `2026-09-28T04:30:30Z` through
+`2026-09-28T04:55:00Z`. Preserve the full focused output, actual exit,
+first failing assertion, and elapsed time. No code edit to census behavior,
+live Run, or broad gate is authorized before this distinguishing observation.
+
+**Initial invocation and test-environment setup.** The exact focused command
+was attempted at `2026-09-28T04:32:30Z` and exited 254 in under one second with
+the literal `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL Command "vitest" not found`;
+`node_modules` and `packages/dalph/node_modules` are absent in this worktree,
+so no test ran and no diagnosis is drawn. This worktree has pnpm 10.29.3 and
+Node 24.20.0. Install the frozen graph only in this isolated worktree with
+`pnpm install --frozen-lockfile`, expected duration five minutes, window
+`2026-09-28T04:33:30Z`–`2026-09-28T04:38:30Z`; stop and preserve install output
+by the deadline. Then rerun the exact discriminating test command and record
+its actual output before changing census behavior.
+
+The frozen install actually completed in 3.54 seconds with exit 0 and no
+downloads; pnpm warned that package bins could not yet link because this clean
+source has no built `packages/dalph/dist` tree. This did not block Vitest. The
+exact discriminating command ran `2026-09-28T04:33:57Z`–`04:34:03Z`, exited 1
+in 6.53 seconds, and is retained at
+`/tmp/issue386-thread-attribution-baseline.log`. Two tests failed and one
+passed (`1 failed`, `2 failed | 1 passed | 15 skipped`): the foreign-thread
+helper was returned as `ExactLive` with PID 191 instead of `Absent`; the
+missing-thread helper was also `ExactLive` instead of `Unreadable`; the
+exact-thread helper remained visible and its stop control passed. This is the
+predicted **A** observation: the real PlannedAttempt census includes
+token-matching helpers without requiring the exact thread identity. It
+distinguishes the accepted ownership defect from the old fixture mismatch.
+Only now may the minimal census repair proceed. A direct no-cadence test is
+added alongside the existing typed-read failure test so census `Unreadable`
+is distinguished from a thread-read error.
+
+**Fresh supervised S1 retained evidence (reported at 04:40:43Z).** The
+supervisor reconciled stopped custody by `2026-09-28T04:36:29Z`; this repair
+worktree did not signal or reuse that Run. Its frozen source was clean at
+`1f1dfb5133bca514ba598c7c657d386433984d8e`; candidate `db546599` had sole
+planned Base `a08d5` (prefix as reported), while hosted main remained at its
+Base and tracker issue #1 remained open. The retained SQLite journal has 2,169
+records, last `ExecutorWorkExecuting`, and 1,351 exact lifecycle rereads all
+remained Executing. `turn/completed` was observed at ingress, published, and
+consumed; both provider rollouts reported `task_complete`. A foreign-thread
+`codex-code-mode-host` helper persisted until supervised stop. Circuit-open
+tracker reads were also present and remain a separate wait condition. This
+distinguishes the missing-notification/unmapped-event alternatives: the
+completion hint was delivered and consumed, while the app-server's
+same-incarnation census admitted the foreign helper as exact activity. The
+controlled baseline reproduces that census result directly. No inference is
+made that the separate tracker wait was resolved.
+
+**Full-file regression and repair.** The first repaired full public test file
+run failed two cleanup tests because the first implementation incorrectly
+required thread identity in the shared app-server replacement/close census.
+That path owns all descendants of one server incarnation and has no task
+thread scope; it retains its prior token-only rule. Thread identity now filters
+only `PlannedAttempt` census candidates, preserving server replacement and
+close cleanup. The full public file then passed 18/18; the process-policy file
+passed 31/31; the three accepted cadence controls passed 3/3. Logs:
+`/tmp/issue386-thread-attribution-public-suite-r2.log`,
+`/tmp/issue386-thread-attribution-process-policy.log`, and
+`/tmp/issue386-thread-attribution-cadence-tests.log`. The failing intermediate
+run remains at `/tmp/issue386-thread-attribution-public-suite.log`.
+
+**Affected fast-check window.** Run `pnpm check:fast` in this exact worktree,
+expected duration six minutes, planned window
+`2026-09-28T04:42:00Z`–`2026-09-28T04:48:00Z`; preserve the actual exit and
+complete log. This is local typecheck and changed-file lint only, not a full
+gate. No gate or live Run is part of this repair.
+
+The command finished at `2026-09-28T04:42:20Z` (21.1 seconds) with exit 1.
+`tsc -p tsconfig.json --noEmit` passed. `lint:changed` selected the two
+changed TypeScript files and failed on
+`codex-app-server.ts:1454:16: warning typescript(no-redundant-type-constituents)`;
+that line is the pre-existing `CodexTurnSnapshot` normalization signature,
+outside the repair diff. The clean frozen install also had not built workspace
+package artifacts. Distinguish missing workspace artifact resolution from a
+base lint issue by running `pnpm --filter @dalph/dalph... build`, expected
+duration four minutes, window `2026-09-28T04:46:30Z`–`2026-09-28T04:50:30Z`;
+then rerun `check:fast` if the build succeeds. No unrelated source cleanup is
+authorized by this check failure.
+
+The workspace dependency build succeeded at `2026-09-28T04:46:44Z` in 14.8
+seconds (`/tmp/issue386-thread-attribution-package-build.log`). The next
+`check:fast` run reached lint and failed only because the new executor test
+needed dprint formatting (exit 20;
+`/tmp/issue386-thread-attribution-check-fast-r2.log`). `pnpm exec dprint fmt`
+formatted that one test file. The focused unreadable-census cadence control
+then passed 1/1 at 04:47:13Z; final `check:fast` passed (exit 0, 2.96 seconds)
+at 04:47:18Z using explicit base
+`1f1dfb5133bca514ba598c7c657d386433984d8e`; complete log:
+`/tmp/issue386-thread-attribution-check-fast-final.log`. `git diff --check`
+also passed.
+
+**Scenario-to-test closure for this repair.** The foreign helper returns
+`Absent`; a token-bearing helper without `CODEX_THREAD_ID` returns typed
+`Unreadable`; the exact-thread escaped child returns `ExactLive` until the
+controlled stop, then `Absent`. The executor holds the prior report as
+Executing on the unreadable projection and records no additional activity
+census reads over five seconds; no cadence starts. The mapped targeted cadence
+positive path, equal wake, and typed failure tests remain passing. Relevant
+logs are `/tmp/issue386-thread-attribution-repair-focused.log` (3/3),
+`/tmp/issue386-thread-attribution-public-suite-r2.log` (18/18),
+`/tmp/issue386-thread-attribution-process-policy.log` (31/31),
+`/tmp/issue386-thread-attribution-cadence-tests.log` (3/3), and
+`/tmp/issue386-thread-attribution-unreadable-cadence.log` (1/1). No broad gate,
+Run, provider mutation, or preserved-evidence mutation was performed by this
+repair worktree.
+
+**Scoped review disposition.** Independent Luna Spec and Standards review
+completed with no findings. It verified the real PlannedAttempt escaped-child
+fixture, exact/foreign/missing thread outcomes, unchanged IntegratorSession
+behavior, terminal/finality handling, and fail-closed cadence behavior. The
+review is closed for this scoped repair; no broad gate or live Run was started.

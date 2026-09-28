@@ -400,7 +400,10 @@ it.effect("keeps app-server token descendants out of Integrator sessions but in 
       ["/proc/501/environ", { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000" }],
       ["/proc/502/stat", { _tag: "Read", text: linuxProcessStat(502, 501, 502, "linux:child") }],
       ["/proc/502/cmdline", { _tag: "Read", text: "/bin/sh\u0000" }],
-      ["/proc/502/environ", { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000" }]
+      [
+        "/proc/502/environ",
+        { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000CODEX_THREAD_ID=public-thread\u0000" }
+      ]
     ]),
     (native) => {
       const census = makeNodeCodexOwnedActivityCensusService(
@@ -589,7 +592,99 @@ const makeTwoThreadActivityNative = () => {
   }
 }
 
-it.effect("attributes escaped activity to the exact Codex thread and rejects foreign or missing thread ids", () =>
+const makePlannedAttemptEscapedHelper = (threadIdentity: string | undefined) => {
+  const token = CodexServerIncarnation.make("planned-attempt-incarnation")
+  const appServerPid = 190
+  const helperPid = 191
+  const live = new Set([appServerPid, helperPid])
+  const killed: Array<number> = []
+  const readFile = async (path: string): Promise<string> => {
+    const match = /\/proc\/([0-9]+)\/(stat|cmdline|environ)$/.exec(path)
+    if (match === null) {
+      const error = Object.assign(new Error(`unexpected process file ${path}`), { code: "ENOENT" })
+      // eslint-disable-next-line functional/no-throw-statements -- controlled proc reader rejects an unknown fixture path.
+      throw error
+    }
+    const pid = Number(match[1])
+    if (!live.has(pid)) {
+      const error = Object.assign(new Error(`process ${pid} is absent`), { code: "ESRCH" })
+      // eslint-disable-next-line functional/no-throw-statements -- controlled native boundary reports an absent process.
+      throw error
+    }
+    if (match[2] === "stat") {
+      return pid === appServerPid
+        ? linuxProcessStat(pid, 0, appServerPid, `planned-server-${pid}`)
+        : linuxProcessStat(pid, appServerPid, helperPid, `planned-helper-${pid}`)
+    }
+    if (match[2] === "cmdline") {
+      return pid === appServerPid ? "codex\u0000app-server\u0000" : "codex-code-mode-host\u0000"
+    }
+    if (pid === appServerPid) return `DALPH_CODEX_SERVER_INCARNATION=${token}\u0000`
+    return [
+      `DALPH_CODEX_SERVER_INCARNATION=${token}`,
+      ...(threadIdentity === undefined ? [] : [`CODEX_THREAD_ID=${threadIdentity}`])
+    ].join("\u0000")
+  }
+  const kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+    if (!live.has(pid)) {
+      const error = Object.assign(new Error(`process ${pid} is absent`), { code: "ESRCH" })
+      // eslint-disable-next-line functional/no-throw-statements -- controlled kill boundary reports an absent process.
+      throw error
+    }
+    if (signal !== 0) {
+      killed.push(pid)
+      live.delete(pid)
+    }
+    return true
+  }) as typeof nodeProcess.kill
+  return {
+    census: makeNodeCodexOwnedActivityCensusService(
+      { ...nodeCodexProcessNativeService, kill, readFile, readdir: async () => [...live].map(String) },
+      appServerPid,
+      token
+    ),
+    helperPid,
+    killed,
+    threadA: thread("idle", [], "thread-A")
+  }
+}
+
+it.effect("planned-attempt census excludes foreign-thread helpers", () =>
+  Effect.gen(function* () {
+    const fixture = makePlannedAttemptEscapedHelper("thread-B")
+    expect(yield* fixture.census.observe(fixture.threadA, [], "PlannedAttempt")).toEqual({ _tag: "Absent" })
+  })
+)
+
+it.effect("planned-attempt census keeps missing-thread helpers unresolved", () =>
+  Effect.gen(function* () {
+    const fixture = makePlannedAttemptEscapedHelper(undefined)
+    expect(yield* fixture.census.observe(fixture.threadA, [], "PlannedAttempt")).toMatchObject({
+      _tag: "Unreadable",
+      detail: expect.stringContaining("thread identity")
+    })
+  })
+)
+
+it.effect("planned-attempt census counts exact-thread escaped helpers", () =>
+  Effect.gen(function* () {
+    const fixture = makePlannedAttemptEscapedHelper("thread-A")
+    const observed = yield* fixture.census.observe(fixture.threadA, [], "PlannedAttempt")
+    expect(observed).toMatchObject({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ProcessGroupDescendant", identity: { pid: fixture.helperPid } }]
+    })
+    if (observed._tag !== "ExactLive") return yield* Effect.die("exact-thread helper must remain visible")
+    const descendants = observed.activities.flatMap((activity) =>
+      activity._tag === "ProcessGroupDescendant" ? [activity.identity] : []
+    )
+    yield* fixture.census.terminateDescendants(descendants, "PlannedAttempt")
+    expect(fixture.killed).toEqual([fixture.helperPid])
+    expect(yield* fixture.census.observe(fixture.threadA, [], "PlannedAttempt")).toEqual({ _tag: "Absent" })
+  })
+)
+
+it.effect("keeps Integrator activity census scoped to its reported terminal root", () =>
   Effect.gen(function* () {
     const fixture = makeTwoThreadActivityNative()
     const backgroundTerminal = terminal(fixture.processA)
