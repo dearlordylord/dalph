@@ -58,7 +58,7 @@ import {
   Schema,
   Stream
 } from "effect"
-import { TestClock } from "effect/testing"
+import { TestClock, TestConsole } from "effect/testing"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
@@ -1009,10 +1009,6 @@ const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExa
 
 it.effect("labels a source-less global provider wake with prior projection instead of event IDs", () => {
   const harness = makeHarness({ lifecycleHintCount: 1 })
-  const messages: Array<string> = []
-  const collector = Logger.make(({ message }) => {
-    messages.push(String(message))
-  })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
@@ -1034,7 +1030,9 @@ it.effect("labels a source-less global provider wake with prior projection inste
     })
     expect(harness.attemptReadCount() - readsBeforeAttachment).toBe(2)
     expect(harness.turnCount()).toBe(1)
-    const traces = messages.map((message) => JSON.parse(message) as Record<string, unknown>)
+    const traces = (yield* TestConsole.errorLines).map(
+      (message) => JSON.parse(String(message)) as Record<string, unknown>
+    )
     expect(traces).toContainEqual(
       expect.objectContaining({
         _tag: "CodexExecutorCompletionTrace",
@@ -1067,7 +1065,7 @@ it.effect("labels a source-less global provider wake with prior projection inste
         turnId: "codex-turn-1"
       })
     )
-  }).pipe(Effect.provide(layerFor(harness)), Effect.provide(Logger.layer([collector])))
+  }).pipe(Effect.provide(layerFor(harness)), Effect.provide(TestConsole.layer))
 })
 
 it.effect("continues targeted census checks when the final terminal seal census finds exact live activity", () =>
@@ -1147,14 +1145,6 @@ it.effect("starts held terminal activity cadence after a completion hint discove
       const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
         ownedActivityObservationInterval: CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
       })
-      const traces: Array<Record<string, unknown>> = []
-      const collector = Logger.make(({ message }) => {
-        try {
-          traces.push(JSON.parse(String(message)) as Record<string, unknown>)
-        } catch {
-          // The test only uses structured executor completion records.
-        }
-      })
       const result = yield* Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
         const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
@@ -1174,6 +1164,9 @@ it.effect("starts held terminal activity cadence after a completion hint discove
         yield* Deferred.await(heldActivityObserved)
         yield* Effect.yieldNow
         const readsAtHeldActivity = harness.attemptReadCount()
+        const traces = (yield* TestConsole.errorLines).map(
+          (message) => JSON.parse(String(message)) as Record<string, unknown>
+        )
         const eligibleRereadObserved = traces.some(
           (trace) =>
             trace["phase"] === "LifecycleRereadResult" &&
@@ -1193,7 +1186,7 @@ it.effect("starts held terminal activity cadence after a completion hint discove
         yield* Effect.yieldNow
         const changed = yield* Fiber.join(waiting)
         return { changed, eligibleRereadObserved, readsAtHeldActivity, readsBeforeCadence, readsAfterCadence }
-      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)), Effect.provide(Logger.layer([collector])))
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)))
 
       expect(result.eligibleRereadObserved).toBe(true)
       expect(result.readsBeforeCadence).toBe(result.readsAtHeldActivity)
@@ -1205,16 +1198,12 @@ it.effect("starts held terminal activity cadence after a completion hint discove
       expect(harness.turnCount()).toBe(1)
       expect(harness.interruptCount()).toBe(0)
     })
-  )
+  ).pipe(Effect.provide(TestConsole.layer))
 )
 
 it.effect("does not poll a terminal Codex turn when the completion notification is absent", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const messages: Array<string> = []
-      const collector = Logger.make(({ message }) => {
-        messages.push(String(message))
-      })
       const providerHints = yield* PubSub.unbounded<void>()
       const harness = makeHarness({
         lifecycleHints: PubSub.subscribe(providerHints).pipe(
@@ -1245,17 +1234,19 @@ it.effect("does not poll a terminal Codex turn when the completion notification 
         const readsAfterWait = harness.attemptReadCount()
         yield* attachment.close
         return { readsAtAttach, readsAfterWait, stillWaiting }
-      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)), Effect.provide(Logger.layer([collector])))
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)))
 
       expect(result.stillWaiting).toBe(true)
       expect(result.readsAfterWait).toBe(result.readsAtAttach)
       expect(harness.turnCount()).toBe(1)
       expect(harness.interruptCount()).toBe(0)
-      const traces = messages.map((message) => JSON.parse(message) as Record<string, unknown>)
+      const traces = (yield* TestConsole.errorLines).map(
+        (message) => JSON.parse(String(message)) as Record<string, unknown>
+      )
       expect(traces.filter((trace) => trace["phase"] === "GlobalHintConsumed")).toEqual([])
       expect(traces.filter((trace) => trace["phase"] === "LifecycleRereadResult")).toHaveLength(1)
     })
-  )
+  ).pipe(Effect.provide(TestConsole.layer))
 )
 
 it.effect("keeps equal executing provider wakes inside one passive owner without Journal or command progress", () =>

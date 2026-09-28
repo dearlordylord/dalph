@@ -49,6 +49,7 @@ import {
   nodeCodexProcessNativeService,
   type CodexProcessNativeService
 } from "./codex-process-native.js"
+import { logCodexCompletionTrace } from "./codex-completion-trace.js"
 
 /** The process-owned status projection returned by one Codex thread read. */
 const CodexThreadStatus = Schema.Literals(["active", "idle", "notLoaded", "systemError"])
@@ -1936,17 +1937,15 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
               return Ref.updateAndGet(turnCompletedNotificationOrdinal, (current) => current + 1).pipe(
                 Effect.flatMap((notificationOrdinal) => {
                   const trace = (phase: "Ingress" | "HintPublished") =>
-                    Effect.logInfo(
-                      JSON.stringify({
-                        _tag: "CodexExecutorCompletionTrace",
-                        appServerIncarnation: incarnation,
-                        method: "turn/completed",
-                        notificationOrdinal,
-                        phase,
-                        ...(threadId === undefined ? {} : { threadId }),
-                        ...(turnId === undefined ? {} : { turnId })
-                      })
-                    )
+                    logCodexCompletionTrace({
+                      _tag: "CodexExecutorCompletionTrace",
+                      appServerIncarnation: incarnation,
+                      method: "turn/completed",
+                      notificationOrdinal,
+                      phase,
+                      ...(threadId === undefined ? {} : { threadId }),
+                      ...(turnId === undefined ? {} : { turnId })
+                    })
                   return trace("Ingress").pipe(
                     Effect.andThen(PubSub.publish(turnCompletedHints, undefined)),
                     Effect.andThen(trace("HintPublished")),

@@ -162,7 +162,7 @@ The competing explanations and predictions are:
 
 `event_msg/task_complete` is rollout evidence, not proof of a JSON-RPC
 `turn/completed` delivery. The minimum secret-free observation is now
-implemented through the existing Effect logger at JSON-RPC ingress/publication
+implemented through an Effect logger at JSON-RPC ingress/publication
 and at each attached lifecycle's global-hint-consumption and exact-reread/result
 boundaries. Records include a per-app-server notification ordinal,
 per-attachment hint/read ordinals, the app-server incarnation, exact attached
@@ -302,3 +302,134 @@ No accepted behavior is replaced by this deferral.
 The scoped review does not change the preserved Run diagnosis: its cause stays
 **inconclusive** until a future supervised S1 captures the new secret-free
 ingress/publication/subscriber/result logs. No broad gate or live S1 was run.
+
+### Failed coverage-gate diagnostic: hermetic child stdout — 2026-09-28
+
+At Base `7d4c545f5ad7a1ebff3d32940877c514083f297e`, gate
+`f46bc5a4-1b68-4c23-b7eb-b8688f251767` finished with exit 1 at
+`2026-09-28T02:35:32Z`; stopped-writer custody is recorded as stopped. Its
+coverage stage reported one failed cassette among 4,626 tests and the literal
+`HermeticChildOutputCanonicalFailure` at local log time 22:30:42.183
+(02:30:42Z) in
+`direct-remote-publication.test.ts`'s S1 cassette. The retained stage log is
+`.scratch/quality-gates/f46bc5a4-1b68-4c23-b7eb-b8688f251767/logs/64c3c782-a17c-4358-b8f6-01d6052f4196.log`
+(SHA-256 `cf3d3ecdf9a4762d5fcde12efe0127f137f119c40bae48c926266b4007fa9769`).
+
+**Question.** Does the S1 cassette reject the new completion Effect diagnostic
+record as an unexpected public child NDJSON frame (A), does the cassette/child
+emit some other malformed canonical frame (B), or is the failure caused by
+coverage-suite pressure/context and therefore transient in isolation (C)?
+
+- **A prediction:** the exact isolated cassette below exits 1 and prints the
+  literal `HermeticChildOutputCanonicalFailure`; its safe first-rejected-frame
+  classification identifies a completion diagnostic record reaching the
+  public child-output parser.
+- **B prediction:** the isolated cassette may also exit 1 with that literal,
+  but the safe first-rejected-frame classification identifies a distinct
+  malformed canonical frame, not the completion diagnostic record.
+- **C prediction:** the isolated cassette exits 0 and prints Vitest summary
+  `Test Files 1 passed` and `Tests 1 passed`; the retained full-suite context
+  had reported 1 failed / 4,583 passed.
+
+**Distinguishing command and bound.** Run exactly:
+
+```sh
+pnpm exec vitest run --mode coverage --coverage --reporter=dot packages/dalph/test/cassettes/direct-remote-publication.test.ts -t 'publishes M before local promotion and task completion, then releases its dependant from a later complete graph'
+```
+
+Expected duration is under two minutes. Start 2026-09-28T02:41:00Z and stop
+safely by **2026-09-28T02:43:00Z**; preserve the complete command log, actual
+exit, literal-match result, Vitest summary, and elapsed wall time. When
+classifying child output, inspect only bounded safe metadata (first rejected
+frame category/tag and parser position); never print or retain raw child
+payload or secrets. If the exit/literal/summary differs from these predictions
+or no safe classification is available, record the result inconclusive and
+choose a changed focused discriminator before repair. Make no runtime edit
+until this observation distinguishes A from B/C.
+
+**First isolated result (02:40:48Z–02:42:10Z).** The command exited 1 in
+82 seconds; `/tmp/issue386-f46-focused-cassette.log` contains the literal
+`HermeticChildOutputCanonicalFailure` and Vitest summary `Test Files 1 failed`,
+`Tests 1 failed | 4 skipped`; the cassette itself reports 49.47 seconds. This
+supports against C's predicted isolated pass, but does not distinguish A/B:
+the parser intentionally omits all rejected-frame metadata. The next
+discriminator adds temporary category-only metadata at that parser boundary.
+**A predicts** the same command exits 1 with the same literal and first-frame
+category `CodexExecutorCompletionTrace`. **B predicts** the same command exits
+1 with the same literal but a first-frame category `OtherJsonFrame`,
+`InvalidJson`, or `InvalidUtf8`. The classifier compares only the allowlisted
+tag and emits no frame bytes or other field values. Expected duration is
+50–60 seconds; start 2026-09-28T02:45:00Z and stop safely by
+**2026-09-28T02:50:00Z**. Retain log, exit, literal, category and elapsed wall
+time, then remove all temporary classifier changes before any repair or final
+candidate check. No Dalph runtime code changes before this classification.
+
+**Safe first-frame result (02:45:40Z–02:46:35Z).** The category-only rerun
+exited 1 in 55 seconds with the same literal `HermeticChildOutputCanonicalFailure`
+and Vitest summary `Test Files 1 failed`, `Tests 1 failed | 4 skipped`
+(`Duration 48.29s`). Its first rejected frame was classified as
+`CodexExecutorCompletionTrace`. This supports **A**: the Effect completion
+diagnostic reaches the hermetic child's public NDJSON stdout parser. The
+temporary classifier in test support emits only the allowlisted tag category;
+its retained log is `/tmp/issue386-f46-focused-cassette-classified.log`.
+
+**Scoped repair.** Keep the same secret-free records at ingress, publication,
+subscriber consumption, and lifecycle result, but route their Effect messages
+through a stderr-only logger. The hermetic child parser owns stdout as public
+canonical NDJSON, while stderr is already a separate captured diagnostic
+stream. The focused protocol/executor tests must continue to observe each
+diagnostic through a test console, and the hermetic cassette must pass without
+any trace frame on stdout. This changes no workflow decision, journal record,
+provider call, or accepted S1/S8 chronology.
+
+The post-repair discriminator is the same focused command as above, with
+expected duration 50–60 seconds, start 2026-09-28T02:53:00Z, and safe stop
+2026-09-28T03:00:00Z. Preserve its complete log, actual exit, Vitest summary,
+and elapsed wall time before running protocol/executor tests or `check:fast`.
+
+**Post-repair artifact mismatch (02:53:00Z–02:56:50Z).** The 02:53 cassette
+exited 1 with `HermeticChildOutputCanonicalFailure` (1 failed / 4 skipped;
+48.76s), and a bounded category rerun at 02:56 exited 1 with the same failure
+(1 failed / 4 skipped; 48.43s). The first rejected category remained
+`CodexExecutorCompletionTrace`, but these outcomes do not evaluate the source
+repair: the cassette launches
+`packages/dalph/dist/bin/production-hermetic-qualification.js`, whose mtime was
+2026-09-28T02:07:22Z and SHA256 was
+`d9693ee7048484e501e87050639054ad1949be13fb41736c2b6f5f98b8834153`. The
+completion-trace helper source was newer (02:49:45Z), and the corresponding
+dist module was absent. Therefore both cassette reruns used the pre-repair
+artifact. The temporary category classifier has been removed; its retained
+category-only result distinguishes the old artifact's frame and exposes no
+raw payload.
+
+**Source-matched verification.** Built only the affected package with
+`pnpm --filter @dalph/dalph run build` (exit 0, 12.58s; full log
+`/tmp/issue386-f46-package-build.log`). The built qualification entry now has
+mtime 2026-09-28T02:58:38Z. Its SHA256 remains
+`d9693ee7048484e501e87050639054ad1949be13fb41736c2b6f5f98b8834153` because
+the entry wrapper is unchanged; the previously absent
+`dist/src/application/codex-completion-trace.js` now exists, confirming the
+source helper was compiled. The exact focused cassette was then rerun without
+the temporary classifier; the source-matched result is recorded below. This
+diagnosis uses no broad gate or live S1.
+
+**Source-matched cassette result (02:59:35Z–02:59:47Z).** The exact focused
+coverage cassette exited 0 in 11.71s using the rebuilt package: `Test Files 1
+passed`, `Tests 1 passed | 4 skipped`. Its full retained output is
+`/tmp/issue386-f46-focused-cassette-source-matched.log`. This supports cause A:
+the completion trace was emitted to the child public stdout before stderr
+routing; the source-matched artifact now passes the cassette without that
+frame. The earlier source-mismatched reruns remain inconclusive about the
+repair.
+
+**Scoped review and verification closure.** Sol review round 4 found no code
+finding after the source-matched pass. The stderr helper preserves completion
+trace records on the diagnostic channel; protocol and executor tests now read
+`TestConsole.errorLines`, retaining ingress, hint, and lifecycle assertions.
+The rebuilt focused cassette passed 1/1, the two affected test files passed
+228/228, `check:fast` passed after merging the duplicate `effect/testing`
+imports, and `git diff --check` passed. The failed coverage
+gate established a child stdout classification problem only. No claim is made
+about whether the preserved live S1 received or mapped `turn/completed`; its
+cause remains inconclusive without wire receipt evidence. No full gate, fresh
+S1, or preserved Run retry was performed here.

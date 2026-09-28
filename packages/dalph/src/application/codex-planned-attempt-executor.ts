@@ -53,6 +53,7 @@ import {
   Stream
 } from "effect"
 import * as Scope from "effect/Scope"
+import { logCodexCompletionTrace } from "./codex-completion-trace.js"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -2854,23 +2855,21 @@ const makeCodexPlannedAttemptExecutorContext = (
                               : Effect.void
                           ),
                           Effect.andThen(
-                            Effect.logInfo(
-                              JSON.stringify({
-                                _tag: "CodexExecutorCompletionTrace",
-                                appServerIncarnation: app.incarnation,
-                                attemptId: correlation.attemptId,
-                                initial,
-                                lifecycleReadOrdinal: readOrdinal,
-                                phase: "LifecycleRereadResult",
-                                projection: outcome.projection._tag,
-                                ...(outcome.projection._tag === "Exact"
-                                  ? { report: outcome.projection.report._tag }
-                                  : {}),
-                                runId: correlation.runId,
-                                ...(outcome.threadId === undefined ? {} : { threadId: outcome.threadId }),
-                                ...(outcome.turnId === undefined ? {} : { turnId: outcome.turnId })
-                              })
-                            )
+                            logCodexCompletionTrace({
+                              _tag: "CodexExecutorCompletionTrace",
+                              appServerIncarnation: app.incarnation,
+                              attemptId: correlation.attemptId,
+                              initial,
+                              lifecycleReadOrdinal: readOrdinal,
+                              phase: "LifecycleRereadResult",
+                              projection: outcome.projection._tag,
+                              ...(outcome.projection._tag === "Exact"
+                                ? { report: outcome.projection.report._tag }
+                                : {}),
+                              runId: correlation.runId,
+                              ...(outcome.threadId === undefined ? {} : { threadId: outcome.threadId }),
+                              ...(outcome.turnId === undefined ? {} : { turnId: outcome.turnId })
+                            })
                           )
                         )
                       )
@@ -2897,19 +2896,17 @@ const makeCodexPlannedAttemptExecutorContext = (
                 Effect.flatMap((hintOrdinal) =>
                   Ref.get(latestLifecycleOutcome).pipe(
                     Effect.flatMap((latest) =>
-                      Effect.logInfo(
-                        JSON.stringify({
-                          _tag: "CodexExecutorCompletionTrace",
-                          appServerIncarnation: app.incarnation,
-                          attachedAttemptId: correlation.attemptId,
-                          attachedRunId: correlation.runId,
-                          hintOrdinal,
-                          hintChannel: method,
-                          phase: "GlobalHintConsumed",
-                          ...(latest?.threadId === undefined ? {} : { lastProjectedThreadId: latest.threadId }),
-                          ...(latest?.turnId === undefined ? {} : { lastProjectedTurnId: latest.turnId })
-                        })
-                      ).pipe(Effect.andThen(readLifecycle(false)))
+                      logCodexCompletionTrace({
+                        _tag: "CodexExecutorCompletionTrace",
+                        appServerIncarnation: app.incarnation,
+                        attachedAttemptId: correlation.attemptId,
+                        attachedRunId: correlation.runId,
+                        hintOrdinal,
+                        hintChannel: method,
+                        phase: "GlobalHintConsumed",
+                        ...(latest?.threadId === undefined ? {} : { lastProjectedThreadId: latest.threadId }),
+                        ...(latest?.turnId === undefined ? {} : { lastProjectedTurnId: latest.turnId })
+                      }).pipe(Effect.andThen(readLifecycle(false)))
                     )
                   )
                 )
