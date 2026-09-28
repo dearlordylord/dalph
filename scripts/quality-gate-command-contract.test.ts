@@ -28,7 +28,9 @@ it(
   async () => {
     const scripts = readPackageScripts()
     expect(scripts["check:baseline"]).toBe("node scripts/with-gate-slot.mjs -- node scripts/run-baseline.mjs")
-    expect(scripts["check:fast"]).toBe("pnpm typecheck && pnpm lint:changed")
+    expect(scripts["check:fast"]).toBe(
+      "pnpm typecheck && pnpm lint:changed && node scripts/check-quality-selection-fixtures.mjs"
+    )
     const { invocations, result } = await runQualityGateFixture({ fixtureName: "command-contract" })
 
     expect(result.exitCode).toBe(0)

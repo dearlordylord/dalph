@@ -200,7 +200,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:ci:quality:preflight --candidate=<base sha>` | Hosted preflight entry point. It runs the same admitted structural census for one declared Node cell before any hosted qualification stage starts. |
 | `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
 | `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
-| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
+| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, and the Base-scoped quality-stage fixture probe. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. Without that Base, the fixture probe reports that it was skipped. |
 | `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Optional diagnostic only; never a prerequisite to final qualification. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
@@ -250,6 +250,15 @@ attempt context:
 ```sh
 DALPH_DIAGNOSTICS_BASE="<planned Base SHA>" pnpm check:fast
 ```
+
+With an exact planned Base, `check:fast` also runs the capability-registration,
+preflight, and recorded-catalog gate fixtures against that Base. These fixtures
+take about two seconds in the focused observation that followed a late gate
+failure caused by a stale stage list. The probe runs before full-gate admission
+and checks the selected stage sequence for the actual candidate diff. It does
+not replace the remaining full qualification stages or change Dalph runtime
+behavior. An ad-hoc `check:fast` without `DALPH_DIAGNOSTICS_BASE` prints a skip
+message; it is not evidence that the candidate's selected-stage fixtures pass.
 
 `lint:changed` and `typecheck:effect:changed` each print one JSON selection line to stderr
 containing the input reference, its resolved commit, the actual merge base,
