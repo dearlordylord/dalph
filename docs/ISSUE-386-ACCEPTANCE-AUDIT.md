@@ -676,3 +676,38 @@ complete activity census before writing a sealed run. Listener scope closes
 on normal result and failure/interruption. No adapter, executor, tracker,
 publication, or cleanup code changed. Independent review of the final commit
 is pending.
+
+## Round-1 Standards review fixes — 2026-09-28
+
+The Sol Standards review of candidate
+`c017ef2d73c807252682dc59aa09ea35171bbbfa` reported two documentation/test
+findings. Runtime behavior is unchanged by these fixes.
+
+- **S1, governing-behavior pointers.** Scenario 3a now links directly to
+  [Scenario 3: Turn recovery requires the exact token](scenarios/production-codex-integrator.md#3-turn-recovery-requires-the-exact-token),
+  the [ambiguity and evidence invariants](DELIVERY-INVARIANTS.md#ambiguity-and-evidence)
+  (D22–D24), the formal
+  [`acceptedResultIntegration.qnt`](../specs/acceptedResultIntegration.qnt)
+  law `noAutomaticIntegratorSuccessor`, and executable model scenario
+  [`unfinishedIntegratorRestoresSameSessionTest`](../specs/acceptedResultIntegration_test.qnt#L161).
+  It states that the change preserves exact ownership, terminal, and
+  quiescence rules, refines only the active-turn wake/read behavior, and
+  supersedes no accepted behavior. It also bounds the formal model to the
+  outer Integrator/session behavior; the model does not claim to describe the
+  app-server notification transport.
+- **S2, durable intent precedes Git.** The test
+  `records exact run one before asking Git to materialize the candidate` now
+  asserts that the `store:CandidateUnmaterialized` event exists and its index
+  is strictly before the first `git:` event.
+
+The affected test passed:
+
+```text
+pnpm exec vitest run packages/dalph/src/application/codex-integrator.test.ts -t 'records exact run one before asking Git to materialize the candidate'
+1 passed, 62 skipped
+```
+
+`pnpm exec dprint check` on the changed audit, scenario, and test, and
+`git diff --check`, passed. No typecheck, lint, full gate, or S1 qualification was run;
+the change only adjusts governing links, test assertions, and this review
+evidence. The existing line-144 lint finding is unchanged.

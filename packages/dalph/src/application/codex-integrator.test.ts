@@ -1057,8 +1057,10 @@ describe("Codex Integrator", () => {
     expect(first?._tag).toBe("CandidateUnmaterialized")
     expect(first?.initialRun).toEqual(requestFor(1).correlation)
     expect(first === undefined ? [] : privateRuns(first)).toEqual([])
-    expect(boundaryEvents.indexOf("store:CandidateUnmaterialized")).toBeGreaterThanOrEqual(0)
-    expect(boundaryEvents.findIndex((event) => event.startsWith("git:"))).toBeGreaterThan(0)
+    const storeIndex = boundaryEvents.indexOf("store:CandidateUnmaterialized")
+    const firstGitIndex = boundaryEvents.findIndex((event) => event.startsWith("git:"))
+    expect(storeIndex).toBeGreaterThanOrEqual(0)
+    expect(firstGitIndex).toBeGreaterThan(storeIndex)
     expect(gitCalls.length).toBeGreaterThan(0)
   })
 

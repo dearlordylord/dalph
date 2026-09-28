@@ -146,6 +146,29 @@ from a failed turn, or treat an active/ambiguous turn as terminal.
 
 ### 3a. An ID-free completion wake leads to an exact reread — accepted for #386
 
+#### Governing behavior
+
+When Codex leaves the exact owned turn active after `turn/start`, the accepted
+[Scenario 3: Turn recovery requires the exact token](#3-turn-recovery-requires-the-exact-token)
+continues to govern the durable turn token, exact terminal read, complete
+activity census, and prohibition on a replacement turn. The relevant
+[D22 reconcile-before-retry](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence),
+[D23 incomplete-or-unreadable evidence](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence),
+and [D24 no inferred completion](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence)
+invariants remain in force. The outer recovery boundary is constrained by
+[`acceptedResultIntegration.qnt`](../../specs/acceptedResultIntegration.qnt),
+law `noAutomaticIntegratorSuccessor`, and executable model scenario
+[`unfinishedIntegratorRestoresSameSessionTest`](../../specs/acceptedResultIntegration_test.qnt#L161),
+which preserves one Integrator invocation and restores its existing session.
+
+This chronology preserves Scenario 3's exact ownership, terminal, and
+quiescence requirements. It refines only how an observed active turn resumes:
+an ID-free wake triggers an exact reread. It supersedes no accepted behavior
+and adds no outer retry or Integrator session. It makes no new app-server
+notification contract. The formal model constrains the outer invocation and
+session; it does not model the app-server notification transport or this
+exact-thread wake/read sequence.
+
 This chronology accepts the existing app-server `Stream<void>` completion
 boundary. The app-server may receive thread or turn ids in its notification,
 but the Integrator receives no ids. A wake means only that some turn completed
