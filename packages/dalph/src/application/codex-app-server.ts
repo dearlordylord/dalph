@@ -1868,6 +1868,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   // because every consumer rereads the provider-owned state.
   const turnCompletedHints = yield* PubSub.sliding<void>(1)
   const ownedActivityHints = yield* PubSub.sliding<void>(1)
+  const turnCompletedNotificationOrdinal = yield* Ref.make(0)
   yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
   yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
   const encoder = new TextEncoder()
@@ -1924,7 +1925,35 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           }
           if (envelope._tag === "Notification") {
             if (envelope.method === "turn/completed") {
-              return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
+              const params = message["params"]
+              const paramsObject = isJsonObject(params) ? params : undefined
+              const turn = isJsonObject(paramsObject?.["turn"]) ? paramsObject["turn"] : undefined
+              const safeId = (value: unknown): string | undefined => {
+                return typeof value === "string" && /^[A-Za-z0-9._:-]{1,256}$/.test(value) ? value : undefined
+              }
+              const threadId = safeId(paramsObject?.["threadId"] ?? paramsObject?.["thread_id"])
+              const turnId = safeId(paramsObject?.["turnId"] ?? paramsObject?.["turn_id"] ?? turn?.["id"])
+              return Ref.updateAndGet(turnCompletedNotificationOrdinal, (current) => current + 1).pipe(
+                Effect.flatMap((notificationOrdinal) => {
+                  const trace = (phase: "Ingress" | "HintPublished") =>
+                    Effect.logInfo(
+                      JSON.stringify({
+                        _tag: "CodexExecutorCompletionTrace",
+                        appServerIncarnation: incarnation,
+                        method: "turn/completed",
+                        notificationOrdinal,
+                        phase,
+                        ...(threadId === undefined ? {} : { threadId }),
+                        ...(turnId === undefined ? {} : { turnId })
+                      })
+                    )
+                  return trace("Ingress").pipe(
+                    Effect.andThen(PubSub.publish(turnCompletedHints, undefined)),
+                    Effect.andThen(trace("HintPublished")),
+                    Effect.asVoid
+                  )
+                })
+              )
             }
             return envelope.method === "item/completed"
               ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)

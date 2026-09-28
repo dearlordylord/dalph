@@ -1007,8 +1007,12 @@ const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExa
   return yield* Effect.die(`expected exact executor report, received ${projection._tag}`)
 })
 
-it.effect("uses one coalesced provider wake to reproject a later terminal state without command progress", () => {
+it.effect("labels a source-less global provider wake with prior projection instead of event IDs", () => {
   const harness = makeHarness({ lifecycleHintCount: 1 })
+  const messages: Array<string> = []
+  const collector = Logger.make(({ message }) => {
+    messages.push(String(message))
+  })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
@@ -1030,8 +1034,229 @@ it.effect("uses one coalesced provider wake to reproject a later terminal state 
     })
     expect(harness.attemptReadCount() - readsBeforeAttachment).toBe(2)
     expect(harness.turnCount()).toBe(1)
-  }).pipe(Effect.provide(layerFor(harness)))
+    const traces = messages.map((message) => JSON.parse(message) as Record<string, unknown>)
+    expect(traces).toContainEqual(
+      expect.objectContaining({
+        _tag: "CodexExecutorCompletionTrace",
+        appServerIncarnation: harness.app.incarnation,
+        attachedAttemptId: correlation.attemptId,
+        attachedRunId: correlation.runId,
+        hintOrdinal: 1,
+        hintChannel: "turn/completed",
+        phase: "GlobalHintConsumed",
+        lastProjectedThreadId: "codex-thread-issue-58",
+        lastProjectedTurnId: "codex-turn-1"
+      })
+    )
+    const consumed = traces.find((trace) => trace["phase"] === "GlobalHintConsumed")
+    expect(consumed).toBeDefined()
+    expect(consumed).not.toHaveProperty("notificationOrdinal")
+    expect(consumed).not.toHaveProperty("threadId")
+    expect(consumed).not.toHaveProperty("turnId")
+    expect(traces).toContainEqual(
+      expect.objectContaining({
+        _tag: "CodexExecutorCompletionTrace",
+        appServerIncarnation: harness.app.incarnation,
+        attemptId: correlation.attemptId,
+        initial: false,
+        phase: "LifecycleRereadResult",
+        projection: "Exact",
+        report: "ExecutorWorkTerminal",
+        runId: correlation.runId,
+        threadId: "codex-thread-issue-58",
+        turnId: "codex-turn-1"
+      })
+    )
+  }).pipe(Effect.provide(layerFor(harness)), Effect.provide(Logger.layer([collector])))
 })
+
+it.effect("continues targeted census checks when the final terminal seal census finds exact live activity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let makeTerminalActivity: () => void = () => undefined
+      let censusCount = 0
+      const harness = makeHarness({
+        afterActivityCensus: () =>
+          Effect.sync(() => {
+            censusCount += 1
+            if (censusCount === 1) makeTerminalActivity()
+          })
+      })
+      makeTerminalActivity = harness.makeTerminalActivity
+      const observationInterval = CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+      const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
+        ownedActivityObservationInterval: observationInterval
+      })
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.complete(finalResponse(head))
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+
+        yield* TestClock.adjust(Duration.seconds(1))
+        yield* Effect.yieldNow
+        const readsAfterFirstCensus = harness.attemptReadCount()
+        harness.finishTerminalActivity()
+        yield* TestClock.adjust(Duration.seconds(1))
+        yield* Effect.yieldNow
+
+        expect(waiting.pollUnsafe()).not.toBeUndefined()
+        const changed = yield* Fiber.join(waiting)
+        return { changed, readsAfterFirstCensus, readsAfterTerminalRead: harness.attemptReadCount() }
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)))
+
+      expect(result.changed).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+      })
+      expect(result.readsAfterTerminalRead).toBe(result.readsAfterFirstCensus + 1)
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.turnCwds).toEqual([worktree])
+      expect(harness.interruptCount()).toBe(0)
+    })
+  )
+)
+
+it.effect("starts held terminal activity cadence after a completion hint discovers exact live activity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const heldActivityObserved = yield* Deferred.make<void>()
+      const providerHints = yield* PubSub.unbounded<void>()
+      let waitForHeldActivityCensus = false
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        ),
+        afterActivityCensus: () => {
+          if (!waitForHeldActivityCensus) return Effect.void
+          waitForHeldActivityCensus = false
+          return Deferred.succeed(heldActivityObserved, undefined).pipe(Effect.asVoid)
+        }
+      })
+      const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
+        ownedActivityObservationInterval: CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+      })
+      const traces: Array<Record<string, unknown>> = []
+      const collector = Logger.make(({ message }) => {
+        try {
+          traces.push(JSON.parse(String(message)) as Record<string, unknown>)
+        } catch {
+          // The test only uses structured executor completion records.
+        }
+      })
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+
+        harness.makeTerminalActivity()
+        harness.complete(finalResponse(head))
+        waitForHeldActivityCensus = true
+        yield* PubSub.publish(providerHints, undefined)
+        yield* Deferred.await(heldActivityObserved)
+        yield* Effect.yieldNow
+        const readsAtHeldActivity = harness.attemptReadCount()
+        const eligibleRereadObserved = traces.some(
+          (trace) =>
+            trace["phase"] === "LifecycleRereadResult" &&
+            trace["initial"] === false &&
+            trace["report"] === "ExecutorWorkExecuting"
+        )
+
+        yield* TestClock.adjust(Duration.millis(999))
+        yield* Effect.yieldNow
+        const readsBeforeCadence = harness.attemptReadCount()
+        yield* TestClock.adjust(Duration.millis(1))
+        yield* Effect.yieldNow
+        const readsAfterCadence = harness.attemptReadCount()
+
+        harness.finishTerminalActivity()
+        yield* TestClock.adjust(Duration.seconds(1))
+        yield* Effect.yieldNow
+        const changed = yield* Fiber.join(waiting)
+        return { changed, eligibleRereadObserved, readsAtHeldActivity, readsBeforeCadence, readsAfterCadence }
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)), Effect.provide(Logger.layer([collector])))
+
+      expect(result.eligibleRereadObserved).toBe(true)
+      expect(result.readsBeforeCadence).toBe(result.readsAtHeldActivity)
+      expect(result.readsAfterCadence).toBe(result.readsAtHeldActivity + 1)
+      expect(result.changed).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+      })
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.interruptCount()).toBe(0)
+    })
+  )
+)
+
+it.effect("does not poll a terminal Codex turn when the completion notification is absent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const messages: Array<string> = []
+      const collector = Logger.make(({ message }) => {
+        messages.push(String(message))
+      })
+      const providerHints = yield* PubSub.unbounded<void>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+      const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
+        ownedActivityObservationInterval: CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+      })
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const readsAtAttach = harness.attemptReadCount()
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        // The provider state has completed, but this fixture deliberately
+        // withholds the turn/completed wake.
+        harness.complete(finalResponse(head))
+        yield* TestClock.adjust(Duration.seconds(2))
+        yield* Effect.yieldNow
+        const stillWaiting = waiting.pollUnsafe() === undefined
+        const readsAfterWait = harness.attemptReadCount()
+        yield* attachment.close
+        return { readsAtAttach, readsAfterWait, stillWaiting }
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)), Effect.provide(Logger.layer([collector])))
+
+      expect(result.stillWaiting).toBe(true)
+      expect(result.readsAfterWait).toBe(result.readsAtAttach)
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.interruptCount()).toBe(0)
+      const traces = messages.map((message) => JSON.parse(message) as Record<string, unknown>)
+      expect(traces.filter((trace) => trace["phase"] === "GlobalHintConsumed")).toEqual([])
+      expect(traces.filter((trace) => trace["phase"] === "LifecycleRereadResult")).toHaveLength(1)
+    })
+  )
+)
 
 it.effect("keeps equal executing provider wakes inside one passive owner without Journal or command progress", () =>
   Effect.scoped(

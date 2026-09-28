@@ -2,7 +2,7 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import type { PlatformError } from "effect"
-import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Logger, Option, Path, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { expect, expectTypeOf } from "vitest"
 import {
@@ -528,7 +528,11 @@ const onMessage = (message) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "fixture/notice" }) + "\n")
   }
   if (mode === "turn-completed-hint" && message.method === "thread/start") {
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { opaque: true } }) + "\n")
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { opaque: true, threadId: "protocol-thread", turn: { id: "protocol-turn", status: "completed" } }
+    }) + "\n")
   }
   if (mode === "owned-activity-hint" && message.method === "thread/start") {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "item/completed", params: { opaque: true } }) + "\n")
@@ -1571,18 +1575,46 @@ it.effect("keeps diagnostic stderr, blank lines, and notifications outside proto
   )
 )
 
-it.effect("keeps existing ID-less completion notifications as wake hints only", () =>
-  withFixture("turn-completed-hint", (app) =>
+it.effect("traces real turn/completed ingress and hint publication without retaining notification payload", () => {
+  const messages: Array<string> = []
+  const collector = Logger.make(({ message }) => {
+    messages.push(String(message))
+  })
+  return withFixture("turn-completed-hint", (app) =>
     Effect.scoped(
       Effect.gen(function* () {
         const hints = yield* app.attachTurnCompletedHints
         const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
         yield* app.startThread("/fixture/worktree")
         expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+        const traces = messages.map((message) => JSON.parse(message) as Record<string, unknown>)
+        expect(traces).toContainEqual(
+          expect.objectContaining({
+            _tag: "CodexExecutorCompletionTrace",
+            appServerIncarnation: app.incarnation,
+            method: "turn/completed",
+            notificationOrdinal: 1,
+            phase: "Ingress",
+            threadId: "protocol-thread",
+            turnId: "protocol-turn"
+          })
+        )
+        expect(traces).toContainEqual(
+          expect.objectContaining({
+            _tag: "CodexExecutorCompletionTrace",
+            appServerIncarnation: app.incarnation,
+            method: "turn/completed",
+            notificationOrdinal: 1,
+            phase: "HintPublished",
+            threadId: "protocol-thread",
+            turnId: "protocol-turn"
+          })
+        )
+        expect(JSON.stringify(traces)).not.toContain("opaque")
       })
     )
-  )
-)
+  ).pipe(Effect.provide(Logger.layer([collector])))
+})
 
 it.effect("accepts Codex versionless JSON-RPC-shaped responses and notifications", () =>
   withFixture("versionless-envelope", (app) =>

@@ -136,3 +136,169 @@ Recorded before editing runtime code or test fixtures at clean `0796c15c71918042
 | F4, proposed timeout increase | The 45-second direct-publication timeout exposed a repeat graph wait, not a slow successful path. **Rejected with evidence:** the unchanged 45-second test completes in 10.40 seconds after F2. |
 
 No accepted-scenario finding is deferred. The first `pnpm check:fast` found one dprint layout issue in the new test fixture; `pnpm exec dprint fmt` corrected it. The rerun `DALPH_DIAGNOSTICS_BASE=7d4c545f5ad7a1ebff3d32940877c514083f297e pnpm check:fast` passed typecheck and changed-file lint in `/tmp/dalph-386-7cb32-check-fast-final.log`, and `git diff --check` passed. Additional focused preservation checks passed: 13/13 batch-grant cases (`/tmp/dalph-386-7cb32-batch-grant.log`), 33/33 integration-frontier cases (`/tmp/dalph-386-7cb32-frontier.log`), 1/1 production Pause/Unpause case (`/tmp/dalph-386-7cb32-production-s4s7.log`), and 1/1 memory/SQLite grant MBT in Vitest MBT mode (`/tmp/dalph-386-7cb32-mbt-s5.log`). The first MBT invocation used ordinary Vitest mode and selected zero files by configuration; the corrected `--mode mbt` command passed. This review makes no local-gate or dogfood completion claim.
+
+
+## S1 executor-completion boundary follow-up (2026-09-28)
+
+This follow-up is limited to the executor completion handoff. The preserved
+Run was not retried, resumed, or modified. The retained workflow projection is
+still `ExecutorWorkExecuting`; provider rollout metadata records
+`event_msg/task_complete` for turn `01a0e567-441a-7151-8cb1-135e9efacb8a` at
+`2026-09-28T00:28:10.370Z`. The retained journal/private executor state has no
+raw JSON-RPC ingress, app-server hint-publish, or lifecycle-consume event, so
+the live cause remains **inconclusive**.
+
+The competing explanations and predictions are:
+
+1. **Notification not delivered to Dalph.** The app-server reader has no
+   `turn/completed` ingress for this exact owned turn, or fails before
+   publishing its wake hint. The workflow remains Executing because the
+   passive owner receives no wake.
+2. **Notification delivered, then not mapped or accepted.** The reader
+   receives and publishes `turn/completed`, but the lifecycle subscriber
+   does not perform an exact attempt/thread reread, or the reread fails to
+   produce the accepted terminal projection. The workflow also remains
+   Executing.
+
+`event_msg/task_complete` is rollout evidence, not proof of a JSON-RPC
+`turn/completed` delivery. The minimum secret-free observation is now
+implemented through the existing Effect logger at JSON-RPC ingress/publication
+and at each attached lifecycle's global-hint-consumption and exact-reread/result
+boundaries. Records include a per-app-server notification ordinal,
+per-attachment hint/read ordinals, the app-server incarnation, exact attached
+attempt/run, and exact projected thread/turn when available. The reader extracts
+bounded allowlisted IDs from the notification, including `params.turn.id`; it
+never logs the payload.
+
+The lifecycle hint channel is `PubSub<void>` and can coalesce wakes. Therefore
+`GlobalHintConsumed` reports the subscriber's attached attempt and its
+`lastProjectedThreadId`/`lastProjectedTurnId`; these are the prior projection,
+not identities recovered from the notification. The notification ordinal is
+not carried across the channel. Matching ingress IDs and last-projected IDs can
+support an exact-turn mapping observation when available, followed by the
+logged reread result. An IDless or coalesced global wake proves only that a
+subscriber woke; it cannot establish which ingress caused it. Ingress without
+publication supports the reader/publish arm of cause 1. Publication without a
+subsequent exact reread supports the delivery/mapping arm of cause 2. A reread
+ending Executing or unreadable isolates the exact-state acceptance arm. The
+retained S1 has none of these new logs, so its live cause remains
+**inconclusive**.
+
+This instrumentation is observational only: it uses process-local log records,
+does not write workflow or executor journals, and does not participate in
+projection, hint coalescing, or cadence decisions. The only effectful boundary
+remains the existing wake-hint publication followed by the existing exact
+provider reread. The retained Run has no retroactive reader logs, so its live
+cause remains **inconclusive** until a future supervised S1 captures them.
+
+### Proposed lost-hint chronology — UNACCEPTED
+
+The current accepted passive-observation scenario permits paced census rechecks
+only while a terminal exact turn plus a fresh ExactLive owned-activity census
+is the sole reason the report remains Executing. The following active-turn
+lost-hint chronology is a proposal for acceptance review only; it does not
+change that rule or authorize active-turn polling.
+
+- **Starting facts:** one exact Dalph attempt is Running in one attached
+  app-server incarnation; its owned turn is exact; lifecycle listeners are
+  subscribed before the current projection; no owned terminal activity is
+  known. Unrelated attempts remain outside the observation.
+- **Trigger:** Codex reaches a terminal turn state, but the app-server emits no
+  `turn/completed` notification to the attached client (or the client loses
+  that notification).
+- **Diagnostic boundary and bound:** in a controlled fixture, set the exact
+  provider thread to terminal without publishing a hint. After one fixed
+  one-second silence interval, allow at most one exact lifecycle reread of the
+  same attempt, thread, and owned-activity census. Stop after that read; no
+  periodic retry or second provider session is implied. A production recovery
+  interval, repetition limit, and stop rule would require explicit scenario
+  acceptance before implementation.
+- **Visible result:** if that one reread sees an exact terminal turn and Absent
+  owned activity, it may publish the normal sealed terminal result. If it sees
+  an active turn or unusable evidence, it remains Executing/unreadable and the
+  diagnostic ends inconclusive.
+- **Forbidden results:** no new `turn/start`, Begin, Resume, interruption,
+  terminal seal without fresh exact evidence, or census across unrelated
+  attempts. The one-shot diagnostic is not a broad gate or a live Run retry.
+- **Crash/retry:** if the app-server exits before the observation, preserve the
+  exact attempt record and surface the existing typed unavailable/unreadable
+  boundary. A later owner subscribes before its exact current read; it must not
+  restore a cursor, repeat a work-changing command, or treat process loss as
+  terminal proof.
+- **Acceptance tests needed if this proposal is adopted:** a controlled
+  end-to-end notification fixture must exercise JSON-RPC ingress through hint
+  publication and lifecycle mapping to the exact terminal projection; its
+  paired suppressed-notification case must assert one bounded reread, exact
+  result, and zero additional turn/session/interrupt effects. An active-turn
+  case must assert the accepted no-poll behavior until the proposed bounded
+  diagnostic boundary. Until those tests and a cadence/stop policy are
+  accepted, active-turn lost-hint recovery remains open.
+
+### Focused discriminator and P2 repair mapping
+
+The real-parser delivered control is
+`codex-app-server-protocol.test.ts::traces real turn/completed ingress and hint
+publication without retaining notification payload`: its JSON-RPC fixture
+uses the provider-shaped nested `params.turn.id`, emits an opaque sentinel,
+and asserts ingress and publication traces contain only allowlisted IDs and no
+payload. `codex-planned-attempt-executor.test.ts::labels a source-less global
+provider wake with prior projection instead of event IDs` is a field-label
+control: a single attached attempt receives a synthetic global wake without
+source identity, and the trace names the channel and the subscriber's last
+projected IDs, with no notification ordinal or event `threadId`/`turnId`. It
+verifies the exact attempt reread without command progress. This is not a
+two-attempt routing fixture and does not claim that the wake came from a
+particular attempt or ingress. The absent-event
+discriminator is
+`does not poll a terminal Codex turn when the completion notification is
+absent`: provider state becomes terminal without a hint, and the trace has no
+`GlobalHintConsumed`, only its initial lifecycle read, and no extra exact
+attempt read after two seconds. These controls distinguish the two boundary
+outcomes in a fixture; they do not establish which event occurred in the
+retained S1.
+
+The accepted terminal-plus-ExactLive cadence race maps to
+`codex-planned-attempt-executor.test.ts::continues targeted census checks when
+the final terminal seal census finds exact live activity`. If the first
+activity census reports Absent and the final seal census then finds ExactLive,
+the final projection remains eligible for the existing paced exact census.
+`starts held terminal activity cadence after a completion hint discovers exact
+live activity` covers the related attach-Running chronology: only after a
+completion-hint reread produces Terminal+ExactLive does paced census begin;
+the next exact reread settles after activity exits without another hint.
+`does not poll a terminal Codex turn when the completion notification is
+absent` retains the active-turn no-poll assertion. Running turns and initial
+pending-census recovery do not start this cadence. Unreadable/contradictory
+census results remain fail-closed without cadence. These repairs preserve the
+accepted passive-observation boundary and do not resolve the unaccepted
+active-turn lost-hint chronology or establish the cause of the preserved Run.
+
+### Scoped review disposition
+
+The terminal-seal two-census race is resolved: final ExactLive eligibility now
+starts the accepted paced census, covered by the named terminal-seal test. The
+attach-Running-to-hint-to-Terminal+ExactLive path now activates that same
+cadence only after the qualifying reread, covered by the dynamic-activation
+test; the absent-hint active-turn no-poll test checks the corrected
+`GlobalHintConsumed` predicate. The real-parser fixture now supplies nested
+`params.turn.id`, and lifecycle consume records are explicitly labeled as
+global wakes with prior projected IDs, not source event identities.
+
+Sol's remaining P3 suggestion is deferred hardening, not a demonstrated
+production failure. A cadence timer could race a separate hint reread that
+invalidates its ExactLive premise before the timer's next tick. The ordinary
+production observer in
+`packages/orchestrator/src/coordination/run/passive-planned-attempt-observer.ts::makePassivePlannedAttemptObserver`
+consumes `attachment.changes` with `Stream.take(1)` and closes the attachment
+in `Effect.ensuring` after the first changed projection (or stream failure).
+No focused fixture demonstrated an extra reread after an invalidating
+notification while production ownership remains attached. **Deferred owner:**
+the #386 executor follow-up. **Entry condition and scope:** add a controlled
+same-projection invalidation fixture only if it demonstrates a timer read
+after a notification-driven loss of ExactLive eligibility; then stop or
+restart cadence from the latest exact projection without polling active turns.
+No accepted behavior is replaced by this deferral.
+
+The scoped review does not change the preserved Run diagnosis: its cause stays
+**inconclusive** until a future supervised S1 captures the new secret-free
+ingress/publication/subscriber/result logs. No broad gate or live S1 was run.
