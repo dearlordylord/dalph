@@ -674,8 +674,8 @@ exact state loops only by awaiting another wake; the no-hint test confirms no
 read cadence. The terminal path passes the just-reread exact thread into the
 complete activity census before writing a sealed run. Listener scope closes
 on normal result and failure/interruption. No adapter, executor, tracker,
-publication, or cleanup code changed. Independent review of the final commit
-is pending.
+publication, or cleanup code changed. The round-2 independent review of this
+integrated candidate is recorded below.
 
 ## Round-1 Standards review fixes — 2026-09-28
 
@@ -716,9 +716,10 @@ evidence. The existing line-144 lint finding is unchanged.
 
 The failed admitted run `3d3999a8-3604-4898-b0b3-119688658abe` used candidate
 `2e6656a394294253b9c9fa18c406ec2d3f134a26` and Base
-`4c6761a4f07bbdf9198763f44686ebae27eba680`. Custody is reconciled as stopped
-with an unproven writer; the run is terminal and was not retried. The worktree
-was clean and unchanged when diagnosis began. The retained log is
+`4c6761a4f07bbdf9198763f44686ebae27eba680`. Custody reconciliation proved the
+writer process group absent and the run stopped; qualification remains
+`UNPROVEN`. The run is terminal and was not retried. The worktree was clean and
+unchanged when diagnosis began. The retained log is
 `.scratch/quality-gates/3d3999a8-3604-4898-b0b3-119688658abe/logs/ed029178-328f-4477-a999-32774ea27e74.log`.
 
 The focused discriminator was
@@ -766,3 +767,13 @@ passed with exit 0
 The focused run began at 08:52:13 UTC. Its expected duration was 6–8 minutes,
 with a hard stop at 09:00 UTC; it completed in 1.87 seconds. `git diff --check`
 also passed. No full-gate retry or production implementation change was made.
+
+## Round-2 scoped review disposition — 2026-09-28
+
+The second Sol review of candidate
+`0afb3bd39fadd66c811807d9db199f76ffda2de1` found no Spec findings and no
+Standards hard findings. Standards noted one nonblocking `Duplicated Code`
+smell: three tests repeat the same `broadQualificationCommands` suffix. This
+is deferred to ordinary quality-test maintenance, owned by the quality-gate
+test maintainers, for a future fixture-consolidation change. No accepted
+behavior or safety requirement is deferred.
