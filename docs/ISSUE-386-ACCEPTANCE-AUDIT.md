@@ -711,3 +711,58 @@ pnpm exec vitest run packages/dalph/src/application/codex-integrator.test.ts -t 
 `git diff --check`, passed. No typecheck, lint, full gate, or S1 qualification was run;
 the change only adjusts governing links, test assertions, and this review
 evidence. The existing line-144 lint finding is unchanged.
+
+## Admitted quality-gate fixture diagnosis — 2026-09-28
+
+The failed admitted run `3d3999a8-3604-4898-b0b3-119688658abe` used candidate
+`2e6656a394294253b9c9fa18c406ec2d3f134a26` and Base
+`4c6761a4f07bbdf9198763f44686ebae27eba680`. Custody is reconciled as stopped
+with an unproven writer; the run is terminal and was not retried. The worktree
+was clean and unchanged when diagnosis began. The retained log is
+`.scratch/quality-gates/3d3999a8-3604-4898-b0b3-119688658abe/logs/ed029178-328f-4477-a999-32774ea27e74.log`.
+
+The focused discriminator was
+`capability-registration-quality-gate.test.ts > runs the capability audit
+exactly once and continues to the next quality stage`: it passed in isolation
+without `DALPH_COVERAGE_BASE_SHA` (one passed, two skipped), then failed with
+the admitted Base in scope. The observed assertion expected
+`test:delivery-repeatability`; the runner selected `test:delivery-smoke`.
+Base-to-HEAD contains exactly four paths: the acceptance audit, the production
+Codex Integrator scenario, and the Integrator source and test. The shared stage
+algebra therefore selects six preflight commands—artifacts, typecheck, lint,
+cycles, secrets, and capability registration—then delivery smoke and coverage.
+It filters complexity, duplicates, hosted controls, the Lab, and recorded
+catalog. This supports stale fixture inventories under context-aware
+selection; it does not support changing production stage selection.
+
+| Failed fixture assertion | Review disposition |
+| --- | --- |
+| Capability audit continues to delivery repeatability | **Resolved:** the pinned four-path narrow manifest asserts delivery smoke; the broad fixture asserts exact-once audit invocation followed by the exact broad suffix beginning with delivery repeatability. |
+| Capability failure census contains CI classification | **Resolved:** the broad fixture asserts the complete structural sequence, one capability invocation last, and no qualification invocation. |
+| Preflight multi-failure expects the old complete inventory | **Resolved:** the broad fixture retains all three independent failures and asserts the exact structural census and failure summary. |
+| Standalone preflight/full gate expect the old complete inventory | **Resolved:** both runners are compared with the same exact broad inventory; every structural command occurs once and the full suffix order is exact. |
+| Formal-controls failure fixture exits zero | **Resolved:** an explicitly broad fixture selects formal controls and proves the failure blocks qualification. |
+| Maintained-Lab failure fixture exits zero | **Resolved:** an explicitly broad fixture selects the Lab and proves the structural census completes while qualification remains blocked. |
+| Recorded-catalog success fixture sees no catalog command | **Resolved:** an explicitly broad fixture proves exactly-once catalog execution immediately before coverage. |
+| Recorded-catalog failure fixture exits zero | **Resolved:** an explicitly broad fixture proves the catalog failure stops coverage. |
+
+These are test-fixture and audit changes only. They do not change Dalph runtime
+behavior or the shared stage algebra. The exact narrow and broad plans are
+asserted; no fixture accepts arbitrary ordering.
+
+The affected checks passed:
+
+```text
+DALPH_COVERAGE_BASE_SHA=4c6761a4f07bbdf9198763f44686ebae27eba680 pnpm exec vitest run scripts/capability-registration-quality-gate.test.ts scripts/preflight-quality-gate.test.ts scripts/recorded-catalog-gate.test.ts
+3 files passed; 14 tests passed; 1.87s
+
+DALPH_DIAGNOSTICS_BASE=4c6761a4f07bbdf9198763f44686ebae27eba680 pnpm lint:changed
+passed
+
+pnpm typecheck
+passed with exit 0
+```
+
+The focused run began at 08:52:13 UTC. Its expected duration was 6–8 minutes,
+with a hard stop at 09:00 UTC; it completed in 1.87 seconds. `git diff --check`
+also passed. No full-gate retry or production implementation change was made.

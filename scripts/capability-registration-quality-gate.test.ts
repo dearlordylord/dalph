@@ -1,17 +1,25 @@
 import { expect, it } from "vitest"
 import {
+  broadQualityGateStructuralCommands,
   qualityGateFixtureTestTimeoutMilliseconds,
+  qualityGateBroadPlanBaseSha,
   resolveVitestConfig,
   runQualityGateFixture
 } from "./quality-gate-test-fixture.js"
 
+const broadQualificationCommands = ["test:delivery-repeatability", "test:recorded-catalog", "test"]
+
 it(
   "runs the capability audit exactly once and continues to the next quality stage",
   async () => {
-    const { invocations, result } = await runQualityGateFixture({ fixtureName: "capability-registration" })
+    const { invocations, result } = await runQualityGateFixture({
+      environment: { DALPH_COVERAGE_BASE_SHA: qualityGateBroadPlanBaseSha() },
+      fixtureName: "capability-registration"
+    })
     const capabilityIndex = invocations.indexOf("test:capability-registration")
 
     expect(result.exitCode).toBe(0)
+    expect(invocations).toEqual([...broadQualityGateStructuralCommands, ...broadQualificationCommands])
     expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
     expect(capabilityIndex).toBeGreaterThan(-1)
     expect(invocations[capabilityIndex + 1]).toBe("test:delivery-repeatability")
@@ -23,6 +31,7 @@ it(
   "finishes the structural census and skips qualification when the capability audit exits nonzero",
   async () => {
     const { invocations, result } = await runQualityGateFixture({
+      environment: { DALPH_COVERAGE_BASE_SHA: qualityGateBroadPlanBaseSha() },
       failureCommand: "test:capability-registration",
       fixtureName: "capability-registration"
     })
@@ -30,8 +39,8 @@ it(
     expect(result.exitCode).toBe(1)
     expect(result.output).toContain("Quality gate 'capability registration' failed with exit 23")
     expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
+    expect(invocations).toEqual([...broadQualityGateStructuralCommands])
     expect(invocations.at(-1)).toBe("test:capability-registration")
-    expect(invocations).toContain("test:ci-change-classification")
     expect(invocations).not.toContain("test")
   },
   qualityGateFixtureTestTimeoutMilliseconds

@@ -2,21 +2,28 @@ import { expect, it } from "vitest"
 // @ts-expect-error The quality-gate policy is an executable JavaScript module.
 import * as qualityGateStagePolicy from "./quality-gate-stage-policy.mjs"
 import {
+  broadQualityGateStructuralCommands,
   qualityGateFixtureTestTimeoutMilliseconds,
+  qualityGateBroadPlanBaseSha,
   resolveVitestConfig,
   runQualityGateFixture
 } from "./quality-gate-test-fixture.js"
 
 const recordedCatalogTest = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+const broadQualificationCommands = ["test:delivery-repeatability", "test:recorded-catalog", "test"]
 const { boundedQualityGateCommand, fullQualityGateManifest, recordedCatalogQualityGate } = qualityGateStagePolicy
 
 it(
   "runs the maintained recorded-catalog proof exactly once immediately before coverage",
   async () => {
-    const { invocations, result } = await runQualityGateFixture({ fixtureName: "recorded-catalog" })
+    const { invocations, result } = await runQualityGateFixture({
+      environment: { DALPH_COVERAGE_BASE_SHA: qualityGateBroadPlanBaseSha() },
+      fixtureName: "recorded-catalog"
+    })
     const recordedCatalogIndex = invocations.indexOf("test:recorded-catalog")
 
     expect(result.exitCode).toBe(0)
+    expect(invocations).toEqual([...broadQualityGateStructuralCommands, ...broadQualificationCommands])
     expect(invocations.filter((command) => command === "test:recorded-catalog")).toHaveLength(1)
     expect(recordedCatalogIndex).toBeGreaterThan(-1)
     expect(invocations[recordedCatalogIndex + 1]).toBe("test")
@@ -28,12 +35,18 @@ it(
   "fails the gate on a nonzero maintained recorded-catalog proof and does not start coverage",
   async () => {
     const { invocations, result } = await runQualityGateFixture({
+      environment: { DALPH_COVERAGE_BASE_SHA: qualityGateBroadPlanBaseSha() },
       failureCommand: "test:recorded-catalog",
       fixtureName: "recorded-catalog"
     })
 
     expect(result.exitCode).toBe(1)
     expect(result.output).toContain("Quality gate 'maintained recorded-catalog semantics' failed with exit 23")
+    expect(invocations).toEqual([
+      ...broadQualityGateStructuralCommands,
+      "test:delivery-repeatability",
+      "test:recorded-catalog"
+    ])
     expect(invocations.filter((command) => command === "test:recorded-catalog")).toHaveLength(1)
     expect(invocations.at(-1)).toBe("test:recorded-catalog")
     expect(invocations).not.toContain("test")
