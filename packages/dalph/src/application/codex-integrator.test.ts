@@ -17,7 +17,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Context, Effect, FileSystem, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
@@ -168,6 +168,13 @@ type FixtureOptions = {
   readonly threadListingUnavailable?: boolean
   readonly listThreadsHidePersisted?: boolean
   readonly preexistingThread?: boolean
+  readonly preexistingThreadToken?: CodexThreadOwnershipToken
+  readonly initialTurn?: {
+    readonly id: CodexTurnId
+    readonly status: "completed" | "failed" | "inProgress"
+    readonly items: ReadonlyArray<unknown>
+    readonly ownedTurnToken?: CodexOwnedTurnToken
+  }
   readonly preRegisteredWorktree?: boolean
   readonly preRegisteredWorktreePathExists?: boolean
   readonly prunableWorktree?: boolean
@@ -199,6 +206,13 @@ type FixtureOptions = {
   readonly hideTurnsOnRead?: boolean
   readonly activeTurn?: boolean
   readonly failedTerminalTurn?: boolean
+  readonly completionHints?: Queue.Queue<void>
+  readonly completionWaitEvents?: Queue.Queue<void>
+  readonly hintListenerClosures?: { value: number }
+  readonly turnStatus?: { value: "completed" | "failed" | "inProgress" }
+  readonly turnStarted?: Deferred.Deferred<void>
+  readonly startTurnResponseGate?: Deferred.Deferred<void>
+  readonly threadResumes?: { value: number }
   readonly precedingItems?: ReadonlyArray<unknown>
   readonly gitCalls?: Array<ReadonlyArray<string>>
   readonly threadStarts?: { value: number }
@@ -226,7 +240,18 @@ const fixtureLayer = (
       }
       const persistentThreads = yield* Ref.make<
         ReadonlyArray<{ readonly id: CodexThreadId; readonly ownedThreadToken?: CodexThreadOwnershipToken }>
-      >(options.preexistingThread === true ? [{ id: CodexThreadId.make("fixture-thread") }] : [])
+      >(
+        options.preexistingThread === true
+          ? [
+              {
+                id: CodexThreadId.make("fixture-thread"),
+                ...(options.preexistingThreadToken === undefined
+                  ? {}
+                  : { ownedThreadToken: options.preexistingThreadToken })
+              }
+            ]
+          : []
+      )
       const threadStartCalls = yield* Ref.make(0)
       const resumeThreadCalls = yield* Ref.make(0)
       const turns = yield* Ref.make<
@@ -236,7 +261,7 @@ const fixtureLayer = (
           readonly items: ReadonlyArray<unknown>
           readonly ownedTurnToken?: CodexOwnedTurnToken
         }>
-      >([])
+      >(options.initialTurn === undefined ? [] : [options.initialTurn])
       const fixtureIncarnation = CodexServerIncarnation.make("fixture-incarnation")
       const listThreads = () =>
         Ref.get(persistentThreads).pipe(
@@ -256,7 +281,22 @@ const fixtureLayer = (
         )
       const app: CodexAppServerService = {
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
-        attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachTurnCompletedHints: Effect.acquireRelease(
+          Effect.sync(() => {
+            options.boundaryEvents?.push("turn-hints:attached")
+            const hints =
+              options.completionHints === undefined ? Stream.empty : Stream.fromQueue(options.completionHints)
+            return options.completionWaitEvents === undefined
+              ? hints
+              : Stream.fromEffect(Queue.offer(options.completionWaitEvents, undefined)).pipe(
+                  Stream.flatMap(() => hints)
+                )
+          }),
+          () =>
+            Effect.sync(() => {
+              if (options.hintListenerClosures !== undefined) options.hintListenerClosures.value += 1
+            })
+        ),
         get incarnation() {
           return options.appIncarnation?.value ?? fixtureIncarnation
         },
@@ -333,6 +373,8 @@ const fixtureLayer = (
           }),
         resumeThread: (_threadId, cwd) =>
           Effect.gen(function* () {
+            if (options.threadResumes !== undefined) options.threadResumes.value += 1
+            options.boundaryEvents?.push("thread:resume")
             const resumeOrdinal = yield* Ref.getAndUpdate(resumeThreadCalls, (value) => value + 1)
             const current = yield* Ref.get(turns)
             const persisted = yield* Ref.get(persistentThreads)
@@ -376,10 +418,15 @@ const fixtureLayer = (
                                 ? { ...turn, id: CodexTurnId.make("foreign-replay-turn-id") }
                                 : turn
                       )
+            const currentStatus = options.turnStatus?.value
+            const turnsWithCurrentStatus =
+              currentStatus === undefined
+                ? resumedTurns
+                : resumedTurns.map((turn) => ({ ...turn, status: currentStatus }))
             const visibleTurns =
               options.hideTurnsOnRead === true
                 ? []
-                : resumedTurns.map((turn) =>
+                : turnsWithCurrentStatus.map((turn) =>
                     options.persistedTurnCorrelation === true
                       ? {
                           ...turn,
@@ -402,6 +449,7 @@ const fixtureLayer = (
           Effect.gen(function* () {
             if (token === undefined) return yield* Effect.die("missing provider token")
             if (options.turnStarts !== undefined) options.turnStarts.value += 1
+            options.boundaryEvents?.push("turn:start")
             if (options.turnTokens !== undefined) options.turnTokens.push(token)
             const priorTurns = yield* Ref.get(turns)
             const returnedToken =
@@ -410,11 +458,9 @@ const fixtureLayer = (
                 : options.turnTokenMode === "foreign"
                   ? CodexOwnedTurnToken.make("foreign-provider-token")
                   : token
-            const status: "completed" | "failed" | "inProgress" = options.activeTurn
-              ? "inProgress"
-              : options.failedTerminalTurn === true
-                ? "failed"
-                : "completed"
+            const status: "completed" | "failed" | "inProgress" =
+              options.turnStatus?.value ??
+              (options.activeTurn ? "inProgress" : options.failedTerminalTurn === true ? "failed" : "completed")
             const turn = {
               id: CodexTurnId.make(`fixture-turn-${token}`),
               status,
@@ -456,6 +502,8 @@ const fixtureLayer = (
                 })
               )
             }
+            if (options.turnStarted !== undefined) yield* Deferred.succeed(options.turnStarted, undefined)
+            if (options.startTurnResponseGate !== undefined) yield* Deferred.await(options.startTurnResponseGate)
             return {
               ...turn,
               id: turn.id,
@@ -665,6 +713,329 @@ describe("Codex Integrator", () => {
     expect(result._tag === "PreparedCandidate" ? result.candidateText : "").toBe("M")
   })
 
+  it("seals one active turn after an ID-free completion wake arrives before the start response", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/asynchronous-completion-store.json"
+      ),
+      repository
+    })
+    const turnStarts = { value: 0 }
+    const threadResumes = { value: 0 }
+    const hintListenerClosures = { value: 0 }
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const boundaryEvents: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const completionHints = yield* Queue.unbounded<void>()
+        const turnStarted = yield* Deferred.make<void>()
+        const startResponseGate = yield* Deferred.make<void>()
+        const turnStatus: { value: "completed" | "failed" | "inProgress" } = { value: "inProgress" }
+        const running = Effect.gen(function* () {
+          const integrator = yield* Integrator
+          return yield* integrator.prepare(requestFor(1))
+        }).pipe(
+          Effect.provide(
+            providerLayer(config, {
+              boundaryEvents,
+              completionHints,
+              hintListenerClosures,
+              privateWrites,
+              startTurnResponseGate: startResponseGate,
+              threadResumes,
+              turnStarted,
+              turnStarts,
+              turnStatus
+            })
+          )
+        )
+        const fiber = yield* Effect.forkChild(running)
+        yield* Deferred.await(turnStarted)
+        turnStatus.value = "completed"
+        yield* Queue.offer(completionHints, undefined)
+        yield* Deferred.succeed(startResponseGate, undefined)
+        return yield* Fiber.join(fiber)
+      })
+    )
+
+    expect(result._tag).toBe("PreparedCandidate")
+    expect(result._tag === "PreparedCandidate" ? result.candidateText : "").toBe("M")
+    expect(turnStarts.value).toBe(1)
+    expect(threadResumes.value).toBe(1)
+    expect(hintListenerClosures.value).toBe(1)
+    expect(boundaryEvents.indexOf("turn-hints:attached")).toBeLessThan(boundaryEvents.indexOf("turn:start"))
+    expect(privateWrites.some((record) => privateRuns(record).some((run) => run._tag === "CompletedTurnSealed"))).toBe(
+      true
+    )
+  })
+
+  it("does not poll or retry an active Integrator turn without a completion hint", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/no-completion-hint-store.json"
+      ),
+      repository
+    })
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const threadResumes = { value: 0 }
+    const hintListenerClosures = { value: 0 }
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const noTerminalSeal = () =>
+      privateWrites.every((record) =>
+        privateRuns(record).every((run) => run._tag !== "CompletedTurnSealed" && run._tag !== "FailedTurnSealed")
+      )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const completionHints = yield* Queue.unbounded<void>()
+        const completionWaitEvents = yield* Queue.unbounded<void>()
+        const turnStarted = yield* Deferred.make<void>()
+        const startResponseGate = yield* Deferred.make<void>()
+        const running = Effect.gen(function* () {
+          const integrator = yield* Integrator
+          return yield* integrator.prepare(requestFor(1))
+        }).pipe(
+          Effect.provide(
+            providerLayer(config, {
+              completionHints,
+              completionWaitEvents,
+              hintListenerClosures,
+              privateWrites,
+              startTurnResponseGate: startResponseGate,
+              threadResumes,
+              threadStarts,
+              turnStarted,
+              turnStarts,
+              turnStatus: { value: "inProgress" }
+            })
+          )
+        )
+        const fiber = yield* Effect.forkChild(running)
+        yield* Deferred.await(turnStarted)
+        yield* Deferred.succeed(startResponseGate, undefined)
+        yield* Queue.take(completionWaitEvents)
+
+        expect(turnStarts.value).toBe(1)
+        expect(threadStarts.value).toBe(1)
+        expect(threadResumes.value).toBe(0)
+        expect(noTerminalSeal()).toBe(true)
+        yield* Fiber.interrupt(fiber)
+        expect(hintListenerClosures.value).toBe(1)
+      })
+    )
+  })
+
+  it("rereads only the exact Integrator thread after an unrelated completion wake and does not seal while active", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/unrelated-completion-hint-store.json"
+      ),
+      repository
+    })
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const threadResumes = { value: 0 }
+    const hintListenerClosures = { value: 0 }
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const noTerminalSeal = () =>
+      privateWrites.every((record) =>
+        privateRuns(record).every((run) => run._tag !== "CompletedTurnSealed" && run._tag !== "FailedTurnSealed")
+      )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const completionHints = yield* Queue.unbounded<void>()
+        const completionWaitEvents = yield* Queue.unbounded<void>()
+        const turnStarted = yield* Deferred.make<void>()
+        const startResponseGate = yield* Deferred.make<void>()
+        const running = Effect.gen(function* () {
+          const integrator = yield* Integrator
+          return yield* integrator.prepare(requestFor(1))
+        }).pipe(
+          Effect.provide(
+            providerLayer(config, {
+              completionHints,
+              completionWaitEvents,
+              hintListenerClosures,
+              privateWrites,
+              startTurnResponseGate: startResponseGate,
+              threadResumes,
+              threadStarts,
+              turnStarted,
+              turnStarts,
+              turnStatus: { value: "inProgress" }
+            })
+          )
+        )
+        const fiber = yield* Effect.forkChild(running)
+        yield* Deferred.await(turnStarted)
+        yield* Deferred.succeed(startResponseGate, undefined)
+        yield* Queue.take(completionWaitEvents)
+        yield* Queue.offer(completionHints, undefined)
+        yield* Queue.take(completionWaitEvents)
+
+        expect(turnStarts.value).toBe(1)
+        expect(threadStarts.value).toBe(1)
+        expect(threadResumes.value).toBe(1)
+        expect(noTerminalSeal()).toBe(true)
+        yield* Fiber.interrupt(fiber)
+        expect(hintListenerClosures.value).toBe(1)
+      })
+    )
+  })
+
+  it("recovers an already-terminal observed turn after app-server replacement", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/reopened-terminal-turn-store.json"
+      ),
+      repository
+    })
+    const run = requestFor(1).correlation
+    const threadToken = CodexThreadOwnershipToken.make("reopened-thread-token")
+    const turnToken = CodexOwnedTurnToken.make("reopened-turn-token")
+    const turnId = CodexTurnId.make("reopened-turn-id")
+    const record = CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+      appServerIncarnation: CodexServerIncarnation.make("previous-incarnation"),
+      candidatePath,
+      correlation: session,
+      initialRun: run,
+      revision: revision(5),
+      runs: [CodexIntegratorPrivateRun.cases.TurnObserved.make({ correlation: run, token: turnToken, turnId })],
+      threadId: CodexThreadId.make("fixture-thread"),
+      threadToken
+    })
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const threadResumes = { value: 0 }
+    const hintListenerClosures = { value: 0 }
+    const boundaryEvents: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* integrator.prepare(requestFor(1))
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            appIncarnation: { value: CodexServerIncarnation.make("replacement-incarnation") },
+            boundaryEvents,
+            hintListenerClosures,
+            initialRecords: [record],
+            initialTurn: {
+              id: turnId,
+              items: [{ type: "agentMessage", text: '{"version":1,"outcome":"PreparedCandidate","candidate":"M"}' }],
+              ownedTurnToken: turnToken,
+              status: "completed"
+            },
+            preexistingThread: true,
+            preexistingThreadToken: threadToken,
+            preRegisteredWorktree: true,
+            preRegisteredWorktreePathExists: true,
+            threadResumes,
+            threadStarts,
+            turnStarts
+          })
+        )
+      )
+    )
+
+    expect(result._tag).toBe("PreparedCandidate")
+    expect(result._tag === "PreparedCandidate" ? result.candidateText : "").toBe("M")
+    expect(threadStarts.value).toBe(0)
+    expect(turnStarts.value).toBe(0)
+    expect(threadResumes.value).toBe(1)
+    expect(hintListenerClosures.value).toBe(1)
+    expect(boundaryEvents.indexOf("turn-hints:attached")).toBeLessThan(boundaryEvents.indexOf("thread:resume"))
+  })
+
+  it("closes the completion listener when turn ownership validation fails", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/completion-listener-failure-store.json"
+      ),
+      repository
+    })
+    const hintListenerClosures = { value: 0 }
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* Effect.flip(integrator.prepare(requestFor(1)))
+      }).pipe(Effect.provide(providerLayer(config, { hintListenerClosures, turnTokenMode: "foreign" })))
+    )
+
+    expect(failure.detail).toContain("exact owned token")
+    expect(hintListenerClosures.value).toBe(1)
+  })
+
+  it("seals only after exact owned activity is absent", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/active-owned-activity-after-wake-store.json"
+      ),
+      repository
+    })
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const hintListenerClosures = { value: 0 }
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const completionHints = yield* Queue.unbounded<void>()
+        const turnStarted = yield* Deferred.make<void>()
+        const startResponseGate = yield* Deferred.make<void>()
+        const turnStatus: { value: "completed" | "failed" | "inProgress" } = { value: "inProgress" }
+        const running = Effect.gen(function* () {
+          const integrator = yield* Integrator
+          return yield* Effect.flip(integrator.prepare(requestFor(1)))
+        }).pipe(
+          Effect.provide(
+            providerLayer(config, {
+              activitySequence: [
+                { _tag: "Absent" },
+                {
+                  _tag: "ExactLive",
+                  activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("still-live-owned-turn") }]
+                }
+              ],
+              completionHints,
+              hintListenerClosures,
+              privateWrites,
+              startTurnResponseGate: startResponseGate,
+              turnStarted,
+              turnStatus
+            })
+          )
+        )
+        const fiber = yield* Effect.forkChild(running)
+        yield* Deferred.await(turnStarted)
+        turnStatus.value = "completed"
+        yield* Queue.offer(completionHints, undefined)
+        yield* Deferred.succeed(startResponseGate, undefined)
+        return yield* Fiber.join(fiber)
+      })
+    )
+
+    expect(failure._tag).toBe("IntegratorCallFailure")
+    expect(failure.detail).toContain("still live")
+    expect(hintListenerClosures.value).toBe(1)
+    expect(
+      privateWrites.every((record) =>
+        privateRuns(record).every((run) => run._tag !== "CompletedTurnSealed" && run._tag !== "FailedTurnSealed")
+      )
+    ).toBe(true)
+  })
+
   it("records exact run one before asking Git to materialize the candidate", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -686,7 +1057,7 @@ describe("Codex Integrator", () => {
     expect(first?._tag).toBe("CandidateUnmaterialized")
     expect(first?.initialRun).toEqual(requestFor(1).correlation)
     expect(first === undefined ? [] : privateRuns(first)).toEqual([])
-    expect(boundaryEvents[0]).toBe("store:CandidateUnmaterialized")
+    expect(boundaryEvents.indexOf("store:CandidateUnmaterialized")).toBeGreaterThanOrEqual(0)
     expect(boundaryEvents.findIndex((event) => event.startsWith("git:"))).toBeGreaterThan(0)
     expect(gitCalls.length).toBeGreaterThan(0)
   })
@@ -2059,7 +2430,7 @@ describe("Codex Integrator", () => {
     expect(failure.runThree.detail).toContain("exceeds Retry")
   })
 
-  it("rejects foreign resumed-thread tokens, correlated turns, and active turns", async () => {
+  it("rejects foreign resumed-thread tokens and correlated turns", async () => {
     const resumedConfig = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
       commonDirectory,
@@ -2095,20 +2466,6 @@ describe("Codex Integrator", () => {
     )
     expect(correlatedFailure.first._tag).toBe("IntegratorCallFailure")
     expect(correlatedFailure.second.detail).toContain("correlation")
-
-    const activeConfig = CodexIntegratorConfiguration.make({
-      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory,
-      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/active-turn-store.json"),
-      repository
-    })
-    const activeFailure = await Effect.runPromise(
-      Effect.gen(function* () {
-        const integrator = yield* Integrator
-        return yield* Effect.flip(integrator.prepare(requestFor(1)))
-      }).pipe(Effect.provide(providerLayer(activeConfig, { activeTurn: true })))
-    )
-    expect(activeFailure.detail).toContain("remains active")
   })
 
   it("fails closed on a turn observed without a matching token and reconciles app incarnation", async () => {

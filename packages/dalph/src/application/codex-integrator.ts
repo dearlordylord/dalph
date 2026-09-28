@@ -2,7 +2,7 @@
 
 import nodePath from "node:path"
 import { NodeCrypto } from "@effect/platform-node"
-import { Context, Crypto, Effect, FileSystem, Layer, Option, Semaphore } from "effect"
+import { Context, Crypto, Effect, FileSystem, Layer, Option, Semaphore, Stream } from "effect"
 import {
   CodexAppServer,
   CodexOwnedActivityCensus,
@@ -255,6 +255,29 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
   return yield* startObservedTurn(app, store, currentRecord, currentRun, thread)
 })
 
+const awaitTerminalTurn = Effect.fn("CodexIntegrator.awaitTerminalTurn")(function* (
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  store: CodexIntegratorPrivateStoreService,
+  record: CodexIntegratorPrivateRecord,
+  run: CodexIntegratorPrivateRun,
+  thread: CodexThreadSnapshot,
+  completionHints: Stream.Stream<void>
+) {
+  let currentThread = thread
+  let current = yield* readOrRecoverTurn(app, census, store, record, run, currentThread)
+  while (!isTerminalTurn(current.turn)) {
+    const hint = yield* completionHints.pipe(Stream.runHead)
+    if (Option.isNone(hint)) return yield* Effect.fail(providerFailure("turn completion hint stream ended"))
+    currentThread = yield* observedThread(app, thread.id, record.candidatePath)
+    if (currentThread.ownedThreadToken !== record.threadToken) {
+      return yield* Effect.fail(providerFailure("completion wake thread ownership changed before reread"))
+    }
+    current = yield* readOrRecoverTurn(app, census, store, current.record, current.run, currentThread)
+  }
+  return { ...current, thread: currentThread }
+})
+
 const replaySealedRun = Effect.fn("CodexIntegrator.replaySealedRun")(function* (
   app: CodexAppServer["Service"],
   census: CodexOwnedActivityCensus["Service"],
@@ -289,16 +312,17 @@ const sealObservedRun = Effect.fn("CodexIntegrator.sealObservedRun")(function* (
   store: CodexIntegratorPrivateStoreService,
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
-  thread: CodexThreadSnapshot
+  thread: CodexThreadSnapshot,
+  completionHints: Stream.Stream<void>
 ) {
-  const current = yield* readOrRecoverTurn(app, census, store, record, run, thread)
-  const { record: currentRecord, run: currentRun, turn } = current
+  const current = yield* awaitTerminalTurn(app, census, store, record, run, thread, completionHints)
+  const { record: currentRecord, run: currentRun, thread: currentThread, turn } = current
   /* v8 ignore next -- @preserve readOrRecoverTurn selects only the exact durable turn token and rejects contradictions. */
   if (turn.ownedTurnToken !== currentRun.token || turn.correlation !== undefined) {
     return yield* Effect.fail(providerFailure("terminal turn does not carry the exact owned token and correlation"))
   }
   if (!isTerminalTurn(turn)) return yield* Effect.fail(providerFailure("exact provider turn remains active"))
-  yield* observeQuiescence(app, census, thread)
+  yield* observeQuiescence(app, census, currentThread)
   const sealedIdentity = { correlation: currentRun.correlation, token: currentRun.token, turnId: turn.id }
   if (turn.status === "failed") {
     const result = IntegratorResult.cases.NotPrepared.make({
@@ -326,12 +350,13 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
   store: CodexIntegratorPrivateStoreService,
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
-  thread: CodexThreadSnapshot
+  thread: CodexThreadSnapshot,
+  completionHints: Stream.Stream<void>
 ) {
   if (isSealedPrivateRun(run)) {
     return yield* replaySealedRun(app, census, store, record, run, thread, run.result)
   }
-  return yield* sealObservedRun(app, census, store, record, run, thread)
+  return yield* sealObservedRun(app, census, store, record, run, thread, completionHints)
 })
 const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord")(function* (
   found: CodexIntegratorPrivateRecord,
@@ -411,19 +436,38 @@ const integratorServiceFor = (
     prepare: (request: IntegratorRequest) =>
       gate
         .withPermits(1)(
-          Effect.gen(function* () {
-            const run = request.correlation
-            const initial = yield* checkConfigAndRecord(config, store, run, app, crypto)
-            const materialized = yield* ensureCandidateWorktree(commands, fileSystem, config, initial, store, ownership)
-            const threaded = yield* ensureThread(app, materialized, store)
-            // A new Retry may record its run-two token only after the retained thread is freshly writer-free.
-            if (isRetryProviderRun(run) && runFor(threaded.record, run) === undefined) {
-              yield* observeQuiescence(app, census, threaded.thread)
-            }
-            // The thread id is durable before the first exact provider-run token is recorded.
-            const ensured = yield* ensureRun(store, threaded.record, run, app, crypto)
-            return yield* executeRun(app, census, store, ensured.record, ensured.run, threaded.thread)
-          })
+          Effect.scoped(
+            Effect.gen(function* () {
+              // Subscribe before thread/start or turn/start; the app-server stream buffers early wakes.
+              const completionHints = yield* app.attachTurnCompletedHints
+              const run = request.correlation
+              const initial = yield* checkConfigAndRecord(config, store, run, app, crypto)
+              const materialized = yield* ensureCandidateWorktree(
+                commands,
+                fileSystem,
+                config,
+                initial,
+                store,
+                ownership
+              )
+              const threaded = yield* ensureThread(app, materialized, store)
+              // A new Retry may record its run-two token only after the retained thread is freshly writer-free.
+              if (isRetryProviderRun(run) && runFor(threaded.record, run) === undefined) {
+                yield* observeQuiescence(app, census, threaded.thread)
+              }
+              // The thread id is durable before the first exact provider-run token is recorded.
+              const ensured = yield* ensureRun(store, threaded.record, run, app, crypto)
+              return yield* executeRun(
+                app,
+                census,
+                store,
+                ensured.record,
+                ensured.run,
+                threaded.thread,
+                completionHints
+              )
+            })
+          )
         )
         .pipe(
           Effect.mapError(

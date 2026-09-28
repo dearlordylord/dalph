@@ -604,3 +604,75 @@ completed with no findings. It verified the real PlannedAttempt escaped-child
 fixture, exact/foreign/missing thread outcomes, unchanged IntegratorSession
 behavior, terminal/finality handling, and fail-closed cadence behavior. The
 review is closed for this scoped repair; no broad gate or live Run was started.
+
+## Focused #386 Integrator asynchronous-completion repair — 2026-09-28
+
+The accepted chronology in
+[`production-codex-integrator.md`](scenarios/production-codex-integrator.md#3a-an-id-free-completion-wake-leads-to-an-exact-reread--accepted-for-386)
+selects the existing ID-free `turn/completed` wake. A wake is non-authoritative;
+it can only prompt a fresh exact thread/turn/token read. A hint received before
+the `turn/start` response must remain buffered. An unrelated wake that finds
+the exact turn active causes one exact reread and leaves the result unresolved.
+No silence timer, active-turn poll, retry, second turn, or new session is
+accepted. Exact terminal evidence still requires a complete `Absent` owned
+activity census before sealing.
+
+**Red discriminator.** The focused test
+`seals one active turn after an ID-free completion wake arrives before the
+start response` was added first and run alone:
+
+```text
+pnpm exec vitest run packages/dalph/src/application/codex-integrator.test.ts -t 'seals one active turn after an ID-free completion wake arrives before the start response'
+```
+
+At base `4c6761a4f07bbdf9198763f44686ebae27eba680`, it exited 1 in 1.51 seconds
+with `IntegratorCallFailure: exact provider turn remains active` instead of a
+terminal result. The test holds the start response, changes the exact provider
+turn from active to completed, and queues the ID-free wake before releasing the
+response. This is the predicted stale-snapshot discriminator; it does not
+identify or reinterpret the preserved S1 event.
+
+**Evidence boundary.** The retained S1 state and diagnosis above remain
+unchanged and inconclusive: no retroactive app-server logs are inferred, no
+S1 Run is resumed or retried, and this repair does not claim the S1 cause.
+The focused Integrator tests and type/lint checks below own only the #386
+asynchronous Integrator completion chronology.
+
+**Green acceptance evidence.** The complete focused file passed after the
+repair:
+
+```text
+pnpm exec vitest run packages/dalph/src/application/codex-integrator.test.ts
+63 passed
+```
+
+The focused asynchronous controls cover listener attachment before
+`turn/start`, a buffered wake before its response, no wake with no poll/retry,
+an unrelated wake with only one exact reread while still active, terminal
+recovery after app-server replacement, listener closure on success and
+validation failure, and refusal to seal while exact owned activity remains
+live. The ID-free hint is never used as terminal evidence.
+
+`pnpm typecheck` passed. `pnpm check:fast` reached typecheck and changed-file
+lint; typecheck passed, while lint reported only the existing
+`codex-integrator.ts:144` `no-unnecessary-condition` error on
+`next === undefined`. The exact base file at
+`4c6761a4f07bbdf9198763f44686ebae27eba680` has the same condition at lines
+143–145, and the changed-line lint diff contains no finding. This pre-existing
+lint error remains outside this repair. `pnpm exec dprint check` on the four
+owned files and `git diff --check` both passed. The `check:fast` run was bounded
+to the parent-set expected duration of approximately three minutes and the
+absolute stop `2026-09-28T07:55:00Z`; it completed in approximately eleven
+seconds. The staged pre-commit lint hook repeated the same base-line error and
+reverted its temporary staging changes; the reviewed four-file diff was then
+committed with hooks disabled after confirming no changed-line diagnostic. No
+full gate or live S1 was run.
+
+**Scoped implementation review.** The diff adds one scoped ID-free stream
+listener and one exact fresh thread/turn/token reread after each wake. Active
+exact state loops only by awaiting another wake; the no-hint test confirms no
+read cadence. The terminal path passes the just-reread exact thread into the
+complete activity census before writing a sealed run. Listener scope closes
+on normal result and failure/interruption. No adapter, executor, tracker,
+publication, or cleanup code changed. Independent review of the final commit
+is pending.

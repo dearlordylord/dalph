@@ -57,7 +57,7 @@ adoption, no duplicate turns, replay, and cleanup.
 | --- | --- | --- |
 | 1. First preparation | One exact session materializes one candidate worktree, one privately owned Codex thread, one exact turn, and a public `PreparedCandidate` or sanitized `NotPrepared`; private ids remain absent. | `creates one candidate and returns the exact prepared envelope`; `keeps thread, turn, prompt, and private phases out of the public result`; `fails closed for provider errors and malformed porcelain blocks`; `seals a failed provider turn only as sanitized NotPrepared` |
 | 2. Thread/start ambiguity and ownership | After a lost `thread/start`, complete pagination locates candidate thread identities, then an exact per-thread reread plus the recorded thread token adopts one thread. A list entry that omits status or turns remains an explicitly partial summary: it is not proof of idle state or an empty turn census. A sole same-cwd thread without the exact token, a foreign token/correlation, or an unreadable exact thread fails closed and starts no turn. | `reconciles a lost thread-start response through the complete thread list`; `keeps partial thread-list summaries distinct from exact thread snapshots`; `reads every persistent thread-list page before reporting a complete identity list`; `reads a complete persistent thread list and preserves malformed-list failures`; `rejects a pre-existing sole candidate thread without a durable start intent`; `rejects a foreign persistent thread before starting a provider turn` |
-| 3. Turn ambiguity and terminal evidence | A lost turn response is reconciled by the exact owned token. A tokenless or foreign token is a contradiction and cannot cause a replacement turn; a failed terminal turn seals only sanitized `NotPrepared`. A stored terminal result is replayed only after a fresh exact thread/turn/quiescence reread whose terminal status agrees with the sealed private outcome. | `recovers a lost turn response without allocating a second token`; `fails closed on a tokenless terminal turn without starting a replacement`; `fails closed on a foreign terminal turn without starting a replacement`; `fails closed on duplicate exact turn tokens`; `revalidates sealed-result replay when the fresh thread is active`; `revalidates sealed-result replay when the fresh thread is foreign`; `revalidates sealed-result replay when the fresh thread is tokenless`; `revalidates sealed-result replay when the fresh thread is missing`; `revalidates sealed-result replay when the fresh thread is wrongId`; `fails sealed replay when there is a completed result with a fresh failed turn`; `fails sealed replay when there is a failed result with a fresh completed turn`; `seals a failed provider turn only as sanitized NotPrepared` |
+| 3. Turn ambiguity and terminal evidence | A lost turn response is reconciled by the exact owned token. An ID-free `turn/completed` wake prompts an exact fresh thread/turn/token reread; it never proves completion. Active state waits without polling or retry; terminal state seals only after complete owned activity is `Absent`. Stored results replay only after fresh exact validation. | `recovers a lost turn response without allocating a second token`; `seals one active turn after an ID-free completion wake arrives before the start response`; `does not poll or retry an active Integrator turn without a completion hint`; `rereads only the exact Integrator thread after an unrelated completion wake and does not seal while active`; `recovers an already-terminal observed turn after app-server replacement`; `seals only after exact owned activity is absent`; `fails closed on a tokenless terminal turn without starting a replacement`; `fails closed on a foreign terminal turn without starting a replacement`; `fails closed on duplicate exact turn tokens`; existing sealed-result replay controls; `seals a failed provider turn only as sanitized NotPrepared` |
 | 4. Cleanup observation | Cleanup rereads the exact private revision, Git registration/path, exact owned thread token, exact sealed terminal turn, background terminals, and process census. Unresolved intent/activity, stale authorization, live writers, foreign registration, transferred ownership, tokenless/foreign terminal evidence, contradictory terminal status, and unresolved worktree materialization never become `Absent` or permit removal. | `carries the exact provider-private revision into candidate cleanup authorization`; `reads the exact private revision for authorization and rejects foreign evidence`; `does not silently omit candidate authorization when evidence reread fails`; `keeps an unreadable candidate pending without a terminal contradiction`; `keeps an unreadable post-removal observation retryable`; `returns foreign live-writer evidence and performs zero removal requests`; `returns foreign other-session evidence and performs zero removal requests`; `returns transferred-registration evidence and performs zero removal requests`; `fails closed when cleanup authorization carries a stale private revision`; `does not infer absence while an unresolved thread intent remains`; `requires exact thread, terminal, and process absence before settling a removal intent`; `keeps an unresolved worktree materialization unreadable and non-removable`; `rejects tokenless, foreign, active, missing, and correlated terminal evidence`; `fails closed when the fresh terminal status contradicts the sealed private result`; property `proves cleanup mutates only for exact ownership, registration, and quiescent activity` |
 | 5. Cleanup mutation and retry | Cleanup writes removal intent, performs one coordinator-owned Git remove, then rereads Git/private/activity. A failed or unapplied remove with the exact resource still present remains retryable; exact absence becomes `AlreadyAbsent`/`Removed`; foreign or transferred state stays fail-closed and conclusive. | `removes only the authorized predecessor and preserves every successor resource`; `rereads exact absence after a lost candidate-removal response`; `reconciles a failed exact removal before retrying the same resource`; `refuses a same-revision private predecessor replacement before Git removal`; `maps a failed removal race to DefinitelyNotApplied when registration transfers`; `maps a successful removal race to DefinitelyNotApplied when registration transfers`; `keeps cleanup retryable when the post-removal private tombstone disappears`; property `proves cleanup mutates only for exact ownership, registration, and quiescent activity` |
 | 6. Process replacement and independent sessions | A genuine second Dalph process reopens the same private store and unfinished Codex thread, performs no duplicate model call, and seals the result. Two independent exact session threads are censused separately: unrelated activity does not block another session, while exact thread activity remains blocking. | `recovers one unfinished run after the app-server process is replaced`; `keeps two independent session threads scoped to their own activity`; production app-server census tests for exact process-backed activity; direct private-store tests `reads absence, writes a record, and finds it by exact candidate path` and `replaces one session atomically and rejects malformed JSON`; mandatory live gate `pnpm qualify:codex` includes `codex-integrator-real-qualification.test.ts` |
@@ -143,6 +143,94 @@ closed instead of returning stale success.
 The operator sees one terminal result or a typed fail-closed error. Dalph must
 not ignore an unknown token and start another turn, seal `PreparedCandidate`
 from a failed turn, or treat an active/ambiguous turn as terminal.
+
+### 3a. An ID-free completion wake leads to an exact reread — accepted for #386
+
+This chronology accepts the existing app-server `Stream<void>` completion
+boundary. The app-server may receive thread or turn ids in its notification,
+but the Integrator receives no ids. A wake means only that some turn completed
+on this app-server; it never proves which turn completed or that this run is
+terminal. A fresh exact thread and turn read owns that proof.
+
+**Starting facts.** One delivery Run `R` has one immutable planned attempt `A`
+at Base `B`, one accepted task commit `C`, and one fixed Integrator session
+`S` against integration head `H`. The provider-private record identifies one
+app-server incarnation `I`, exact owned thread `T` and thread token `t`, and
+one Integrator run ordinal with durable owned-turn token `u`. The journal has
+`IntegratorRunStarted(R, S, ordinal)` but no
+`IntegratorRunResultRecorded(R, S, ordinal)`; no candidate `M` has been
+reported. The only turn start allowed is the one recorded for `(I, T, u)`.
+The Integrator does not own tracker closure, target-ref updates, remote push,
+local promotion, or task-work cleanup; those remain later delivery boundaries.
+
+**Outside event and trigger.** `turn/start` may return while exact turn `U` is
+`inProgress`. Codex later emits `turn/completed`, or emits a completion for an
+unrelated thread while this run is still active. The app-server broadcasts an
+ID-free wake through its existing coalescing stream. A delivery activation
+starts the provider call; no person directly triggers this app-server boundary.
+
+**Ordered boundaries.** Before `turn/start`, Dalph attaches a listener scoped
+to incarnation `I`, records the turn-boundary intent, and calls `turn/start`
+once for exact thread `T`, cwd, and token `u`. It validates the returned
+owned token and persists `TurnObserved(T, U, u)`. A terminal start response
+proceeds to the exact activity census; an `inProgress` response waits for a
+completion wake. The subscribed stream buffers a wake that arrives before the
+start response. After a wake, Dalph resumes exactly thread `T` at the recorded
+cwd and reads complete current turn history, including every page when history
+is paginated. It requires
+thread id `T`, cwd, ownership token `t`, exactly one turn id `U` with token `u`,
+and no foreign correlation. Missing, duplicate, foreign, tokenless, unreadable,
+or contradictory evidence fails closed. If the exact turn remains active,
+Dalph waits for another wake without sealing, starting another turn, or
+creating another session. An unrelated global wake therefore causes only this
+exact reread.
+
+Only exact terminal `completed` or `failed` status proceeds to the exact
+background-terminal and owned-process census. The complete census must be
+`Absent` before Dalph seals. A completed turn's final agent message is parsed
+once into `CompletedTurnSealed` / `PreparedCandidate`; a failed turn is sealed
+only as sanitized `NotPrepared`. The workflow records the result under the
+same `(R, S, ordinal)` correlation. The listener closes when this provider call
+settles or is interrupted.
+
+**Crash, retry, and reopen.** Before turn intent, no turn mutation has
+occurred. If `turn/start` response is lost, a replacement activation uses
+Scenario 3's complete exact absence census before any same-token retry. After
+`TurnObserved`, it never starts a replacement turn. The replacement attaches
+its listener before its exact thread read: an already-terminal exact turn may
+be reconciled immediately, while an active turn waits for a wake and rereads
+exact state. A crash after terminal observation but before quiescence or private
+sealing repeats those reads. After private sealing but before journal result
+append, the replacement revalidates the same exact thread, turn, and absent
+activity before replaying the sealed result, with no second model call. A lost
+journal append response follows existing journal reconciliation.
+
+**Visible and forbidden results.** The operator sees one terminal
+`PreparedCandidate`, sanitized `NotPrepared`, or existing typed
+unavailable/unreadable wait. An active turn without a wake remains pending; no
+timer, polling fallback, candidate, push, or terminal seal is introduced.
+Dalph must not infer completion from `task_complete`, notification payload ids,
+or a global wake; start a second turn or session; parse a partial turn; or
+update refs, push, promote, close the task, or clean up a live resource.
+
+**Inapplicable fields.** There is no new person-triggered action, provider
+mutation beyond the existing single `turn/start`, tracker revision, target-ref
+observation, publication proof, promotion, or cleanup disposition. The
+publication scenario owns those later boundaries. There is no timeout or timer
+because accepted behavior is to remain pending without a wake.
+
+**Acceptance tests.** The asynchronous path maps to:
+
+- `seals one active turn after an ID-free completion wake arrives before the start response` — listener order, buffered wake, one exact reread, one seal;
+- `does not poll or retry an active Integrator turn without a completion hint` — no extra reread, second turn, or session;
+- `rereads only the exact Integrator thread after an unrelated completion wake and does not seal while active` — one wake causes one exact reread and the active result remains unresolved;
+- `recovers an already-terminal observed turn after app-server replacement` — exact terminal recovery without a replacement turn;
+- `seals only after exact owned activity is absent` — terminal evidence precedes a complete `Absent` census;
+- existing sealed-result replay coverage — no second model call after a crash between private sealing and journal append.
+
+Scenario 3 maps these outcomes to focused tests. This chronology does not
+change the separate S1 executor notification diagnosis or authorize a live S1
+rerun.
 
 ## 4. Cleanup rereads exact evidence before deciding
 
