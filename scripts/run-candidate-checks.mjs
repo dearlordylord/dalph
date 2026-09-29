@@ -32,6 +32,13 @@ export const materializeCandidateManifest = (stages, pnpmEntryPoint, worktree) =
     }
   }))
 
+/** Preserve both post-preflight obligations while exposing application failures before costly formal proof. */
+export const orderedCandidateStages = (stages, formalStages) => [
+  ...stages.filter((stage) => stage.boundary === "preflight"),
+  ...stages.filter((stage) => stage.boundary === "qualification"),
+  ...formalStages
+]
+
 /** This same input contract is used for every fresh candidate; it never grants reuse credit. */
 export const candidateInputContract = (identity) => ({
   ...identity,
@@ -100,7 +107,6 @@ const main = async () => {
     pnpmEntryPoint,
     worktree: process.cwd()
   })
-  const applicationStages = stages.filter((stage) => stage.boundary === "qualification")
   const affectedFamilies =
     formal.status === "affected"
       ? await selectAffectedQuintFamilies({
@@ -121,7 +127,7 @@ const main = async () => {
         ]
       : []
   const manifest = materializeCandidateManifest(
-    [...stages.filter((stage) => stage.boundary === "preflight"), ...formalStages, ...applicationStages],
+    orderedCandidateStages(stages, formalStages),
     pnpmEntryPoint,
     process.cwd()
   )

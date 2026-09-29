@@ -9,7 +9,8 @@ import test from "node:test"
 import {
   candidateInputContract,
   executeCandidateChecks,
-  materializeCandidateManifest
+  materializeCandidateManifest,
+  orderedCandidateStages
 } from "./run-candidate-checks.mjs"
 
 const unchanged = { assertUnchanged: async () => {}, finish: async () => {} }
@@ -18,6 +19,24 @@ const manifest = [
   { id: "candidate-proof", args: ["candidate-command"] },
   { id: "application", args: ["test"] }
 ]
+
+void test("fresh candidate retains every selected stage and runs coverage before affected formal proof", () => {
+  const stages = [
+    { id: "preflight", boundary: "preflight" },
+    { id: "delivery-repeatability", boundary: "qualification" },
+    { id: "recorded-catalog", boundary: "qualification" },
+    { id: "coverage", boundary: "qualification" }
+  ]
+  const formal = [{ id: "affected-formal" }]
+  assert.deepEqual(
+    orderedCandidateStages(stages, formal).map(({ id }) => id),
+    ["preflight", "delivery-repeatability", "recorded-catalog", "coverage", "affected-formal"]
+  )
+  assert.deepEqual(
+    orderedCandidateStages(stages, []).map(({ id }) => id),
+    ["preflight", "delivery-repeatability", "recorded-catalog", "coverage"]
+  )
+})
 
 void test("candidate runner records and executes the same chosen manifest without reader substitution", async () => {
   const calls = []

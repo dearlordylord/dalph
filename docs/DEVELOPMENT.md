@@ -108,6 +108,15 @@ permit, stage resume, or cross-worktree formal reuse on this ordinary path.
 Interruption costs a rerun after reconciliation; this is an explicit simplicity
 tradeoff. Formal inputs still select exhaustive proof, executed fresh.
 
+After structural preflight, the local gate runs its existing delivery,
+recorded-catalog, and coverage suffix before affected formal proof. Both remain
+required when selected. These are independent post-preflight obligations: moving
+the suffix first exposes a coverage failure before the long formal stage, while
+a formal failure now incurs the suffix cost. The recorded candidate manifest
+binds this order to the exact candidate. Hosted formal and quality cells remain
+independent. This qualification-tooling order cannot change Dalph runtime
+behavior or the assertions within either gate.
+
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
 removal needs consumer evidence and affected type/build checks; changed behavior
