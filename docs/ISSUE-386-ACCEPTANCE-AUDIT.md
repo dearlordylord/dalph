@@ -2349,7 +2349,7 @@ clean at `adc7b413d356c3b3f9233fa6b2d5d183b6f351fc`.
 **Scenario-to-test mapping.** This repair is limited to the accepted [S4
 completion refinement](scenarios/direct-remote-publication.md#s4-completion-refinement-an-exact-app-server-notification-precedes-integrator-completion):
 
-- `packages/dalph/src/application/codex-integrator.property.test.ts::proves cleanup mutates only for exact ownership, registration, and quiescent activity` now establishes the completed `property-turn` on the owned `property-thread`, then publishes that exact thread/turn identity. Its subscription buffers the hint until the durable turn ID is bound; the turn retains the same owned token issued to `turn/start`.
+- `packages/dalph/src/application/codex-integrator.property.test.ts::proves cleanup mutates only for exact ownership, registration, and quiescent activity` now establishes the completed `property-turn` on the owned `property-thread`, then publishes that exact thread/turn identity. Its subscription buffers the hint until the durable turn ID is bound; the turn retains the same owned token issued to `turn/start`. This is fixture compatibility support for the cleanup property, not a standalone S4 test of an active turn followed by a later completion notification.
 - `packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette.ts::makeHarness`, exercised by `packages/dalph/test/cassettes/application-and-codex-protocol.execution.test.ts::runs maintained Codex executor stories through the concrete production executor`, uses the controlled completion action to find the exact owned active turn, persist its completed state while preserving its token, and only then publish its exact thread/turn hint. The cassette attaches the production lifecycle observation and waits for the hint-authorized terminal projection; its other maintained stories remain active, lost-response, suspension, or replacement controls.
 - `packages/dalph/test/scenarios/production.test.ts::ordinary Run reconstruction replaces an absent empty Codex association and settles only Begin ordinal one` has no completion event: the controlled `turn/start` result is intentionally `inProgress`. Its exact subscription binds the subsequent durable `Running` record's thread, owned token, and turn ID, then has no hint to publish. The case remains the no-false-terminal control and still proves one Begin. The earlier source diagnosis that all three fixtures lacked a completion hint is refined: this production case lacked the exact subscription capability, but a completion hint is inapplicable while its turn remains active.
 
@@ -2430,11 +2430,13 @@ The one stale per-cycle assertion must therefore expect this pending
 `RunMustRemainActive` result. The repaired test asserts the same
 in-progress lifecycle and exact thread/token/turn binding, zero emitted
 completion hints, exactly one Begin and `ExecutorWorkExecuting`, no terminal
-executor report/result/finality/termination, no second turn or downstream
-publication/promotion, and retained task worktree/Base. The accepted blocking
-edge is preserved; only activation-cycle success is distinguished from Run
-terminality. This scoped correction is authorized by the parent after the
-diagnostic evidence above.
+executor report/result/finality/termination, no second turn, and retained task
+worktree/Base. The test explicitly checks no terminal work report,
+`IntegrationFinalitySettled`, `WorkflowRunTerminated`, `PlannedAttemptReplaced`,
+or `TaskClaimReleased`; it does not explicitly assert downstream-publication
+or promotion absence. The accepted blocking edge is preserved; only
+activation-cycle success is distinguished from Run terminality. This scoped
+correction is authorized by the parent after the diagnostic evidence above.
 
 **S4 boundary clarification and accepted mapping.** S4's accepted completion
 refinement distinguishes the exact app-server X/T completion hint from an
@@ -2566,4 +2568,65 @@ Base-untouched `no-redundant-type-constituents` warnings; its full log is
 `4dab949a27f827783eb35709c15d2d52eab93364b29848f448185eca5ea08358`.
 The post-format `git diff --check` exited 0; log
 `/tmp/issue386-fixture-diff-check-postformat.log`, SHA-256
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+## Review follow-up — inherited cassette tag diagnostics — 2026-09-29
+
+**Base and stop.** Follow-up candidate starts at commit
+`9c8f160b4e4505cad4c94b9c6ce93537fa442d12`, with lint selection pinned to
+Base `05357e56ffe1927f9a9e5af30a97cc27d2f63476`. Absolute stop is
+`2026-09-29T07:39:00Z`. Change only the three test-support tag type
+expressions and this audit. Run, in order: pinned `pnpm lint:changed`, expected
+under one minute (stop `07:34Z`); `pnpm typecheck`, expected under one minute
+(stop `07:35Z`); dprint check on the four scoped files, expected under one
+minute (stop `07:36Z`); then `git diff --check`, inspect the scoped diff and
+commit, expected under three minutes (stop `07:39Z`). No full gate, S1, or
+prevention worktree access.
+
+**Spec review precision.** The cleanup property case supplies an exact
+completion hint to keep the fixture compatible with the accepted cleanup
+property. It is not a standalone S4 proof of an active turn followed by a later
+completion notification. The maintained executor cassette separately controls
+the active-to-completed transition, preserves the exact owned token, and emits
+the matching thread/turn hint only after persisting completion. The production
+reconstruction case proves the pending active-turn/no-seal boundary, exact
+thread/token/turn binding across reopen, one Begin and one
+`ExecutorWorkExecuting`, and absence of explicitly checked terminal work,
+finality, termination, replacement, and claim-release events. It does not
+assert explicit downstream-publication or promotion absence, so this audit
+does not credit it with those claims. This fixture does not establish S1
+acceptance; S1's terminal-result-before-publication requirement remains outside
+this focused proof.
+
+**Inherited type warning correction.** In the cassette support module, the
+public tag types now derive from `keyof typeof CodexAttemptRecord.cases` and
+`keyof typeof CodexProviderWorkUnitReplacementResult.cases`. The helper and
+result interface retain their exact literal tag unions; no runtime code or
+scenario behavior changed. The first pinned `pnpm lint:changed` after this
+type-only edit produced no Oxlint warnings and reached dprint, which reported
+one formatting-only layout change in the helper signature. Log
+`/tmp/issue386-tag-followup-lint.log`, SHA-256
+`3e785686dabda722467a4a6edc4d5d03d823490b0e01ad32a11ee43ca3296989`.
+
+`pnpm exec dprint fmt packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette.ts`
+completed with exit 0; log `/tmp/issue386-tag-followup-dprint-fmt.log`, SHA-256
+`13dd8d24cb06171ef89795c6f1669ffec4ccbd0e21dc925d7868e04abb8c2831`.
+The pinned changed-file lint then passed with exit 0, including Oxlint and
+dprint, with exactly the four intended TypeScript files selected against the
+recorded Base. Log `/tmp/issue386-tag-followup-lint-final.log`, SHA-256
+`b8ac9f95c2d92c9641d4c2de37bc8c575e0f552eedf8af1863306725fde1772f`.
+
+Next check: `pnpm typecheck`, expected under one minute with stop
+`2026-09-29T07:35:00Z`, on the current follow-up candidate based on commit
+`9c8f160b4e4505cad4c94b9c6ce93537fa442d12`.
+
+The full `pnpm typecheck` exited 0 on the type-only correction; its complete
+output is `/tmp/issue386-tag-followup-typecheck.log`, SHA-256
+`5efd0ccf214f92f409b2b4271348c8b630d9a40c42592659d041f7f6f77b4c66`.
+Next run dprint check on the four scoped files and `git diff --check`, each
+expected under one minute and before `2026-09-29T07:36:00Z`.
+
+Both checks passed with exit 0 and empty output: dprint log
+`/tmp/issue386-tag-followup-dprint-check.log` and diff-check log
+`/tmp/issue386-tag-followup-diff-check.log`, each SHA-256
 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.

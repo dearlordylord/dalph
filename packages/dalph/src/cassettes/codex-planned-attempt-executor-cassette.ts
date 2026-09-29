@@ -536,11 +536,14 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
   }
 })
 
+type CodexAttemptRecordTag = keyof typeof CodexAttemptRecord.cases
+type CodexProviderWorkUnitReplacementResultTag = keyof typeof CodexProviderWorkUnitReplacementResult.cases
+
 export interface CodexPlannedAttemptExecutorCassetteRun {
   readonly cassette: CodexPlannedAttemptExecutorCassetteType
   readonly activeActivity: Pick<CodexOwnedActivityCensusProjection, "_tag">
-  readonly privateRecordTag: CodexAttemptRecord["_tag"] | null
-  readonly replacementResultTag: CodexProviderWorkUnitReplacementResult["_tag"] | null
+  readonly privateRecordTag: CodexAttemptRecordTag | null
+  readonly replacementResultTag: CodexProviderWorkUnitReplacementResultTag | null
   readonly purgedWorkUnitPreserved: boolean | null
   readonly distinctReplacementWorkUnit: boolean | null
   readonly authorityObservationCount: number | null
@@ -560,9 +563,8 @@ export interface CodexPlannedAttemptExecutorCassetteRun {
 }
 
 /** Exposes only the record state needed by cassette assertions, never its private Codex thread id. */
-export const codexAttemptRecordTagOrNull = (
-  record: CodexAttemptRecord | undefined
-): CodexAttemptRecord["_tag"] | null => record?._tag ?? null
+export const codexAttemptRecordTagOrNull = (record: CodexAttemptRecord | undefined): CodexAttemptRecordTag | null =>
+  record?._tag ?? null
 
 /** Keeps the private process and turn identities inside the controlled harness. */
 const publicActivityProjection = (
