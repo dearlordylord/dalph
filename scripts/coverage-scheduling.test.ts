@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { resolveVitestConfig } from "./quality-gate-test-fixture.js"
 
 const resourceSensitiveFiles = [
-  "packages/dalph/test/cassettes/direct-remote-publication.test.ts",
+  "packages/dalph/test/integration/direct-remote-publication.integration.test.ts",
   "packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts",
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
   "scripts/quint-ci-contract.test.ts"

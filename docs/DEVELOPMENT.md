@@ -216,6 +216,9 @@ All commands below use `pnpm`. Script definitions live in
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
 | `test` | Run tests and report advisory production/evaluation and changed-line coverage; takes an admission slot. |
+| `test:cassettes:memory` | Run the in-memory cassette test directory without coverage or built CLI startup. Dedicated recorded-catalog and delivery-repeatability tests retain their own commands. |
+| `test:recorded-catalog` | Run the maintained in-memory recorded-cassette catalog without starting the built production CLI. |
+| `test:integration:publication` | Build the Dalph CLI and run the process-based direct-publication integration scenario explicitly, with one Vitest worker. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
@@ -1178,12 +1181,22 @@ of retained files is a separate, deliberate operator action.
 Coverage scheduling is repository tooling only: it does not change a Dalph
 command, workflow decision, provider boundary, journal fact, retry, cleanup
 action, or runtime-visible result. Resource-sensitive simulations that spawn a
-built CLI do not belong in automatic V8 coverage: the child process is not
-attributed to the parent report. When focused boundary tests plus the actual
-protected qualification already own their acceptance facts, remove a redundant
-built-child simulation instead of moving it into another automatic lane. The
-focused tests remain boundary evidence, not a substitute for composed runtime
-proof; the actual protected #307 run owns the final shipped-entry composition.
+built CLI do not add child-process V8 coverage to the parent report; their
+inclusion must rest on required acceptance proof. When focused boundary tests
+plus the actual protected qualification already own their acceptance facts,
+remove a redundant built-child simulation instead of moving it into another
+automatic lane. The focused tests remain boundary evidence, not a substitute
+for composed runtime proof; the actual protected #307 run owns the final
+shipped-entry composition.
+
+The direct-publication S1 test is a production integration scenario under
+`packages/dalph/test/integration/`: it starts the built CLI with real local
+Git and SQLite and controlled external providers. The maintained recorded
+catalog remains under `packages/dalph/test/cassettes/` and has its own command.
+During development, run the named integration scenario only when its accepted
+boundary is affected. The complete coverage and full qualification commands
+still include that S1 test; this path change grants no skipped acceptance proof
+and makes no Dalph runtime behavior change.
 
 Before submitting another hosted candidate after a failure, reproduce the
 failure with the smallest named check that owns that boundary. Run cheap
