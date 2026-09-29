@@ -332,6 +332,21 @@ const exerciseProductionAutomaticSuccessorLifecycleCut = (
         backend === "Memory"
           ? Layer.succeedContext(yield* Layer.build(memoryJournalTestLayer))
           : sqliteJournalTestLayer({ filename })
+      const applicationStoreScopeEvents = yield* Ref.make<ReadonlyArray<string>>([])
+      const applicationStoreOpenCount = yield* Ref.make(0)
+      const applicationStoreLayer =
+        cutoff === "ReopenAfterReceipt" && backend === "SQLite"
+          ? Layer.tap(storeLayer, () =>
+              Ref.getAndUpdate(applicationStoreOpenCount, (count) => count + 1).pipe(
+                Effect.flatMap((previousCount) =>
+                  Ref.update(applicationStoreScopeEvents, (events) => [
+                    ...events,
+                    `journal-store-opened-${previousCount + 1}`
+                  ])
+                )
+              )
+            )
+          : storeLayer
       yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         const began = authorizedRecords[0]
@@ -445,7 +460,7 @@ const exerciseProductionAutomaticSuccessorLifecycleCut = (
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
         {
-          journalStoreLayer: storeLayer,
+          journalStoreLayer: applicationStoreLayer,
           targetPromotion: {
             git: {
               compareAndSet: () => Effect.die("successor fixture must stop before promotion"),
@@ -503,9 +518,11 @@ const exerciseProductionAutomaticSuccessorLifecycleCut = (
           PlannedTaskAttemptPlanner.of({ plan: () => Effect.die(`automatic S2 ${cutoff} must not plan fresh work`) })
         )
       )
+      // `local: true` gives each application phase its own layer memo map and
+      // closes that phase's scope before the effect returns.
       const provideApplication = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
-          Effect.provide(application),
+          Effect.provide(application, { local: cutoff === "ReopenAfterReceipt" }),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
         )
       if (cutoff === "ReopenAfterReceipt") {
@@ -513,6 +530,9 @@ const exerciseProductionAutomaticSuccessorLifecycleCut = (
           const bootstrap = yield* JournaledRunBootstrap
           yield* bootstrap.operatorControl.applyRemotePublicationResume(resumeRequest)
         }).pipe(provideApplication)
+        // The receipt application scope and its SQLite client are closed before
+        // the activation application is built below.
+        yield* Ref.update(applicationStoreScopeEvents, (events) => [...events, "receipt-application-scope-closed"])
       }
       const activationExit = yield* Effect.gen(function* () {
         const bootstrap = yield* JournaledRunBootstrap
@@ -544,9 +564,12 @@ const exerciseProductionAutomaticSuccessorLifecycleCut = (
         }
         return result
       }).pipe(
-        Effect.provide(application),
+        Effect.provide(application, { local: cutoff === "ReopenAfterReceipt" }),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
       )
+      if (cutoff === "ReopenAfterReceipt") {
+        yield* Ref.update(applicationStoreScopeEvents, (events) => [...events, "activation-application-scope-closed"])
+      }
 
       if (continues) {
         expect(activationExit._tag).toBe("Failure")
@@ -612,10 +635,21 @@ const exerciseProductionAutomaticSuccessorLifecycleCut = (
         yield* Effect.gen(function* () {
           yield* (yield* JournaledRunBootstrap).operatorControl.applyRemotePublicationResume(resumeRequest)
         }).pipe(provideApplication)
+        yield* Ref.update(applicationStoreScopeEvents, (events) => [...events, "replay-application-scope-closed"])
         const replayed = yield* Effect.gen(function* () {
           return yield* (yield* JournalStore).read(runId)
         }).pipe(Effect.provide(storeLayer))
         expect(replayed).toEqual(after)
+        if (cutoff === "ReopenAfterReceipt" && backend === "SQLite") {
+          expect(yield* Ref.get(applicationStoreScopeEvents)).toEqual([
+            "journal-store-opened-1",
+            "receipt-application-scope-closed",
+            "journal-store-opened-2",
+            "activation-application-scope-closed",
+            "journal-store-opened-3",
+            "replay-application-scope-closed"
+          ])
+        }
         return
       }
       expect(after.slice(0, authorizedRecords.length)).toEqual(authorizedRecords)

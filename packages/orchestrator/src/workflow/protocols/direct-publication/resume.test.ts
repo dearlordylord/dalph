@@ -1345,6 +1345,43 @@ it.effect("a persistent denial stops at the accepted attempt limit and cannot be
   )
 )
 
+const exerciseResumeDenialDoesNotRetryAfterRestart = (process: StoreProcess): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const initialDenial = yield* makeGit("denied")
+    expect((yield* process((store) => invoke(store, initialDenial.git, "run")))._tag).toBe("PublicationRetained")
+
+    const request = requestFor("resume-denial-restart-does-not-retry")
+    const resumedDenial = yield* makeGit("denied")
+    const retained = yield* process((store) => invoke(store, resumedDenial.git, { request }))
+    expect(retained).toMatchObject({
+      _tag: "PublicationRetained",
+      authorization: { _tag: "ResumeRequest", requestId: request.requestId },
+      cause: { _tag: "AuthenticationDenied" }
+    })
+    expect(yield* Ref.get(resumedDenial.calls)).toMatchObject({ pushes: [2] })
+
+    const beforeRestart = yield* process((store) => store.read(runId))
+    const restartedGit = yield* makeGit("applied")
+    expect(yield* process((store) => invoke(store, restartedGit.git, "run"))).toEqual(retained)
+    expect(yield* Ref.get(restartedGit.calls)).toEqual(emptyCalls())
+
+    const replayGit = yield* makeGit("applied")
+    expect(yield* process((store) => invoke(store, replayGit.git, { request }))).toEqual(retained)
+    expect(yield* Ref.get(replayGit.calls)).toEqual(emptyCalls())
+    const afterReplay = yield* process((store) => store.read(runId))
+    expect(afterReplay).toEqual(beforeRestart)
+    expect(publicationOrdinals(afterReplay)).toEqual([1, 2])
+  })
+
+it.effect("does not replay a conclusive resume denial after restart in memory and reopened SQLite journals", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* memoryFresh(exerciseResumeDenialDoesNotRetryAfterRestart)
+      yield* sqliteFresh(exerciseResumeDenialDoesNotRetryAfterRestart)
+    })
+  )
+)
+
 it.effect("resume control returns retained status without a receipt after the attempt limit", () =>
   memoryFresh((process) =>
     Effect.gen(function* () {
