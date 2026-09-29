@@ -33,6 +33,19 @@ how an unreadable current graph read is published. It proves the classifier
 and process-local owner together; it does not qualify the composed S1 delivery
 journey.
 
+### Governing behavior
+
+Dalph's reactivation owner must preserve the accepted direct-publication
+[S1 normal-delivery chronology](direct-remote-publication.md#normal-delivery)
+and [S8 finality chronology](direct-remote-publication.md#s8-a-grant-or-intent-does-not-prove-publication-or-settle-finality).
+The shared bound is [D36: No busy loop on unchanged facts](../DELIVERY-INVARIANTS.md#d36-no-busy-loop-on-unchanged-facts),
+formalized by
+[`runActivation.establishmentSourceDoesNotChangeActivationBounds`](../../specs/runActivation.qnt).
+This refinement preserves that law and the S1/S8 completion and finality
+behavior. It narrows only the accepted-publication classification of
+`TaskTrackerFactsReadFailed`; a successful
+`UnchangedTaskTrackerFactsReconfirmed` remains `WorkflowProgress`.
+
 ### Starting facts and trigger
 
 No person directly starts this transition. An active, unpaused Run is inside
@@ -81,6 +94,16 @@ dependant, that reconfirmation may enable the dependant's ordinary progression.
 
 ### Exact acceptance-test mapping
 
+- `packages/dalph/src/application/production-reactivation.test.ts::unreadable
+  F G discovery preserves B C D and waits for another independent tracker
+  hint` proves the production tracker-call and executor-action boundary. Before
+  the independent `TrackerNotification`,
+  `result.beforeSecondOpportunity?.trackerCalls.filter((call) => call === "graph")`
+  has length one; after that notification,
+  `result.trackerCalls.filter((call) => call === "graph")` has length two.
+  `result.executorCalls` and `result.executorEntries` are both empty. This test
+  supplies the tracker-call evidence; the owner/classifier composition test
+  below does not call the tracker.
 - `run-reactivation-owner.test.ts`: `a failed accepted graph read retracts
   progress-owned trailing activation until an operator wake` constructs a
   Run-began / `WorkflowEstablishment` read-intent / `CircuitOpen`
@@ -90,7 +113,8 @@ dependant, that reconfirmation may enable the dependant's ordinary progression.
   `RunReactivationOwner` accepted-fact observer. It first publishes
   `WorkflowProgress`, then the failed-read publication, waits for the owner to
   hand off to idle, advances `TestClock` without another wake, and checks one
-  activation; `OperatorWake` then checks exactly two total activations.
+  activation; `OperatorWake` then checks exactly two total activations. This
+  test proves accepted-prefix classifier-to-owner behavior, not a tracker call.
 - `run-reactivation-owner.test.ts`: `classifies an accepted unchanged
   root/dependant graph reconfirmation as workflow progress` validates a
   complete accepted prefix whose graph has a completed root and an open
