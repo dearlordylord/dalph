@@ -148,3 +148,45 @@ authorized by this bounded repair.
 - **No accepted gap deferred:** this scoped change alters test composition only;
   it changes no Dalph runtime behavior. A full #387 qualification is outside
   this task and remains unclaimed.
+
+## Integrated production-composition verification plan — 2026-09-29
+
+The integrated candidate is clean at `bdc621bbda819c927a7d1453d76596fbf96f9da5`,
+with the #387 test repair directly atop the accepted #385/#386 integration
+Base `0000d5375a7835d02458ddf519b3dcf9bab15b53`. The prior repair verified the
+SQLite reopen case alone; it did not rerun the complete production-composition
+file. To close that remaining focused check, run exactly:
+
+`pnpm exec vitest run packages/dalph/test/scenarios/publication-composition.test.ts --reporter=dot --maxWorkers=1`
+
+Expected duration is at most 2 minutes; absolute UTC stop is
+`2026-09-29T18:10:00Z`. This check covers the production-composed retained
+receipt lifecycle cases in that file; it does not qualify the full #387 issue,
+the combined #385/#386 candidate, or a live Run. Stop safely at the deadline,
+preserve the output, and record the exact terminal result before any next check.
+
+The integrated worktree has no `node_modules/.bin/vitest`. Before the check,
+restore only its frozen dependencies with `pnpm install --frozen-lockfile`.
+Expected duration is at most 2 minutes; absolute UTC stop is
+`2026-09-29T18:09:00Z`. Do not start the Vitest check unless installation
+finishes successfully before that stop. This install must leave tracked source
+and the candidate HEAD unchanged.
+
+Dependency restore finished at `2026-09-29T18:05:24Z`, exit 0, in 4.8 seconds.
+The frozen lockfile was already current; pnpm reused 268 packages and added
+270 links. It warned that Dalph CLI bins could not be linked because this
+worktree has no `packages/dalph/dist`; the target composition test imports the
+workspace modules directly. The install log is
+`/tmp/issue387-integrated-install-20260929.log` (SHA-256
+`e3722dfd2a6b34dd2b60dfcdad79d0461cdec8e1b314435af089e99a7ba9215c`). HEAD
+remained `bdc621bbda819c927a7d1453d76596fbf96f9da5`; only this audit document
+is tracked as modified.
+
+The predeclared production-composition check then passed on that exact HEAD:
+Vitest reported `Test Files 1 passed (1)` and `Tests 12 passed (12)`, duration
+9.48 seconds, exit 0. Its retained log is
+`/tmp/issue387-composition-integrated-20260929.log` (SHA-256
+`926c3890b4d39df2de61132e7fd3a11699dc117439f381a15bcb5ebad35f939c`). The
+run completed before the recorded `18:10Z` stop; the worktree stayed on the
+same source HEAD. This closes the composition-file check left unrun by the
+scoped repair, but does not claim the full integrated #385/#386/#387 gate.
