@@ -2,7 +2,6 @@ import { expect, it } from "vitest"
 import { resolveVitestConfig } from "./quality-gate-test-fixture.js"
 
 const resourceSensitiveFiles = [
-  "packages/dalph/test/integration/direct-remote-publication.integration.test.ts",
   "packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts",
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
   "scripts/quint-ci-contract.test.ts"
@@ -30,13 +29,14 @@ it("runs resource-sensitive coverage files once after the ordinary batch without
   expect(ordinary.test?.maxWorkers).toBe(2)
   expect(ordinary.test?.testTimeout).toBe(30_000)
 
-  expect(late.test?.include).toEqual(resourceSensitiveFiles.slice(0, 2))
+  expect(rootExcludes).toContain("packages/dalph/test/integration/direct-remote-publication.integration.test.ts")
+  expect(late.test?.include).toEqual(resourceSensitiveFiles.slice(0, 1))
   expect(late.test?.exclude).toEqual(rootExcludes)
   expect(late.test?.sequence?.groupOrder).toBe(1)
   expect(late.test?.maxWorkers).toBe(2)
   expect(late.test?.testTimeout).toBe(30_000)
 
-  expect(serial.test?.include).toEqual(resourceSensitiveFiles.slice(2))
+  expect(serial.test?.include).toEqual(resourceSensitiveFiles.slice(1))
   expect(serial.test?.exclude).toEqual(coverage.test?.exclude)
   expect(serial.test?.sequence?.groupOrder).toBe(2)
   expect(serial.test?.fileParallelism).toBe(false)

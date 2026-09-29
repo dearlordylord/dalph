@@ -13,12 +13,10 @@ const performanceTestPattern = "**/*.performance.test.ts"
 const publicRecoveryProcessBoundaryTestPattern =
   "packages/dalph/src/application/production-public-recovery.integration.test.ts"
 const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+const publicationIntegrationTestPattern = "packages/dalph/test/integration/direct-remote-publication.integration.test.ts"
 // These process-heavy files passed focused coverage but crossed their own
 // deadlines when competing with other files in a broad coverage run.
-const lateCoverageTestPatterns = [
-  "packages/dalph/test/integration/direct-remote-publication.integration.test.ts",
-  "packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"
-]
+const lateCoverageTestPatterns = ["packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"]
 const serialCoverageTestPatterns = [
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
   "scripts/quint-ci-contract.test.ts"
@@ -33,6 +31,7 @@ const ordinaryWorkerCount = 4
 const coverageWorkerCount = 2
 const runDeliveryRepeatability = processEnvironment["DALPH_RUN_DELIVERY_REPEATABILITY"] === "1"
 const runQualificationTests = processEnvironment["DALPH_RUN_QUALIFICATION_TESTS"] === "1"
+const runPublicationIntegration = processEnvironment["DALPH_RUN_PUBLICATION_INTEGRATION"] === "1"
 const ordinaryTestIncludes = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
@@ -44,6 +43,7 @@ const selectedTestExcludes = (mode: string) => [
   "**/node_modules/**",
   "**/dist/**",
   ...(mode === "mbt" ? [] : [mbtTestPattern]),
+  ...(runPublicationIntegration ? [] : [publicationIntegrationTestPattern]),
   ...(runQualificationTests || runDeliveryRepeatability
     ? []
     : [deliveryRepeatabilityTestPattern, capabilityRegistrationTestPattern, recordedCatalogCoverageTestPattern]),

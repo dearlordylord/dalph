@@ -6,7 +6,6 @@ import nodeProcess from "node:process"
 import {
   GitCommand,
   gitSenderTokenEnvironment,
-  type GithubGraphqlRequest,
   JournalStore,
   OperationId,
   TrackerGraphReader,
@@ -123,26 +122,6 @@ const compactS1Diagnostic = (serialized: string): string => {
     return JSON.stringify({ _tag: "Unavailable" })
   }
 }
-
-const githubProviderOperationTags = new Set<GithubGraphqlRequest["_tag"]>([
-  "AddBlockedBy",
-  "AddIssueComment",
-  "AddSubIssue",
-  "CloseIssue",
-  "FindClaimLabel",
-  "CreateClaimLabel",
-  "CreateIssue",
-  "DeleteIssue",
-  "DeleteClaimLabel",
-  "ReadIssueDetails",
-  "ReadTaskWorkSpecification",
-  "ReopenIssue",
-  "ResolveRepository",
-  "ResolveIssue",
-  "ReadIssue",
-  "ReadSubIssues",
-  "ReadBlockedBy"
-])
 
 const awaitWithDiagnostic = <A, E, R, E1, R1, E2, R2, E3, R3, E4, R4, E5, R5>(
   awaited: Effect.Effect<A, E, R>,
@@ -760,13 +739,6 @@ it.live(
         }
 
         const provider = providerAfterChild
-        const githubProviderTransportCount = provider.operationCounts.reduce(
-          (total, operation) =>
-            total +
-            (githubProviderOperationTags.has(operation.tag as GithubGraphqlRequest["_tag"]) ? operation.count : 0),
-          0
-        )
-        expect(githubProviderTransportCount).toBeLessThanOrEqual(130)
         expect(provider.taskLifecycle).toBe("Completed")
         expect(provider.dependantTaskLifecycle).toBe("Completed")
         expect(provider.activeClaimCount).toBe(0)

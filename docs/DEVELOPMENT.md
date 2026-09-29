@@ -218,7 +218,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test` | Run tests and report advisory production/evaluation and changed-line coverage; takes an admission slot. |
 | `test:cassettes:memory` | Run the in-memory cassette test directory without coverage or built CLI startup. Dedicated recorded-catalog and delivery-repeatability tests retain their own commands. |
 | `test:recorded-catalog` | Run the maintained in-memory recorded-cassette catalog without starting the built production CLI. |
-| `test:integration:publication` | Build the Dalph CLI and run the process-based direct-publication integration scenario explicitly, with one Vitest worker. |
+| `test:integration:publication` | Build the Dalph CLI and run the process-based direct-publication integration scenario explicitly, with one Vitest worker. Required before handoff when direct-publication or its composed completion/dependant behavior changes. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
@@ -1193,10 +1193,18 @@ The direct-publication S1 test is a production integration scenario under
 `packages/dalph/test/integration/`: it starts the built CLI with real local
 Git and SQLite and controlled external providers. The maintained recorded
 catalog remains under `packages/dalph/test/cassettes/` and has its own command.
-During development, run the named integration scenario only when its accepted
-boundary is affected. The complete coverage and full qualification commands
-still include that S1 test; this path change grants no skipped acceptance proof
-and makes no Dalph runtime behavior change.
+Run `pnpm test:integration:publication` before handoff when direct publication
+or its composed completion/dependant behavior changes; record its result in the
+scenario-to-test mapping. Ordinary `test`, `coverage:body`, and `check:all`
+exclude this process-backed scenario. It contributes no child-process V8
+coverage, and its real Git/SQLite startup can fail for reasons unrelated to
+the coverage measurements. The named integration command retains the full
+scenario assertions and bounded completion timeout. Its old 130-call ceiling
+was a heuristic rather than an accepted scenario outcome; provider operation
+counts remain in the failure diagnostic for investigating loops. Neither this
+change nor a passing coverage run claims S1 acceptance until that named
+integration command passes. These changes affect test policy, not a Dalph
+command or runtime behavior.
 
 Before submitting another hosted candidate after a failure, reproduce the
 failure with the smallest named check that owns that boundary. Run cheap
@@ -1204,11 +1212,11 @@ structural diagnostics before resource-sensitive acceptance checks; the gate
 manifest enforces its complete preflight prefix before qualification and
 coverage. `scripts/recorded-catalog-gate.test.ts` proves that ordering and the
 two-worker V8 policy. Coverage runs ordinary files with two workers, then the
-direct-publication and cleanup recovery files with two workers, then the
-distinct-finality and formal-command contract files one at a time. All three
+cleanup recovery file, then the distinct-finality and formal-command contract
+files one at a time. All three
 projects use the same 30-second per-test budget and current-source aliases.
 `scripts/coverage-scheduling.test.ts` checks that the split keeps the ordinary
-file selection and exclusions and runs each of the four resource-sensitive
+file selection and exclusions and runs each of the three resource-sensitive
 files once. This scheduling policy changes no Dalph runtime behavior.
 
 - Report 95% production and 75% maintained-evaluation goals independently
