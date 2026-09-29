@@ -1307,7 +1307,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       >(undefined)
       const latestJournalPosition = yield* Ref.make<JournalRecord["position"] | undefined>(undefined)
       const stableJournalRecordsBeforeWake = yield* Ref.make<ReadonlyArray<JournalRecord> | undefined>(undefined)
-      const stableTrackerCallsBeforeWake = yield* Ref.make<ReadonlyArray<"graph" | "specification" | "claim" | "acquire"> | undefined>(undefined)
+      const stableTrackerCallsBeforeWake = yield* Ref.make<
+        ReadonlyArray<"graph" | "specification" | "claim" | "acquire"> | undefined
+      >(undefined)
       const failpoint = yield* Ref.make<ProductionRefreshFailpoint | undefined>(undefined)
       const failpointConsumed = yield* Ref.make(false)
       const activeReadStarted = yield* Deferred.make<void>()
@@ -1699,15 +1701,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                         initialControlPolicySource,
                         allocatedRunId,
                         program,
-                      activationOpportunity
-                    )
+                        activationOpportunity
+                      )
                 const observedOrdinaryActivation =
                   options.stableStartupWake === undefined
                     ? ordinaryActivation
                     : ordinaryActivation.pipe(
-                        Effect.tap((decision) =>
-                          Ref.update(activeDecisions, (current) => [...current, decision])
-                        )
+                        Effect.tap((decision) => Ref.update(activeDecisions, (current) => [...current, decision]))
                       )
                 return activationOpportunity._tag === "OrdinaryRunEntry"
                   ? options.actualOrdinaryStartup === true
@@ -2178,11 +2178,13 @@ it.effect(
       )
       const failedGraphIntentsBeforeWake = graphIntentsBeforeWake.filter(
         ({ event }) =>
-          event._tag === "TaskTrackerReadIntentRecorded" && failedOperationIdsBeforeWake.has(event.operation.operationId)
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          failedOperationIdsBeforeWake.has(event.operation.operationId)
       )
       const setupGraphIntentsBeforeWake = graphIntentsBeforeWake.filter(
         ({ event }) =>
-          event._tag === "TaskTrackerReadIntentRecorded" && !failedOperationIdsBeforeWake.has(event.operation.operationId)
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          !failedOperationIdsBeforeWake.has(event.operation.operationId)
       )
       const setupGraphOperationId =
         setupGraphIntentsBeforeWake[0]?.event._tag === "TaskTrackerReadIntentRecorded"
@@ -2266,9 +2268,7 @@ it.effect(
           event._tag === "TaskTrackerReadIntentRecorded" ? event.operation.operationId : undefined
         )
       ).toEqual(
-        failedReads.map(({ event }) =>
-          event._tag === "TaskTrackerFactsObserved" ? event.operationId : undefined
-        )
+        failedReads.map(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? event.operationId : undefined))
       )
       expect(failedGraphIntents[0]?.position).toBeLessThan(failedReads[0]?.position ?? 0)
       expect(failedReads[0]?.position).toBeLessThan(failedGraphIntents[1]?.position ?? 0)
