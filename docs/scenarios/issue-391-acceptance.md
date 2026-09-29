@@ -95,14 +95,30 @@ dependant, that reconfirmation may enable the dependant's ordinary progression.
 ### Exact acceptance-test mapping
 
 - `packages/dalph/src/application/production-reactivation.test.ts::unreadable
+  ordinary-startup graph waits for an explicit operator wake` proves the
+  ordinary production-startup boundary. Its accepted fixture history already
+  contains one complete setup `WorkflowEstablishment` graph at position 4;
+  that seed precedes the production activation and is not a provider call.
+  The current activation's intent is correlated by operation ID with its
+  `TaskTrackerFactsReadFailed` result at position 18. After that failure, the
+  harness advances `TestClock` by 30 minutes without an outside wake and
+  snapshots both the accepted journal and tracker calls: there is still only
+  one current graph call and no second failed-read outcome. `OperatorWake`
+  then permits a second bounded activation, with exactly one new graph intent,
+  provider call, and matching failed outcome. No forward journal effect
+  appears before that wake, and no executor command, task attempt, integrator
+  session, or remote publication follows the second failed read. The separate
+  owner test below proves that a failed-read publication retracts a
+  progress-owned trailing activation.
+- `packages/dalph/src/application/production-reactivation.test.ts::unreadable
   F G discovery preserves B C D and waits for another independent tracker
-  hint` proves the production tracker-call and executor-action boundary. Before
-  the independent `TrackerNotification`,
+  hint` separately proves the active production tracker-call and executor-action
+  boundary. Before the independent `TrackerNotification`,
   `result.beforeSecondOpportunity?.trackerCalls.filter((call) => call === "graph")`
   has length one; after that notification,
   `result.trackerCalls.filter((call) => call === "graph")` has length two.
   `result.executorCalls` and `result.executorEntries` are both empty. This test
-  supplies the tracker-call evidence; the owner/classifier composition test
+  also supplies tracker-call evidence; the owner/classifier composition test
   below does not call the tracker.
 - `run-reactivation-owner.test.ts`: `a failed accepted graph read retracts
   progress-owned trailing activation until an operator wake` constructs a
@@ -122,6 +138,8 @@ dependant, that reconfirmation may enable the dependant's ordinary progression.
   `UnchangedTaskTrackerFactsReconfirmed`, and checks its publication remains
   `WorkflowProgress`.
 
-These two focused tests prove the failed-read classifier repair composed with
-the owner and its successful-reconfirmation control. They do not substitute
-for S1 acceptance.
+The owner/classifier and unchanged-success tests prove the failed-read
+classification composed with the process-local owner and its
+successful-reconfirmation control. The separate production tests prove the
+tracker boundary in ordinary startup and active refresh. Together they do not
+substitute for S1 acceptance.

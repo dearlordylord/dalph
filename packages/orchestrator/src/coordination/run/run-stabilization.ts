@@ -92,6 +92,7 @@ const finalityInputsOf = (
 }
 
 const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): RunFinalityProof => {
+  if (quiescence._tag === "TrackerGraphReadRetainedWaitQuiescence") return unsettledProof(quiescence.acceptedAt)
   if (quiescence._tag === "DispositionCleanupRuntimeQuiescence") return unsettledProof(quiescence.acceptedAt)
   const cancellationAppliedWhilePassive = passiveCancellationApplied(quiescence)
   const decision = deliveryFinalityOf(
@@ -186,6 +187,7 @@ const awaitAcceptedObservation = Effect.fn("RunStabilization.awaitAcceptedObserv
 })
 
 const shouldReturnInitialProof = (quiescence: DeliveryRuntimeQuiescence): boolean => {
+  if (quiescence._tag === "TrackerGraphReadRetainedWaitQuiescence") return true
   if (quiescence._tag === "DispositionCleanupRuntimeQuiescence") return true
   if (quiescence._tag === "TaskWorkAdmissionStalledRuntimeQuiescence") return true
   if (quiescence._tag === "PassiveRuntimeQuiescence") return !passiveCancellationApplied(quiescence)

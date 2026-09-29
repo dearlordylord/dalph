@@ -695,6 +695,23 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
               return Option.some(quiescence)
             }
             const graph = current.current.trackerGraph
+            const failedGraphReadAt = current.failedWorkflowEstablishmentGraphReadAt
+            if (
+              phase._tag === "OrdinaryDeliveryRuntimePhase" &&
+              graph._tag === "GraphNotEstablished" &&
+              current.acceptedAt !== null &&
+              failedGraphReadAt !== undefined &&
+              failedGraphReadAt <= current.acceptedAt
+            ) {
+              return Option.some<DeliveryRuntimeQuiescence>({
+                _tag: "TrackerGraphReadRetainedWaitQuiescence",
+                acceptedAt: current.acceptedAt,
+                failedReadAt: failedGraphReadAt,
+                current: current.current,
+                disposition: current.quiescence,
+                proposedActions: empty
+              })
+            }
             if (graph._tag !== "GraphEstablished" || current.acceptedAt === null) {
               return yield* new DeliveryRuntimeReconfirmationStateInvalid({
                 acceptedAt: current.acceptedAt,
@@ -745,7 +762,13 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
-        if (!activeRefreshG2Pending && !(yield* cleanupPending)) {
+        const failedEstablishmentReadIsRetainedWait =
+          phase._tag === "OrdinaryDeliveryRuntimePhase" &&
+          current.current.trackerGraph._tag === "GraphNotEstablished" &&
+          current.acceptedAt !== null &&
+          current.failedWorkflowEstablishmentGraphReadAt !== undefined &&
+          current.failedWorkflowEstablishmentGraphReadAt <= current.acceptedAt
+        if (!activeRefreshG2Pending && !failedEstablishmentReadIsRetainedWait && !(yield* cleanupPending)) {
           yield* runDeliveryRuntimeAdmissionSweep(current.proposedActions, admissionLoop.admitPass)
         }
 
