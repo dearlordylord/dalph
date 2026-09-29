@@ -2199,3 +2199,371 @@ candidate retains the separate #385 precommit S2 result-append recovery proof
 and its memory/reopened-SQLite test mapping. This review disposition does not
 claim direct-publication cassette, full-gate, or live S1 evidence; those checks
 remain unrun.
+
+## Failed gate a4da9e00 focused diagnosis — 2026-09-29
+
+**Question.** Are the property, maintained-executor, and production-reconstruction
+failures caused by fixtures with no exact X/T `turn/completed` hint (**A**), or
+by a matching hint that the production router/Integrator fails to consume (**B**)?
+For the direct-publication count failure, are the excess calls repeated
+`WorkflowEstablishment` graph reads against unchanged facts while the same
+transition is deferred (**A**), or do distinct provider operations/changing
+graph facts account for the calls (**B**)?
+
+**Predictions recorded before tests.** Source inspection finds the property
+fixture has only an empty legacy completion-hint stream and no exact-X/T
+subscription; its terminal turn-start can therefore have zero matching hints.
+The maintained-executor cassette likewise configures an empty legacy stream,
+completes the scripted turn without publishing X/T, and predicts the reported
+accepted report remains Executing; the production Run reconstruction fixture
+also has an empty legacy stream and no exact-hint publication, predicting no
+terminal settlement from a terminal graph alone. These support A if each exact
+test reproduces its gate failure and confirms zero matching hints; B requires a
+matching X/T hint in the fixture and a failed terminal projection afterward.
+
+Run these exact tests separately, each expected under one minute. A predicts
+exit 1 with the retained failure signature shown; B predicts exit 0 after a
+consumed matching hint, or a different failure if some other boundary is wrong:
+
+```text
+pnpm exec vitest run packages/dalph/src/application/codex-integrator.property.test.ts -t 'proves cleanup mutates only for exact ownership, registration, and quiescent activity'
+expected exit 1; literal: 'exact provider completion hints are unavailable'
+
+pnpm exec vitest run packages/dalph/test/cassettes/application-and-codex-protocol.execution.test.ts -t 'runs maintained Codex executor stories through the concrete production executor'
+expected exit 1; literal: 'expected [ "ExecutorWorkExecuting", …(1) ] to deeply equal [ "ExecutorWorkExecuting", …(1) ]'
+
+pnpm exec vitest run packages/dalph/test/scenarios/production.test.ts -t 'ordinary Run reconstruction replaces an absent empty Codex association and settles only Begin ordinal one'
+expected exit 1; literal: 'expected +0 to be 1 // Object.is equality'
+```
+
+For the cassette, do not repeat an operation-count-only probe. First verify
+that temporary test-only instrumentation can safely report, at the existing
+130-call assertion, per-tag operation counts and each relevant tracker-graph
+journal position, lifecycle/revision/fact-family projection, and selected
+workflow transition/defer reason without IDs, payloads, or secrets. If it can,
+run this exact coverage cassette once, keeping the existing assertion and all
+accepted assertions unchanged:
+
+```text
+pnpm exec vitest run --mode coverage --coverage --reporter=dot packages/dalph/test/cassettes/direct-remote-publication.test.ts -t 'publishes M before local promotion and task completion, then releases its dependant from a later complete graph'
+expected exit 1 at githubProviderTransportCount <= 130; literal assertion form: 'expected <observed count> to be less than or equal to 130' (the retained gate observed 211; the focused count may vary).
+```
+
+Alternatives A and B are distinguished only if the projection includes every
+counted graph read and its exact visible facts/transition disposition; missing
+positions or projections are inconclusive. Total expected work is at most 14
+minutes. Absolute UTC stop: `2026-09-29T06:35:00Z`. Remove temporary
+instrumentation, retain command logs, run `git diff --check`, confirm no probe
+symbols remain, and verify unchanged candidate HEAD/source before stopping.
+No source repair, cassette retry, full gate, or live S1 is authorized here.
+
+**Observed stop.** The first predicted property-test command did not reach
+Vitest: it exited 254 with `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL Command "vitest"
+not found`. Retained output is `/tmp/issue386-a4da-property-focused.log`
+(SHA-256 `98bb9c43567b6fc10e95ef62af360f83a4a555098e4d5c4f79f95e728e1a8724`).
+This does not distinguish A from B. The exact missing observation is a Vitest
+installation in this new worktree; no dependency repair was attempted. Per the
+prediction-mismatch stop rule, the other two test commands and the cassette
+were not run. No temporary instrumentation was added.
+
+**Changed next action after the command mismatch — 2026-09-29 06:27:32 UTC.**
+The recovery worktree has no `node_modules`, so the previous command could not
+admit Vitest. First run `pnpm install --frozen-lockfile` in this isolated
+worktree, expected to finish within four minutes; absolute install stop is
+`2026-09-29T06:32:00Z`. Stop safely at that time, preserve install output, and
+do not continue if it is still active or changes tracked source/lockfiles. If
+Vitest resolves afterward, run only the same property discriminator, expected
+under one minute and before the overall `2026-09-29T06:35:00Z` diagnostic
+stop. The source-based A prediction remains exit 1 with a property counterexample
+containing `exact provider completion hints are unavailable`; B predicts the
+focused property passes or fails at a different exact boundary. Capture the
+command's exit and literal counterexample/output in its own retained log. Any
+missing executable, output mismatch, timeout, or absent counterexample remains
+inconclusive and stops this diagnostic. Do not run the other fixtures or the
+direct-publication cassette in this timebox.
+
+**Observed property discriminator — 2026-09-29 06:28 UTC.** The frozen
+install completed in 3.1s with exit 0; Vitest resolved as `4.1.10` on
+`linux-arm64`. It emitted warnings for generated `packages/dalph/dist/bin/*`
+links, which are absent in this test-only worktree; no tracked source or
+lockfile changed. Install log:
+`/tmp/issue386-recovery-install-20260929T0627Z.log` (SHA-256
+`baa38cf2c4bc53031ce847a5d3201e8ab98ed681391669ba251407106abd6216`).
+
+The property command then exited 1 in 3.00s (Vitest test body 49ms), with the
+predicted literal `detail: 'exact provider completion hints are unavailable'`
+after one generated case. Full output:
+`/tmp/issue386-a4da-property-focused-after-install.log` (SHA-256
+`e9c6ff5057db49e215406367e35faddb792f10044d5fb4b0fa67fad01f3df437`). This
+supports A: the property fixture has no matching exact X/T hint and the test
+fails at that unavailable-hint boundary; it does not show a matching hint being
+misrouted. The first command's dependency failure was environmental and is
+resolved only in this isolated recovery worktree.
+
+**Bounded follow-up discriminator.** Continue with only the two already-planned
+fixture tests below, sequentially, expected total under two minutes; absolute
+stop `2026-09-29T06:32:30Z`. A predicts the maintained-executor cassette exits
+1 with the `ExecutorWorkExecuting` versus `ExecutorWorkTerminal` assertion,
+and the production reconstruction test exits 1 with `expected +0 to be 1`;
+each would confirm its fixture has no exact completion hint. A pass or a
+different boundary falsifies that fixture-specific prediction. Save each
+command's exit and full output separately. Do not run or instrument the
+direct-publication cassette in this follow-up. If either command mismatches or
+the timebox expires, stop and preserve the evidence.
+
+**Observed fixture follow-up — 2026-09-29 06:31 UTC.** Both separately
+filtered tests matched their predictions:
+
+- The maintained-executor test exited 1; one failed, two skipped, 26ms test
+  body. Literal output: `actual: [ 'ExecutorWorkExecuting',
+  'ExecutorWorkExecuting' ]`, `expected: [ 'ExecutorWorkExecuting',
+  'ExecutorWorkTerminal' ]`. Log:
+  `/tmp/issue386-a4da-executor-focused.log` (SHA-256
+  `989fd5256b53f4f86af77dc1470b6e9fc47ccf1b6b51fdaac2a088e81a733efb`).
+- The production reconstruction test exited 1; one failed, 31 skipped, 350ms
+  test body. Literal output: `expected +0 to be 1 // Object.is equality` at
+  `turns`. Log: `/tmp/issue386-a4da-production-focused.log` (SHA-256
+  `c4f2948c6aefc30219f7d8fa9817efffc81894fd739637a89ef48e188a0ef25f`).
+
+Together with the property counterexample and the recorded fixture source
+inspection (these fixtures do not publish an exact matching X/T completion
+hint), this supports stale hint-dependent fixtures for three gate failures.
+No production behavior was changed or justified by these failures. The fourth
+gate failure remains distinct: direct publication observed 211 provider calls
+against the retained limit 130. Its graph-transition projection has not been
+run; next, inspect whether test-only instrumentation at the existing assertion
+can capture every counted graph read's journal position, visible lifecycle /
+revision / fact-family, and selected transition/defer reason without IDs or
+payloads. Only after that feasibility check, run the predeclared focused
+coverage cassette once with the 130 assertion intact, in a newly recorded
+bounded window. Do not infer a cause from aggregate call counts and do not
+weaken the cap.
+
+At this stop, the recovery worktree is still at `05357e56ffe1927f9a9e5af30a97cc27d2f63476`;
+only this audit document is tracked as modified, `git diff --check` passes, and
+no production/test source or lockfile changed. The prevention worktree remains
+clean at `adc7b413d356c3b3f9233fa6b2d5d183b6f351fc`.
+
+## Exact completion fixture chronology repair — 2026-09-29
+
+**Scenario-to-test mapping.** This repair is limited to the accepted [S4
+completion refinement](scenarios/direct-remote-publication.md#s4-completion-refinement-an-exact-app-server-notification-precedes-integrator-completion):
+
+- `packages/dalph/src/application/codex-integrator.property.test.ts::proves cleanup mutates only for exact ownership, registration, and quiescent activity` now establishes the completed `property-turn` on the owned `property-thread`, then publishes that exact thread/turn identity. Its subscription buffers the hint until the durable turn ID is bound; the turn retains the same owned token issued to `turn/start`.
+- `packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette.ts::makeHarness`, exercised by `packages/dalph/test/cassettes/application-and-codex-protocol.execution.test.ts::runs maintained Codex executor stories through the concrete production executor`, uses the controlled completion action to find the exact owned active turn, persist its completed state while preserving its token, and only then publish its exact thread/turn hint. The cassette attaches the production lifecycle observation and waits for the hint-authorized terminal projection; its other maintained stories remain active, lost-response, suspension, or replacement controls.
+- `packages/dalph/test/scenarios/production.test.ts::ordinary Run reconstruction replaces an absent empty Codex association and settles only Begin ordinal one` has no completion event: the controlled `turn/start` result is intentionally `inProgress`. Its exact subscription binds the subsequent durable `Running` record's thread, owned token, and turn ID, then has no hint to publish. The case remains the no-false-terminal control and still proves one Begin. The earlier source diagnosis that all three fixtures lacked a completion hint is refined: this production case lacked the exact subscription capability, but a completion hint is inapplicable while its turn remains active.
+
+**Focused repair record.** The exact property command passed one test with five skipped in 1.47s:
+`pnpm exec vitest run --reporter=dot packages/dalph/src/application/codex-integrator.property.test.ts -t 'proves cleanup mutates only for exact ownership, registration, and quiescent activity'`.
+Log `/tmp/issue386-fixture-property-repair.log` has SHA-256
+`3fb3abf099263219d00d7b31dd2f6185e44687fb34dab9142c2d6c7fc7d73059`.
+
+The first maintained-executor retest exited 1 in 1.02s with the original
+Executing-versus-Terminal difference despite its fixture having published
+exact X/T after changing turn state. The cassette was invoking passive
+`executor.observe`, which returns the current projection and does not consume
+the separate lifecycle change stream. Log
+`/tmp/issue386-fixture-executor-repair.log` has SHA-256
+`0c3f795c6f95a32a315111c20e743a75f3364285dfbe422caec6e55479c384a8`.
+The changed test-support action is to attach the production lifecycle
+observation after the scripted completion and await its exact terminal
+projection. No production module was changed. This focused failure was
+followed by changed fixture work before another attempt.
+
+**Production reconstruction follow-up discriminator — 2026-09-29.** The
+question is whether the later production fixture failure is caused by its
+missing optional app-server protocol-failure stream (**A**) or by the active,
+no-completion chronology reaching a later accepted runtime wait (**B**).
+Observed boundary: after exact subscription capability lets the second
+activation persist `Running` with the exact replacement thread, owned token,
+and turn ID, the third activation reaches lifecycle attachment and `Layer.mock`
+throws `UnimplementedError` for `attachProtocolFailures`. The owned turn is
+still `inProgress`, so no completion hint is published. The distinction is
+fixture setup if an explicit empty protocol-failure stream lets the same
+activation finish; a subsequent exact boundary failure supports B and must be
+reported without weakening the existing assertions.
+
+For A, add only `attachProtocolFailures: Effect.succeed(Stream.empty)` to that
+test mock and rerun only the exact production test below; predict exit 0, one
+pass with 31 skipped, retaining the `ExecutorWorkExecuting` report and no
+completion hint. For B, predict exit 1 with a new exact lifecycle/read result
+after the empty stream is attached. Expected duration is under one minute;
+absolute discriminator stop is `2026-09-29T06:54:00Z`. Diagnostic log from
+the observed failure is `/tmp/issue386-fixture-production-diagnostic.log`;
+its failure is the exact `attachProtocolFailures` UnimplementedError at
+`codex-planned-attempt-executor.ts:2971`, not a terminal-projection result.
+
+**Observed discriminator mismatch.** With the fixture-only empty protocol
+failure stream added, the same focused production command exits 1 earlier:
+the second activation is `Success` where the existing test expects `Failure`
+at `recovered._tag`. The original property discriminator now reaches
+`turns === 1`; the turn remains `inProgress`, and the fixture publishes no
+completion hint. This does not match the predeclared A prediction of a passing
+test. The exact output is retained in
+`/tmp/issue386-fixture-production-repair-r2.log` (hash to be added with the
+final focused evidence).
+
+Before any further production-test retry, distinguish whether this is the
+accepted pending `ExecutorWorkExecuting` outcome with a stale `Failure`
+expectation (**A**) or a distinct failure in the activation's journal-visible
+projection (**B**). Temporarily expose only the second activation tag and its
+recorded command-response report tags in that existing assertion's failure
+message; retain every assertion. A predicts `Success` plus exactly one
+`ExecutorWorkExecuting` Begin response and no terminal event. B predicts a
+different/missing response or terminal evidence. Run only the exact production
+test, expected under one minute, absolute stop
+`2026-09-29T06:56:00Z`; revert diagnostic-only message changes afterward.
+
+**Accepted no-completion outcome.** The recorded second-activation report
+projection resolves the discriminator: `fixture.activate()` returned
+`Success`, the only observed executor command response is
+`ExecutorWorkExecuting`, and the journal has no `WorkflowRunTerminated` event.
+The fixture's turn remains `inProgress` and `Stream.empty` publishes no
+completion hint. This matches the accepted [S4 no-replay rule](scenarios/direct-remote-publication.md#s4-completion-refinement-an-exact-app-server-notification-precedes-integrator-completion):
+without exact X/T notification Dalph keeps the turn pending indefinitely. S1
+still requires a terminal executor result before candidate validation and
+publication. An activation returning the ordinary `{ _tag:
+"RunMustRemainActive", reason: "UnsettledResponsibility" }` cycle result is
+not task completion, integration finality, or Run termination.
+
+The one stale per-cycle assertion must therefore expect this pending
+`RunMustRemainActive` result. The repaired test asserts the same
+in-progress lifecycle and exact thread/token/turn binding, zero emitted
+completion hints, exactly one Begin and `ExecutorWorkExecuting`, no terminal
+executor report/result/finality/termination, no second turn or downstream
+publication/promotion, and retained task worktree/Base. The accepted blocking
+edge is preserved; only activation-cycle success is distinguished from Run
+terminality. This scoped correction is authorized by the parent after the
+diagnostic evidence above.
+
+**S4 boundary clarification and accepted mapping.** S4's accepted completion
+refinement distinguishes the exact app-server X/T completion hint from an
+activation cycle's return value. In the production reconstruction case,
+`RunMustRemainActive` with `UnsettledResponsibility` records that the current
+activation cycle completed while the owned turn is still pending; it does not
+report a completed executor result, candidate validation, integration
+finality, or Run termination. The fixture therefore retains the blocking edge
+by asserting the turn remains `inProgress`, exact `replacement-2` /
+`sole-task-turn` / owned-token binding survives reopen, zero exact completion
+hints, one Begin intent and one `ExecutorWorkExecuting` response, no terminal
+event/result/replacement/release, no second turn, and the worktree remains at
+the accepted Base. This maps to [S4 no-replay and exact-notification
+requirements](scenarios/direct-remote-publication.md#s4-completion-refinement-an-exact-app-server-notification-precedes-integrator-completion);
+S1's terminal-result-before-publication condition is not reached.
+
+**Focused repair results already observed.** All three repaired target tests
+pass at Base `05357e56ffe1927f9a9e5af30a97cc27d2f63476` with the fixture-only
+candidate changes described in the mapping above:
+
+- `pnpm exec vitest run --reporter=dot packages/dalph/src/application/codex-integrator.property.test.ts -t 'proves cleanup mutates only for exact ownership, registration, and quiescent activity'` — exit 0, one passed and five skipped. Log `/tmp/issue386-fixture-property-repair.log`, SHA-256 `3fb3abf099263219d00d7b31dd2f6185e44687fb34dab9142c2d6c7fc7d73059`.
+- `pnpm exec vitest run --reporter=dot packages/dalph/test/cassettes/application-and-codex-protocol.execution.test.ts -t 'runs maintained Codex executor stories through the concrete production executor'` — exit 0, one passed and two skipped. Log `/tmp/issue386-fixture-executor-repair-r3.log`, SHA-256 `adc33eedb0884902cb9e8b225455f71d11fc31631bc889517107ad83ed0e4afc`.
+- `pnpm exec vitest run --reporter=dot packages/dalph/test/scenarios/production.test.ts -t 'ordinary Run reconstruction replaces an absent empty Codex association and settles only Begin ordinal one'` — exit 0, one passed and 31 skipped. Log `/tmp/issue386-fixture-production-repair-final.log`, SHA-256 `ba45422a87c3f2d1f96f2d3293842350724007f2677c5dbfcfa72f7c91486f0b`.
+
+**Bounded fixture closure phase — 2026-09-29 07:05 UTC.** Candidate is the
+current dirty worktree `repair/issue-386-gate-recovery-r1`, based on the exact
+Base above. Absolute stop is `2026-09-29T07:25:00Z`. Run only these checks, in
+order, preserving each full output and SHA-256 under `/tmp/issue386-*` and
+appending the result here: (1) adjacent Integrator and executor exact-hint / no-hint
+controls, expected under two minutes, stop `07:09Z`; (2) `pnpm typecheck`,
+expected under seven minutes, stop `07:16Z`; (3) `DALPH_DIAGNOSTICS_BASE=05357e56ffe1927f9a9e5af30a97cc27d2f63476 pnpm lint:changed`,
+expected under three minutes, stop `07:21Z`; (4) `git diff --check` plus
+final status/diff review, expected under one minute, stop `07:22Z`; (5) commit
+the scoped test/audit candidate, expected under two minutes, stop `07:25Z`.
+Do not run `check:all`, S1, or the direct-publication cassette. If any command
+is still active at its stop, stop safely, retain its exact log/hash and report
+the next discriminating action without broad retry.
+
+**Bounded closure observations.** The strengthened production target was rerun
+after adding exact one-intent/one-response assertions and explicit absence of
+terminal work report and finality. It passed one test with 31 skipped; log
+`/tmp/issue386-fixture-production-closure.log`, SHA-256
+`215686d365d56a670930a80e431907f3c8e34fbee2d72c157477305292d40a50`.
+
+The adjacent controlled-hint command selected the Integrator subscribe-before-
+start, later exact hint, unrelated-hint, and reopen controls, plus executor
+pre-response, legacy-stream negative, absent-hint, terminal-start pending,
+reopen/no-replay, suspension/no-hint, and idle-running/no-hint controls. It
+passed 13 selected tests across two files (243 skipped); log
+`/tmp/issue386-fixture-adjacent-controls.log`, SHA-256
+`0f71cad12cf15e5783fb1e30bc86179901ee01197b2f60649a9311e52b9e4884`.
+
+Next planned check: `pnpm typecheck`, expected under seven minutes, with
+absolute stop `2026-09-29T07:16:00Z`; it is scoped to candidate Base
+`05357e56ffe1927f9a9e5af30a97cc27d2f63476` and is positive compilation
+evidence for the current fixture candidate.
+
+The first planned changed-file lint invocation exited 1. It selected the three
+changed TypeScript fixtures/support files against the pinned Base and reported
+two `no-magic-numbers` findings for the same bounded hint-buffer capacity in
+the cassette helper, plus one `consistent-type-imports` finding for the
+production test's token type. The helper now names the shared capacity and
+the test import is type-only; no behavior or capacity changed. Failure log
+`/tmp/issue386-fixture-lint-changed.log`, SHA-256
+`0976ba3ecb13993b9547836c8f363e66a0d79e39052de08662e005b10e144a6a`.
+
+Rerun the same pinned changed-file lint command after these two lint-only
+fixture edits, expected under three minutes; absolute stop remains
+`2026-09-29T07:21:00Z`.
+
+The changed-file lint rerun still exited 1, now with zero magic-number or
+type-only-import findings and only the same three
+`typescript(no-redundant-type-constituents)` warnings. Pinned zero-context diff
+against Base `05357e56ffe1927f9a9e5af30a97cc27d2f63476` confirms the warned
+source expressions at current lines 542, 543, and 565 are outside all changed
+hunks; they predate this candidate and are not repaired here. The candidate
+therefore has an explicit changed-file lint limitation despite clean new
+findings. Rerun log `/tmp/issue386-fixture-lint-changed-r2.log`, SHA-256
+`4dab949a27f827783eb35709c15d2d52eab93364b29848f448185eca5ea08358`.
+Diff-attribution log `/tmp/issue386-fixture-lint-baseline-attribution.log`,
+SHA-256 `2851bcca879bd673f2ad3de0de36c184a2eb226b70a17709143ab30d72c94f08`.
+
+The final maintained-executor target was rerun after replacing the fixture's
+repeated bounded-buffer literal with its named constant. It passed one test
+with two skipped; log `/tmp/issue386-fixture-executor-closure.log`, SHA-256
+`3adb0daa951899e08463236e300e2d89707e64564e4fb413da92af9f1a564294`.
+`git diff --check` exited 0 with no output; its empty log is
+`/tmp/issue386-fixture-diff-check.log` (SHA-256
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`).
+
+The final full `pnpm typecheck`, after the changed-file lint-only corrections,
+also exited 0; full log `/tmp/issue386-fixture-typecheck-final.log`, SHA-256
+`685ccffcdfd6302c72601f980a3bfc60acd6d209b6a147e656fb47f023d595ed`.
+
+The full `pnpm typecheck` completed with exit 0. It emitted existing Effect
+suggestions but no errors; this is the requested positive whole-repository
+compilation evidence. Full log `/tmp/issue386-fixture-typecheck.log`, SHA-256
+`685ccffcdfd6302c72601f980a3bfc60acd6d209b6a147e656fb47f023d595ed`.
+
+Changed-file lint is complete with the pre-existing warning limitation
+described above. The scoped source/audit diff is ready for final review and
+commit from Base `05357e56ffe1927f9a9e5af30a97cc27d2f63476` before the absolute
+`2026-09-29T07:25:00Z` stop.
+
+Because `run-quality-lint.mjs` exits immediately when Oxlint returns nonzero,
+the changed-file lint command did not reach its dprint phase. Run the selected
+files through `pnpm exec dprint check` separately, expected under one minute,
+before `2026-09-29T07:22:00Z`, against the same candidate/Base; record its
+literal outcome and log hash before commit.
+
+The separate dprint check exited 20 and found two formatting-only differences:
+continuation indentation in the property fixture and a multiline
+`Stream.empty.pipe` expression in the production fixture. No semantic finding
+was reported. Apply `pnpm exec dprint fmt` to those two owned fixture files,
+then rerun the planned dprint check and `git diff --check`; expected under one
+minute total, with the same `07:22Z` stop.
+Failure log `/tmp/issue386-fixture-dprint-check.log`, SHA-256
+`69064788493acb5cff2b52fef1bdd10ceb85c4cdbcf316cff9ea0d7c3751966d`.
+
+`pnpm exec dprint fmt` formatted the two reported fixture files with exit 0;
+log `/tmp/issue386-fixture-dprint-fmt.log`, SHA-256
+`3d8b3a61f123bfb9629923b56a9546589dcabaa89633ecde04b15d19b237f47a`.
+The final dprint check over the audit and all three owned TypeScript files
+exited 0 with no output; log `/tmp/issue386-fixture-dprint-check-final.log`,
+SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+The final pinned changed-file lint rerun still exits 1 only on the same three
+Base-untouched `no-redundant-type-constituents` warnings; its full log is
+`/tmp/issue386-fixture-lint-changed-final.log`, SHA-256
+`4dab949a27f827783eb35709c15d2d52eab93364b29848f448185eca5ea08358`.
+The post-format `git diff --check` exited 0; log
+`/tmp/issue386-fixture-diff-check-postformat.log`, SHA-256
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.

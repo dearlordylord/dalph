@@ -223,11 +223,14 @@ import {
   CodexAppServerFailure,
   CodexThreadWorkingDirectory,
   controlledCodexOwnedActivityCensusLayer,
-  type CodexThreadSnapshot
+  type CodexTurnCompletedHint,
+  type CodexThreadSnapshot,
+  type CodexTurnSnapshot
 } from "../../src/application/codex-app-server.js"
 import {
   CodexAttemptStore,
   CodexAttemptRecord,
+  type CodexOwnedTurnToken,
   CodexServerIncarnation,
   CodexThreadId,
   CodexTurnId,
@@ -1459,17 +1462,49 @@ it.effect(
         const fs = yield* FileSystem.FileSystem
         const stateDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-342-private-" })
         const calls: Array<string> = []
+        const completionBindings: Array<{
+          readonly threadId: CodexThreadId
+          readonly turnId: CodexTurnId
+          readonly ownedToken: CodexOwnedTurnToken
+        }> = []
+        const completionHints: Array<CodexTurnCompletedHint> = []
         let allocations = 0
         let turns = 0
+        let startedTurn: CodexTurnSnapshot | undefined
         const privateStore = nodeCodexAttemptStoreLayer({ stateDirectory })
         const fixture = yield* makePublicRunFixture(() => [], {
           executorLayerForApplication: (planned, ordinal) => {
             let thread: CodexThreadSnapshot | undefined
+            let startedTurnToken: CodexOwnedTurnToken | undefined
             const app = Layer.unwrap(
               Effect.map(CodexAttemptStore, (durable) =>
                 Layer.mock(CodexAppServer, {
                   incarnation: CodexServerIncarnation.make(`process-${ordinal}`),
                   attachTurnCompletedHints: Effect.succeed(Stream.empty),
+                  attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
+                    Effect.succeed({
+                      hints: Stream.empty.pipe(Stream.tap((hint) => Effect.sync(() => completionHints.push(hint)))),
+                      expectTurnId: (turnId) =>
+                        Effect.gen(function* () {
+                          expect(turnId).toBe(CodexTurnId.make("sole-task-turn"))
+                          expect(expectedTurnId === undefined || expectedTurnId === turnId).toBe(true)
+                          const observed = Option.getOrUndefined(
+                            yield* durable.readAttempt(planned.runId, planned.attemptId).pipe(Effect.orDie)
+                          )
+                          if (observed?._tag !== "Running")
+                            return yield* Effect.die("completion binding requires its exact durable Running record")
+                          expect(observed.threadId).toBe(threadId)
+                          expect(observed.observedTurnId).toBe(turnId)
+                          if (startedTurnToken !== undefined) expect(observed.currentToken).toBe(startedTurnToken)
+                          completionBindings.push({
+                            threadId: observed.threadId,
+                            turnId: observed.observedTurnId,
+                            ownedToken: observed.currentToken
+                          })
+                          calls.push(`process-${ordinal}:completion-bound`)
+                        })
+                    }),
+                  attachProtocolFailures: Effect.succeed(Stream.empty),
                   attachOwnedActivityHints: Effect.succeed(Stream.empty),
                   startThread: (cwd) =>
                     Effect.sync(() => {
@@ -1512,13 +1547,16 @@ it.effect(
                         worktree: planned.worktree,
                         currentToken: token
                       })
+                      if (token === undefined) return yield* Effect.die("turn start requires the exact owned token")
+                      startedTurnToken = token
                       turns += 1
-                      return {
+                      startedTurn = {
                         id: CodexTurnId.make("sole-task-turn"),
                         status: "inProgress" as const,
                         items: [],
-                        ...(token === undefined ? {} : { ownedTurnToken: token })
+                        ownedTurnToken: token
                       }
+                      return startedTurn
                     })
                 })
               )
@@ -1576,35 +1614,59 @@ it.effect(
         expect(allocations).toBe(1)
         expect(turns).toBe(0)
         const recovered = yield* fixture.activate().pipe(Effect.exit)
-        expect(recovered._tag).toBe("Failure")
+        expect(recovered._tag).toBe("Success")
+        if (recovered._tag === "Success") {
+          expect(recovered.value).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+        }
         expect(allocations).toBe(2)
         expect(turns).toBe(1)
-        expect((yield* fixture.activate().pipe(Effect.exit))._tag).toBe("Success")
+        const resumed = yield* fixture.activate().pipe(Effect.exit)
+        expect(resumed._tag).toBe("Success")
+        if (resumed._tag === "Success") {
+          expect(resumed.value).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+        }
         expect(fixture.applicationBuilds()).toBe(3)
         expect(allocations).toBe(2)
         expect(turns).toBe(1)
+        expect(startedTurn).toMatchObject({ id: CodexTurnId.make("sole-task-turn"), status: "inProgress" })
+        expect(completionBindings).toHaveLength(2)
+        expect(completionBindings.map(({ threadId, turnId }) => ({ threadId, turnId }))).toEqual([
+          { threadId: CodexThreadId.make("replacement-2"), turnId: CodexTurnId.make("sole-task-turn") },
+          { threadId: CodexThreadId.make("replacement-2"), turnId: CodexTurnId.make("sole-task-turn") }
+        ])
+        expect(completionBindings[1]?.ownedToken).toBe(completionBindings[0]?.ownedToken)
+        expect(startedTurn?.ownedTurnToken).toBe(completionBindings[0]?.ownedToken)
+        expect(completionHints).toHaveLength(0)
         expect(calls).toContain("process-2:read:replacement-1")
         expect(calls).toContain("process-2:saved:TurnIntentRecorded")
         expect(calls).toContain("process-2:turn/start")
+        expect(calls).toContain("process-2:completion-bound")
         expect(calls.indexOf("process-2:read:replacement-1")).toBeLessThan(calls.indexOf("process-2:thread/start"))
         expect(calls.indexOf("process-2:saved:TurnIntentRecorded")).toBeLessThan(calls.indexOf("process-2:turn/start"))
         const records = yield* fixture.readRecords
         expect(reduceWorkflowJournalHistory(fixture.runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-        expect(
-          records
-            .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
-            .map(({ event }) => event)
-        ).toMatchObject([{ ordinal: 1, command: "Begin", plannedAttempt: fixture.attempt }])
-        expect(
-          records
-            .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
-            .map(({ event }) => event)
-        ).toMatchObject([
+        const commandIntents = records
+          .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+          .map(({ event }) => event)
+        expect(commandIntents).toHaveLength(1)
+        expect(commandIntents).toMatchObject([{ ordinal: 1, command: "Begin", plannedAttempt: fixture.attempt }])
+        const commandResponses = records
+          .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
+          .map(({ event }) => event)
+        expect(commandResponses).toHaveLength(1)
+        expect(commandResponses).toMatchObject([
           {
             commandOrdinal: 1,
             report: { _tag: "ExecutorWorkExecuting", correlation: plannedAttemptExecutorCorrelation(fixture.attempt) }
           }
         ])
+        expect(
+          records.some(
+            ({ event }) =>
+              (event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal") ||
+              event._tag === "IntegrationFinalitySettled"
+          )
+        ).toBe(false)
         expect(records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
         expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
         expect(

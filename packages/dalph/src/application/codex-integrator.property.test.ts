@@ -19,7 +19,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import * as fc from "fast-check"
-import { Context, Effect, FileSystem, Layer, Ref, Schema, Stream } from "effect"
+import { Context, Effect, FileSystem, Layer, Queue, Ref, Schema, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import { codexIntegratorLayer } from "./codex-integrator.js"
 import {
@@ -39,6 +39,7 @@ import {
   CodexThreadWorkingDirectory,
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection,
+  type CodexTurnCompletedHint,
   type CodexTurnSnapshot
 } from "./codex-app-server.js"
 import {
@@ -279,9 +280,59 @@ const authorityFixtureLayer = (
       const turns = yield* Ref.make<ReadonlyArray<CodexTurnSnapshot>>([])
       const threadToken = yield* Ref.make<CodexThreadOwnershipToken | undefined>(undefined)
       const activityReads = yield* Ref.make(0)
+      const completionSubscribers = yield* Ref.make<
+        ReadonlyArray<{
+          readonly threadId: CodexThreadId
+          readonly publish: (hint: CodexTurnCompletedHint) => Effect.Effect<void>
+        }>
+      >([])
       const app: CodexAppServerService = {
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
+          Effect.gen(function* () {
+            const queue = yield* Queue.sliding<CodexTurnCompletedHint>(64)
+            const routing = yield* Ref.make<{
+              readonly expectedTurnId: CodexTurnId | undefined
+              readonly pending: ReadonlyArray<CodexTurnCompletedHint>
+            }>({ expectedTurnId, pending: [] })
+            const subscriber = {
+              threadId,
+              publish: (hint: CodexTurnCompletedHint) =>
+                Ref.modify(routing, (current) => {
+                  if (hint.threadId !== threadId) return [undefined, current] as const
+                  if (current.expectedTurnId !== undefined) {
+                    return current.expectedTurnId !== hint.turnId
+                      ? ([undefined, current] as const)
+                      : ([hint, current] as const)
+                  }
+                  if (current.pending.length >= 64) return [undefined, current] as const
+                  return [undefined, { ...current, pending: [...current.pending, hint] }] as const
+                }).pipe(
+                  Effect.flatMap((selected) =>
+                    selected === undefined ? Effect.void : Queue.offer(queue, selected).pipe(Effect.asVoid)
+                  )
+                )
+            }
+            yield* Ref.update(completionSubscribers, (current) => [...current, subscriber])
+            yield* Effect.addFinalizer(() =>
+              Ref.update(completionSubscribers, (current) => current.filter((entry) => entry !== subscriber)).pipe(
+                Effect.andThen(Queue.shutdown(queue))
+              )
+            )
+            return {
+              hints: Stream.fromQueue(queue),
+              expectTurnId: (turnId) =>
+                Ref.modify(routing, (current) => {
+                  const retained = current.pending.filter((hint) => hint.turnId === turnId)
+                  return [retained, { expectedTurnId: turnId, pending: [] }] as const
+                }).pipe(
+                  Effect.flatMap((retained) =>
+                    Effect.forEach(retained, (hint) => Queue.offer(queue, hint), { discard: true })
+                  )
+                )
+            }
+          }),
         incarnation: CodexServerIncarnation.make("property-incarnation"),
         listThreads: () => Effect.succeed([]),
         listThreadsComplete: true,
@@ -332,7 +383,21 @@ const authorityFixtureLayer = (
               }
             ]
           }
-          return Ref.update(turns, (current) => [...current, turn]).pipe(Effect.as({ ...turn, cwd }))
+          return Ref.update(turns, (current) => [...current, turn]).pipe(
+            Effect.andThen(
+              Ref.get(completionSubscribers).pipe(
+                Effect.flatMap((subscribers) =>
+                  Effect.forEach(
+                    subscribers,
+                    (subscriber) =>
+                      subscriber.publish({ threadId: CodexThreadId.make("property-thread"), turnId: turn.id }),
+                    { discard: true }
+                  )
+                )
+              )
+            ),
+            Effect.as({ ...turn, cwd })
+          )
         },
         interruptTurn: () => Effect.void,
         listBackgroundTerminals: () => Effect.succeed([]),
