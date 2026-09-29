@@ -9,7 +9,7 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 5, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 7, version: 1 })
 
 // Local Vitest-backed obligations are admitted under the highest fixed cap
 // proven safe by the pairwise memory campaign recorded for issue #336.  This
@@ -66,6 +66,12 @@ export const recordedCatalogQualityGate = Object.freeze({
 // unchanged while allowing the measured source audit headroom to complete.
 const CAPABILITY_REGISTRATION_TIMEOUT = 120 * SECOND
 
+// A timed maintained-cassette smoke completed in 330.592s under shared-host
+// contention; two capstone DOM scenarios consumed 165.727s of that run. Seven
+// minutes retains a finite stop and leaves room for typecheck/build plus runner
+// variance without dropping the Lab proof.
+const REDUCER_LAB_TIMEOUT = 7 * 60 * SECOND
+
 export const capabilityRegistrationQualityGate = Object.freeze({
   args: Object.freeze(["test:capability-registration"]),
   name: "capability registration",
@@ -102,7 +108,7 @@ export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint
 /** The early admitted baseline reuses the exact lint and Lab stages from full preflight. */
 export const baselineQualityGates = () => [
   { args: ["lint:code", "--census"], name: "format and lint", timeout: 5 * 60 * SECOND },
-  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 5 * 60 * SECOND }
+  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: REDUCER_LAB_TIMEOUT }
 ]
 
 /** Structural checks run once before qualification; production artifacts are prepared before source checks. */

@@ -44,6 +44,42 @@ const manifestAtCommit = (sha, cwd) =>
     })
   )
 
+const packageAtCommit = (sha, cwd) =>
+  execFileSync("git", ["show", `${sha}:package.json`], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }
+  })
+
+/** Formal controls test selection does not alter Quint inputs or its invocation. */
+export const isFormalControlsOnlyPackageChange = (baseText, headText) => {
+  const base = JSON.parse(baseText)
+  const head = JSON.parse(headText)
+  if (
+    base === null ||
+    head === null ||
+    typeof base !== "object" ||
+    typeof head !== "object" ||
+    Array.isArray(base) ||
+    Array.isArray(head) ||
+    base.scripts === null ||
+    head.scripts === null ||
+    typeof base.scripts !== "object" ||
+    typeof head.scripts !== "object" ||
+    Array.isArray(base.scripts) ||
+    Array.isArray(head.scripts)
+  )
+    throw new Error("Cannot classify malformed root package scripts as formal-neutral")
+  const { ["test:formal:controls"]: baseControl, ...baseScripts } = base.scripts
+  const { ["test:formal:controls"]: headControl, ...headScripts } = head.scripts
+  return (
+    typeof baseControl === "string" &&
+    typeof headControl === "string" &&
+    baseControl !== headControl &&
+    JSON.stringify({ ...base, scripts: baseScripts }) === JSON.stringify({ ...head, scripts: headScripts })
+  )
+}
+
 /** A deletion remains governed by taking the union of the exact base and head projections. */
 export const hostedFormalInputPathsBetween = (baseSha, headSha, cwd = process.cwd()) => [
   ...new Set([...manifestAtCommit(baseSha, cwd).paths, ...manifestAtCommit(headSha, cwd).paths])
@@ -79,6 +115,7 @@ export const classifyFormalChangeBetween = ({
   headSha,
   listChangedPaths = changedPathsBetween,
   listFormalInputPaths = hostedFormalInputPathsBetween,
+  readPackageAt = packageAtCommit,
   requireChangedPaths = false
 }) => {
   if (!commitSha.test(baseSha) || !commitSha.test(headSha) || allZeroSha.test(baseSha) || allZeroSha.test(headSha))
@@ -87,13 +124,18 @@ export const classifyFormalChangeBetween = ({
   if (requireChangedPaths && changedPaths.length === 0) throw new Error("The exact base-to-head path set is empty")
   const formalInputPaths = listFormalInputPaths(baseSha, headSha, cwd)
   const affectedPaths = changedPaths.length === 0 ? [] : classifyFormalChangedPaths(changedPaths, formalInputPaths)
+  const formalRelevantPaths =
+    affectedPaths.includes("package.json") &&
+    isFormalControlsOnlyPackageChange(readPackageAt(baseSha, cwd), readPackageAt(headSha, cwd))
+      ? affectedPaths.filter((path) => path !== "package.json")
+      : affectedPaths
   return Object.freeze({
     version: 1,
-    status: affectedPaths.length > 0 ? "affected" : "unaffected",
+    status: formalRelevantPaths.length > 0 ? "affected" : "unaffected",
     baseSha,
     headSha,
     changedPaths: Object.freeze(changedPaths),
-    affectedPaths: Object.freeze(affectedPaths)
+    affectedPaths: Object.freeze(formalRelevantPaths)
   })
 }
 

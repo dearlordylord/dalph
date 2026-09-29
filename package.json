@@ -34,7 +34,7 @@
     "test:gate-previous-boot-reconcile": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-previous-boot-reconcile.test.mjs",
     "test:gate-resume": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-resume-policy.test.mjs scripts/gate-quality-evidence.test.mjs scripts/local-formal-relevance.test.mjs scripts/gate-resume-integration.test.mjs scripts/gate-resume-inputs.test.mjs scripts/gate-vite-cache.test.mjs scripts/prewarm-vitest.test.mjs scripts/gate-pnpm-state.test.mjs scripts/compact-node-test-reporter.test.mjs scripts/quality-output-budget.test.mjs scripts/quality-gate-qualification-scheduler.test.mjs",
     "check:preflight": "node scripts/with-gate-slot.mjs -- node scripts/run-preflight.mjs",
-    "check:fast": "pnpm typecheck && pnpm lint:changed",
+    "check:fast": "pnpm typecheck && pnpm lint:changed && node scripts/check-quality-selection-fixtures.mjs",
     "check:baseline": "node scripts/with-gate-slot.mjs -- node scripts/run-baseline.mjs",
     "check:duplicates": "jscpd .",
     "test:capability-registration": "DALPH_RUN_QUALIFICATION_TESTS=1 vitest run scripts/capability-registration.test.ts",
@@ -66,7 +66,7 @@
     "check:ci:formal:shard": "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs",
     "check:ci": "pnpm check:ci:quality && pnpm check:ci:formal",
     "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-candidate-checks.mjs",
-    "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
+    "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/generate-formal-command-inventory.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
     "test:formal:integration": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-gate.integration.test.mjs",
     "test:delivery-smoke": "node scripts/run-delivery-smoke.mjs"
   },

@@ -108,6 +108,15 @@ permit, stage resume, or cross-worktree formal reuse on this ordinary path.
 Interruption costs a rerun after reconciliation; this is an explicit simplicity
 tradeoff. Formal inputs still select exhaustive proof, executed fresh.
 
+After structural preflight, the local gate runs its existing delivery,
+recorded-catalog, and coverage suffix before affected formal proof. Both remain
+required when selected. These are independent post-preflight obligations: moving
+the suffix first exposes a coverage failure before the long formal stage, while
+a formal failure now incurs the suffix cost. The recorded candidate manifest
+binds this order to the exact candidate. Hosted formal and quality cells remain
+independent. This qualification-tooling order cannot change Dalph runtime
+behavior or the assertions within either gate.
+
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
 removal needs consumer evidence and affected type/build checks; changed behavior
@@ -144,6 +153,12 @@ generated hosted-formal input projection. That projection follows executable
 model-conformance adapters through their TypeScript-resolved repository import
 closure; the non-model workspace source-resolution control remains outside it. Unaffected changes retain the
 required formal check as a lightweight successful not-applicable result.
+The classifier reads exact committed root `package.json` contents at Base and
+HEAD. A change solely to `scripts.test:formal:controls` adds or changes a
+structural control without changing Quint inputs, so that package path alone
+does not start model proof. Dependency, Quint command, other package, or
+unreadable comparison changes still require formal proof. The classifier itself
+remains a governed formal input.
 
 When required, freeze the candidate and run
 `pnpm check:all --candidate=<base-sha>`. No prior stages are credited. The runner
@@ -194,7 +209,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:ci:quality:preflight --candidate=<base sha>` | Hosted preflight entry point. It runs the same admitted structural census for one declared Node cell before any hosted qualification stage starts. |
 | `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
 | `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
-| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
+| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, and the Base-scoped quality-stage fixture probe. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. Without that Base, the fixture probe reports that it was skipped. |
 | `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Optional diagnostic only; never a prerequisite to final qualification. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
@@ -206,7 +221,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 
-| `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
+| `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. Baseline and full preflight bound the command to seven minutes: a timed successful smoke took 330.592 seconds under shared-host contention, including 165.727 seconds in two capstone DOM scenarios. The command remains mandatory when selected. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
 | `check:quint` | Obtains the complete required formal profile through guarded local execution or applicable recorded success. It reports which occurred and names the original evidence. `--force` requests fresh execution under the same guards. |
@@ -244,6 +259,15 @@ attempt context:
 ```sh
 DALPH_DIAGNOSTICS_BASE="<planned Base SHA>" pnpm check:fast
 ```
+
+With an exact planned Base, `check:fast` also runs the capability-registration,
+preflight, and recorded-catalog gate fixtures against that Base. These fixtures
+take about two seconds in the focused observation that followed a late gate
+failure caused by a stale stage list. The probe runs before full-gate admission
+and checks the selected stage sequence for the actual candidate diff. It does
+not replace the remaining full qualification stages or change Dalph runtime
+behavior. An ad-hoc `check:fast` without `DALPH_DIAGNOSTICS_BASE` prints a skip
+message; it is not evidence that the candidate's selected-stage fixtures pass.
 
 `lint:changed` and `typecheck:effect:changed` each print one JSON selection line to stderr
 containing the input reference, its resolved commit, the actual merge base,
@@ -354,6 +378,10 @@ custody without rewriting that child result. Missing terminal receipts remain
 `UNPROVEN`; successful earlier stages are not a
 final green gate. Interrupted ordinary candidate checks restart from the beginning
 after reconciliation. No stage resume or formal reuse is credited by `check:all`.
+The enclosing cleanup negative-control fixture waits for its descendant's
+readiness byte before releasing the controller. This makes the required failed
+absence observation independent of test-file scheduling; it changes no gate
+runtime behavior or custody rule.
 Standalone `check:quint --force` remains available for formal diagnostics.
 Automatic MBT is temporarily excluded pending #363.
 
@@ -469,6 +497,16 @@ This is repository-tooling behavior only; no Dalph command, provider boundary,
 journal fact, retry or runtime cleanup changes. Output-policy tests prove bounded
 presentation and malformed-count rejection; the resume integration test proves
 that a reused prefix plus a noisy suffix qualifies with exact original counts.
+
+The executable Quint command manifest and hosted model-family ranges generate
+`packages/dalph/src/qualification/formal-command-inventory.generated.ts`.
+The production provenance schema and positive live-qualification fixtures read
+its command count and shard assignment. After changing either input, run
+`node scripts/generate-formal-command-inventory.mjs --write`. The early
+`test:formal:controls` check rejects a stale generated inventory or a missing
+or overlapping shard position before coverage. The existing negative fixture
+with a truncated profile remains independent. This is qualification tooling
+only; it changes no Dalph workflow decision or external request.
 
 A composite receipt links original prefix stages and newly executed suffix stages;
 it never invents execution receipts for skipped commands. Verified reused coverage
@@ -1152,7 +1190,13 @@ failure with the smallest named check that owns that boundary. Run cheap
 structural diagnostics before resource-sensitive acceptance checks; the gate
 manifest enforces its complete preflight prefix before qualification and
 coverage. `scripts/recorded-catalog-gate.test.ts` proves that ordering and the
-unchanged four-worker V8 policy.
+two-worker V8 policy. Coverage runs ordinary files with two workers, then the
+direct-publication and cleanup recovery files with two workers, then the
+distinct-finality and formal-command contract files one at a time. All three
+projects use the same 30-second per-test budget and current-source aliases.
+`scripts/coverage-scheduling.test.ts` checks that the split keeps the ordinary
+file selection and exclusions and runs each of the four resource-sensitive
+files once. This scheduling policy changes no Dalph runtime behavior.
 
 - Report 95% production and 75% maintained-evaluation goals independently
   for statements, branches, functions, lines, and changed executable lines.
