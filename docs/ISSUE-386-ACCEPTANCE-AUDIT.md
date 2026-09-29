@@ -2630,3 +2630,22 @@ Both checks passed with exit 0 and empty output: dprint log
 `/tmp/issue386-tag-followup-dprint-check.log` and diff-check log
 `/tmp/issue386-tag-followup-diff-check.log`, each SHA-256
 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+## Controlled publication integration evidence — 2026-09-29
+
+On exact candidate `be6a75cd58a5cf09bb3060e70e5d3815aeb098b3`,
+`pnpm test:integration:publication` built successfully and ran
+`packages/dalph/test/integration/direct-remote-publication.integration.test.ts`:
+1 file and 5 tests passed. Vitest duration was 41.01s (tests: 39.48s). The
+full retained log is `/tmp/dalph-386-integration-publication-be6a75cd.log`,
+SHA-256 `e4cfb67467e137997bcdab1152ce4864c8d619d014bb3b07429732ef155e69d0`.
+The source worktree was clean at this exact HEAD before this audit-only edit.
+
+This is controlled process-integration evidence only. It does not establish
+the required fresh supervised real-provider S1 dogfood or full qualification;
+both remain outstanding. Preserve the accepted S1/S4/S8 outcomes and the
+45-second publication bound.
+
+The latest Base-scoped `lint:changed` disposition available for this
+integration candidate was exit 20 solely because owner-managed
+`vitest.config.ts` requires dprint formatting. That file was not changed here.
