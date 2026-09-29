@@ -93,6 +93,7 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
     const turns = yield* Ref.make<ReadonlyMap<string, CodexTurnSnapshot>>(new Map())
     const app: CodexAppServerService = {
       incarnation,
+      terminalSealPolicy: "FreshLifecycleMaySeal",
       attachTurnCompletedHints: Effect.succeed(Stream.empty),
       attachOwnedActivityHints: Effect.succeed(Stream.empty),
       startThread: (cwd, ownedThreadToken) =>

@@ -704,6 +704,14 @@ const routeFixtures = (
     {
       _tag: "IdentityFreeWorkflowRoute",
       transition: {
+        _tag: "ObservePlannedAttemptExecutorWork",
+        plannedAttempt,
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) }
+      }
+    },
+    {
+      _tag: "IdentityFreeWorkflowRoute",
+      transition: {
         _tag: "RunIntegrator",
         responsibility: fixture.responsibility,
         lineage: fixture.lineage,
@@ -1931,11 +1939,11 @@ describe("qualification original source boundary", () => {
     expect(rejected).not.toHaveProperty("registration")
   })
 
-  it("checks all six measured route families and twenty-eight direct roots without accepting added opaque source fields", async () => {
+  it("checks all six measured route families and twenty-nine direct roots without accepting added opaque source fields", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
     const { context, routes } = routeFixtures(originalContext)
-    expect(routes).toHaveLength(30)
+    expect(routes).toHaveLength(31)
     expect(new Set(routes.map((route) => route._tag)).size).toBe(6)
     for (const route of routes) {
       const proposal = proposalForRoute(route, context)
@@ -1956,6 +1964,24 @@ describe("qualification original source boundary", () => {
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
       if (code !== undefined) expect(rejected.code).toBe(code)
     }
+    const observeRoute = routes.find(
+      (route) =>
+        route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "ObservePlannedAttemptExecutorWork"
+    )
+    if (
+      observeRoute?._tag !== "IdentityFreeWorkflowRoute" ||
+      observeRoute.transition._tag !== "ObservePlannedAttemptExecutorWork"
+    )
+      return expect.fail("identity-free Observe route fixture must exist")
+    const malformedObserveRoute: unknown = {
+      ...observeRoute,
+      transition: { ...observeRoute.transition, acceptedProgress: { _tag: "UnsupportedProgress" } }
+    }
+    await rejectProposal(
+      proposalForRoute(malformedObserveRoute as DeliveryActionProposal["route"], context),
+      "InvalidAcceptedProgress"
+    )
+
     const foreignTrackerTarget = await Effect.runPromise(
       Schema.decodeUnknownEffect(TrackerTarget)({
         _tag: "GithubIssue",

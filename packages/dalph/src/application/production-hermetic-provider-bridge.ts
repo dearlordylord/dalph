@@ -2,7 +2,7 @@
 import { NodeHttpClient } from "@effect/platform-node"
 import { EvidenceDigest, PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { githubGraphqlClientLayer, type TargetPromotionGitRequest } from "@dalph/orchestrator"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { BoundaryReached, type HermeticRegistrationScopeId } from "./production-hermetic-contract.js"
 import { CodexAppServer, CodexAppServerFailure, CodexThreadWorkingDirectory } from "./codex-app-server.js"
@@ -13,6 +13,7 @@ import {
   CodexThreadOwnershipToken,
   CodexTurnId
 } from "./codex-attempt-store.js"
+import type { CodexTurnCompletedHint } from "./codex-app-server.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { HermeticQualificationSourceRejected } from "./production-hermetic-qualification-attempt-source.js"
 import type { ValidatedHermeticRecordToken } from "./production-hermetic-qualification-source.js"
@@ -21,6 +22,7 @@ import { createHash } from "node:crypto"
 import nodeProcess from "node:process"
 
 type CodexAppServerOperation = CodexAppServerFailure["operation"]
+const maxPendingHermeticCompletionHintsPerThread = 64
 
 const isHermeticControllerOrigin = (url: URL): boolean =>
   url.protocol === "http:" &&
@@ -99,6 +101,11 @@ const HermeticCodexTurn = Schema.Struct({
   ownedTurnToken: Schema.optionalKey(CodexOwnedTurnToken),
   correlation: Schema.optionalKey(PlannedAttemptExecutorCorrelation)
 })
+const HermeticCodexTurnCompletedHint = Schema.Struct({ threadId: CodexThreadId, turnId: CodexTurnId })
+const HermeticCodexTurnStartResult = Schema.Struct({
+  turn: HermeticCodexTurn,
+  completionNotifications: Schema.Array(HermeticCodexTurnCompletedHint)
+})
 const HermeticCodexThread = Schema.Struct({
   id: CodexThreadId,
   cwd: CodexThreadWorkingDirectory,
@@ -164,6 +171,12 @@ export const hermeticCodexAppServerLayer = (
     CodexAppServer,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
+      const turnCompletionSubscribers = yield* Ref.make<
+        ReadonlyArray<{
+          readonly threadId: CodexThreadId
+          readonly publish: (hint: CodexTurnCompletedHint) => Effect.Effect<void>
+        }>
+      >([])
       const decodeThread = Schema.decodeUnknownEffect(HermeticCodexThread)
       const request = (value: HermeticCodexRequest, operation: CodexAppServerOperation) =>
         requestCodex(client, endpoint, value, operation)
@@ -178,6 +191,62 @@ export const hermeticCodexAppServerLayer = (
       return CodexAppServer.of({
         incarnation,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
+          Effect.gen(function* () {
+            const queue = yield* Queue.unbounded<CodexTurnCompletedHint>()
+            const routing = yield* Ref.make<{
+              readonly expectedTurnId: CodexTurnId | undefined
+              readonly pending: ReadonlyMap<CodexTurnId, CodexTurnCompletedHint>
+              readonly published: ReadonlySet<CodexTurnId>
+            }>({ expectedTurnId, pending: new Map(), published: new Set() })
+            const subscriber = {
+              threadId,
+              publish: (hint: CodexTurnCompletedHint) =>
+                Ref.modify(routing, (current) => {
+                  if (hint.threadId !== threadId) return [undefined, current] as const
+                  if (current.expectedTurnId !== undefined) {
+                    if (current.expectedTurnId !== hint.turnId || current.published.has(hint.turnId))
+                      return [undefined, current] as const
+                    return [hint, { ...current, published: new Set([...current.published, hint.turnId]) }] as const
+                  }
+                  if (
+                    current.pending.has(hint.turnId) ||
+                    current.pending.size >= maxPendingHermeticCompletionHintsPerThread
+                  )
+                    return [undefined, current] as const
+                  return [undefined, { ...current, pending: new Map(current.pending).set(hint.turnId, hint) }] as const
+                }).pipe(
+                  Effect.flatMap((selected) =>
+                    selected === undefined ? Effect.void : Queue.offer(queue, selected).pipe(Effect.asVoid)
+                  )
+                )
+            }
+            yield* Ref.update(turnCompletionSubscribers, (current) => [...current, subscriber])
+            yield* Effect.addFinalizer(() =>
+              Ref.update(turnCompletionSubscribers, (current) => current.filter((entry) => entry !== subscriber)).pipe(
+                Effect.andThen(Queue.shutdown(queue))
+              )
+            )
+            return {
+              hints: Stream.fromQueue(queue),
+              expectTurnId: (turnId) =>
+                Ref.modify(routing, (current) => {
+                  const retained = current.pending.get(turnId)
+                  return [
+                    retained,
+                    {
+                      expectedTurnId: turnId,
+                      pending: new Map(),
+                      published: retained === undefined ? current.published : new Set([...current.published, turnId])
+                    }
+                  ] as const
+                }).pipe(
+                  Effect.flatMap((retained) =>
+                    retained === undefined ? Effect.void : Queue.offer(queue, retained).pipe(Effect.asVoid)
+                  )
+                )
+            }
+          }),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         listThreadsComplete: true,
         unattendedPolicyAdmission: Effect.void,
@@ -205,19 +274,28 @@ export const hermeticCodexAppServerLayer = (
             Effect.mapError((failure) => unavailable("thread/resume", failure))
           ),
         startTurn: (threadId, cwd, text, ownedTurnToken) =>
-          request(
-            {
-              _tag: "StartTurn",
-              threadId,
-              cwd: CodexThreadWorkingDirectory.make(cwd),
-              text,
-              ...(ownedTurnToken === undefined ? {} : { ownedTurnToken })
-            },
-            "turn/start"
-          ).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(HermeticCodexTurn)),
-            Effect.mapError((failure) => unavailable("turn/start", failure))
-          ),
+          Effect.gen(function* () {
+            const result = yield* request(
+              {
+                _tag: "StartTurn",
+                threadId,
+                cwd: CodexThreadWorkingDirectory.make(cwd),
+                text,
+                ...(ownedTurnToken === undefined ? {} : { ownedTurnToken })
+              },
+              "turn/start"
+            ).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(HermeticCodexTurnStartResult)),
+              Effect.mapError((failure) => unavailable("turn/start", failure))
+            )
+            const subscribers = yield* Ref.get(turnCompletionSubscribers)
+            yield* Effect.forEach(
+              result.completionNotifications,
+              (hint) => Effect.forEach(subscribers, (subscriber) => subscriber.publish(hint), { discard: true }),
+              { discard: true }
+            )
+            return result.turn
+          }),
         interruptTurn: (threadId, turnId) =>
           request({ _tag: "InterruptTurn", threadId, turnId }, "turn/interrupt").pipe(Effect.asVoid),
         listThreads: () =>
