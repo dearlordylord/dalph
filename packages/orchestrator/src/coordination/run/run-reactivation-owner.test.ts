@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { AttemptId, RunId } from "@dalph/contracts"
+import { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import {
   ApplicationExitShell,
   type ApplicationExitDrainFailure,
@@ -10,6 +10,28 @@ import { Deferred, Effect, Fiber, Layer, Queue, Ref, Schema, Stream } from "effe
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { RunFinalityDecision } from "../frontier/frontier.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskTrackerFactsReadFailed } from "../../workflow/task-tracker-facts/read-observation.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  TaskTrackerFactsObservedEvent,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
+import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
+import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import { OperationId } from "../../workflow/identity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
+import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { validSnapshot } from "../../../test/task-dag.js"
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   RunReactivationHint,
   RunReactivationIntervalInvalid,
@@ -18,6 +40,7 @@ import {
   type RunReactivationOwnerService,
   runReactivationOwnerLayer
 } from "./run-reactivation-owner.js"
+import { acceptedRunFactPublicationFromPrefix } from "./accepted-run-fact-publication.js"
 import {
   AcceptedRunFactPublication,
   type AcceptedRunControlObserver,
@@ -30,6 +53,8 @@ import {
   activeWorkAuthorityRefreshSubjectsFor,
   RunActivationOpportunity
 } from "./run-activation-opportunity.js"
+
+const initialControlPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
 class TestTrackerReadFailure extends Schema.TaggedError<TestTrackerReadFailure>()("TestTrackerReadFailure", {
   detail: Schema.String
@@ -384,6 +409,180 @@ it.effect("an unchanged retained wait retracts only its publication-owned traili
       )
     })
   )
+)
+
+it.effect("a failed accepted graph read retracts progress-owned trailing activation until an operator wake", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const firstStarted = yield* Deferred.make<void>()
+      const releaseFirst = yield* Deferred.make<void>()
+      const secondStarted = yield* Deferred.make<void>()
+      const idleHandoffs = yield* Queue.unbounded<void>()
+      const publicationObserver =
+        yield* Deferred.make<(publication: AcceptedRunFactPublicationValue) => Effect.Effect<void>>()
+      const activations = yield* Ref.make(0)
+      const runId = RunId.make("test-run-failed-graph-read-retained-wake")
+      const target = FixtureTarget.make("test-run-failed-graph-read-retained-wake")
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("failed-current-graph-read"),
+        target
+      )
+      const beginning = makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest)
+      const failurePrefix: ReadonlyArray<JournalRecord> = [
+        beginning,
+        {
+          event: taskTrackerReadIntent(operation),
+          key: intentRecordKey(operation.operationId),
+          position: JournalPosition.make(2),
+          runId
+        },
+        {
+          event: TaskTrackerFactsObservedEvent.make({
+            observation: TaskTrackerFactsReadFailed.make({
+              completeness: "Unreadable",
+              failure: {
+                _tag: "TrackerAdapterReadError",
+                detail: "request circuit is open",
+                reason: { _tag: "CircuitOpen" }
+              },
+              operationId: operation.operationId,
+              target
+            }),
+            operationId: operation.operationId,
+            version: workflowJournalEventVersion
+          }),
+          key: outcomeRecordKey(operation.operationId),
+          position: JournalPosition.make(3),
+          runId
+        }
+      ]
+      const acceptedFailurePrefix = reduceWorkflowJournalHistory(runId, failurePrefix)
+      if (acceptedFailurePrefix._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `failed graph read fixture is not accepted: ${JSON.stringify(acceptedFailurePrefix.issues)}`
+        )
+      }
+      const failedReadPublication = yield* acceptedRunFactPublicationFromPrefix(
+        JournalPosition.make(3),
+        acceptedFailurePrefix.prefix
+      )
+      expect(failedReadPublication._tag).toBe("RetainedWait")
+
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId,
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(activations, (current) => current + 1).pipe(
+              Effect.tap((count) =>
+                count === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFirst)))
+                  : Deferred.succeed(secondStarted, undefined)
+              ),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ acceptedFactPublication }) =>
+            Deferred.succeed(publicationObserver, acceptedFactPublication),
+          onActivationHandoffIdle: () => Queue.offer(idleHandoffs, undefined).pipe(Effect.asVoid),
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstStarted)
+            const publish = yield* Deferred.await(publicationObserver)
+            yield* publish(AcceptedRunFactPublication.WorkflowProgress())
+            yield* publish(failedReadPublication)
+            yield* Deferred.succeed(releaseFirst, undefined)
+            yield* Queue.take(idleHandoffs)
+            yield* TestClock.adjust("30 minutes")
+            expect(yield* Ref.get(activations)).toBe(1)
+
+            yield* owner.hint(RunReactivationHint.OperatorWake())
+            yield* Deferred.await(secondStarted)
+            yield* Queue.take(idleHandoffs)
+            expect(yield* Ref.get(activations)).toBe(2)
+          })
+      )
+    })
+  )
+)
+
+it.effect("classifies an accepted unchanged root/dependant graph reconfirmation as workflow progress", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("test-run-unchanged-root-dependant-reconfirmation")
+    const target = FixtureTarget.make("test-run-unchanged-root-dependant-reconfirmation")
+    const rootTaskId = TaskId.make("root")
+    const dependantTaskId = TaskId.make("dependant")
+    const snapshot = validSnapshot({
+      revision: TrackerRevision.make("completed-root-open-dependant"),
+      rootTaskId,
+      tasks: [
+        { id: rootTaskId, lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
+        { id: dependantTaskId, lifecycle: { _tag: "Open" }, parentTaskId: rootTaskId, prerequisiteIds: [rootTaskId] }
+      ]
+    })
+    const firstRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("completed-root-first-read"),
+      target
+    )
+    const unchangedRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("completed-root-unchanged-read"),
+      target,
+      [firstRead.operationId]
+    )
+    const beginning = makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest)
+    const firstIntent = {
+      event: taskTrackerReadIntent(firstRead),
+      key: intentRecordKey(firstRead.operationId),
+      position: JournalPosition.make(2),
+      runId
+    }
+    const firstObservation = {
+      event: taskTrackerFactsObservedEvent(
+        firstRead.operationId,
+        makeCompleteTaskTrackerFactsObserved(firstRead, snapshot)
+      ),
+      key: outcomeRecordKey(firstRead.operationId),
+      position: JournalPosition.make(3),
+      runId
+    }
+    const priorRecords: ReadonlyArray<JournalRecord> = [beginning, firstIntent, firstObservation]
+    const unchangedIntent = {
+      event: taskTrackerReadIntent(unchangedRead),
+      key: intentRecordKey(unchangedRead.operationId),
+      position: JournalPosition.make(4),
+      runId
+    }
+    const unchangedObservation = makeTaskTrackerFactsObservedFromRead(priorRecords, unchangedRead, snapshot)
+    expect(unchangedObservation.observation._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
+    const acceptedPrefix = reduceWorkflowJournalHistory(runId, [
+      ...priorRecords,
+      unchangedIntent,
+      {
+        event: unchangedObservation,
+        key: outcomeRecordKey(unchangedRead.operationId),
+        position: JournalPosition.make(5),
+        runId
+      }
+    ])
+    if (acceptedPrefix._tag !== "ValidWorkflowJournalHistory") {
+      return yield* Effect.die(
+        `unchanged root/dependant fixture is not accepted: ${JSON.stringify(acceptedPrefix.issues)}`
+      )
+    }
+
+    expect(yield* acceptedRunFactPublicationFromPrefix(JournalPosition.make(5), acceptedPrefix.prefix)).toEqual(
+      AcceptedRunFactPublication.WorkflowProgress()
+    )
+  })
 )
 
 it.effect.each(["ProviderNotification", "TrackerNotification", "OperatorWake", "ConfiguredTimer"] as const)(
