@@ -86,6 +86,7 @@ it("coverage excludes the monolithic proof while retaining coverage reports and 
     "**/node_modules/**",
     "**/dist/**",
     "packages/**/*.mbt.test.ts",
+    "packages/dalph/test/integration/direct-remote-publication.integration.test.ts",
     "packages/dalph/test/cassettes/delivery-repeatability.test.ts",
     "scripts/capability-registration.test.ts",
     "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
