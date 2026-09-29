@@ -18,6 +18,12 @@ const acceptedProgress = Schema.TaggedUnion({
   ExecutorReportAccepted: { ordinal: PlannedAttemptExecutorReportOrdinal }
 })
 
+export const validateAcceptedExecutorProgress = (value: unknown) =>
+  Schema.decodeUnknownEffect(
+    acceptedProgress,
+    strictSource
+  )(value).pipe(Effect.mapError(sourceRejectedBecause("InvalidAcceptedProgress")))
+
 type FreshStep = Extract<
   DeliveryActionProposal["route"],
   { readonly _tag: "FreshWorkflowRoute" | "FreshExecutorWorkflowRoute" }
@@ -118,10 +124,7 @@ const validateExecutorStep = Effect.fn("HermeticQualification.validateExecutorSt
         _tag: step._tag,
         plannedAttempt: yield* validatePlannedAttempt(step.plannedAttempt, context),
         specification: yield* validateSpecification(step.specification, context),
-        acceptedProgress: yield* Schema.decodeUnknownEffect(
-          acceptedProgress,
-          strictSource
-        )(step.acceptedProgress).pipe(Effect.mapError(sourceRejectedBecause("InvalidAcceptedProgress"))),
+        acceptedProgress: yield* validateAcceptedExecutorProgress(step.acceptedProgress),
         task
       }
     /* v8 ignore next -- @preserve Executor-step schema narrows this union before exhaustive routing. */

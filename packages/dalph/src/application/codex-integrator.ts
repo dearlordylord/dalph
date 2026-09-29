@@ -2,12 +2,14 @@
 
 import nodePath from "node:path"
 import { NodeCrypto } from "@effect/platform-node"
-import { Context, Crypto, Effect, FileSystem, Layer, Option, Semaphore, Stream } from "effect"
+import { Context, Crypto, Effect, FileSystem, Layer, Option, Semaphore, Stream, type Scope } from "effect"
 import {
   CodexAppServer,
   CodexOwnedActivityCensus,
   type CodexOwnedActivityCensusProjection,
-  type CodexThreadSnapshot
+  type CodexThreadSnapshot,
+  type CodexTurnCompletedHint,
+  type CodexTurnCompletedSubscription
 } from "./codex-app-server.js"
 import { isTerminalTurn } from "./codex-planned-attempt-executor.js"
 import { CodexOwnedTurnToken, CodexThreadOwnershipToken } from "./codex-attempt-store.js"
@@ -95,6 +97,31 @@ const observeQuiescence = (
     Effect.flatMap((terminals) => boundary(census.observe(thread, terminals, "IntegratorSession"))),
     Effect.flatMap(activityIsAbsent)
   )
+
+const requiresExactCompletionHint = (app: CodexAppServer["Service"]): boolean =>
+  app.terminalSealPolicy !== "FreshLifecycleMaySeal"
+
+const attachTurnCompletionHints = (
+  app: CodexAppServer["Service"],
+  threadId: CodexThreadSnapshot["id"],
+  turnId?: CodexTurnCompletedHint["turnId"]
+): Effect.Effect<CodexTurnCompletedSubscription | undefined, CodexIntegratorProviderFailure, Scope.Scope> =>
+  !requiresExactCompletionHint(app)
+    ? Effect.succeed(undefined)
+    : app.attachExactTurnCompletedHints === undefined
+      ? Effect.fail(providerFailure("exact provider completion hints are unavailable"))
+      : app.attachExactTurnCompletedHints(threadId, turnId)
+
+const awaitExactTurnCompletionHint = (
+  subscription: CodexTurnCompletedSubscription,
+  threadId: CodexTurnCompletedHint["threadId"],
+  turnId: CodexTurnCompletedHint["turnId"]
+): Effect.Effect<CodexTurnCompletedHint, CodexIntegratorProviderFailure> =>
+  subscription.hints.pipe(
+    Stream.filter((hint) => hint.threadId === threadId && hint.turnId === turnId),
+    Stream.runHead,
+    Effect.flatMap((hint) => (Option.isSome(hint) ? Effect.succeed(hint.value) : Effect.never))
+  )
 const configError = (config: CodexIntegratorConfiguration): string | undefined => {
   const root = config.candidateWorktreeRoot
   /* v8 ignore next -- @preserve The branded configuration admits only an absolute, normalized candidate root. */
@@ -169,8 +196,10 @@ const startObservedTurn = Effect.fn("CodexIntegrator.startObservedTurn")(functio
   store: CodexIntegratorPrivateStoreService,
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
-  thread: CodexThreadSnapshot
+  thread: CodexThreadSnapshot,
+  completionSubscription: CodexTurnCompletedSubscription | undefined
 ) {
+  const subscription = completionSubscription ?? (yield* attachTurnCompletionHints(app, thread.id))
   const started = yield* boundary(
     app.startTurn(thread.id, record.candidatePath, promptFor(run.correlation, record.candidatePath), run.token)
   )
@@ -190,7 +219,8 @@ const startObservedTurn = Effect.fn("CodexIntegrator.startObservedTurn")(functio
   /* v8 ignore next -- @preserve updateRun returns a schema-validated record retaining the exact run correlation. */
   if (observedRun === undefined) return yield* Effect.fail(providerFailure("private turn observation disappeared"))
   yield* boundary(store.write(observed))
-  return { record: observed, run: observedRun, turn: started }
+  if (subscription !== undefined) yield* subscription.expectTurnId(started.id)
+  return { record: observed, run: observedRun, turn: started, completionSubscription: subscription }
 })
 
 const contradictoryProviderTurn = (
@@ -226,7 +256,8 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
   store: CodexIntegratorPrivateStoreService,
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
-  thread: CodexThreadSnapshot
+  thread: CodexThreadSnapshot,
+  completionSubscription?: CodexTurnCompletedSubscription
 ) {
   const matchingTurns = thread.turns.filter((item) => item.ownedTurnToken === run.token)
   if (matchingTurns.length > 1) return yield* Effect.fail(providerFailure("owned turn token is duplicated"))
@@ -252,30 +283,7 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
     currentRecord = advanced.record
     currentRun = advanced.run
   }
-  return yield* startObservedTurn(app, store, currentRecord, currentRun, thread)
-})
-
-const awaitTerminalTurn = Effect.fn("CodexIntegrator.awaitTerminalTurn")(function* (
-  app: CodexAppServer["Service"],
-  census: CodexOwnedActivityCensus["Service"],
-  store: CodexIntegratorPrivateStoreService,
-  record: CodexIntegratorPrivateRecord,
-  run: CodexIntegratorPrivateRun,
-  thread: CodexThreadSnapshot,
-  completionHints: Stream.Stream<void>
-) {
-  let currentThread = thread
-  let current = yield* readOrRecoverTurn(app, census, store, record, run, currentThread)
-  while (!isTerminalTurn(current.turn)) {
-    const hint = yield* completionHints.pipe(Stream.runHead)
-    if (Option.isNone(hint)) return yield* Effect.fail(providerFailure("turn completion hint stream ended"))
-    currentThread = yield* observedThread(app, thread.id, record.candidatePath)
-    if (currentThread.ownedThreadToken !== record.threadToken) {
-      return yield* Effect.fail(providerFailure("completion wake thread ownership changed before reread"))
-    }
-    current = yield* readOrRecoverTurn(app, census, store, current.record, current.run, currentThread)
-  }
-  return { ...current, thread: currentThread }
+  return yield* startObservedTurn(app, store, currentRecord, currentRun, thread, completionSubscription)
 })
 
 const replaySealedRun = Effect.fn("CodexIntegrator.replaySealedRun")(function* (
@@ -313,10 +321,39 @@ const sealObservedRun = Effect.fn("CodexIntegrator.sealObservedRun")(function* (
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot,
-  completionHints: Stream.Stream<void>
+  completionSubscription: CodexTurnCompletedSubscription | undefined,
+  deliveredCompletionHint: CodexTurnCompletedHint | undefined
 ) {
-  const current = yield* awaitTerminalTurn(app, census, store, record, run, thread, completionHints)
-  const { record: currentRecord, run: currentRun, thread: currentThread, turn } = current
+  const subscription =
+    completionSubscription ??
+    (yield* attachTurnCompletionHints(app, thread.id, run._tag === "TurnObserved" ? run.turnId : undefined))
+  let currentThread = thread
+  let current = yield* readOrRecoverTurn(app, census, store, record, run, thread, subscription)
+  if (requiresExactCompletionHint(app) && current.run._tag === "TurnObserved") {
+    const observedTurnId = current.run.turnId
+    // Reopen reconciliation has already consumed this exact hint and supplied
+    // the fresh thread snapshot. Reuse its exact T observation instead of
+    // resuming the same thread a second time; the terminal path below still
+    // requires the complete absent-activity census before sealing. If this
+    // snapshot is active, wait for a later matching hint before rereading.
+    let terminalRereadObserved = deliveredCompletionHint !== undefined && isTerminalTurn(current.turn)
+    while (!terminalRereadObserved) {
+      const hint =
+        subscription === undefined
+          ? yield* Effect.fail(providerFailure("exact provider completion hints are unavailable"))
+          : yield* awaitExactTurnCompletionHint(subscription, thread.id, observedTurnId)
+      if (hint.threadId !== thread.id || hint.turnId !== observedTurnId) {
+        return yield* Effect.fail(providerFailure("completion hint does not match the exact private Integrator turn"))
+      }
+      currentThread = yield* observedThread(app, thread.id, record.candidatePath)
+      if (currentThread.ownedThreadToken !== record.threadToken) {
+        return yield* Effect.fail(providerFailure("fresh completion thread has a foreign ownership token"))
+      }
+      current = yield* readOrRecoverTurn(app, census, store, current.record, current.run, currentThread, subscription)
+      terminalRereadObserved = isTerminalTurn(current.turn)
+    }
+  }
+  const { record: currentRecord, run: currentRun, turn } = current
   /* v8 ignore next -- @preserve readOrRecoverTurn selects only the exact durable turn token and rejects contradictions. */
   if (turn.ownedTurnToken !== currentRun.token || turn.correlation !== undefined) {
     return yield* Effect.fail(providerFailure("terminal turn does not carry the exact owned token and correlation"))
@@ -351,12 +388,22 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot,
-  completionHints: Stream.Stream<void>
+  completionSubscription: CodexTurnCompletedSubscription | undefined,
+  deliveredCompletionHint: CodexTurnCompletedHint | undefined
 ) {
   if (isSealedPrivateRun(run)) {
     return yield* replaySealedRun(app, census, store, record, run, thread, run.result)
   }
-  return yield* sealObservedRun(app, census, store, record, run, thread, completionHints)
+  return yield* sealObservedRun(
+    app,
+    census,
+    store,
+    record,
+    run,
+    thread,
+    completionSubscription,
+    deliveredCompletionHint
+  )
 })
 const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord")(function* (
   found: CodexIntegratorPrivateRecord,
@@ -438,8 +485,6 @@ const integratorServiceFor = (
         .withPermits(1)(
           Effect.scoped(
             Effect.gen(function* () {
-              // Subscribe before thread/start or turn/start; the app-server stream buffers early wakes.
-              const completionHints = yield* app.attachTurnCompletedHints
               const run = request.correlation
               const initial = yield* checkConfigAndRecord(config, store, run, app, crypto)
               const materialized = yield* ensureCandidateWorktree(
@@ -450,6 +495,34 @@ const integratorServiceFor = (
                 store,
                 ownership
               )
+              const existingRun = runFor(materialized, run)
+              const existingThreadId =
+                materialized._tag === "ThreadWithRuns" || materialized._tag === "RemovalIntentRecorded"
+                  ? materialized.threadId
+                  : undefined
+              const completionSubscription =
+                existingThreadId !== undefined &&
+                (existingRun?._tag === "TurnObserved" || existingRun?._tag === "TurnBoundaryCrossing")
+                  ? yield* attachTurnCompletionHints(
+                      app,
+                      existingThreadId,
+                      existingRun._tag === "TurnObserved" ? existingRun.turnId : undefined
+                    )
+                  : undefined
+              let deliveredCompletionHint: CodexTurnCompletedHint | undefined
+              if (existingRun?._tag === "TurnObserved" && requiresExactCompletionHint(app)) {
+                if (existingThreadId === undefined) {
+                  return yield* providerFailure("private Integrator thread identity is unavailable")
+                }
+                if (completionSubscription === undefined) {
+                  return yield* providerFailure("exact provider completion hints are unavailable")
+                }
+                deliveredCompletionHint = yield* awaitExactTurnCompletionHint(
+                  completionSubscription,
+                  existingThreadId,
+                  existingRun.turnId
+                )
+              }
               const threaded = yield* ensureThread(app, materialized, store)
               // A new Retry may record its run-two token only after the retained thread is freshly writer-free.
               if (isRetryProviderRun(run) && runFor(threaded.record, run) === undefined) {
@@ -464,7 +537,8 @@ const integratorServiceFor = (
                 ensured.record,
                 ensured.run,
                 threaded.thread,
-                completionHints
+                completionSubscription,
+                deliveredCompletionHint
               )
             })
           )

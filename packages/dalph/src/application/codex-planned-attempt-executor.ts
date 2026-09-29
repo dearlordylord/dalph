@@ -60,6 +60,8 @@ import {
   CodexOwnedActivityCensus,
   CodexThreadWorkingDirectory,
   nodeCodexOwnedActivityCensusLayer,
+  type CodexTurnCompletedHint,
+  type CodexTurnCompletedSubscription,
   type CodexOwnedActivityCensusProjection,
   type CodexOwnedProcessIdentity,
   type CodexThreadSnapshot,
@@ -908,6 +910,12 @@ const makeCodexPlannedAttemptExecutorContext = (
     const evidenceStore = yield* Effect.serviceOption(EvidenceStore)
     const replacementAuthority = yield* Effect.serviceOption(CodexReplacementAuthority)
     const gates = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map())
+    type TurnCompletionSubscription = {
+      readonly close: Effect.Effect<void>
+      readonly stream: Stream.Stream<CodexTurnCompletedHint>
+      readonly expectTurnId: (turnId: CodexTurnId) => Effect.Effect<void>
+    }
+    const turnCompletionSubscriptions = yield* Ref.make<ReadonlyMap<string, TurnCompletionSubscription>>(new Map())
     // A proof is an activation-local capability, not copied provider authority.
     // New proof replaces old proof; every attempt mutation consumes or invalidates it.
     const beginProofs = yield* Ref.make<
@@ -927,6 +935,60 @@ const makeCodexPlannedAttemptExecutorContext = (
       /* v8 ignore next -- @preserve Crypto.randomUUIDv4 has an uninhabited error channel in the production Crypto service. */
       Effect.mapError(() => new CodexTurnBoundaryUnknown({}))
     )
+    const completionSubscriptionForTurnStart = Effect.fn(
+      "CodexPlannedAttemptExecutor.completionSubscriptionForTurnStart"
+    )(function* (correlation: PlannedAttemptExecutorCorrelation, threadId: CodexThreadId) {
+      const subscriptionScope = yield* Scope.make()
+      const attached =
+        app.attachExactTurnCompletedHints === undefined
+          ? undefined
+          : yield* app
+              .attachExactTurnCompletedHints(threadId)
+              .pipe(Effect.provideService(Scope.Scope, subscriptionScope))
+      const subscription: TurnCompletionSubscription = {
+        close: Scope.close(subscriptionScope, Exit.void).pipe(Effect.asVoid),
+        stream: attached?.hints ?? Stream.empty,
+        expectTurnId: attached?.expectTurnId ?? (() => Effect.void)
+      }
+      const key = plannedAttemptExecutorCorrelationKey(correlation)
+      const previous = yield* Ref.modify(turnCompletionSubscriptions, (current) => {
+        const present = current.get(key)
+        return [present, new Map(current).set(key, subscription)] as const
+      })
+      if (previous !== undefined) yield* previous.close
+    })
+    const bindTurnCompletionIdentity = (correlation: PlannedAttemptExecutorCorrelation, turnId: CodexTurnId) =>
+      Ref.get(turnCompletionSubscriptions).pipe(
+        Effect.flatMap(
+          (subscriptions) =>
+            subscriptions.get(plannedAttemptExecutorCorrelationKey(correlation))?.expectTurnId(turnId) ?? Effect.void
+        )
+      )
+    const takeTurnCompletionSubscription = (
+      correlation: PlannedAttemptExecutorCorrelation,
+      threadId: CodexThreadId,
+      turnId: CodexTurnId | undefined,
+      attachmentScope: Scope.Scope
+    ): Effect.Effect<CodexTurnCompletedSubscription, never, Scope.Scope> =>
+      Ref.modify(turnCompletionSubscriptions, (current) => {
+        const key = plannedAttemptExecutorCorrelationKey(correlation)
+        const present = current.get(key)
+        return [present, new Map([...current].filter(([entryKey]) => entryKey !== key))] as const
+      }).pipe(
+        Effect.flatMap((present) => {
+          if (present === undefined) {
+            return app.attachExactTurnCompletedHints === undefined
+              ? Effect.succeed({ hints: Stream.empty, expectTurnId: () => Effect.void })
+              : app
+                  .attachExactTurnCompletedHints(threadId, turnId)
+                  .pipe(Effect.provideService(Scope.Scope, attachmentScope))
+          }
+          return (turnId === undefined ? Effect.void : present.expectTurnId(turnId)).pipe(
+            Effect.andThen(Effect.addFinalizer(() => present.close)),
+            Effect.as({ hints: present.stream, expectTurnId: present.expectTurnId })
+          )
+        })
+      )
     const referenceMatchesBytes = Effect.fn("CodexPlannedAttemptExecutor.referenceMatchesBytes")(function* (
       reference: EvidenceReference,
       bytes: Uint8Array
@@ -1368,8 +1430,14 @@ const makeCodexPlannedAttemptExecutorContext = (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord,
-      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
+      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>,
+      completionHintAuthorized = false
     ) {
+      const exactCompletionHintRequired = app.terminalSealPolicy !== "FreshLifecycleMaySeal"
+      const hasUnsealedOwnedTurn = record._tag === "Running" || record._tag === "SafelySuspended"
+      if (exactCompletionHintRequired && hasUnsealedOwnedTurn && !completionHintAuthorized) {
+        return { continueLifecycleObservation: false, report: running(correlation) }
+      }
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
       const census = yield* observeOwnedActivity(reconciliation.thread)
       if (censusHasActivity(census)) {
@@ -1478,20 +1546,12 @@ const makeCodexPlannedAttemptExecutorContext = (
       })
       const observed = observedRecordFor(attempt, record.threadId, currentToken, turn.id, priorObservedTurnId)
       yield* save(observed)
-      if (turn.status === "inProgress") {
-        yield* save(runningRecordFor(attempt, observed))
-        return running(correlation)
-      }
-      return yield* terminalOrRunning(attempt, correlation, observed, {
-        _tag: "Terminal" as const,
-        thread: {
-          id: record.threadId,
-          cwd: CodexThreadWorkingDirectory.make(attempt.worktree),
-          status: "idle",
-          turns: [turn]
-        },
-        turn
-      })
+      // Even a terminal status in the turn/start response is only an initial
+      // response fact. The exact completion notification is the authorization
+      // boundary for rereading terminal state and owned activity.
+      yield* save(runningRecordFor(attempt, observed))
+      yield* bindTurnCompletionIdentity(correlation, turn.id)
+      return running(correlation)
     })
 
     const sendTurn = Effect.fn("CodexPlannedAttemptExecutor.sendTurn")(function* (
@@ -1510,8 +1570,23 @@ const makeCodexPlannedAttemptExecutorContext = (
       // therefore be reconciled without sending a second turn.
       const intent = intentRecordFor(attempt, record.threadId, currentToken, priorObservedTurnId)
       yield* save(intent)
-      const result = yield* startTurnAcrossBoundary(attempt, specification, correlation, intent)
-      return yield* finishStartedTurn(attempt, correlation, record, priorObservedTurnId, currentToken, result)
+      // The provider may complete the new turn before its turn/start response
+      // arrives, so install the exact-ID notification subscription first.
+      yield* completionSubscriptionForTurnStart(correlation, record.threadId)
+      return yield* startTurnAcrossBoundary(attempt, specification, correlation, intent).pipe(
+        Effect.flatMap((result) =>
+          finishStartedTurn(attempt, correlation, record, priorObservedTurnId, currentToken, result)
+        ),
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit)
+            ? Ref.modify(turnCompletionSubscriptions, (current) => {
+                const key = plannedAttemptExecutorCorrelationKey(correlation)
+                const present = current.get(key)
+                return [present, new Map([...current].filter(([entryKey]) => entryKey !== key))] as const
+              }).pipe(Effect.flatMap((present) => (present === undefined ? Effect.void : present.close)))
+            : Effect.void
+        )
+      )
     })
 
     /** Distinguishes a thread created by this command from private state recovered after a process boundary. */
@@ -1883,13 +1958,20 @@ const makeCodexPlannedAttemptExecutorContext = (
       record: CodexThreadBackedRecord,
       attempt: CodexAttemptContext,
       reconciliation: ThreadReconciliation,
-      purpose: PlannedAttemptExecutorObservationPurpose
+      purpose: PlannedAttemptExecutorObservationPurpose,
+      completionHintAuthorized = false
     ) {
       if (reconciliation._tag === "Running") {
         return projectionOutcome(exact(running(correlation)), false, reconciliation.thread.id, reconciliation.turn.id)
       }
       if (reconciliation._tag === "Terminal") {
-        const outcome = yield* terminalOrRunningOutcome(attempt, correlation, record, reconciliation)
+        const outcome = yield* terminalOrRunningOutcome(
+          attempt,
+          correlation,
+          record,
+          reconciliation,
+          completionHintAuthorized
+        )
         // A Begin reconciliation settles the lost public command response
         // before ordinary passive delivery can expose the retained terminal.
         return projectionOutcome(
@@ -1911,7 +1993,8 @@ const makeCodexPlannedAttemptExecutorContext = (
 
     const projectStoredRecord = Effect.fn("CodexPlannedAttemptExecutor.projectStoredRecord")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
-      purpose: PlannedAttemptExecutorObservationPurpose
+      purpose: PlannedAttemptExecutorObservationPurpose,
+      completionHintAuthorized = false
     ) {
       if (isBeginReconciliation(purpose)) yield* invalidateBeginProof(correlation)
       const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
@@ -1939,8 +2022,29 @@ const makeCodexPlannedAttemptExecutorContext = (
         return projectionOutcome(yield* issueBeginProof(correlation, association))
       }
       if (!isThreadBackedRecord(record)) return projectionOutcome(noReport(correlation))
+      // Exact-notification providers such as Codex cannot treat a fresh thread
+      // read as completion authority. Providers without that protocol must opt
+      // into fresh lifecycle sealing explicitly; a missing capability fails closed.
+      const exactCompletionHintRequired = app.terminalSealPolicy !== "FreshLifecycleMaySeal"
+      if (
+        (record._tag === "Running" || record._tag === "SafelySuspended") &&
+        exactCompletionHintRequired &&
+        !completionHintAuthorized
+      ) {
+        // Preserve the durable Safe projection without treating a lifecycle read
+        // as completion authority; only Running projects as Executing here.
+        const report = record._tag === "SafelySuspended" ? suspended(correlation) : running(correlation)
+        return projectionOutcome(exact(report), false, record.threadId, record.observedTurnId)
+      }
       const reconciliation = yield* reconcile(attempt, correlation, record)
-      return yield* projectReconciliation(correlation, record, attempt, reconciliation, purpose)
+      return yield* projectReconciliation(
+        correlation,
+        record,
+        attempt,
+        reconciliation,
+        purpose,
+        completionHintAuthorized
+      )
     })
 
     const projectFailure = (
@@ -2002,9 +2106,14 @@ const makeCodexPlannedAttemptExecutorContext = (
 
     const projectLifecycle = Effect.fn("CodexPlannedAttemptExecutor.projectLifecycle")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
-      allowInitialRunningRecovery = false
+      allowInitialRunningRecovery = false,
+      completionHintAuthorized = false
     ) {
-      return yield* projectStoredRecord(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
+      return yield* projectStoredRecord(
+        correlation,
+        { _tag: "PassiveLifecycleObservation" },
+        completionHintAuthorized
+      ).pipe(
         Effect.catch((error: unknown) =>
           Effect.gen(function* () {
             // Codex can acknowledge turn/start before thread/resume exposes
@@ -2023,7 +2132,12 @@ const makeCodexPlannedAttemptExecutorContext = (
                 stored.success.value.correlationRunId === correlation.runId &&
                 stored.success.value.correlationAttemptId === correlation.attemptId
               ) {
-                return projectionOutcome(exact(running(correlation)))
+                return projectionOutcome(
+                  exact(running(correlation)),
+                  false,
+                  stored.success.value.threadId,
+                  stored.success.value.observedTurnId
+                )
               }
             }
             yield* logProjectionFailure(correlation, { _tag: "PassiveLifecycleObservation" }, error)
@@ -2824,28 +2938,52 @@ const makeCodexPlannedAttemptExecutorContext = (
           const lifecycleReadOrdinal = yield* Ref.make(0)
           const lifecycleHintOrdinal = yield* Ref.make(0)
           const latestLifecycleOutcome = yield* Ref.make<LifecycleProjectionOutcome | undefined>(undefined)
+          const matchingCompletionHintObserved = yield* Ref.make(false)
           const closed = yield* Deferred.make<void>()
-          const turnHints = yield* app.attachTurnCompletedHints.pipe(
-            Effect.provideService(Scope.Scope, attachmentScope)
-          )
+          const privateRecord = yield* store.readAttempt(correlation.runId, correlation.attemptId).pipe(Effect.result)
+          const retainedThreadId =
+            Result.isSuccess(privateRecord) &&
+            Option.isSome(privateRecord.success) &&
+            recordMatchesCorrelation(privateRecord.success.value, correlation) &&
+            isThreadBackedRecord(privateRecord.success.value)
+              ? privateRecord.success.value.threadId
+              : undefined
+          const retainedTurnId =
+            Result.isSuccess(privateRecord) &&
+            Option.isSome(privateRecord.success) &&
+            recordMatchesCorrelation(privateRecord.success.value, correlation) &&
+            (privateRecord.success.value._tag === "Running" ||
+              privateRecord.success.value._tag === "SafelySuspended" ||
+              privateRecord.success.value._tag === "Terminal")
+              ? privateRecord.success.value.observedTurnId
+              : undefined
+          const turnSubscription =
+            retainedThreadId === undefined
+              ? { hints: Stream.empty, expectTurnId: (_turnId: CodexTurnId) => Effect.void }
+              : yield* takeTurnCompletionSubscription(correlation, retainedThreadId, retainedTurnId, attachmentScope)
+          const turnHints = turnSubscription.hints
           const activityHints = yield* app.attachOwnedActivityHints.pipe(
             Effect.provideService(Scope.Scope, attachmentScope)
           )
+          const protocolFailures =
+            app.attachProtocolFailures === undefined
+              ? Stream.empty
+              : yield* app.attachProtocolFailures.pipe(Effect.provideService(Scope.Scope, attachmentScope))
           const shouldContinueLifecycleObservation = (outcome: LifecycleProjectionOutcome) =>
             outcome.continueLifecycleObservation &&
             outcome.projection._tag === "Exact" &&
             outcome.projection.report._tag === "ExecutorWorkExecuting"
           const heldTerminalActivity = yield* Deferred.make<void>()
-          const hints = Stream.merge(
-            turnHints.pipe(Stream.map(() => "turn/completed" as const)),
-            activityHints.pipe(Stream.map(() => "item/completed" as const))
-          )
-          const readLifecycle = (initial: boolean) =>
+          const readLifecycle = (
+            initial: boolean,
+            completionHintAuthorized = false,
+            allowInitialRunningRecovery = false
+          ) =>
             projectionGate.withPermit(
               Ref.updateAndGet(lifecycleReadOrdinal, (currentOrdinal) => currentOrdinal + 1).pipe(
                 Effect.flatMap((readOrdinal) =>
                   attemptGate
-                    .withPermit(projectLifecycle(correlation, initial))
+                    .withPermit(projectLifecycle(correlation, allowInitialRunningRecovery, completionHintAuthorized))
                     .pipe(
                       Effect.tap((outcome) =>
                         Ref.set(latestLifecycleOutcome, outcome).pipe(
@@ -2885,35 +3023,102 @@ const makeCodexPlannedAttemptExecutorContext = (
           const lifecycleCadence = Stream.fromEffect(Deferred.await(heldTerminalActivity)).pipe(
             Stream.flatMap(() =>
               Stream.fromSchedule(Schedule.spaced(ownedActivityObservationInterval)).pipe(
-                Stream.mapEffect(() => readLifecycle(false)),
+                Stream.mapEffect(() =>
+                  Ref.get(matchingCompletionHintObserved).pipe(
+                    Effect.flatMap((authorized) => readLifecycle(false, authorized))
+                  )
+                ),
                 Stream.takeUntil((candidate) => !shouldContinueLifecycleObservation(candidate))
               )
             )
           )
-          const notificationCandidates = hints.pipe(
-            Stream.mapEffect((method) =>
+          const turnNotificationCandidates = turnHints.pipe(
+            Stream.mapEffect((hint) =>
               Ref.updateAndGet(lifecycleHintOrdinal, (currentOrdinal) => currentOrdinal + 1).pipe(
                 Effect.flatMap((hintOrdinal) =>
                   Ref.get(latestLifecycleOutcome).pipe(
-                    Effect.flatMap((latest) =>
-                      logCodexCompletionTrace({
-                        _tag: "CodexExecutorCompletionTrace",
-                        appServerIncarnation: app.incarnation,
-                        attachedAttemptId: correlation.attemptId,
-                        attachedRunId: correlation.runId,
-                        hintOrdinal,
-                        hintChannel: method,
-                        phase: "GlobalHintConsumed",
-                        ...(latest?.threadId === undefined ? {} : { lastProjectedThreadId: latest.threadId }),
-                        ...(latest?.turnId === undefined ? {} : { lastProjectedTurnId: latest.turnId })
-                      }).pipe(Effect.andThen(readLifecycle(false)))
-                    )
+                    Effect.flatMap((latest) => {
+                      const projectedIdentityMatches =
+                        latest?.threadId === hint.threadId && latest.turnId === hint.turnId
+                      const trace = (
+                        phase:
+                          | "ExactCompletionHintConsumed"
+                          | "UnrelatedCompletionHintIgnored"
+                          | "CompletionHintAssociationUnreadable"
+                      ) =>
+                        logCodexCompletionTrace({
+                          _tag: "CodexExecutorCompletionTrace",
+                          appServerIncarnation: app.incarnation,
+                          attachedAttemptId: correlation.attemptId,
+                          attachedRunId: correlation.runId,
+                          hintOrdinal,
+                          hintChannel: "turn/completed",
+                          phase,
+                          threadId: hint.threadId,
+                          turnId: hint.turnId,
+                          ...(latest?.threadId === undefined ? {} : { lastProjectedThreadId: latest.threadId }),
+                          ...(latest?.turnId === undefined ? {} : { lastProjectedTurnId: latest.turnId })
+                        })
+                      if (!projectedIdentityMatches) {
+                        return trace("UnrelatedCompletionHintIgnored").pipe(Effect.as(undefined))
+                      }
+                      return store.readAttempt(correlation.runId, correlation.attemptId).pipe(
+                        Effect.result,
+                        Effect.flatMap((privateRecord) => {
+                          if (Result.isFailure(privateRecord)) {
+                            return trace("CompletionHintAssociationUnreadable").pipe(
+                              Effect.andThen(readLifecycle(false))
+                            )
+                          }
+                          const record = Option.isSome(privateRecord.success) ? privateRecord.success.value : undefined
+                          const exactAssociation =
+                            record !== undefined &&
+                            recordMatchesCorrelation(record, correlation) &&
+                            (record._tag === "Running" || record._tag === "SafelySuspended") &&
+                            record.threadId === hint.threadId &&
+                            record.observedTurnId === hint.turnId
+                          if (!exactAssociation) {
+                            return trace("UnrelatedCompletionHintIgnored").pipe(Effect.as(undefined))
+                          }
+                          return trace("ExactCompletionHintConsumed").pipe(
+                            Effect.andThen(Ref.set(matchingCompletionHintObserved, true)),
+                            Effect.andThen(readLifecycle(false, true, true))
+                          )
+                        })
+                      )
+                    })
                   )
                 )
               )
+            ),
+            Stream.filter((candidate): candidate is LifecycleProjectionOutcome => candidate !== undefined)
+          )
+          const activityNotificationCandidates = activityHints.pipe(
+            Stream.mapEffect(() =>
+              Ref.get(matchingCompletionHintObserved).pipe(
+                Effect.flatMap((authorized) => readLifecycle(false, authorized))
+              )
             )
           )
-          const changes = Stream.merge(notificationCandidates, lifecycleCadence).pipe(
+          const protocolFailureCandidates = protocolFailures.pipe(
+            Stream.mapEffect((failure) =>
+              logCodexCompletionTrace({
+                _tag: "CodexExecutorCompletionTrace",
+                appServerIncarnation: app.incarnation,
+                attachedAttemptId: correlation.attemptId,
+                attachedRunId: correlation.runId,
+                phase: "AppServerProtocolFailureConsumed",
+                protocolOperation: failure.operation
+              }).pipe(Effect.as(projectionOutcome(projectFailure(correlation, failure))))
+            )
+          )
+          const changes = Stream.merge(
+            Stream.merge(
+              Stream.merge(turnNotificationCandidates, activityNotificationCandidates),
+              protocolFailureCandidates
+            ),
+            lifecycleCadence
+          ).pipe(
             Stream.map((candidate) => candidate.projection),
             Stream.filter((candidate) => !samePlannedAttemptExecutorProjection(candidate, current.projection)),
             Stream.interruptWhen(Deferred.await(closed))

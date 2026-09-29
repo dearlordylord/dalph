@@ -680,6 +680,133 @@ ordering.
 custody, authentication, policy, incompatible-history, or throttle constraints,
 or expose a public control command.
 
+### S4 completion refinement: an exact app-server notification precedes Integrator completion
+
+#### Governing behavior
+
+When the Codex app-server reports that the active Integrator turn completed,
+Dalph uses the accepted [Codex terminal-seal chronology](codex-app-server-qualification.md#scenario-to-test-mapping)
+and [D24: No inferred completion across boundaries](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence).
+The [planned-attempt executor model](../../specs/plannedAttemptExecutor.qnt)
+keeps terminal-report acceptance distinct from an executing report
+(`terminalAcceptedStatusIsAbsorbing`); the executable Codex chronology owns
+the provider and private-store boundary. This refinement adds exact
+`threadId`/`turnId` routing to that boundary. It does not create a completion
+poll or alter publication bounds, proof, promotion, or tracker finality.
+
+#### Starting facts and trigger
+
+Task A has an accepted commit C and one fixed Integrator session S1 at remote
+head H. Its candidate worktree W and private Integrator record belong to S1.
+The record retains the owned thread X, its private thread token, the initial
+run's owned-turn token K, and exact turn T from one `turn/start`. T was returned
+as `inProgress` and durably recorded as `TurnObserved`; the private run is not
+sealed and no candidate M is eligible for publication. The same Integrator
+session, W, X, K, and T remain authoritative across process loss.
+
+No person triggers the next event. Codex finishes T and sends one JSON-RPC
+`turn/completed` notification whose `params.threadId` is X and whose
+`params.turn.id` is T. The notification's thread and turn identifiers are
+required, branded IDs at the app-server boundary. A missing, malformed, or
+contradictory identifier makes the notification unusable; it cannot wake a
+lifecycle read or supply terminal evidence.
+
+#### Ordered boundary calls
+
+1. The app-server adapter attaches the exact completion subscription for X
+   before Dalph calls `turn/start`. Dalph persists the provider-run crossing,
+   calls `turn/start` once with X, W, the Integrator request, and K, verifies
+   the returned owned token, then stores exact T as `TurnObserved`. It binds T
+   to the subscription after that durable association; a matching event that
+   arrived before the start response remains buffered until this binding.
+2. The app-server adapter decodes `turn/completed` and publishes a typed hint
+   containing only exact X and T. Dalph waits for that pair. A hint for another
+   thread or turn is consumed without a lifecycle read; notification payloads
+   and an unqualified global wake are not retained.
+3. Only the matching hint triggers a fresh read of the exact thread X in W.
+   Dalph validates the private thread token, the exact T/K association, and a
+   terminal status, then reads the complete owned-activity census. An active,
+   unreadable, contradictory, or incomplete observation leaves the private
+   Integrator run unsealed.
+4. If the exact reread reports T terminal and the complete owned-activity
+   census is `Absent`, Dalph seals the private run and returns its exact
+   Integrator result. Only then may candidate validation and existing
+   publication steps continue in their accepted order. There is no
+   timeout-based success or terminal polling fallback.
+
+#### Crash and reopen
+
+If Dalph exits after `TurnObserved` is stored but before the private run is
+sealed, the successor reads the same private Integrator record, thread X,
+tokens K, and T. It does not allocate a thread, call another `turn/start`, or
+change S1, W, the candidate, or publication history. The successor subscribes
+for exact X/T before any recovery read that could observe lifecycle state. If
+Codex replays or later delivers the exact notification, the successor performs
+the exact reread above.
+
+This refinement starts after `turn/start` returned T with status `inProgress`
+and Dalph durably retained T. A lost `turn/start` response before that exact
+association exists remains under the existing S4 intent-reconciliation rule;
+this refinement does not infer T from a notification or seal from a
+pre-association completion event.
+
+The app-server protocol does not guarantee notification replay after a client
+disconnect. Therefore, if T completes while Dalph is disconnected and no
+matching X/T notification arrives after reopen, the Integrator run remains
+pending indefinitely. A fresh terminal read and absent activity cannot seal
+the private run without the matching hint. The user accepted this no-replay
+outcome. Dalph adds no timeout, polling, synthetic replay, duplicate
+turn/start, candidate, or replacement session to escape it.
+
+Before the initial `turn/start` response supplies T, the adapter retains at most
+64 completion notifications in arrival order, including repeated IDs. It
+discards later notifications without replacing retained ones. Binding T
+publishes each retained exact match into the scoped queue and discards
+unrelated IDs; if no matching notification was retained, lifecycle observation
+stays pending unless a later exact X/T notification arrives. The scoped queue
+also holds at most 64 notifications and slides out its oldest queued notification
+when full. After T is bound, each later matching notification enters that bounded
+queue. If the fresh exact reread still reports T active, the Integrator remains
+`TurnObserved` and waits for another matching notification, which must trigger
+another fresh exact reread. A queued hint never proves completion. The fixed
+`turn/start` response deadline does not bound message rate, so the two finite
+buffers keep memory bounded while overflow fails closed and preserves the
+newest exact wake.
+
+#### Visible and forbidden results
+
+While T is active, Alice sees the retained Integrator responsibility with no
+candidate result. A wrong-thread or wrong-turn hint produces no lifecycle read
+and no public change. A matching hint can produce an Integrator result only
+after fresh exact thread/token/turn evidence and an `Absent` owned-activity
+census. If activity remains live, the private run stays unsealed. After
+process loss without a replayed matching hint, Alice sees the same pending
+Integrator responsibility until that exact condition is met.
+
+Dalph must not reread lifecycle state because of an unrelated or malformed
+hint; treat a timeout, missing hint, process loss, terminal `turn/start`
+response, or terminal read alone as success; seal while owned activity remains;
+issue a duplicate turn, thread, candidate, or push; or use another turn's
+notification to advance this Integrator responsibility. Tracker completion
+remains downstream of the existing exact remote proof, promotion, and fresh
+tracker checks.
+
+#### Acceptance-test map
+
+| Outcome | Required test evidence |
+| --- | --- |
+| The adapter preserves exact wire IDs, retains a completion delivered before the `turn/start` response, and rejects malformed or missing IDs without publishing a hint. | `packages/dalph/src/application/codex-app-server-protocol.test.ts::traces real turn/completed ingress and hint publication without retaining notification payload`; `::preserves exact completion IDs emitted before the turn/start response`; `::ignores malformed completion notification IDs without publishing a hint` |
+| The adapter retains an exact matching identity from a pre-response burst, rejects overflow identities without replacing retained candidates, and does not publish a matching ID that arrived after the 64-entry bound. | `packages/dalph/src/application/codex-app-server-protocol.test.ts::retains the exact matching identity from a pre-response burst without unrelated hints overwriting it`; `::fails closed when the pre-response identity buffer is full before the matching turn hint` |
+| Repeated notifications count toward the bounded pre-response queue; after T binds, two matching X/T notifications pass through the production JSON-RPC router. | `packages/dalph/src/application/codex-app-server-protocol.test.ts::routes repeated exact completion notifications after the turn ID is bound`; retained pre-response burst and overflow controls above |
+| The Integrator subscribes before `turn/start`, buffers a matching completion delivered before the start response, and consumes it only after T is durably retained. | Existing passing evidence: `packages/dalph/src/application/codex-integrator.test.ts::subscribes before an Integrator turn start and seals after its exact completion hint`; adapter control `packages/dalph/src/application/codex-app-server-protocol.test.ts::preserves exact completion IDs emitted before the turn/start response`. |
+| Wrong-thread and wrong-turn hints cause no provider lifecycle or activity read; only exact X/T authorizes the fresh thread, private-token, turn, and activity reads. | `packages/dalph/src/application/codex-integrator.test.ts::ignores unrelated Integrator completion hints without reading lifecycle` waits until T is durably stored and the subscription is bound, then injects wrong-thread and wrong-turn hints directly into the bound Integrator subscription stream (bypassing the fake's pre-bind filter). It asserts activity and resume counters remain unchanged after each hint; only the later exact X/T proceeds to the terminal reread. |
+| Without exact identity attachment, the executor does not use the legacy global wake stream. | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts::does not fall back to the legacy global completion stream without exact identity attachment` |
+| A matching terminal hint does not seal while owned activity is live, unreadable, or failed; sealing follows a complete `Absent` census. | The Integrator control `packages/dalph/src/application/codex-integrator.test.ts::ignores unrelated Integrator completion hints without reading lifecycle` asserts a matching hint followed by `ExactLive` activity leaves `TurnObserved` unsealed; `::keeps the Integrator run unsealed when the exact terminal read has unreadable or failed activity census` covers both an `Unreadable` projection and a failed census effect after exact terminal evidence. `::subscribes before an Integrator turn start and seals after its exact completion hint` proves the absent-activity seal. The planned-attempt boundary remains covered by `packages/dalph/src/application/codex-planned-attempt-executor.test.ts::starts held terminal activity cadence after a completion hint discovers exact live activity`. |
+| Neither terminal provider state nor a terminal `turn/start` response substitutes for the matching hint. A reopened `TurnObserved` Integrator run with terminal provider state stays pending when the notification was not replayed. | Existing passing evidence: `packages/dalph/src/application/codex-integrator.test.ts::keeps a completed Integrator turn pending after reopen when its matching notification was not replayed`; the separate planned-attempt path remains covered by `packages/dalph/src/application/codex-planned-attempt-executor.test.ts::does not read or seal a terminal turn when its matching completion hint is absent`, `::keeps a terminal turn start response pending without its exact completion hint`, `::keeps a completed turn pending when suspension sees no exact completion hint`, and `::keeps a completed Safe Resume pending without its exact completion hint`. |
+| Reopen reuses X, K, and T and never sends a second turn; without a replayed matching hint it remains pending despite terminal provider state, while a later exact hint triggers the exact reread. | Existing passing evidence: `packages/dalph/src/application/codex-integrator.test.ts::keeps a completed Integrator turn pending after reopen when its matching notification was not replayed` and `::seals after the exact Integrator completion hint arrives after reopen`; the planned-attempt path remains covered by `packages/dalph/src/application/codex-planned-attempt-executor.test.ts::keeps a completed turn pending after reopen when its matching notification was not replayed` and `::seals after the exact completion hint arrives after reopen`. |
+| A matching X/T hint whose exact reread still finds the turn active leaves durable `TurnObserved` pending with no seal or duplicate turn; only a later matching hint triggers a second fresh reread and terminal+Absent sealing. | Pending/no-seal control: `packages/dalph/src/application/codex-integrator.test.ts::rejects foreign resumed-thread tokens and correlated turns while an active turn remains pending`; active→terminal control: `::keeps the exact Integrator turn pending after an active reread until a later matching hint`; production router control: `packages/dalph/src/application/codex-app-server-protocol.test.ts::routes repeated exact completion notifications after the turn ID is bound`. |
+| Publication and tracker finality remain behind a terminal executor report and the existing proof/promotion protocol. | Retain the S1 publication cassette `packages/dalph/test/cassettes/direct-remote-publication.test.ts::publishes M before local promotion and task completion, then releases its dependant from a later complete graph`; its assertions remain required and are not replaced by executor-only tests. |
+
 ### S8: A grant or intent does not prove publication or settle finality
 
 **Starting facts and trigger.** R still owns A/Q/P and exact C. A grant may be

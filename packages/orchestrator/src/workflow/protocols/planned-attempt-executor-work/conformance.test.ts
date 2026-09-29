@@ -99,6 +99,8 @@ interface NamedConformanceImplementation {
   readonly name: string
   /** Provider-specific terminal tags remain normalized reports at this seam. */
   readonly terminalResultTag?: "Accepted" | "Completed" | "Failed"
+  /** Some providers require an exact completion hint before a fresh terminal graph can be sealed. */
+  readonly terminalSuspensionRequiresExactCompletionHint?: boolean
 }
 
 interface ConformanceImplementation extends NamedConformanceImplementation {
@@ -364,25 +366,36 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
       }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(conformanceJournalLayer()))
     )
 
-    it.effect("accepts Terminal from Suspend after accepted executing work", () =>
-      Effect.gen(function* () {
-        const harness = yield* implementation.make("TerminalSuspension", () => Effect.void)
-        yield* beginPlannedAttemptExecutorWork(plannedAttempt, specification).pipe(
-          Effect.provideService(PlannedAttemptExecutor, harness.executor)
-        )
-        const report = yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
-          Effect.provideService(PlannedAttemptExecutor, harness.executor)
-        )
-        expect(report._tag).toBe("ExecutorWorkTerminal")
-        if (report._tag === "ExecutorWorkTerminal") {
-          expect(report.result._tag).toBe(implementation.terminalResultTag ?? "Completed")
-        }
-        expect(yield* harness.calls).toEqual([
-          { _tag: "Begin", correlation },
-          { _tag: "Suspend", correlation }
-        ])
-        expect(yield* requiredTaskWorkPositions).toEqual([])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(conformanceJournalLayer()))
+    it.effect(
+      implementation.terminalSuspensionRequiresExactCompletionHint === true
+        ? "keeps a terminal Suspend observation pending without its exact completion hint"
+        : "accepts Terminal from Suspend after accepted executing work",
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* implementation.make("TerminalSuspension", () => Effect.void)
+          yield* beginPlannedAttemptExecutorWork(plannedAttempt, specification).pipe(
+            Effect.provideService(PlannedAttemptExecutor, harness.executor)
+          )
+          const report = yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+            Effect.provideService(PlannedAttemptExecutor, harness.executor)
+          )
+          if (implementation.terminalSuspensionRequiresExactCompletionHint === true) {
+            expect(report).toEqual(executing())
+            expect(yield* requiredTaskWorkPositions).toEqual([
+              { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
+            ])
+          } else {
+            expect(report._tag).toBe("ExecutorWorkTerminal")
+            if (report._tag === "ExecutorWorkTerminal") {
+              expect(report.result._tag).toBe(implementation.terminalResultTag ?? "Completed")
+            }
+            expect(yield* requiredTaskWorkPositions).toEqual([])
+          }
+          expect(yield* harness.calls).toEqual([
+            { _tag: "Begin", correlation },
+            { _tag: "Suspend", correlation }
+          ])
+        }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(conformanceJournalLayer()))
     )
 
     it.effect("records a foreign Suspend response without proving safety", () =>

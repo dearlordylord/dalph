@@ -2,6 +2,7 @@
 /* eslint-disable import/no-nodejs-modules -- Timeout diagnostics inspect exact Git sender custody and process evidence. */
 import { createHash } from "node:crypto"
 import { readFile, readdir } from "node:fs/promises"
+import nodeProcess from "node:process"
 import {
   GitCommand,
   gitSenderTokenEnvironment,
@@ -41,10 +42,11 @@ class PublicPublicationTimeout extends Schema.TaggedError<PublicPublicationTimeo
 
 const builtEntry = new URL("../../dist/bin/production-hermetic-qualification.js", import.meta.url).pathname
 const fixtureLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
-const diagnosticPath = "/tmp/public-s1-timeout-diagnostic.json"
-const diagnosticProviderPath = "/tmp/public-s1-timeout-provider.json"
-const diagnosticAuditPath = "/tmp/public-s1-timeout-audit.json"
-const diagnosticGitBoundaryPath = "/tmp/public-s1-timeout-git-boundary.json"
+const diagnosticPrefix = `/tmp/public-s1-timeout-${nodeProcess.pid}-${nodeProcess.hrtime.bigint()}`
+const diagnosticPath = `${diagnosticPrefix}-diagnostic.json`
+const diagnosticProviderPath = `${diagnosticPrefix}-provider.json`
+const diagnosticAuditPath = `${diagnosticPrefix}-audit.json`
+const diagnosticGitBoundaryPath = `${diagnosticPrefix}-git-boundary.json`
 
 type DiagnosticRecord = { readonly [key: string]: unknown }
 
@@ -525,6 +527,14 @@ it.live(
             `diagnostic status/proposal projection: ${childDiagnosticProjection}`
         ).toBe(0)
 
+        const consumedCompletionHint = childStderr
+          .split(/\r?\n/u)
+          .find((line) => line.includes('"phase":"ExactCompletionHintConsumed"'))
+        expect(consumedCompletionHint).toContain('"_tag":"CodexExecutorCompletionTrace"')
+        expect(consumedCompletionHint).toContain('"hintChannel":"turn/completed"')
+        expect(consumedCompletionHint).toContain('"threadId":"hermetic-thread:0"')
+        expect(consumedCompletionHint).toContain('"turnId":"hermetic-turn:hermetic-thread:0:0"')
+
         expect(tags.filter((tag) => tag === "WorkflowRunBegan")).toHaveLength(1)
         expect(
           records.filter(
@@ -756,9 +766,6 @@ it.live(
             (githubProviderOperationTags.has(operation.tag as GithubGraphqlRequest["_tag"]) ? operation.count : 0),
           0
         )
-        // The 140-request qualification circuit is only headroom for this controlled
-        // two-task journey. Its terminal tracker traffic must stay close to the 120
-        // ordinary-production default and cannot conceal a read/retry loop.
         expect(githubProviderTransportCount).toBeLessThanOrEqual(130)
         expect(provider.taskLifecycle).toBe("Completed")
         expect(provider.dependantTaskLifecycle).toBe("Completed")
