@@ -2775,3 +2775,134 @@ log is `/tmp/issue386-five-task-diamond-reordered-cassette.log`. The next exact
 discriminator is a safe projection of `mismatch.expected`, `mismatch.actual`,
 and `storyPosition` at the Integrator candidate-preparation boundary. This
 record authorizes no new test or edit loop.
+
+## Five-task Reducer Lab completion-claim chronology — 2026-09-30
+
+**Accepted scenario and test mapping.** The Lab fixture projects the accepted
+five-task chronology in
+[`docs/scenarios/controlled-provider-capstone.md`](scenarios/controlled-provider-capstone.md),
+“A five-task dependency diamond completes only from tracker-confirmed
+success.” Its production acceptance test remains
+`packages/dalph/test/cassettes/scenario.test.ts`:
+`runs the five-task controlled-provider diamond through exact accepted-result
+finality`. The focused Lab projection is
+`prototypes/reducer-lab/src/trace-task-progress.test.ts`, loaded through the
+Vite SSR smoke route. It requires the maintained
+`authored:productionShapedFiveTaskDiamond` result to be `Completed` and checks
+that confirmed finality precedes dependant progress. This Lab check does not
+replace the package acceptance test or prove a full gate.
+
+**Diagnosis and corrected interpretation.** The initial cursor trace
+`/tmp/issue386-cursor-mismatch-diagnostic.log` records
+`expectedConsumerTag=CompletionClaimReadReturned`, then
+`nextAuthoredItemTag=DalphSelects(ReadTrackerGraph)` at story position 21.
+Sol's read-only review confirmed that the runtime consumes the Active claim
+response before requesting the post-promotion graph. The cassette was corrected
+to put that response before the graph/specification/claim sequence.
+
+The next result log
+`/tmp/issue386-five-task-direct-result-order-r2.log` reports a mismatch at
+zero-based cursor position 90: the runtime requests `ReadTrackerGraph` while
+the next authored item is `CompletionClaimReplacementApplied`. The loaded
+story projection shows one-based items 90–91 are B's
+`CompletionClaimReadReturned(Active)` and `CompletionClaimReplacementApplied`;
+there are no graph, specification, or claim-read items between them. The
+earlier inference that those reads remained before replacement generalized
+the A helper's optional sequence to all later integrations; that was wrong.
+Sol's scoped review confirms B's releasing-work helper and the C, E, and D
+calls omitted the required observations. This is a fixture chronology gap,
+not evidence of a production behavior defect.
+
+**Fixture repair.** Every task now keeps this order:
+`CompletionClaimReadReturned(Active)` → current complete graph read → exact
+task specification read → task claim read →
+`CompletionClaimReplacementApplied`. A uses `noneComplete`; B and C use
+`aComplete`; E uses `abcComplete`; D uses `abceComplete`. Each graph leaves
+the current task Open and reflects the completed prerequisites at that stage.
+The optional graph sequence is propagated through B's releasing-work helper;
+the later complete graph reads that release dependants remain unchanged.
+No production code or Lab assertions changed.
+
+The raw position anchors account for the six authored items added after each
+promotion (graph select/response, specification select/response, claim
+select/response), using the actual A → B → C → E → D insertion order. The
+existing `authoredIntegrationPositionsAfterDirectPublication` helper then adds
+the admission, baseline, and prior-integration journal records to form each
+loaded Integrator correlation:
+
+| Integration | Prior read blocks | Raw `queuedAt` / `startedAt` / `targetLineageObservedAt` anchors |
+|---|---|---:|
+| B | A (6 items) | 100 / 106 / 113 |
+| C | A (6 for queued; A, B (12) for later anchors) | 98 / 157 / 159 |
+| E | A, B, C (18 items) | 201 / 202 / 204 |
+| D | A, B, C, E (24 items) | 261 / 262 / 264 |
+
+The earlier safe B-correlation comparison in
+`/tmp/issue386-five-task-correlation-diffpaths.log` showed the first insertion
+shifting B's positions by six; its other projected task, attempt, Run, target,
+and planned-attempt fields matched. The anchors are field-specific: C's
+`queuedAt` follows A's six read items because C is queued in the joint B/C
+admission block before B's finality reads; C's `startedAt` and
+`targetLineageObservedAt` follow A and B's twelve read items. E's anchors
+follow A, B, and C (18 items), and D's follow A, B, C, and E (24 items). A's
+anchors and all unrelated cassettes remain unchanged. The focused
+production-runner acceptance below consumes the loaded correlations in the
+authored story order.
+
+**Scoped review disposition.** Sol confirmed the production
+`readPostPromotionFinalityPremises` sequence and the B/C/E/D fixture omissions;
+the repair preserves that boundary and changes only controlled fixture data.
+The contradictory earlier “all reads remain” statement is superseded by the
+loaded-story positions above. The exact focused Lab acceptance result below
+determines whether this fixture repair passes; the S8/capstone production
+acceptance test and full qualification remain separate evidence.
+
+**Focused Lab acceptance.** The one authorized command was
+`pnpm --filter @dalph/reducer-lab-prototype exec node --input-type=module -e 'import { createServer } from "vite"; const server=await createServer({appType:"custom",logLevel:"error",server:{hmr:false,middlewareMode:true}}); try {await server.ssrLoadModule("/src/trace-task-progress.test.ts"); console.log("Reducer Lab five-task trace acceptance passed.")} finally {await server.close()}'`.
+It ran at 2026-09-30 10:50:00–10:50:06 UTC (5.223s), exited 1, and failed
+the unchanged assertion at `trace-task-progress.test.ts:12`: actual `Failed`,
+expected `Completed`. Full output is
+`/tmp/issue386-five-task-lab-final-r1.log`. This candidate has no passing Lab
+acceptance credit and was not committed. The wrapper does not expose the
+cassette's first failure boundary; the next distinguishing action is one
+bounded direct result-reporting SSR call with the safe cursor/correlation
+projection on this candidate. No further repair or run was made here.
+
+**One-shot C queued-position discriminator — 2026-09-30.** Before the direct
+result call, compare two explanations for its first mismatch. A predicts the
+C Integrator request is first, with only `session.queuedAt` differing: the C
+anchor should be 98 (original 92 plus A's six post-finality read items), since
+C is queued in the joint B/C admission block before B's later post-promotion
+reads. The current C anchor is 104, which also includes B's six reads. B
+predicts an earlier or different mismatch boundary/field. Run one direct
+`runMaintainedCassette('authored:productionShapedFiveTaskDiamond')` Vite SSR
+result report with safe first-mismatch/correlation-path projection; do not run
+the assertion wrapper or edit the fixture. Expected duration is at most 3
+minutes, with an absolute stop at 2026-09-30 10:57:00 UTC. Preserve the full
+log at `/tmp/issue386-five-task-diamond-correlation-first-mismatch.log`; if
+the safe result lacks enough fields to distinguish A and B, stop as
+inconclusive without another probe.
+
+**Discriminator result.** The one direct SSR call ran at
+2026-09-30 10:56:11–10:56:16 UTC (5 seconds). Its safe projection was
+`storyPosition=111`, expected/actual tag `IntegratorRequestReceived`,
+`differingPaths=["session.queuedAt"]`, `expectedQueuedAt=116`, and
+`actualQueuedAt=110`; the cassette returned `Failed` with `location=Unknown`
+(process exit 0). C's current raw anchor 104 plus the known 12-position
+admission/baseline offset gives 116; the predicted corrected raw anchor 98
+plus the same offset gives the observed runtime 110. This supports A: C's
+fixture `queuedAt` includes B's later six read items even though C is queued
+before B's finality reads. A falsifier would be a mapped story position other
+than C's Integrator request or any additional differing stable correlation
+field; neither appeared in this projection. Full output:
+`/tmp/issue386-five-task-diamond-correlation-first-mismatch.log`. No catalog
+edit or second run was made.
+
+**C queued-position correction and focused result.** The discriminator's
+single fixture correction changed C's `queuedAt` anchor from 104 to 98;
+`startedAt=157`, `targetLineageObservedAt=159`, all graph facts, later
+releases, and assertions were preserved. The one focused five-task Lab SSR
+acceptance ran at 2026-09-30 10:58:01–10:58:08 UTC (7 seconds), exited 0, and
+printed `Reducer Lab five-task trace acceptance passed.` Full output is
+`/tmp/issue386-five-task-lab-anchor98-r1.log`. No other check or commit was
+made; the passing candidate awaits Sol's review.
