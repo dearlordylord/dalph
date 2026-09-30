@@ -546,7 +546,7 @@ void test("semantic candidate identity tolerates a normal status stat refresh", 
   }
 })
 
-void test("semantic candidate identity rejects a persistent staged entry change at the boundary and final check", async () => {
+void test("semantic candidate identity rejects a persistent staged entry change at the boundary", async () => {
   const f = semanticCandidateFixture()
   const source = join(f.root, "source.ts")
   const sourceBytes = readFileSync(source)
@@ -558,6 +558,21 @@ void test("semantic candidate identity rejects a persistent staged entry change 
     assert.equal(f.git("rev-parse", "HEAD"), head)
     assert.match(f.git("ls-files", "--stage", "-v", "source.ts"), /^H 100755 /u)
     await assert.rejects(guard.assertUnchanged(), /Candidate staged Git index entries changed during execution/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+void test("semantic candidate identity rejects a persistent staged entry change at finish without a boundary check", async () => {
+  const f = semanticCandidateFixture()
+  const sourceBytes = readFileSync(join(f.root, "source.ts"))
+  const head = f.git("rev-parse", "HEAD")
+  const guard = await f.guard()
+  try {
+    f.git("update-index", "--chmod=+x", "source.ts")
+    assert.deepEqual(readFileSync(join(f.root, "source.ts")), sourceBytes)
+    assert.equal(f.git("rev-parse", "HEAD"), head)
+    assert.match(f.git("ls-files", "--stage", "-v", "source.ts"), /^H 100755 /u)
     await assert.rejects(guard.finish(), /Candidate staged Git index entries changed during execution/u)
   } finally {
     await guard.close()
