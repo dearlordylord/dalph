@@ -48,7 +48,11 @@ export const selectQualityStages = (stages, changedPaths) => {
         path
       )
     )
-  const lab = shared || changedPaths.some((path) => /^prototypes\/reducer-lab\//u.test(path))
+  const lab =
+    unknown ||
+    changedPaths.some((path) =>
+      /^(?:prototypes\/reducer-lab\/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|vitest\.config\.ts$)/u.test(path)
+    )
   return stages
     .filter((stage) => {
       if (advisory.has(stage.id)) return false
