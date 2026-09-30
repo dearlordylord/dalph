@@ -54,31 +54,11 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   fence for explicit reconciliation; a timeout never qualifies the candidate.
   This tooling policy does not change Dalph runtime behavior or accepted task
   execution deadlines.
-- A failed `check:all` writes one recovery obstruction in the Git common
-  directory. The obstruction references the failed run, exact failure
-  fingerprint, failed and unexecuted stages, and diagnostic attempts. Another
-  `check:all` is not admitted merely because the candidate, session, hypothesis,
-  or command wording changed. Run `pnpm gate:diagnose <failed-run-id>
-  --question=<question> --alternatives='<a> | <b>'
-  --observation=<distinguishing-observation> --contains=<expected-output>
-  --expect=<outcome>
-  --supports=<alternative-number> -- <focused-reproducer>`. The command records
-  intent before execution, rejects broad gates and an identical repeated
-  experiment, retains its output, and records which predicted exit and literal
-  output observation were both seen. It does not authorize qualification.
-  Repair the candidate, then run
-  `pnpm gate:verify-repair <failed-run-id>`; this reruns the exact focused command
-  after candidate content changes. For an environment, resource, or ignored-artifact
-  repair, add `--intervention=<observed external change>` instead; the agent records
-  that intervention without asking the maintainer to choose it. An empty commit is
-  not a content repair. One passing verification admits one full qualification.
-  A later candidate input change makes that verification stale. A failed full
-  qualification creates the next obstruction without erasing earlier diagnostic
-  history; a passed qualification clears it. `pnpm gate:recovery` projects the one
-  canonical recovery decision and the exact failed-stage command suggested for
-  focused reproduction after a session resume. The orchestrator owns selecting
-  the competing explanations and observation; it does not ask the maintainer to
-  choose them. This is tooling-only and does not change Dalph runtime behavior.
+- A failed `check:all` retains its actual logs and failed-stage results. Run the
+  failing test directly, repair its cause, and observe it passing before another
+  full qualification. The ordinary candidate runner does not consult historical
+  recovery records for admission. Incomplete writers retain custody fences until
+  stopped-process proof. This tooling policy does not change Dalph runtime behavior.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
   scenario evidence survives and reproduced accepted-path defects still block
@@ -258,10 +238,8 @@ All commands below use `pnpm`. Script definitions live in
 | `check:secrets` | Scan Git history with gitleaks. |
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id> [--previous-boot=<recorded boot UUID>]` | Ordinary form closes registration and proves every recorded writer group absent before clearing exact worktree/slot fences. The explicit previous-boot form accepts only a structurally complete no-child/observed inventory from the supplied recorded boot, durably records `UNPROVEN` stopped custody, and clears exact fences without probing or signalling old process groups. |
-| `gate:recovery` | Show the current worktree's durable qualification obstruction, its preserved attempt history, suggested failed-stage command, and canonical next action. |
-| `gate:diagnose <failed-run-id> ... -- <focused-command>` | Record and run one bounded distinguishing experiment for the current obstruction. An observed prediction requires repair; it does not admit qualification. |
-| `gate:verify-repair <failed-run-id> [--intervention=<observed external change>]` | After candidate content or a recorded external intervention changes, rerun the exact observed diagnostic command. One pass admits one full qualification attempt. |
-| `check:all --candidate=<base sha>` | Run the clean frozen candidate's selected preflight and application manifest with bounded children and actual exit results. It records formal relevance with `not-requested`; run `check:quint` explicitly for local proof or use CI formal verification. Revision-10 selection runs Reducer Lab only for Lab-owned paths or missing/unknown change evidence. Interrupted attempts restart after custody reconciliation. |
+| `gate:recovery`, `gate:diagnose`, `gate:verify-repair` | Historical recovery commands; ordinary candidate-runner admission does not consult their records. |
+| `check:all --candidate=<base sha>` | Invoke `scripts/run-candidate-checks.mjs` on the clean, frozen checkout using its exact Base. It records the selected preflight/application manifest and each stage result. Formal relevance is `not-requested`; run `pnpm check:quint` explicitly for local proof, and retain CI's separate formal verification. Revision-10 selects Reducer Lab only for a `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Interrupted attempts restart after stopped-writer reconciliation. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
