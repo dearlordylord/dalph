@@ -61,11 +61,7 @@ const semanticCandidateFixture = () => {
   f.invocation.formalDisposition = "not-requested"
   f.invocation.gitIndexObservation = "semantic"
   f.invocation.stageManifest = [
-    {
-      id: "secrets",
-      args: secretArgs,
-      execution: { args: ["/fixture/pnpm.cjs", "--silent", ...secretArgs] }
-    }
+    { id: "secrets", args: secretArgs, execution: { args: ["/fixture/pnpm.cjs", "--silent", ...secretArgs] } }
   ]
   f.environment.DALPH_GATE_GIT_HISTORY = "candidate-ancestry"
   return f
@@ -531,7 +527,7 @@ void test("semantic candidate identity tolerates a normal status stat refresh", 
   f.environment.GIT_OPTIONAL_LOCKS = "1"
   const source = join(f.root, "source.ts")
   writeFileSync(source, "initial\n")
-  const refreshedStat = new Date(Date.now() + 5_000)
+  const refreshedStat = new Date("2000-01-01T00:00:00.000Z")
   utimesSync(source, refreshedStat, refreshedStat)
   const index = join(f.root, ".git", "index")
   const before = readFileSync(index)

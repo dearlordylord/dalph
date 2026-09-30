@@ -280,7 +280,10 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   const storage = optionalGit(root, ["config", "--get", "extensions.refstorage"], environment)
   if (storage !== undefined && storage !== "files") throw new Error("Unsupported Git reference storage")
   const selectedCandidateHistory = candidateHistory(root, logicalInvocation, environment)
-  if (semanticIndexObservation && (!selectedCandidateHistory || logicalInvocation.formalDisposition !== "not-requested"))
+  if (
+    semanticIndexObservation &&
+    (!selectedCandidateHistory || logicalInvocation.formalDisposition !== "not-requested")
+  )
     throw new Error("Semantic Git index observation is limited to local candidate qualification")
   if (!selectedCandidateHistory) paths.push(path("refs"))
   else {
