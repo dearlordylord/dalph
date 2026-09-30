@@ -172,6 +172,9 @@ const acceptedRecords = () => [...accepted.records]
 
 const promotionRecords = () => [...promoted.promotedRecords]
 
+const promotionRecordsWithoutReplacementIntent = () =>
+  promotionRecords().filter(({ event }) => event._tag !== "CompletionClaimReplacementIntended")
+
 const replacedPrefix = () => [...promoted.replacedRecords]
 
 const replacedRecords = () => [...promoted.replacedRecords, ...focusedSuccessRecords]
@@ -1059,7 +1062,7 @@ it.effect("writes replacement intent first and reconciles an unknown response by
 
 it.effect("fails closed on a foreign claim without attempting replacement", () =>
   Effect.gen(function* () {
-    const records = yield* journalRecordsRef(promotionRecords())
+    const records = yield* journalRecordsRef(promotionRecordsWithoutReplacementIntent())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1073,13 +1076,13 @@ it.effect("fails closed on a foreign claim without attempting replacement", () =
     )
     expect(failure).toBeInstanceOf(CompletionClaimOwnershipConflict)
     expect(yield* Ref.get(replacementCalls)).toBe(0)
-    expect(tagsAfterPromotionSuccess(yield* Ref.get(records))).toEqual([
-      "TargetPromotionObservedSuccess",
-      "CompletionClaimReplacementIntended"
+    expect(yield* Ref.get(deletionCalls)).toBe(0)
+    expect(yield* Ref.get(records).pipe(Effect.map(tagsAfterPromotionSuccess))).toEqual([
+      "TargetPromotionObservedSuccess"
     ])
 
     const foreignCompletion = CompletionTaskClaim.make({ ...fixture.claim, originalClaim: foreign })
-    const completionRecords = yield* journalRecordsRef(promotionRecords())
+    const completionRecords = yield* journalRecordsRef(promotionRecordsWithoutReplacementIntent())
     expect(
       yield* runWith(
         runCompletionClaimReplacementProtocol(
@@ -1089,6 +1092,36 @@ it.effect("fails closed on a foreign claim without attempting replacement", () =
         completionRecords
       )
     ).toBeInstanceOf(CompletionClaimOwnershipConflict)
+    expect(yield* Ref.get(replacementCalls)).toBe(0)
+    expect(yield* Ref.get(deletionCalls)).toBe(0)
+    expect(yield* Ref.get(readCalls)).toBe(2)
+    expect(yield* Ref.get(completionRecords).pipe(Effect.map(tagsAfterPromotionSuccess))).toEqual([
+      "TargetPromotionObservedSuccess"
+    ])
+  })
+)
+
+it.effect("fails closed when a completion claim is observed without prior replacement intent", () =>
+  Effect.gen(function* () {
+    const records = yield* journalRecordsRef(promotionRecordsWithoutReplacementIntent())
+    const replacementCalls = yield* Ref.make(0)
+    const deletionCalls = yield* Ref.make(0)
+    const readCalls = yield* Ref.make(0)
+    const failure = yield* runWith(
+      runCompletionClaimReplacementProtocol(
+        makeBoundary({ initial: [fixture.claim], replacementCalls, deletionCalls, readCalls }),
+        { claim: fixture.claim, operationId: replacementOperationFor(fixture.claim) }
+      ).pipe(Effect.flip),
+      records
+    )
+
+    expect(failure).toBeInstanceOf(CompletionClaimOwnershipConflict)
+    expect(yield* Ref.get(readCalls)).toBe(1)
+    expect(yield* Ref.get(replacementCalls)).toBe(0)
+    expect(yield* Ref.get(deletionCalls)).toBe(0)
+    expect(yield* Ref.get(records).pipe(Effect.map(tagsAfterPromotionSuccess))).toEqual([
+      "TargetPromotionObservedSuccess"
+    ])
   })
 )
 

@@ -5143,7 +5143,11 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         const currentGraphObservation = currentGraphBoundary.event.observation
         expect(currentGraphBoundary.position).toBeGreaterThan(promotion.position)
         expect(currentGraphBoundary.event.operationId).toBe(currentGraphObservation.operationId)
-        expect(currentGraphObservation).toMatchObject({ operationId: currentGraphObservation.operationId, rootTaskId: taskId, target })
+        expect(currentGraphObservation).toMatchObject({
+          operationId: currentGraphObservation.operationId,
+          rootTaskId: taskId,
+          target
+        })
         expect(currentGraphObservation.factFamilies.map(({ freshness }) => freshness.operationId)).toEqual(
           Array(5).fill(currentGraphObservation.operationId)
         )
@@ -5156,7 +5160,10 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
               event.observation._tag === "CompleteTaskTrackerFacts" &&
               event.operationId === currentGraphObservation.priorFullObservationOperationId
           )
-          expect(priorFullObservation, "successful compact reconfirmation must resolve its exact prior full graph").toBeDefined()
+          expect(
+            priorFullObservation,
+            "successful compact reconfirmation must resolve its exact prior full graph"
+          ).toBeDefined()
           if (
             priorFullObservation === undefined ||
             priorFullObservation.event._tag !== "TaskTrackerFactsObserved" ||
@@ -5193,14 +5200,12 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
           premise === "dependency" ? [taskId, unfinishedPrerequisiteTaskId].sort() : [taskId]
         )
         expect(membership.memberTaskIds).toEqual(identities.taskIds)
-        expect(lifecycles.lifecycles.find(({ taskId: observedTaskId }) => observedTaskId === taskId)?.lifecycle).toEqual(
-          { _tag: "Open" }
-        )
-        expect(prerequisites.prerequisites.find(({ taskId: observedTaskId }) => observedTaskId === taskId))
-          .toMatchObject({
-            prerequisiteTaskIds: premise === "dependency" ? [unfinishedPrerequisiteTaskId] : [],
-            taskId
-          })
+        expect(
+          lifecycles.lifecycles.find(({ taskId: observedTaskId }) => observedTaskId === taskId)?.lifecycle
+        ).toEqual({ _tag: "Open" })
+        expect(
+          prerequisites.prerequisites.find(({ taskId: observedTaskId }) => observedTaskId === taskId)
+        ).toMatchObject({ prerequisiteTaskIds: premise === "dependency" ? [unfinishedPrerequisiteTaskId] : [], taskId })
         expect(groupings.groupings.find(({ taskId: observedTaskId }) => observedTaskId === taskId)).toMatchObject({
           parentTaskId: null,
           taskId
@@ -5371,7 +5376,8 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         for (const [index, intent] of completionReadIntents.entries()) {
           const observation = completionReadObservations[index]
           expect(observation).toBeDefined()
-          if (observation === undefined) return yield* Effect.die("completion read intent lacks its durable facts result")
+          if (observation === undefined)
+            return yield* Effect.die("completion read intent lacks its durable facts result")
           expect(observation.position).toBeGreaterThan(intent.position)
           expect(observation.observation.operationId).toBe(intent.operation.operationId)
         }
@@ -5379,7 +5385,9 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         const promotionAttemptIntents = appendedRecords.filter(
           ({ event }) => event._tag === "TargetPromotionAttemptIntended"
         )
-        const promotionSuccesses = appendedRecords.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+        const promotionSuccesses = appendedRecords.filter(
+          ({ event }) => event._tag === "TargetPromotionObservedSuccess"
+        )
         expect(promotionIntents).toHaveLength(1)
         expect(promotionAttemptIntents).toHaveLength(1)
         expect(promotionSuccesses).toHaveLength(1)
@@ -5411,9 +5419,11 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         )
         expect(completionCandidateAncestryIntents).toHaveLength(2)
         expect(completionCandidateAncestryObservations).toHaveLength(2)
-        expect(completionCandidateAncestryIntents.map(({ event }) =>
-          event._tag === "CompletionTaskCandidateAncestryReadIntended" ? event.attemptOrdinal : undefined
-        )).toEqual([1, 2])
+        expect(
+          completionCandidateAncestryIntents.map(({ event }) =>
+            event._tag === "CompletionTaskCandidateAncestryReadIntended" ? event.attemptOrdinal : undefined
+          )
+        ).toEqual([1, 2])
         const ancestryIntentEvents = completionCandidateAncestryIntents.flatMap(({ event }) =>
           event._tag === "CompletionTaskCandidateAncestryReadIntended" ? [event] : []
         )
@@ -5510,10 +5520,7 @@ it.effect.each([
     name: "ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination",
     premise: "unchanged"
   },
-  {
-    name: "S8 dependency blocks finality",
-    premise: "dependency"
-  },
+  { name: "S8 dependency blocks finality", premise: "dependency" },
   { name: "S8 changed revision blocks finality", premise: "revision" },
   { name: "S8 foreign claim blocks finality", premise: "claim" }
 ] as const)("$name", ({ premise }) => exerciseResumedFinality(premise))

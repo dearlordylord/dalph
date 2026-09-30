@@ -2649,3 +2649,106 @@ both remain outstanding. Preserve the accepted S1/S4/S8 outcomes and the
 The latest Base-scoped `lint:changed` disposition available for this
 integration candidate was exit 20 solely because owner-managed
 `vitest.config.ts` requires dprint formatting. That file was not changed here.
+
+## Materialized completion-claim replacement identity — 2026-09-30
+
+**Base and diagnosis.** This focused repair is based on `25d04fb7f7d2a642329608187cf81eac3fa008e8`; the integrated S8 candidate before repair is `799ad3fd39296a43b7ad4e21513afdc75de90848`. The controlled publication integration failure followed the exact completion hint and terminal reread, then rejected `ReplacePromotedTaskClaim` with `InvalidOperationIdentity`. The route keeps the request made by `completionClaimReplacementRequestFor(claim)`, which derives `completion-claim-replacement:${claim.promotionCorrelation.requestId}`. Proposal validation reconstructs and validates that exact claim-bound request. Materialization then uses its nested `request.operationId` as the `MaterializedDeliveryAction` owner ID. `production-hermetic-qualification-status-source.ts::validateOwnedEntry` previously applied only the generic UUIDv7/derived-ID check to that owner ID; the current status context had not derived this transition-specific ID, so it rejected the exact request after proposal validation. This confirms a missing accepted identity derivation at the status boundary, not a malformed request or a change to S8 chronology.
+
+**Repair and decisive mapping.** After validating the owner's proposal, the status validator now accepts the materialized ID only when an `IdentityFreeWorkflowRoute/ReplacePromotedTaskClaim` owner carries the exact ID recomputed from its validated completion claim. A foreign or mismatched owner ID rejects with `InvalidOperationIdentity`; all other materialized actions retain the generic UUIDv7/derived-ID guard. `production-hermetic-qualification-source.test.ts::accepts only the exact claim-derived replacement identity for its materialized action` proves the exact ID is absent from the pre-route `originalContext.derivedOperationIds`, accepts that exact materialized owner ID, and rejects a foreign ID with the typed `InvalidOperationIdentity` code and no registration. This test would reject the positive exact ID under the previous generic UUID/derived-ID validator. The controlled S8 assertion remains `packages/dalph/test/integration/direct-remote-publication.integration.test.ts::publishes M before local promotion and task completion, then releases its dependant from a later complete graph`; its original completion-hint, promotion, finality, cleanup, and later-complete-graph assertions are retained. No accepted scenario changed. **Scoped review disposition:** resolved for the operation-identity findings by the pre-route absent-ID assertion and typed negative rejection assertion; the separate timed-out S8 dependant-release gap remains open.
+
+**Verification.** The focused hermetic qualification test passed after the review controls were added: exit 0, `Test Files 1 passed (1)`, `Tests 1 passed | 33 skipped (34)`, duration 3.70s. The package build and Node 24 `pnpm typecheck` passed before the review-only assertion/error-code adjustment; typecheck was not rerun afterward. The exact-title controlled publication integration test did not pass: it timed out at 45 seconds waiting for dependant release. Its retained sidecar shows the replacement, task completion, `IntegrationFinalitySettled`, and cleanup events occurred, followed by repeated tracker wait/proposal observations; this repair therefore resolves the invalid replacement identity but does not close the controlled S8 scenario. Do not retry this unchanged case; first diagnose why the later complete graph does not release the dependant. Base-scoped `pnpm lint:changed` exited 20 because dprint found three files unformatted: two untouched candidate files (`packages/orchestrator/src/workflow/protocols/integration-finality/protocol.ts` and `packages/dalph/test/scenarios/production.test.ts`) and the new qualification test. The qualification test alone was then formatted; lint was not rerun. `git diff --check` passed after the review follow-up. No full gate, live S1, or external Run is part of this repair.
+
+**Bounded graph-diagnosis attempt (2026-09-30).** The prescribed exact-title command exited 1 in 0.274s with Vitest's literal `No test files found`: its resolved configuration excludes `packages/dalph/test/integration/direct-remote-publication.integration.test.ts` unless `DALPH_RUN_PUBLICATION_INTEGRATION=1` is set. No test body ran and no new failure sidecar was produced; this attempt is inconclusive about either graph boundary. The complete command output is retained at `/tmp/issue386-s8-graph-diagnostic-command.log`. The temporary test-only projection was removed. The next smallest action is an owner-authorized single exact-title run with the test's required inclusion environment, then inspect the safe journal-position/read/status projection before drawing conclusions about either interval.
+
+**Integration-enabled S8 result (2026-09-30).** The corrected single-worker exact-title command was `DALPH_RUN_PUBLICATION_INTEGRATION=1 pnpm exec vitest run packages/dalph/test/integration/direct-remote-publication.integration.test.ts -t 'publishes M before local promotion and task completion, then releases its dependant from a later complete graph' --maxWorkers=1`. It exited 0: `Test Files 1 passed (1)`, `Tests 1 passed | 4 skipped (5)`, duration 38.87s. This is the first correctly admitted 1/1 controlled S8 integration pass in this worktree; all existing assertions ran unchanged, with temporary projection code confined to the failure-only audit writer. Because the child succeeded, that writer did not produce the requested per-read sidecar, so the A/B graph-cause discriminator remains inconclusive. Preserve the earlier timeout as intermittent/unresolved; no retry is authorized here. The full command output is retained at `/tmp/issue386-s8-graph-diagnostic-enabled.log`. If a later owner-directed diagnosis is needed, the projection must also persist on successful completion before another exact-title run.
+
+## Missing replacement-intent recovery guard and route proof — 2026-09-30
+
+**Base and scope.** This bounded follow-up is on exact Base
+`25d04fb7f7d2a642329608187cf81eac3fa008e8`, HEAD
+`799ad3fd39296a43b7ad4e21513afdc75de90848`, preserving the existing dirty
+materialized-identity repair. No full gate or S1 was run.
+
+**Finding 1 — resolved.** If the first replacement protocol read finds the
+exact `CompletionTaskClaim` but the accepted journal has no matching
+`CompletionClaimReplacementIntended`, that tracker effect is unexplained. The
+protocol now returns `CompletionClaimOwnershipConflict` before appending a
+replacement outcome; it does not call replacement or deletion and never writes
+an intent retroactively. A mismatched existing intent fails with
+`CompletionClaimPremiseContradiction`. The exact-claim control is
+`packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts`
+test `fails closed when a completion claim is observed without prior replacement
+intent`; its promotion-only prefix has no replacement-intent event and asserts
+one claim read, zero replacement/deletion calls, and no replacement intent,
+attempt, or outcome.
+
+**Finding 2 — resolved.** The test `fails closed on a foreign claim without
+attempting replacement` now uses a promotion-only prefix with no replacement
+intent for both foreign active and foreign completion claims. It asserts typed
+ownership conflict, zero replacement/deletion calls, and no appended
+replacement intent, attempt, or outcome.
+
+**Finding 3 — open route-fixture proof.** The named route test
+`packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts`
+`executes completion-claim replacement and deletion through the configured
+boundary` now builds a current open graph, matching task specification and
+active-claim interpreter, deterministic operation allocator, trace recorder,
+and a read-order assertion requiring graph/specification/claim before
+replacement. The first focused attempt failed because the replacement call used
+the fixture's atomic lease (`DeliveryActionForwardBoundaryMismatch`, expected
+`InterruptibleBoundary`). The fixture was corrected to use an interruptible
+lease for that call while retaining the missing-boundary control. The second
+focused attempt still failed at
+`readPostPromotionFinalityPremises` with `IntegrationFinalityRuntimeUnavailable`
+(adapter line 197), so the route evidence is not proven. The first fixture
+hypothesis was provider order: its interpreter/allocator/trace/boundary had
+been provided inside `provideLiveJournal`, whose final `Effect.provide` installs
+the remote-delivery test layer. A bounded follow-up moved them outside that
+helper, matching the existing adapter-service test pattern, but the correctly
+selected route test still failed with the same error. The next distinguishing
+action is a test-only check of which of the five required services
+(`WorkflowInterpreter`, `OperationIdAllocator`, `WorkflowTrace`, `InRunJournal`,
+`AcceptedJournalReader`) is absent immediately before the adapter call; then
+repair only that fixture provision. No further route attempt is authorized in
+this task.
+
+**Focused evidence.** Both selected protocol tests passed in each focused
+invocation. First log: `/tmp/issue386-finality-repair-focused-tests.log`, exit
+1 overall because of the route boundary mismatch; summary `Test Files 1 failed
+| 1 passed (2)`, `Tests 1 failed | 2 passed | 93 skipped (96)`. Second log:
+`/tmp/issue386-finality-repair-focused-tests-r2.log`, exit 1 because of the
+route runtime-unavailable failure; the same summary counts apply. The controlled
+S8 integration test was not rerun. **Scoped disposition:** missing-intent
+runtime guard and foreign-claim control are resolved by the named passing
+protocol tests. The route fixture proof remains open and cannot be credited as
+passing S8 route evidence until the exact route test passes.
+
+**Provider-order follow-up.** The first invocation after changing provider
+order used an anchored title filter and ran no tests: exit 0, `Test Files 1
+skipped (1)`, `Tests 58 skipped (58)`, duration 1.08s. The correctly selected
+command was `pnpm exec vitest run packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts -t 'executes completion-claim replacement and deletion through the configured boundary' --maxWorkers=1`.
+It exited 1 with `IntegrationFinalityRuntimeUnavailable` at
+`readPostPromotionFinalityPremises` line 197; Vitest reports `Test Files 1
+failed (1)`, `Tests 1 failed | 57 skipped (58)`, duration 775ms (test body
+53ms). Full log: `/tmp/issue386-finality-route-test-r4.log`; the skipped
+invocation log is `/tmp/issue386-finality-route-test-r3.log`. No further
+attempt was made.
+
+**Route-fixture service and boundary follow-up (2026-09-30).** The bounded
+five-service projection supported alternative A: the successful replacement
+had `WorkflowInterpreter`, `OperationIdAllocator`, `WorkflowTrace`,
+`InRunJournal`, and `AcceptedJournalReader` present; the foreign-claim
+replacement fixture had the first three absent and both journal services
+present. Full diagnostic log:
+`/tmp/issue386-route-service-presence-diagnostic.log`. Providing those three
+services moved the focused case past that guard and exposed its next fixture
+defect: the foreign-claim replacement used `AtomicBoundary`, while this
+replacement protocol requires `InterruptibleBoundary`. The first repair
+verification log is `/tmp/issue386-route-service-repair-verification.log`.
+The foreign-claim and unreadable-claim fixture calls now use the same
+interruptible lease as the successful replacement. The exact-title route test
+then passed once: exit 0, `Test Files 1 passed (1)`,
+`Tests 1 passed | 57 skipped (58)`, duration 1.13s; log:
+`/tmp/issue386-route-service-repair-r2.log`. This closes the focused route
+fixture proof. No production behavior changed; this result gives no S1 or full
+gate credit.

@@ -4518,6 +4518,45 @@ describe("delivery proposal route matrix", () => {
         integrationFinalityFixture.target
       )
       const journal = harness.journal
+      const postPromotionGraph = projectTrackerSnapshot({
+        revision: "post-promotion-finality-route",
+        tasks: [
+          {
+            id: integrationFinalityFixture.taskId,
+            lifecycle: TaskLifecycle.cases.Open.make({}),
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        ]
+      })
+      if (postPromotionGraph._tag === "Invalid") {
+        return yield* Effect.die("the post-promotion finality graph fixture must be valid")
+      }
+      const readOrder = yield* Ref.make<ReadonlyArray<string>>([])
+      const recordRead = (name: string) => Ref.update(readOrder, (current) => [...current, name])
+      const traceTags = yield* Ref.make<ReadonlyArray<string>>([])
+      const interpreter = WorkflowInterpreter.of({
+        acquireTaskClaim: () => Effect.die("post-promotion finality does not acquire a task claim"),
+        readTaskClaim: () =>
+          recordRead("claim").pipe(
+            Effect.as(AuthoritativeTaskClaimObserved.make({ observation: integrationFinalityFixture.activeClaim }))
+          ),
+        readTaskWorktree: () => Effect.die("post-promotion finality does not read a worktree"),
+        readTargetLineage: () => Effect.die("post-promotion finality does not read target lineage"),
+        readTrackerGraph: () => recordRead("graph").pipe(Effect.as(postPromotionGraph.snapshot)),
+        readTaskWorkSpecification: () => recordRead("specification").pipe(Effect.as(finalitySpecification)),
+        reconcileTaskWorktree: () => Effect.die("post-promotion finality does not reconcile a worktree"),
+        recordTaskAttemptPlan: () => Effect.die("post-promotion finality does not plan an attempt"),
+        releaseTaskClaim: () => Effect.die("post-promotion finality does not release a task claim")
+      })
+      let postPromotionOperation = 0
+      const operationIds = OperationIdAllocator.of({
+        allocate: () =>
+          Effect.sync(() => {
+            postPromotionOperation += 1
+            return OperationId.make(`post-promotion-finality-read-${postPromotionOperation}`)
+          })
+      })
       let activeClaim: typeof integrationFinalityFixture.activeClaim | undefined =
         integrationFinalityFixture.activeClaim
       let completionMarker: typeof integrationFinalityFixture.claim | undefined
@@ -4541,10 +4580,14 @@ describe("delivery proposal route matrix", () => {
             activeClaim = undefined
           }),
         replaceTaskClaim: (request) =>
-          Effect.sync(() => {
-            completionMarker = request.claim
-            return request.claim
-          })
+          recordRead("replacement").pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                completionMarker = request.claim
+                return request.claim
+              })
+            )
+          )
       })
       const replacement = RunnableFrontierTransition.ReplacePromotedTaskClaim({
         request: completionClaimReplacementRequestFor(integrationFinalityFixture.claim),
@@ -4555,6 +4598,20 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing completion-claim replacement proposal")
       }
       const replacementAction = { _tag: "IdentityFreeAction" as const, proposal: replacementProposal }
+      const replacementBoundaryEntries = yield* Ref.make(0)
+      const replacementLease: DeliveryActionExecutionLease = {
+        ...inertLease,
+        forwardBoundary: {
+          _tag: "InterruptibleBoundary",
+          execution: {
+            run: (_intent, call, recordResult) =>
+              Ref.update(replacementBoundaryEntries, (count) => count + 1).pipe(
+                Effect.andThen(call),
+                Effect.flatMap(recordResult)
+              )
+          }
+        }
+      }
       expect(
         yield* executeIntegrationAction(
           replacementAction,
@@ -4567,12 +4624,23 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           replacementAction,
           replacement,
-          inertLease,
+          replacementLease,
           integrationFinalityFixture.target
-        ).pipe(Effect.provideService(CompletionClaimBoundary, boundary), (effect) =>
-          provideLiveJournal(effect, harness)
+        ).pipe(
+          (effect) => provideLiveJournal(effect, harness),
+          Effect.provideService(CompletionClaimBoundary, boundary),
+          Effect.provideService(WorkflowInterpreter, interpreter),
+          Effect.provideService(OperationIdAllocator, operationIds),
+          Effect.provideService(
+            WorkflowTrace,
+            WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
+          )
         )
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: replacementProposal.id })
+      expect(yield* Ref.get(readOrder)).toEqual(["graph", "specification", "claim", "replacement"])
+      expect(yield* Ref.get(traceTags)).toEqual(["OperationSelected", "OperationSelected", "OperationSelected"])
+      expect(yield* Ref.get(replacementBoundaryEntries)).toBe(1)
+      expect(acceptedFinalityHistory.plannedAttempt.taskRevision).toBe(finalitySpecification.fingerprint)
 
       const completionIntent = CompletionTaskIntendedEvent.make({
         request: integrationFinalityFixture.completionRequest,
@@ -4662,10 +4730,17 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           replacementAction,
           replacement,
-          inertLease,
+          replacementLease,
           integrationFinalityFixture.target
-        ).pipe(Effect.provideService(CompletionClaimBoundary, foreignBoundary), (effect) =>
-          provideLiveJournal(effect, waitingHarness)
+        ).pipe(
+          (effect) => provideLiveJournal(effect, waitingHarness),
+          Effect.provideService(CompletionClaimBoundary, foreignBoundary),
+          Effect.provideService(WorkflowInterpreter, interpreter),
+          Effect.provideService(OperationIdAllocator, operationIds),
+          Effect.provideService(
+            WorkflowTrace,
+            WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
+          )
         )
       ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimConflict" })
 
@@ -4687,10 +4762,17 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           replacementAction,
           replacement,
-          inertLease,
+          replacementLease,
           integrationFinalityFixture.target
-        ).pipe(Effect.provideService(CompletionClaimBoundary, unreadableBoundary), (effect) =>
-          provideLiveJournal(effect, waitingHarness)
+        ).pipe(
+          (effect) => provideLiveJournal(effect, waitingHarness),
+          Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
+          Effect.provideService(WorkflowInterpreter, interpreter),
+          Effect.provideService(OperationIdAllocator, operationIds),
+          Effect.provideService(
+            WorkflowTrace,
+            WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
+          )
         )
       ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimReadUnavailable" })
 
