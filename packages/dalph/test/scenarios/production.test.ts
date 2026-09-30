@@ -4373,6 +4373,7 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
       const remoteCalls = yield* Ref.make<ReadonlyArray<string>>([])
       const integratorCalls = yield* Ref.make<ReadonlyArray<string>>([])
       const executorCommands = yield* Ref.make<ReadonlyArray<string>>([])
+      const executorObservations = yield* Ref.make(0)
       const trackerReads = yield* Ref.make(0)
       const completionReads = yield* Ref.make(0)
       const promotionCalls = yield* Ref.make({ compareAndSet: 0, read: 0 })
@@ -4629,10 +4630,14 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
       })
       const executor = PlannedAttemptExecutor.of({
         observe: () =>
-          Effect.succeed(
-            PlannedAttemptExecutorProjection.cases.NoReport.make({
-              correlation: plannedAttemptExecutorCorrelation(attempt)
-            })
+          Ref.update(executorObservations, (count) => count + 1).pipe(
+            Effect.andThen(
+              Effect.succeed(
+                PlannedAttemptExecutorProjection.cases.NoReport.make({
+                  correlation: plannedAttemptExecutorCorrelation(attempt)
+                })
+              )
+            )
           ),
         requestSuspension: () =>
           Ref.update(executorCommands, (calls) => [...calls, "Suspend"]).pipe(
@@ -5143,7 +5148,11 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         const currentGraphObservation = currentGraphBoundary.event.observation
         expect(currentGraphBoundary.position).toBeGreaterThan(promotion.position)
         expect(currentGraphBoundary.event.operationId).toBe(currentGraphObservation.operationId)
-        expect(currentGraphObservation).toMatchObject({ operationId: currentGraphObservation.operationId, rootTaskId: taskId, target })
+        expect(currentGraphObservation).toMatchObject({
+          operationId: currentGraphObservation.operationId,
+          rootTaskId: taskId,
+          target
+        })
         expect(currentGraphObservation.factFamilies.map(({ freshness }) => freshness.operationId)).toEqual(
           Array(5).fill(currentGraphObservation.operationId)
         )
@@ -5156,7 +5165,10 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
               event.observation._tag === "CompleteTaskTrackerFacts" &&
               event.operationId === currentGraphObservation.priorFullObservationOperationId
           )
-          expect(priorFullObservation, "successful compact reconfirmation must resolve its exact prior full graph").toBeDefined()
+          expect(
+            priorFullObservation,
+            "successful compact reconfirmation must resolve its exact prior full graph"
+          ).toBeDefined()
           if (
             priorFullObservation === undefined ||
             priorFullObservation.event._tag !== "TaskTrackerFactsObserved" ||
@@ -5193,14 +5205,12 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
           premise === "dependency" ? [taskId, unfinishedPrerequisiteTaskId].sort() : [taskId]
         )
         expect(membership.memberTaskIds).toEqual(identities.taskIds)
-        expect(lifecycles.lifecycles.find(({ taskId: observedTaskId }) => observedTaskId === taskId)?.lifecycle).toEqual(
-          { _tag: "Open" }
-        )
-        expect(prerequisites.prerequisites.find(({ taskId: observedTaskId }) => observedTaskId === taskId))
-          .toMatchObject({
-            prerequisiteTaskIds: premise === "dependency" ? [unfinishedPrerequisiteTaskId] : [],
-            taskId
-          })
+        expect(
+          lifecycles.lifecycles.find(({ taskId: observedTaskId }) => observedTaskId === taskId)?.lifecycle
+        ).toEqual({ _tag: "Open" })
+        expect(
+          prerequisites.prerequisites.find(({ taskId: observedTaskId }) => observedTaskId === taskId)
+        ).toMatchObject({ prerequisiteTaskIds: premise === "dependency" ? [unfinishedPrerequisiteTaskId] : [], taskId })
         expect(groupings.groupings.find(({ taskId: observedTaskId }) => observedTaskId === taskId)).toMatchObject({
           parentTaskId: null,
           taskId
@@ -5371,7 +5381,8 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         for (const [index, intent] of completionReadIntents.entries()) {
           const observation = completionReadObservations[index]
           expect(observation).toBeDefined()
-          if (observation === undefined) return yield* Effect.die("completion read intent lacks its durable facts result")
+          if (observation === undefined)
+            return yield* Effect.die("completion read intent lacks its durable facts result")
           expect(observation.position).toBeGreaterThan(intent.position)
           expect(observation.observation.operationId).toBe(intent.operation.operationId)
         }
@@ -5379,7 +5390,9 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         const promotionAttemptIntents = appendedRecords.filter(
           ({ event }) => event._tag === "TargetPromotionAttemptIntended"
         )
-        const promotionSuccesses = appendedRecords.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+        const promotionSuccesses = appendedRecords.filter(
+          ({ event }) => event._tag === "TargetPromotionObservedSuccess"
+        )
         expect(promotionIntents).toHaveLength(1)
         expect(promotionAttemptIntents).toHaveLength(1)
         expect(promotionSuccesses).toHaveLength(1)
@@ -5411,9 +5424,11 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         )
         expect(completionCandidateAncestryIntents).toHaveLength(2)
         expect(completionCandidateAncestryObservations).toHaveLength(2)
-        expect(completionCandidateAncestryIntents.map(({ event }) =>
-          event._tag === "CompletionTaskCandidateAncestryReadIntended" ? event.attemptOrdinal : undefined
-        )).toEqual([1, 2])
+        expect(
+          completionCandidateAncestryIntents.map(({ event }) =>
+            event._tag === "CompletionTaskCandidateAncestryReadIntended" ? event.attemptOrdinal : undefined
+          )
+        ).toEqual([1, 2])
         const ancestryIntentEvents = completionCandidateAncestryIntents.flatMap(({ event }) =>
           event._tag === "CompletionTaskCandidateAncestryReadIntended" ? [event] : []
         )
@@ -5450,12 +5465,32 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         expect(yield* Ref.get(completionAppliedCalls)).toBe(0)
         expect(yield* Ref.get(completionLookups)).toEqual([])
         expect(yield* Ref.get(completionCalls)).toEqual([])
+        expect(yield* Ref.get(completionAttempts)).toBe(0)
         expect(yield* Ref.get(lifecycle)).toBe("Open")
         expect(yield* Ref.get(trackerClaim)).toEqual(premise === "claim" ? foreignClaim : claim)
         expect(yield* Ref.get(completionClaimReads)).toEqual([])
         expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
         expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 1, read: 1 })
         expect(yield* Ref.get(remoteCalls)).toEqual([])
+        expect(yield* Ref.get(integratorCalls)).toEqual([])
+        expect(yield* Ref.get(executorCommands)).toEqual([])
+        expect(yield* Ref.get(executorObservations)).toBe(0)
+        expect(yield* Ref.get(candidateEvidenceReads)).toBe(0)
+        expect(yield* Ref.get(candidateObservations)).toBe(0)
+        expect(yield* Ref.get(candidateRemovals)).toBe(0)
+        const candidateResourcesAfterWait = yield* Ref.get(candidateResources)
+        expect(candidateResourcesAfterWait.size).toBe(1)
+        expect(candidateResourcesAfterWait.get(candidateResource)).toBe(candidateSessionId)
+        expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+        expect(after.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+        expect(after.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+        expect(
+          after.flatMap(({ event }) =>
+            event._tag === "RemotePublicationAttemptIntended" ? [event.attemptOrdinal] : []
+          )
+        ).toEqual([1])
+        expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(1)
+        expect(after.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toEqual([])
       }
       expect(yield* Ref.get(trackerReads)).toBeGreaterThan(0)
       if (premise === "unchanged") {
@@ -5510,10 +5545,7 @@ it.effect.each([
     name: "ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination",
     premise: "unchanged"
   },
-  {
-    name: "S8 dependency blocks finality",
-    premise: "dependency"
-  },
+  { name: "S8 dependency blocks finality", premise: "dependency" },
   { name: "S8 changed revision blocks finality", premise: "revision" },
   { name: "S8 foreign claim blocks finality", premise: "claim" }
 ] as const)("$name", ({ premise }) => exerciseResumedFinality(premise))
