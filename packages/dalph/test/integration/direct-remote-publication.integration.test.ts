@@ -634,6 +634,7 @@ it.live(
                 (candidate) =>
                   candidate._tag === "TaskTrackerFactsObserved" &&
                   candidate.evidence._tag === "CompleteTaskTrackerFacts" &&
+                  candidate.originatingActionOperationId === reconfirmation.priorFullObservationOperationId &&
                   candidate.evidence.operationId === reconfirmation.priorFullObservationOperationId &&
                   reconfirmationMatchesPriorFullObservation(reconfirmation, candidate.evidence)
               )

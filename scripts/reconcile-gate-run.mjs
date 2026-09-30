@@ -18,6 +18,17 @@ import {
   withFileLock
 } from "./gate-custody-records.mjs"
 import { closeAndDigestPreviousBootInventoryLocked, closeAndProveCustodyStopped } from "./gate-registration.mjs"
+import { reconcileGateRecovery } from "./gate-recovery.mjs"
+
+const reconcileRecovery = ({ run, runDirectory, runId }) =>
+  reconcileGateRecovery({
+    identity: existsSync(join(runDirectory, "identity.json"))
+      ? readRecord(join(runDirectory, "identity.json"))
+      : undefined,
+    location: repositoryLocation(run.worktree),
+    run,
+    runId
+  })
 export const reconcileGateRun = ({ runDirectory, runId }) => {
   const run = validateRun(runDirectory, runId)
   return withFileLock(run.worktreeLock, () =>
@@ -31,6 +42,7 @@ export const reconcileGateRun = ({ runDirectory, runId }) => {
         reconciledAt: wallClockTimestamp(),
         qualification: "UNPROVEN"
       })
+      reconcileRecovery({ run, runDirectory, runId })
       for (const path of [run.slotFence, run.worktreeFence]) {
         if (!existsSync(path)) continue
         const fence = readRecord(path)
@@ -204,6 +216,7 @@ export const reconcilePreviousBootGateRun = ({ failurePhase, previousBootId, run
           )
             throw new Error("Previous-boot proof fence digest does not match current custody")
           injectFailure(failurePhase, "proof-validated")
+          reconcileRecovery({ run, runDirectory, runId })
           if (slotFence !== undefined) clearFence(slotFence, { runDirectory, run, path: run.slotFence })
           injectFailure(failurePhase, "slot-cleared")
           if (worktreeFence !== undefined) clearFence(worktreeFence, { runDirectory, run, path: run.worktreeFence })
@@ -255,6 +268,7 @@ export const reconcilePreviousBootGateRun = ({ failurePhase, previousBootId, run
         }
         atomicRecord(proofPath, proof)
         injectFailure(failurePhase, "proof-published")
+        reconcileRecovery({ run, runDirectory, runId })
         clearFence(initialSlotFence, { runDirectory, run, path: run.slotFence })
         injectFailure(failurePhase, "slot-cleared")
         clearFence(initialWorktreeFence, { runDirectory, run, path: run.worktreeFence })

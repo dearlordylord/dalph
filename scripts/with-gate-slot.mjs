@@ -24,6 +24,23 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
   )
 const entryName = basename(commandArguments[1] ?? "")
 const context = inheritedCustody()
+const recoveryAction =
+  process.env.DALPH_GATE_RECOVERY_MODE !== undefined ||
+  context?.run.commandArguments.some((argument) =>
+    ["run-gate-diagnosis.mjs", "run-gate-repair-verification.mjs"].includes(basename(argument))
+  )
+if (
+  recoveryAction &&
+  [
+    "run-baseline.mjs",
+    "run-formal-gate.mjs",
+    "run-hosted-quality-stage.mjs",
+    "run-preflight.mjs",
+    "run-quality-gate.mjs",
+    "run-candidate-checks.mjs"
+  ].includes(entryName)
+)
+  throw new Error("A focused gate recovery action cannot launch a broad admitted command")
 const requiredExecutables = [
   "run-hosted-quality-stage.mjs",
   "run-quality-gate.mjs",

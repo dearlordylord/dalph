@@ -66,6 +66,11 @@ export const recordedCatalogQualityGate = Object.freeze({
 // unchanged while allowing the measured source audit headroom to complete.
 const CAPABILITY_REGISTRATION_TIMEOUT = 120 * SECOND
 
+// Recovery qualification measured the custody and resume suites at 70.5s and
+// 98.5s under admitted execution. Two minutes keeps both finite without making
+// normal host variance a false product failure. The maintained Lab completed
+// just below its former five-minute edge, so its bounded headroom is seven minutes.
+const GATE_CONTROL_TIMEOUT = 2 * 60 * SECOND
 // A timed maintained-cassette smoke completed in 330.592s under shared-host
 // contention; two capstone DOM scenarios consumed 165.727s of that run. Seven
 // minutes retains a finite stop and leaves room for typecheck/build plus runner
@@ -120,9 +125,9 @@ export const preflightQualityGates = (baseSha) => [
   complexityQualityGate(baseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:coverage:explanation"], name: "coverage explanation controls", timeout: 60 * SECOND },
-  { args: ["test:gate-custody"], name: "gate custody controls", timeout: 60 * SECOND },
+  { args: ["test:gate-custody"], name: "gate custody controls", timeout: GATE_CONTROL_TIMEOUT },
   { args: ["test:gate-previous-boot-reconcile"], name: "previous-boot gate reconciliation", timeout: 60 * SECOND },
-  { args: ["test:gate-resume"], name: "gate resume controls", timeout: 60 * SECOND },
+  { args: ["test:gate-resume"], name: "gate resume controls", timeout: GATE_CONTROL_TIMEOUT },
   { args: ["test:preflight"], name: "preflight controls", timeout: 60 * SECOND },
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
   { args: ["test:formal:controls"], name: "formal verification controls", timeout: 60 * SECOND },

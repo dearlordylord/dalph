@@ -46,14 +46,15 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 ## Verification and closure
 
-- Delegate `check:all` and other gates to a subagent. Measure and report each
-  gate's elapsed wall-clock time.
-
-- After a failed qualification, run the actual failing test, repair its cause,
-  and observe the repaired test passing before another full run. Logs are
-  diagnostic evidence; no diagnosis declaration or repair permit admits a run.
-  An incomplete process still retains its custody fence until stopped writers
-  are proved through reconciliation.
+- A failed full qualification creates a worktree recovery obstruction. Before
+  another full qualification, execute its focused diagnostic action with an
+  explicit question, competing explanations, and distinguishing observation.
+  The harness must match both its predicted command outcome and expected output.
+  Candidate changes, delegation, compaction, and resumed sessions do not clear
+  the obstruction. A diagnosis records which competing explanation its observed
+  outcome supports; only a subsequent passing verification of the repaired
+  candidate admits one qualification attempt. An inconclusive diagnosis or
+  failed verification requires changed work rather than a broad rerun.
 - Before starting or waiting on an operation expected to exceed one minute,
   record its expected duration and wall-clock stop time. At that time, stop
   safely, preserve evidence, and name the next discriminating action before a
@@ -83,10 +84,10 @@ questions. Reuse guidance already read unless it changed or scope changed.
   `GIT_OPTIONAL_LOCKS=0`; shared tools, dependencies, Git configuration, packed
   refs, and unknown shared writes wait. Blocking edges still forbid
   implementation, though read-only planning may continue.
-- `pnpm check:all --candidate=<base sha>` runs the clean frozen candidate's
-  own command manifest once. Ordinary qualification does not resume stages or
-  reuse cross-worktree formal certification. Interrupted runs restart after
-  stopped-writer reconciliation. Never credit missing or failed stages.
+- A maintainer can resume only `pnpm check:all --candidate=<base sha> --resume=<run-id>`
+  in the same worktree with complete monitored input/artifact evidence. Fresh and
+  resumed full gates require Python 3 with Linux inotify; failed/unproven stages
+  and the remaining suffix run normally. Never manually skip required stages.
 - Before declaring Playwright environment-blocked, try the documented
   [browser setup](docs/DEVELOPMENT.md#browser-and-real-host-setup); report the exact unrun command
   and missing dependency if privileges block setup.

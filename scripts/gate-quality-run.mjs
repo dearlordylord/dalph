@@ -165,6 +165,18 @@ export const executeResumableQualityGate = async ({
   let retainedFormal
   let formal
   const entries = stageManifest.map(() => ({ kind: "pending" }))
+  const publishComposite = (finalized) =>
+    atomicRecord(join(runDirectory, "composite.json"), {
+      version: 1,
+      finalized,
+      runId: run.runId,
+      logicalInvocation,
+      manifest: stageManifest,
+      entries,
+      successfulOutputLines,
+      formalOutputLineCount,
+      formal
+    })
   try {
     let prefix = []
     if (resumeRunId !== undefined) {
@@ -221,6 +233,8 @@ export const executeResumableQualityGate = async ({
           entries[stage.ordinal].copiedCoverage = { directory: coverageDirectory, artifact: copied["@coverage"] }
         }
         report(`Reused quality stage ${stage.stageId} from ${stage.runId}`)
+        await guard.assertUnchanged()
+        publishComposite(false)
       }
     }
     const executeStage = async (stage, signal) => {
@@ -265,16 +279,24 @@ export const executeResumableQualityGate = async ({
           stageName: stage.id,
           stageOutputLines: result.outputLineCount
         })
+        const artifacts = captureResumeArtifacts({
+          worktree: run.worktree,
+          roots: stage.artifactRoots,
+          coverageDirectory: join(run.reportDirectory, "coverage")
+        })
+        const inputGuard = {
+          ...(await (guard.checkpoint ?? guard.finish)()),
+          stageId: stage.id,
+          ordinal,
+          obligationId: result.gateObligationId
+        }
         atomicRecord(path, {
           ...started,
           outcome: "passed",
           obligationId: result.gateObligationId,
           outputLineCount: result.outputLineCount,
-          artifacts: captureResumeArtifacts({
-            worktree: run.worktree,
-            roots: stage.artifactRoots,
-            coverageDirectory: join(run.reportDirectory, "coverage")
-          })
+          artifacts,
+          inputGuard
         })
         return { ...result, outputLineCount: 0, stageEvidencePath: path }
       } catch (error) {
@@ -374,16 +396,7 @@ export const executeResumableQualityGate = async ({
       }
     }
     atomicRecord(join(runDirectory, "input-guard.json"), finalGuard)
-    atomicRecord(join(runDirectory, "composite.json"), {
-      version: 1,
-      runId: run.runId,
-      logicalInvocation,
-      manifest: stageManifest,
-      entries,
-      successfulOutputLines,
-      formalOutputLineCount,
-      formal
-    })
+    publishComposite(true)
     if (failure !== undefined) throw failure
     return { successfulOutputLines }
   } finally {

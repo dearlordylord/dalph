@@ -13,6 +13,17 @@ export const inputGuardProven = (identity, guard) =>
   guard.inputDigest === identity.inputDigest &&
   guard.sourceInputDigest === identity.sourceInputDigest
 
+const stageInputGuardProven = (identity, result, stage, ordinal) =>
+  inputGuardProven(identity, result.inputGuard) &&
+  result.inputGuard.stageId === stage.id &&
+  result.inputGuard.ordinal === ordinal &&
+  result.inputGuard.obligationId === result.obligationId
+
+export const resumeStageInputProven = ({ identity, ordinal, result, stage, terminalGuard }) =>
+  terminalGuard === undefined
+    ? stageInputGuardProven(identity, result, stage, ordinal)
+    : inputGuardProven(identity, terminalGuard)
+
 /** Reuse only the earliest complete, proven quality-stage results of this exact attempt. */
 export const selectResumePrefix = ({ currentArtifacts, currentIdentity, priorEvidence, stageManifest }) => {
   const resume = priorEvidence.resume
@@ -20,7 +31,8 @@ export const selectResumePrefix = ({ currentArtifacts, currentIdentity, priorEvi
     return refusal("Prior run lacks the stronger resumable input schema")
   if (priorEvidence.custody !== "stopped" || priorEvidence.registration !== "closed")
     return refusal("Prior writer custody is not stopped and closed")
-  if (!inputGuardProven(resume.identity, resume.guard))
+  const terminalGuardProven = inputGuardProven(resume.identity, resume.guard)
+  if (resume.guard !== undefined && !terminalGuardProven)
     return refusal("Prior input observation is incomplete or changed")
   if (priorEvidence.worktree !== currentIdentity.worktree) return refusal("Resume belongs to another worktree")
   if (
@@ -36,6 +48,8 @@ export const selectResumePrefix = ({ currentArtifacts, currentIdentity, priorEvi
   for (const [ordinal, stage] of stageManifest.entries()) {
     const result = resume.stages[ordinal]
     if (result === undefined || result.outcome !== "passed") break
+    if (!resumeStageInputProven({ identity: resume.identity, ordinal, result, stage, terminalGuard: resume.guard }))
+      break
     if (
       result.stageId !== stage.id ||
       result.ordinal !== ordinal ||

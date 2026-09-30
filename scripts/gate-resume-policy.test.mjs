@@ -63,6 +63,60 @@ void test("late failure reuses only the contiguous proven prefix and retains ori
   assert.equal(result.successfulOutputLines, 12)
   assert.equal(result.prefix[0].runId, "original")
 })
+void test("an interrupted run reuses only stages with exact input checkpoints", () => {
+  const args = inputs()
+  delete args.priorEvidence.resume.guard
+  const first = args.priorEvidence.resume.stages[0]
+  first.inputGuard = {
+    version: 1,
+    observerVersion: 1,
+    unchanged: true,
+    ready: true,
+    drained: true,
+    inputDigest: args.priorEvidence.resume.identity.inputDigest,
+    sourceInputDigest: args.priorEvidence.resume.identity.sourceInputDigest,
+    stageId: first.stageId,
+    ordinal: first.ordinal,
+    obligationId: first.obligationId
+  }
+  const result = selectResumePrefix(args)
+  assert.equal(result.status, "selected")
+  assert.deepEqual(
+    result.prefix.map((stage) => stage.stageId),
+    ["types"]
+  )
+})
+for (const [name, mutate] of [
+  ["stage identity", (guard) => (guard.stageId = "other")],
+  ["stage ordinal", (guard) => (guard.ordinal = 2)],
+  ["stage obligation", (guard) => (guard.obligationId = "other")]
+])
+  void test(`an interrupted run refuses a checkpoint with mismatched ${String(name)}`, () => {
+    const args = inputs()
+    delete args.priorEvidence.resume.guard
+    const first = args.priorEvidence.resume.stages[0]
+    first.inputGuard = {
+      version: 1,
+      observerVersion: 1,
+      unchanged: true,
+      ready: true,
+      drained: true,
+      inputDigest: args.priorEvidence.resume.identity.inputDigest,
+      sourceInputDigest: args.priorEvidence.resume.identity.sourceInputDigest,
+      stageId: first.stageId,
+      ordinal: first.ordinal,
+      obligationId: first.obligationId
+    }
+    mutate(first.inputGuard)
+    assert.deepEqual(selectResumePrefix(args).prefix, [])
+  })
+void test("an interrupted run cannot credit a passed stage without its checkpoint", () => {
+  const args = inputs()
+  delete args.priorEvidence.resume.guard
+  const result = selectResumePrefix(args)
+  assert.equal(result.status, "selected")
+  assert.deepEqual(result.prefix, [])
+})
 void test("earlier census failure never turns later successes into reusable islands", () => {
   const args = inputs()
   args.priorEvidence.resume.stages[0].outcome = "failed"

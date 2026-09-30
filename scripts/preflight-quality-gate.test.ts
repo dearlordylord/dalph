@@ -42,11 +42,11 @@ it("selects the exact narrow inventory for the pinned Base paths and the broad s
 })
 
 it("keeps the split custody controls inside their original bounded deadline", () => {
-  expect(
-    preflightQualityGates("fixture-base").find(
-      ({ args }: { readonly args: ReadonlyArray<string> }) => args[0] === "test:gate-custody"
-    )
-  ).toMatchObject({ timeout: 60_000 })
+  const gates = preflightQualityGates("fixture-base")
+  for (const command of ["test:gate-custody", "test:gate-resume"])
+    expect(gates.find(({ args }: { readonly args: ReadonlyArray<string> }) => args[0] === command)).toMatchObject({
+      timeout: 120_000
+    })
 })
 
 it(

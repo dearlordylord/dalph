@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "02e72da002b8f9674c5f304dcbb064e9869bcb4d3b8fefaf01b58cd11ef69878",
+  "digest": "636eb7d7cd016a3cff938d75dc95f6b932a7b15f8da5f4ac0b51b680c2b22053",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -455,6 +455,7 @@
     "scripts/gate-deadline.mjs",
     "scripts/gate-input-observer.mjs",
     "scripts/gate-quality-evidence.mjs",
+    "scripts/gate-recovery.mjs",
     "scripts/gate-registration.mjs",
     "scripts/gate-resume-artifacts.mjs",
     "scripts/gate-resume-policy.mjs",
