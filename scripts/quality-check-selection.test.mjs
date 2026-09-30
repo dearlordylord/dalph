@@ -49,15 +49,7 @@ void test("tooling, shared configuration, and unknown changes retain infrastruct
     const selected = ids(paths)
     for (const id of ["custody-controls", "resume-controls", "preflight-controls", "recorded-catalog"])
       assert.ok(selected.includes(id), `${JSON.stringify(paths)}: ${id}`)
-    assert.equal(
-      selected.includes("reducer-lab"),
-      paths === undefined ||
-        paths.length === 0 ||
-        paths[0] === "package.json" ||
-        paths[0] === "pnpm-lock.yaml" ||
-        paths[0] === "vitest.config.ts",
-      JSON.stringify(paths)
-    )
+    assert.equal(selected.includes("reducer-lab"), paths === undefined || paths.length === 0, JSON.stringify(paths))
     assert.ok(!selected.includes("complexity"))
     assert.ok(!selected.includes("duplicates"))
   }

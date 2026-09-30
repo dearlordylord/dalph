@@ -95,11 +95,12 @@ Choose checks by affected behavior, not by commit or handoff alone:
 Gate infrastructure controls run for tooling and shared configuration changes;
 ordinary product edits omit them. Missing change evidence retains the controls.
 Recorded-catalog checks run for cassette, schema, projection, Lab, and shared
-configuration changes. The Reducer Lab check runs for Lab and shared
-configuration changes; a change to an authored cassette does not also require
-its UI/trace projection in the blocking preflight. Run `pnpm check:lab`
-explicitly when changing that projection or investigating it. Selection
-retains deleted and renamed source paths.
+configuration changes. The Reducer Lab check runs automatically only for
+changes under `prototypes/reducer-lab` or when changed-path evidence is
+unavailable; an authored cassette or shared configuration change does not
+also require its UI/trace projection in the blocking preflight. Run
+`pnpm check:lab` explicitly when changing that projection or investigating
+it. Selection retains deleted and renamed source paths.
 Complexity, duplication, and unused-export checks are optional trend diagnostics,
 not delivery blockers; `lint` owns formatter and code-lint correctness only.
 This reduces heuristic and sampling assurance without changing application tests.
