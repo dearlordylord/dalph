@@ -24,6 +24,17 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   and run a distinguishing experiment. More reviewers, time, or gate reruns alone
   are not new evidence. Continue independent authorized work; ask only about
   unresolved choices that materially change accepted outcomes.
+- Before a focused authored-cassette diagnostic, trace each requested fact to
+  the adapter actually selected by that story (including conditional interpreter
+  routes). Name the observation point and prove it executes *before* the first
+  possible mismatch or assertion failure. A hook reached only after the failed
+  boundary, or an assertion skipped by an earlier failure, cannot distinguish
+  the alternatives. Record the required fields and a missing-field outcome
+  before one bounded run. If a required field is absent, stop and repair the
+  observation route; do not edit a cursor position or append a story response
+  based on a partial trace. Prefer event identity and correlation over numeric
+  cursor positions when carrying evidence across fixture revisions. This is
+  diagnostic procedure for test adapters and changes no Dalph runtime behavior.
 - Apply the [#307 churn controls](postmortems/issue-307-qualification-churn.md#prevention-plan-and-validation)
   after two non-advancing attempts or 30 minutes of active repair without a new
   distinguishing result. Within the next 10 minutes of active work, record the
