@@ -4883,6 +4883,29 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
           cause: { _tag: "AuthenticationDenied" },
           correlation: oldProof.correlation
         })
+        const publicationOutcomes = after.filter(
+          ({ event }) => event._tag === "RemotePublicationRetained" || event._tag === "RemotePublicationSucceeded"
+        )
+        expect(publicationOutcomes.at(-1)).toEqual(resumedDenials.at(-1))
+        const resumedDenialIndex = after.findLastIndex(
+          ({ event }) =>
+            event._tag === "RemotePublicationRetained" &&
+            event.authorization._tag === "ResumeRequest" &&
+            event.authorization.requestId === request.requestId &&
+            event.cause._tag === "AuthenticationDenied"
+        )
+        expect(resumedDenialIndex).toBeGreaterThanOrEqual(0)
+        const postDenialSuffix = after.slice(resumedDenialIndex + 1)
+        const forbiddenForwardEvents = new Set<string>([
+          "RemotePublicationIntended",
+          "RemotePublicationAttemptIntended",
+          "RemotePublicationSucceeded",
+          "IntegratorRunStarted",
+          "TargetPromotionObservedSuccess",
+          "CompletionTaskAttemptIntended",
+          "IntegrationFinalitySettled"
+        ])
+        expect(postDenialSuffix.filter(({ event }) => forbiddenForwardEvents.has(event._tag))).toHaveLength(0)
 
         const admissionIntents = appendedRecords.filter(
           ({ event }) => event._tag === "RemotePublicationAdmissionReadIntended"

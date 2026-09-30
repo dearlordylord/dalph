@@ -268,3 +268,33 @@ cases, and Base-pinned lint passed again. Typecheck and lint were budgeted at
 under 2 minutes each with a `2026-09-30T03:00:00Z` stop and completed before
 that stop. Final `git diff --check` passed (exit 0). No production source
 changed; no commit was created during this scoped repair.
+
+## Resumed denial remains terminal — 2026-09-30
+
+**Accepted mapping and review closure:** Under direct-publication S5/S6, the
+resumed authentication-denial case is
+`packages/dalph/test/scenarios/production.test.ts::ordinary production Run does not retry a conclusive resumed authentication denial`.
+Sol's remaining finding was that the case preserved the exact denial and
+attempt count but did not prove the denial remained the latest durable
+publication outcome or rule out later forward journal events. The test now
+orders all `RemotePublicationRetained` and `RemotePublicationSucceeded`
+outcomes and requires the last one to be the exact resumed authentication
+denial. It checks the suffix after that denial for no
+`RemotePublicationIntended`, `RemotePublicationAttemptIntended`,
+`RemotePublicationSucceeded`, `IntegratorRunStarted`,
+`TargetPromotionObservedSuccess`, `CompletionTaskAttemptIntended`, or
+`IntegrationFinalitySettled`. Existing exact request/cause/correlation,
+admission, graph, claim, lineage, and `[1, 2]` attempt-history assertions are
+preserved; no historical publication outcome is required to be absent.
+
+**Verification:** On Node `v24.20.0`, the three exact candidate cases passed
+sequentially: resumed denial, 1/1 in 5.31s; receipt A after request B, 1/1 in
+1.45s; denial after restart, 1/1 in 1.25s. `pnpm typecheck` passed in 14.83s
+(exit 0; only non-fatal Effect suggestions). Base-pinned
+`DALPH_DIAGNOSTICS_BASE=6095f600641927e6919a8f4030b01fb185af1e3a pnpm
+lint:changed` passed in 2.72s and selected only
+`packages/dalph/test/scenarios/production.test.ts`. The initial test command
+could not start because this worktree lacked `node_modules`; frozen offline
+install completed in 3.26s and restored the locked dependencies. All checks
+completed before the task's `2026-09-30T05:12:00Z` stop. No production
+behavior changed.
