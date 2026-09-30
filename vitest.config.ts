@@ -31,6 +31,7 @@ const ordinaryWorkerCount = 4
 // local/hosted runners without starving bounded Git process reconciliation.
 const coverageWorkerCount = 2
 const runDeliveryRepeatability = processEnvironment["DALPH_RUN_DELIVERY_REPEATABILITY"] === "1"
+const runIntegrationCapstone = processEnvironment["DALPH_RUN_INTEGRATION_CAPSTONE"] === "1"
 const runQualificationTests = processEnvironment["DALPH_RUN_QUALIFICATION_TESTS"] === "1"
 const runPublicationIntegration = processEnvironment["DALPH_RUN_PUBLICATION_INTEGRATION"] === "1"
 const ordinaryTestIncludes = [
@@ -47,7 +48,10 @@ const selectedTestExcludes = (mode: string) => [
   ...(runPublicationIntegration ? [] : [publicationIntegrationTestPattern]),
   ...(runQualificationTests || runDeliveryRepeatability
     ? []
-    : [deliveryRepeatabilityTestPattern, capabilityRegistrationTestPattern, recordedCatalogCoverageTestPattern]),
+    : [deliveryRepeatabilityTestPattern, capabilityRegistrationTestPattern]),
+  ...(runQualificationTests || runDeliveryRepeatability || runIntegrationCapstone
+    ? []
+    : [recordedCatalogCoverageTestPattern]),
   ...(mode === "coverage" ? [performanceTestPattern, publicRecoveryProcessBoundaryTestPattern] : [])
 ]
 // Inline projects do not inherit root Vite aliases. Every test interpretation
