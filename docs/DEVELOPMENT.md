@@ -104,6 +104,11 @@ unavailable; an authored cassette or shared configuration change does not
 also require its UI/trace projection in the blocking preflight. Run
 `pnpm check:lab` explicitly when changing that projection or investigating
 it. Selection retains deleted and renamed source paths.
+The seven-task `deliveryInvariantStoryCapstone` is excluded from routine cassette
+execution and the recorded-catalog round trip. Run `pnpm test:integration:capstone`
+explicitly for its S8 acceptance proof. Its current fixture chronology is under
+repair, so a passing routine gate does not close S8. This selection changes test
+policy only; Dalph production runtime and its accepted behavior do not change.
 Complexity, duplication, and unused-export checks are optional trend diagnostics,
 not delivery blockers; `lint` owns formatter and code-lint correctness only.
 This reduces heuristic and sampling assurance without changing application tests.
@@ -229,8 +234,9 @@ All commands below use `pnpm`. Script definitions live in
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
 | `test` | Run tests and report advisory production/evaluation and changed-line coverage; takes an admission slot. |
-| `test:cassettes:memory` | Run the in-memory cassette test directory without coverage or built CLI startup. Dedicated recorded-catalog and delivery-repeatability tests retain their own commands. |
-| `test:recorded-catalog` | Run the maintained in-memory recorded-cassette catalog without starting the built production CLI. |
+| `test:cassettes:memory` | Run the in-memory cassette test directory without coverage or built CLI startup. The seven-task delivery capstone is manual through `test:integration:capstone`; dedicated recorded-catalog and delivery-repeatability tests retain their own commands. |
+| `test:recorded-catalog` | Run the routine in-memory recorded-cassette catalog without starting the built production CLI. The seven-task capstone is manual through `test:integration:capstone`. |
+| `test:integration:capstone` | Explicitly run the seven-task delivery capstone, its status/cleanup assertions, and its recorded-catalog round trip with one Vitest worker. This is manual S8 acceptance evidence while the capstone chronology is under repair. |
 | `test:integration:publication` | Build the Dalph CLI and run the process-based direct-publication integration scenario explicitly, with one Vitest worker. Required before handoff when direct-publication or its composed completion/dependant behavior changes. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |

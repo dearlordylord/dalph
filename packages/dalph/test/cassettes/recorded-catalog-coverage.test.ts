@@ -1,3 +1,4 @@
+import { env as processEnvironment } from "node:process"
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
@@ -15,6 +16,7 @@ import {
 } from "../../src/cassettes/index.js"
 
 const allMaintainedCassetteRoundTripTimeout = 600_000
+const runIntegrationCapstone = processEnvironment.DALPH_RUN_INTEGRATION_CAPSTONE === "1"
 const removedIntegrationSurfacePrefixes = [
   "IntegrationCandidate",
   "IntegratorCandidateGitObserved",
@@ -29,7 +31,7 @@ const removedIntegrationSurfaceNames = (names: ReadonlyArray<string>) =>
   names.filter((name) => removedIntegrationSurfacePrefixes.some((prefix) => name.startsWith(prefix)))
 
 it.effect(
-  "keeps maintained authored and recorded catalogs and public exports free of legacy integration tags",
+  "keeps routine authored and recorded catalogs and public exports free of legacy integration tags",
   () =>
     Effect.gen(function* () {
       const emptyRenaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
@@ -46,6 +48,7 @@ it.effect(
 
       for (const [name, cassette] of Object.entries(maintainedAuthoredCassetteCatalog)) {
         expect(removedIntegrationSurfaceNames(cassette.story.map(({ _tag }) => _tag)), name).toEqual([])
+        if (name === "deliveryInvariantStoryCapstone" && !runIntegrationCapstone) continue
         const run = yield* runAuthoredScenarioCassette(cassette)
         const recorded = yield* projectRecordedCassette(run.records)
         expect(removedIntegrationSurfaceNames(recorded.entries.map(({ _tag }) => _tag)), name).toEqual([])

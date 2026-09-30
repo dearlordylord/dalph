@@ -1,3 +1,4 @@
+import { env as processEnvironment } from "node:process"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "@effect/vitest"
 import { Effect } from "effect"
@@ -11,6 +12,7 @@ import {
 import { assertDeliveryCapstoneFreshReplay } from "./delivery-capstone-replay.test-support.js"
 
 const capstoneTimeout = 600_000
+const runIntegrationCapstone = processEnvironment.DALPH_RUN_INTEGRATION_CAPSTONE === "1"
 // Acceptance assertions share one completed run; replay still executes a second fresh journal.
 const cachedCapstoneRun = Effect.runSync(
   Effect.cached(
@@ -18,7 +20,7 @@ const cachedCapstoneRun = Effect.runSync(
   )
 )
 
-it.effect(
+it.effect.skipIf(!runIntegrationCapstone)(
   "maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run",
   () =>
     Effect.gen(function* () {
@@ -176,7 +178,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+it.effect.skipIf(!runIntegrationCapstone)(
   "completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup",
   () =>
     Effect.gen(function* () {
@@ -187,7 +189,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+it.effect.skipIf(!runIntegrationCapstone)(
   "replays the maintained capstone with the same exact chronology",
   () =>
     Effect.gen(function* () {

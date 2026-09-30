@@ -1,3 +1,4 @@
+import { env as processEnvironment } from "node:process"
 import { AttemptId, GitCommitSha, RunId } from "@dalph/contracts"
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -21,6 +22,7 @@ import { acceptedManifestReferenceFor } from "./delivery-capstone-authored-corre
 import { restartPredecessorCleanupAfterRemoval } from "./delivery-predecessor-cleanup-restart.test-support.js"
 
 const capstoneTimeout = 600_000
+const runIntegrationCapstone = processEnvironment.DALPH_RUN_INTEGRATION_CAPSTONE === "1"
 
 const cachedCapstoneRun = Effect.runSync(
   Effect.cached(
@@ -54,7 +56,7 @@ const exactlyOne = <Tag extends JournalRecord["event"]["_tag"]>(
   return match
 }
 
-it.effect(
+it.effect.skipIf(!runIntegrationCapstone)(
   "authored capstone carries exact canonical status or typed failure at its observation moment",
   () =>
     Effect.gen(function* () {
@@ -113,7 +115,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+it.effect.skipIf(!runIntegrationCapstone)(
   "reopens A cleanup after exact removal before response and settles only after owning-boundary absence",
   () =>
     Effect.gen(function* () {

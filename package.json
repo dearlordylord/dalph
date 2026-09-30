@@ -47,6 +47,7 @@
     "test:recorded-catalog": "DALPH_RUN_QUALIFICATION_TESTS=1 vitest run packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts",
     "test:cassettes:memory": "vitest run packages/dalph/test/cassettes --maxWorkers=4",
     "test:integration:publication": "pnpm --filter @dalph/dalph... build && DALPH_RUN_PUBLICATION_INTEGRATION=1 vitest run packages/dalph/test/integration/direct-remote-publication.integration.test.ts --maxWorkers=1",
+    "test:integration:capstone": "DALPH_RUN_INTEGRATION_CAPSTONE=1 vitest run packages/dalph/test/cassettes/capstone.execution.test.ts packages/dalph/test/cassettes/authored-delivery-status.test.ts packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts --maxWorkers=1",
     "check:lab": "pnpm --filter @dalph/reducer-lab-prototype check",
     "check:lab:browser": "pnpm --filter @dalph/reducer-lab-prototype check:browser",
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",
