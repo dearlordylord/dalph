@@ -2906,3 +2906,603 @@ acceptance ran at 2026-09-30 10:58:01–10:58:08 UTC (7 seconds), exited 0, and
 printed `Reducer Lab five-task trace acceptance passed.` Full output is
 `/tmp/issue386-five-task-lab-anchor98-r1.log`. No other check or commit was
 made; the passing candidate awaits Sol's review.
+
+## Failed maintained Lab fixture diagnosis — 2026-09-30
+
+**Pinned failure and custody.** Failed run
+`051cfec1-0c34-463c-a474-e2891bf90c5e` is closed, stopped, and UNPROVEN at
+Base `934861676593b6ec1eb8c853366128efd4771838`; its first failed stage was
+`check:lab`. `pnpm gate:status 051cfec1-0c34-463c-a474-e2891bf90c5e` reports
+registration closed, custody stopped, source unchanged, and the Lab writer
+group absent. The complete retained Lab log is
+`/workspace/typescript/dalph-worktrees/integration-385-386-387-r2/.scratch/quality-gates/051cfec1-0c34-463c-a474-e2891bf90c5e/logs/f618c5aa-fef8-47b2-8250-a3ba4c032d82.log`
+(460 lines, 79,141 bytes, SHA-256
+`2557ed9b7bee6d2611890bec2165931db088f93dbebdf8c32fb7f540acdc25b5`).
+
+**Competing explanations and result.** A predicted a production regression:
+after promotion, an exact active completion claim and still-eligible current
+task would be prevented from reaching replacement even after the required
+fresh current graph, task specification, and claim were supplied. B predicted
+stale fixture chronology: runtime requests those three post-promotion reads
+before replacement, while the authored stories put
+`CompletionClaimReplacementApplied` immediately after the active-claim read.
+The retained Lab log supports B for all ten authored rows below: at each first
+mismatch the runtime selects `ReadTrackerGraph` where the cassette expects
+replacement. The rows have eligible current facts and no contradictory
+runtime outcome; the fixture must record graph → exact task specification →
+exact claim before replacement, as required by the accepted S8 chronology in
+`docs/scenarios/direct-remote-publication.md`.
+
+| Retained authored row | First story position | Current facts at the finality boundary and fixture repair required |
+|---|---:|---|
+| `ambiguousCompletionResponse` | 29 | Inherited A-finality story; fresh graph/spec/claim is missing between A's Active read and replacement. Keep the lost completion-response cut after replacement. |
+| `prerequisiteReopensDuringCompletion` | 29 | Inherited A-finality story; graph at replacement must still show the accepted prerequisite satisfied. Preserve the later reopen during Q and the resulting retained wait. |
+| `completionGraphRefreshRecovery` | 29 | Inherited A-finality story; record current graph/spec/claim before replacement and preserve the process-death cut before the later graph that releases B. |
+| `completionTaskConflict` | 38 | Starting facts add independent C; A remains Open with its exact current specification and claim at replacement. Preserve the later terminal-without-success transition while Q is pending. |
+| `currentCompletionGraphAuthority` | 29 | Inherited A-finality story; record the fresh eligible A graph/spec/claim before replacement; preserve the later complete G7 graph that blocks B. |
+| `deliveryFinalitySpine` | 29 | After restart, use the expanded current G5 graph, A's starting task specification, and A's exact active claim before replacement; preserve the subsequent Q, cleanup, and later dependant graph. |
+| `deliveryStoryDs14ThroughDs17` | 36 | After successor M2 promotion, A is Open with its unchanged specification and active claim. Record the current singleton graph/spec/claim before replacing; retain the exact successor M2 and finality chronology. |
+| `deliveryInvariantStory` | 22 | Starting graph `doubleDiamondGraphs.initialAEligible` (G0) leaves A Open with no prerequisites; its acquired A claim and starting specification are exact. Supply G0/spec/claim after promotion. |
+| `dependentTasksCompleteInOneRun` | 22 | Starting graph `blockedPipelineGraph` leaves A Open with no prerequisites while B depends on A; its acquired A claim and starting specification are exact. Supply that graph/spec/claim after promotion. |
+| `deliveryInvariantStoryCapstone` | 117 | At B's successor promotion, current G5 reports A complete and B Open; B's current `Implement B` specification matches the promoted attempt and its acquired claim remains current. Supply G5/spec/claim before replacement. The controlled-provider capstone does not require a changed B revision; `production.test.ts::S8 changed revision blocks finality` owns that negative outcome. |
+
+**Fail-closed rows.** Two maintained protocol cassettes expected an
+`CompletionClaimReplacementIntended` despite an unreadable or foreign claim:
+`waitsWithoutReplacingWhenTheCurrentCompletionClaimCannotBeRead` and
+`doesNotMutateAForeignClaimWhileSettlingAPromotedTask`. The focused
+discriminator for the unreadable row returned the predicted
+`CompletionClaimReadFailure`, one read, zero replacement calls, and zero
+deletion calls. The protocol checks the claim before appending intent; an
+unreadable or foreign observation is not authority to write that intent. Both
+fixtures must assert no replacement intent, attempt, or outcome and no
+downstream completion/finality, preserving S8's no-mutation boundary.
+
+Five maintained finality rows started with an existing `Completion` claim but
+no exact prior replacement intent, then attempted focused completion/finality:
+`deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess`,
+`reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess`,
+`keepsSuccessfulWorkFinalWhenTheCompletionClaimCannotBeReadBeforeDeletion`,
+`keepsSuccessfulWorkFinalWhenCompletionClaimDeletionCannotConverge`, and
+`doesNotTerminateAnEmptyFrontierWhileCompletionSettlementIsPending`. Each
+failed at story position 46 with
+`WorkflowJournalHistorySemanticIssue` saying the completion request lacked
+one exact prior claim replacement. The fixtures incorrectly used
+`RunReplacement` against the pre-existing completion claim, which the accepted
+guard correctly rejects without retroactively minting intent. Model the
+restart cut with an exact claim-bound `CompletionClaimReplacementIntended`
+before the completion-claim reread (the cassette's `RestartReplacement` path),
+then preserve the focused-success, deletion, and pending-frontier assertions.
+
+**Disposition and next work.** These 17 logged rows are stale fixture
+chronologies, not a production defect: ten omit the accepted pre-replacement
+graph/spec/claim reads; two expect intent after a read failure/conflict; five
+omit durable prior replacement history. Repairs may change only these
+fixtures/tests and this audit. Keep no-mutation, S8, completion/finality,
+cleanup, and dependant-order assertions. Do not change production behavior or
+the journal validator. The prior failed gate remains unproven; this diagnosis
+does not admit another Lab stage or full gate.
+
+### Focused fixture-repair checkpoint — 2026-09-30
+
+The first focused repair run `/tmp/issue386-lab-focused-cassettes-r2.log`
+completed at 12:02:11–12:02:21 UTC (Vitest exit 1, 9.25s; 2 failed, 9
+passed). The shared delivery-finality stories, same-Run dependant, fail-closed
+claim controls, and DS14–17 chronology passed. The capstone B fixture still
+asked for a graph at story 117 before replacement, and the double-diamond
+advanced to a B Integrator correlation whose queued/start/lineage positions
+were six behind the observed chronology: expected 111/117/122, observed
+117/123/128. The double-diamond authored return and paid-G2 graph anchors also
+needed to move from 241/233 to 247/239 after A's six post-promotion reads.
+
+The bounded correction updated the double-diamond anchors and B correlation,
+and added the observed graph read around capstone B finality. The sole rerun
+`/tmp/issue386-lab-focused-cassettes-r3.log` completed at 12:04:26–12:04:36 UTC
+(Vitest exit 1, 9.55s; 2 failed, 9 passed). The pipeline, shared S8 rows,
+fail-closed claim controls, and DS14–17 case passed. Two mismatches remain:
+capstone B still requests `ReadTrackerGraph` at story position 117 where the
+cassette expects `CompletionClaimReplacementApplied`; double-diamond now
+requests `ReadTrackerGraph` at story position 97 where the cassette expects
+`CompletionClaimReplacementApplied`. The current evidence does not identify
+which premise prevents replacement, so neither mismatch is repaired or
+qualified. No focused Lab SSR, typecheck, lint, full gate, or commit was run.
+
+**Next discriminating action.** In this isolated candidate, capture the
+capstone B and double-diamond A pre-replacement read slice through each second
+`ReadTrackerGraph` request: graph revision and A/B lifecycle/prerequisite facts,
+task-specification fingerprint, exact current claim observation, and journal
+position/tags through `CompletionClaimReplacementIntended`. Compare the three
+read results to the promoted task's recorded revision and exact acquired
+claim. Stop on a mismatch; repair only the fixture value or order identified by
+that observation, then rerun the two affected cassette cases once.
+
+### S8 cassette premise reconciliation — 2026-09-30
+
+The bounded read-only diagnosis found different causes for the two cursors.
+The previous capstone fixture introduced `Changed B` through its operator
+continuation and then returned that changed specification at finality, although
+the promoted session still fingerprinted `Implement B`. The accepted
+controlled-provider capstone in `docs/scenarios/controlled-provider-capstone.md`
+does not require this revision change; retaining it would correctly block B but
+contradict the capstone's accepted all-task success chronology. The fixture now
+keeps B's specification at `Implement B`, matching the promoted attempt, while
+the separate `packages/dalph/test/scenarios/production.test.ts::S8 changed
+revision blocks finality` negative case remains unchanged and owns the changed
+revision wait.
+
+For double-diamond B, the last pre-promotion graph is
+`double-diamond-G2-X-added`: A is `CompletedSuccessfully`, B is `Open`, and
+B's sole prerequisite A is complete. B's current specification matches its
+promoted attempt and the restart chronology has read B's current claim. The
+finality fixture lacked the required post-promotion graph/specification/claim
+reads; it now records that complete graph, unchanged exact specification, and
+current claim before replacement. This preserves B's later completion,
+dependant release, and finality assertions.
+
+The retained `/tmp/issue386-lab-focused-cassettes-r3.log` records story cursors
+117 and 97 and the first emitted `ReadTrackerGraph` operations, but no journal
+position, cassette index, or returned graph/claim response at either failed
+cursor. Those indices and responses remain unobserved; the fixture facts above
+come from the authored chronology, not a reconstructed runtime result.
+
+### Read-only resume-prefix and cursor diagnosis — 2026-09-30
+
+The capstone prefix after `OperatorContinuesAttempt(B)` contained
+`ReadTrackerGraph(G2)`, `ReadTaskWorkSpecification(B)`,
+`ReadTaskClaim(B)`/`TaskClaimCurrentReadReturned(B)`, worktree and lineage reads,
+then A's terminal report before B's Resume. The authored tracker preserves the
+exact B claim from its successful acquisition. Since A's terminal report occurs
+after that claim observation and no B claim mutation occurs, B's Resume boundary
+requires a current B claim read. `delivery-story-capstone.ts` currently records
+two consecutive `ReadTaskClaim(B)`/`TaskClaimCurrentReadReturned(B)` pairs after
+`terminal(A)` and before `report(B, Resume)`. The earlier note's singular
+description undercounted those authored reads; this correction records the
+actual pair count without inferring a claim mutation between them.
+
+The six post-promotion graph/specification/claim observations in double-diamond
+B move the unique paid-G2 activation return from story index 247 to 253 and its
+causal graph anchor from 239 to 245. The earlier one-shot focused run at 12:18
+UTC exited 1 in 2.26s: capstone stopped at story position 54 when the runtime
+selected `ReadTaskClaim(B)` where the cassette expected B's Resume report; the
+double-diamond test's fixed-index assertion found X's passive terminal report
+at 247 instead of the activation return. This new candidate records the
+post-A-terminal claim read and updates only the two double-diamond indices.
+
+### S8 fixture repair and one-run predeclaration — 2026-09-30
+
+The double-diamond finality helper now requires a post-promotion graph and
+records the current graph, exact task specification, and exact current claim
+after the active-claim observation and before every claim replacement. The
+loaded graph keeps the task being finalized Open and reports all its
+prerequisites complete: G0 for A, G2-X-added for B, G2-B-complete for C, G3
+for D, G3-D-complete for E, G4-E-complete-before-F for F,
+G4-F-complete-before-X for X, G5 for H, G5-H-complete for I, and G6 for G.
+Later complete-graph reads that release dependants remain in place.
+
+The raw integration anchors are derived from the loaded story's location of
+each responsibility, start, and lineage occurrence relative to the six-item
+post-promotion premise blocks. The earlier B mismatch measures one block:
+the stale B correlation was 111/117/122 while the runtime's loaded chronology
+was 117/123/128. The C queue occurs in the joint B/C admission before B's
+block, while C's start and lineage occur after it. Later field-specific
+dependencies follow the authored integration order:
+
+| Task | Finality premise blocks before queuedAt | Blocks before startedAt and lineage | Raw queuedAt / startedAt / lineage |
+|---|---|---|---:|
+| B | A | A | 110 / 116 / 119 |
+| C | A | A, B | 108 / 163 / 165 |
+| D | A, B, C | A, B, C | 222 / 223 / 225 |
+| E | A, B, C, D | A, B, C, D | 282 / 285 / 300 |
+| F | A, B, C, D, E | A, B, C, D, E | 376 / 378 / 388 |
+| X | A, B, C, D, E | A, B, C, D, E, F | 372 / 426 / 428 |
+| H | A, B, C, D, E, F, X | A, B, C, D, E, F, X | 502 / 504 / 506 |
+| I | A, B, C, D, E, F, X | A, B, C, D, E, F, X, H | 498 / 544 / 546 |
+| G | A, B, C, D, E, F, X, H, I | A, B, C, D, E, F, X, H, I | 605 / 606 / 608 |
+
+Before the sole ten-task focused acceptance run, the predicted result is
+`2 tests passed`, including exact integrations and finality in order
+A→B→C→D→E→F→X→H→I→G, 700 journal records, and no held positions at
+termination. Competing result A is an earliest correlation mismatch at C's
+`IntegratorRequestReceived`, which would falsify the field-specific block map.
+Competing result B is an earlier `ReadTrackerGraph`, specification, or claim
+mismatch at a post-promotion finality boundary, which would identify an
+incorrect task-specific S8 premise. Preserve the complete output at
+`/tmp/issue386-s8-double-diamond-focused-r1.log`; do not retry if the outcome is
+inconclusive or fails to distinguish those results.
+
+The focused run is expected to finish within one minute; its absolute stop is
+2026-09-30 14:08:00 UTC. This declaration precedes the run. After it, only the
+affected package typecheck and changed-file lint will run if they fit before
+14:15 UTC. The five-task A→B→C→E→D cassette, its C anchors 98/157/159, and its
+later dependant-release checks are unchanged.
+
+#### Focused attempt 1 result and disposition — 2026-09-30
+
+The exact command was
+`pnpm exec vitest run packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts --maxWorkers=1 --reporter=verbose`, with full output at
+`/tmp/issue386-s8-double-diamond-focused-r1.log`. It exited 1 after 2.38
+seconds; both test cases failed before `runAuthoredScenarioCassette` ran. The
+first assertion expected the paid-G2 `CoordinatorActivationReturned` at
+`story[253]` but observed `TaskClaimCurrentReadReturned(F)`. This outcome was
+outside the predeclared alternatives, so it does not distinguish the runtime
+correlation and S8 premise explanations. The added C, D, and E premise blocks
+precede that cursor in the loaded story. The test's fixed indices were then
+adjusted to 271/263 from that visible 18-item shift; those numbers remain
+unverified and are not treated as observed loaded-story positions.
+
+The next discriminating action is to derive the paid-G2 return and causal-graph
+positions from their actual tagged occurrences in the loaded cassette story,
+replace the two fixed indices with those derived positions, and predeclare a
+new focused-run prediction, competing outcomes, command, log path, duration,
+and stop time before invocation. No second focused run or type/lint check was
+started in this repair window; no qualification or commit is claimed.
+
+#### Focused attempt 2 predeclaration — 2026-09-30
+
+The first focused attempt stopped at a stale fixed cursor before entering
+`runAuthoredScenarioCassette`: story index 253 held F's
+`TaskClaimCurrentReadReturned`, rather than the paid-G2 activation return.
+That failure did not observe a runtime correlation or post-promotion premise
+mismatch. The test now locates the unique authored `DalphSelects` occurrence
+with role `double-diamond-paid-G2`, verifies its declared boundary is
+`CoordinatorActivationReturned`, and locates the first later return carrying
+that tag. Missing or duplicate role anchors and a missing following return
+fail closed. Both return assertions and the omission control use that derived
+position. The full premise, finality order, 700-record, termination, and
+negative omission assertions remain present.
+
+For this one focused run, the prediction is that both tests pass. Competing
+result A is a correlation-anchor mismatch at the first
+`IntegratorRequestReceived`. Competing result B is a post-promotion graph,
+specification, or claim premise mismatch. Any other result is inconclusive and
+ends this diagnostic lane without another run. The exact command is:
+
+```sh
+pnpm exec vitest run packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts --testNamePattern='^(returns after the paid G2 and settles F X and the complete double diamond after fresh activation facts|rejects omission of the actual double-diamond activation return before its owed next graph)$' --maxWorkers=1 --reporter=verbose > /tmp/issue386-s8-double-diamond-focused-r2.log 2>&1
+```
+
+Expected duration is at most five minutes, with an absolute stop at
+2026-09-30 14:27:00 UTC. This predeclaration is recorded before invocation.
+
+#### Focused attempt 2 result and disposition — 2026-09-30
+
+The exact predeclared command ran once and exited 1 after 11.33 seconds. Its
+full output is preserved at
+`/tmp/issue386-s8-double-diamond-focused-r2.log`. The negative omission
+control passed. The ten-task test entered `runAuthoredScenarioCassette` and
+failed at an authored coordinator activation boundary: it expected
+`RunMustRemainActive/TrackerTargetUnsettled` and received
+`RunMustRemainActive/UnsettledResponsibility`. This is neither the predicted
+first `IntegratorRequestReceived` correlation mismatch nor a post-promotion
+graph/specification/claim premise mismatch. The result is therefore
+inconclusive under the predeclaration. Stop this diagnostic lane: do not rerun,
+typecheck, lint, or commit this candidate. The next discriminating action
+requires a changed candidate and a new predeclaration that distinguishes the
+activation-return decision mismatch before another focused run.
+
+#### Activation-boundary diagnostic predeclaration — 2026-09-30
+
+Question: which authored `CoordinatorActivationReturned` is the first
+runtime mismatch, and what exact graph and integration facts immediately
+precede it? A temporary test-only `onObservationCapture` trace records the
+boundary story position, activation ordinal, authored decision, nearest prior
+matched tracker graph revision and task lifecycle tags, exact preceding
+`IntegratorRequestReceived` correlations, and preceding
+`CompletionClaimReplacementApplied` task IDs. The test captures the existing
+failure with `Effect.exit`, logs its actual decision and full cause, then
+re-fails that same cause; expected reasons are unchanged.
+
+Prediction: the mismatch is one of the three authored
+`TrackerTargetUnsettled` boundaries after A, F/X, or H/I. The distinguishing
+observation is the final captured boundary's exact position/ordinal, received
+decision, graph lifecycle snapshot, and preceding exact integration/finality
+occurrences. A different position or an unavailable boundary snapshot
+falsifies this location prediction and ends the diagnostic without another
+invocation. This is a diagnostic only and gives no acceptance credit.
+
+The single invocation is the main ten-task test only, with this exact command:
+
+```sh
+pnpm exec vitest run packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts --testNamePattern='^returns after the paid G2 and settles F X and the complete double diamond after fresh activation facts$' --maxWorkers=1 --reporter=verbose > /tmp/issue386-s8-activation-boundary-diagnostic-r3.log 2>&1
+```
+
+Expected duration is at most one minute; absolute command stop is
+2026-09-30 14:33:00 UTC and the task hard stop is 2026-09-30 14:34:00 UTC.
+This predeclaration precedes the one invocation. Afterward, remove the
+temporary instrumentation, preserve the log, record the result, and stop.
+
+#### Activation-boundary diagnostic result and disposition — 2026-09-30
+
+The exact predeclared command ran once and exited 1; Vitest reported 6.58
+seconds total duration. Its full structured output is preserved at
+`/tmp/issue386-s8-activation-boundary-diagnostic-r3.log`. It identified the
+first mismatch at story position 335, activation ordinal 8: the authored
+decision is `RunMustRemainActive/TrackerTargetUnsettled`, while the actual
+decision is `RunMustRemainActive/UnsettledResponsibility`. This matches the
+predicted F/X boundary after A and before H/I.
+
+The nearest prior matched graph occurrence was story position 316, revision
+`double-diamond-G4-F-complete-before-X`. Its lifecycle snapshot had A, B, C,
+D, E, and F `CompletedSuccessfully`; G, H, I, and X were `Open`. Before the
+boundary, the exact authored Integrator requests included F attempt 1 at
+position 282 and X attempt 0 at position 309. Captured
+`CompletionClaimReplacementApplied` tasks already included F and X along with
+A-E. Thus the authored stream had the exact F/X requests and claim-replacement
+responses before the boundary, while the nearest complete graph still showed
+X open. The failing run does not return journal records, so it does not expose
+an `IntegrationFinalitySettled` record for direct confirmation of finality;
+the trace records authored occurrences, not an inferred journal event.
+
+The temporary callback and failure logging were removed from the test file
+after preserving the output; authored expected reasons and acceptance checks
+were not changed. This diagnostic grants no acceptance credit. The smallest
+scenario-mapped next candidate should relax only the reason assertion at this
+after-F/X boundary to `RunMustRemainActiveReasonUnasserted`, preserving the
+required active return and all graph, integration, and finality assertions;
+then define a new focused diagnostic or acceptance action before any further
+run. No follow-up check or commit was performed.
+
+#### After-F/X active-return repair and focused predeclaration — 2026-09-30
+
+At the identified after-F/X boundary, the authored cassette now requires the
+Run to remain active while leaving the reason unasserted, using
+`RunMustRemainActiveReasonUnasserted`. This matches the accepted S8 condition
+without asserting an internal reason tag. The other two reason-specific
+active-return assertions and every graph, task, finality, chronology, and
+termination assertion remain unchanged.
+
+Question: does the remaining authored double-diamond chronology satisfy the
+acceptance scenario after this boundary? Prediction: the positive ten-task
+test passes its finality-order, 700-record, termination, and remaining
+chronology assertions. Alternative: a later authored boundary or fact fails;
+that failure's first divergence falsifies the prediction and ends this lane
+without retry. The exact one-test command is:
+
+```sh
+pnpm exec vitest run packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts --testNamePattern='^returns after the paid G2 and settles F X and the complete double diamond after fresh activation facts$' --maxWorkers=1 --reporter=verbose > /tmp/issue386-s8-double-diamond-focused-r4.log 2>&1
+```
+
+Expected output is `1 passed, 1 skipped` (the positive test passes; the
+negative omission test is filtered out). Expected duration is at most one
+minute. The absolute command stop is 2026-09-30 14:44:00 UTC; the task hard
+stop is 2026-09-30 14:45:00 UTC. This predeclaration precedes the invocation.
+
+#### After-F/X focused result and disposition — 2026-09-30
+
+The exact predeclared command ran once and exited 0. Vitest reported
+`1 passed, 1 skipped` in 11.04 seconds. The full log is
+`/tmp/issue386-s8-double-diamond-focused-r4.log`. The positive test completed
+the remaining authored chronology and its assertions for finality order,
+700 journal records, terminal run state, and released delivery positions. The
+negative omission case was excluded by the title filter. No lint, typecheck,
+additional test, or commit was run.
+
+#### Negative omission control predeclaration — 2026-09-30
+
+Question: is omission of the actual paid-G2 activation return still rejected
+after the after-F/X decision was changed to leave the active reason
+unasserted? Prediction: exit 0 with the exact negative-control title passing.
+Alternative: the control fails to detect omission; any such failure ends this
+lane without retry. Run only this exact command:
+
+```sh
+pnpm exec vitest run packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts --testNamePattern='^rejects omission of the actual double-diamond activation return before its owed next graph$' --maxWorkers=1 --reporter=verbose
+```
+
+Expected duration is at most one minute; absolute command stop is
+2026-09-30 14:44:00 UTC. This predeclaration precedes the one invocation.
+
+#### Negative omission control result — 2026-09-30
+
+The exact predeclared command exited 0. The negative-control title passed;
+the positive title was filtered out. Exact Vitest summary: `Test Files 1
+passed (1)`; `Tests 1 passed | 1 skipped (2)`; duration 10.15s (transform
+865ms, setup 0ms, import 2.44s, tests 7.55s, environment 0ms). The command
+output was returned directly; no separate log file was created. No source
+edits, checks, or retries followed.
+
+#### Affected typecheck and changed-file lint predeclaration — 2026-09-30
+
+Candidate custody is branch `work/issue386-lab-claim-fixtures-r1`, Base
+`a0f4071f12e809cbd5305461a1d963eb9c569fc9`, in
+`/workspace/typescript/dalph-worktrees/issue386-lab-claim-fixtures-r1`.
+First run `node --version` and proceed only if it reports Node v24. Then run
+`pnpm typecheck` (expected at most four minutes; absolute stop
+2026-09-30 14:46:00 UTC). Only if that succeeds, run
+`DALPH_DIAGNOSTICS_BASE=a0f4071f12e809cbd5305461a1d963eb9c569fc9 pnpm lint:changed`
+(expected at most two minutes; absolute stop 2026-09-30 14:50:00 UTC). Stop
+on any failure; do not repair or run further checks. Hard stop is
+2026-09-30 14:52:00 UTC. This declaration is recorded before those commands.
+
+Node check result: `node --version` returned `v24.20.0`. The predeclared
+`pnpm typecheck` exited 0 in 15.6 seconds. Its script ran
+`tsc -p tsconfig.json --noEmit`; output included Effect advisory suggestions
+and no type errors. The predeclared typecheck passed, so proceed to the
+Base-pinned changed-file lint.
+
+#### Affected verification results and disposition — 2026-09-30
+
+Under Node `v24.20.0`, `pnpm typecheck` exited 0 in 15.6 seconds. The
+Base-pinned `DALPH_DIAGNOSTICS_BASE=a0f4071f12e809cbd5305461a1d963eb9c569fc9
+pnpm lint:changed` exited 1 in 2.52 seconds. It reported:
+
+- `packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts:92:20`, rule `dalph(sort-destructure-keys)`: “Expected object destructuring keys to be sorted; storyPosition belongs before taskId.”
+- `packages/dalph/src/cassettes/catalog.ts`, rule `eslint(no-magic-numbers)`, “No magic number” findings: `4729:58=104`, `4730:59=110`, `4731:73=113`, `4734:58=102`, `4735:59=151`, `4736:73=153`, `4739:58=204`, `4740:59=205`, `4741:73=207`, `4744:58=258`, `4745:59=261`, `4746:73=276`, `4749:58=346`, `4750:59=348`, `4751:73=358`, `4754:58=551`, `4755:59=552`, `4756:73=554`, `4759:58=460`, `4760:59=462`, `4761:73=464`, `4764:58=456`, `4765:59=496`, `4766:73=498`, `4769:58=342`, `4770:59=390`, `4771:73=392`.
+- `packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts:22:9`, rule `typescript(no-unnecessary-condition)`: “This condition will always return the same value since the types have no overlap.”
+
+No repair, rerun, additional check, or commit followed the lint failure.
+Terminal worktree status is branch `work/issue386-lab-claim-fixtures-r1`,
+HEAD `a0f4071f12e809cbd5305461a1d963eb9c569fc9`, with these seven scoped
+files dirty and uncommitted: this audit, `packages/dalph/src/cassettes/catalog.ts`,
+`delivery-story-capstone-support.ts`, `delivery-story-capstone.ts`,
+`integration-finality-protocol-cassette-domain.ts`,
+`packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts`,
+and `scenario.test.ts`. No command is running.
+
+#### Base-pinned lint repair predeclaration — 2026-09-30
+
+The previous Base-pinned `lint:changed` exited 1 in 2.52 seconds. Its exact
+findings were `packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts:92:20`
+(`dalph(sort-destructure-keys)`: storyPosition must precede taskId),
+`packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts:22:9`
+(`typescript(no-unnecessary-condition)`: the undefined guard has no overlapping
+type), and `packages/dalph/src/cassettes/catalog.ts` at
+`4729:58=104, 4730:59=110, 4731:73=113; 4734:58=102, 4735:59=151,
+4736:73=153; 4739:58=204, 4740:59=205, 4741:73=207; 4744:58=258,
+4745:59=261, 4746:73=276; 4749:58=346, 4750:59=348, 4751:73=358;
+4754:58=551, 4755:59=552, 4756:73=554; 4759:58=460, 4760:59=462,
+4761:73=464; 4764:58=456, 4765:59=496, 4766:73=498; 4769:58=342,
+4770:59=390, 4771:73=392` (`eslint(no-magic-numbers)`).
+
+Repair only those findings: sort the destructuring keys, remove only the
+redundant undefined guard while preserving the exact-one-anchor and declared
+boundary checks, and suppress `no-magic-numbers` narrowly around the exact
+authored occurrence anchors with a concrete comment. Every numeric story
+position and formula remains unchanged. Then run this command once:
+
+```sh
+DALPH_DIAGNOSTICS_BASE=a0f4071f12e809cbd5305461a1d963eb9c569fc9 pnpm lint:changed
+```
+
+Expected duration is at most two minutes, with absolute stop
+2026-09-30 14:50:00 UTC. If lint fails, record its exact findings and stop;
+do not repair or rerun. Do not run a typecheck, cassette, other edit, commit,
+or gate. This predeclaration precedes the repair and command.
+
+#### Base-pinned lint repair result and disposition — 2026-09-30
+
+The exact predeclared `DALPH_DIAGNOSTICS_BASE=a0f4071f12e809cbd5305461a1d963eb9c569fc9
+pnpm lint:changed` command exited 1 after 3.75 seconds. Its sole remaining
+finding was `packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts:22:9`,
+rule `typescript(no-unnecessary-condition)`: “This condition will always
+return the same value since the types have no overlap.” The prior
+`dalph(sort-destructure-keys)` and catalog `eslint(no-magic-numbers)` findings
+were absent from this result. The only subsequent change is recording this
+result; stop without another repair, check, or retry.
+
+This bounded repair changed the loop destructuring order to
+`{ storyPosition, taskId }`, removed the redundant `anchor === undefined`
+guard while preserving unique-anchor and boundary validation, and applied a
+narrow commented `no-magic-numbers` suppression to the exact authored
+integration-position object. All authored numeric positions and formulas were
+left unchanged. Candidate remains uncommitted at branch
+`work/issue386-lab-claim-fixtures-r1`, Base
+`a0f4071f12e809cbd5305461a1d963eb9c569fc9`; terminal Git status follows this
+entry: seven modified, uncommitted files are this audit,
+`packages/dalph/src/cassettes/catalog.ts`,
+`packages/dalph/src/cassettes/delivery-story-capstone-support.ts`,
+`packages/dalph/src/cassettes/delivery-story-capstone.ts`,
+`packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts`,
+`packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts`,
+and `packages/dalph/test/cassettes/scenario.test.ts`. HEAD remains
+`a0f4071f12e809cbd5305461a1d963eb9c569fc9`; no command is running.
+
+#### Narrow no-unnecessary-condition follow-up predeclaration — 2026-09-30
+
+The previous Base-pinned lint exited 1 after 3.75 seconds with one remaining
+finding: `packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts:22:9`,
+`typescript(no-unnecessary-condition)`, “This condition will always return the
+same value since the types have no overlap.” Remove only the impossible
+`causalAnchor === undefined` disjunct. Retain the occurrence-role comparison,
+exactly-one-anchor check, declared-boundary check, and missing-following-return
+check. Then run only:
+
+```sh
+DALPH_DIAGNOSTICS_BASE=a0f4071f12e809cbd5305461a1d963eb9c569fc9 pnpm lint:changed
+```
+
+Expected duration is at most two minutes; absolute stop is
+2026-09-30 14:50:00 UTC. If it fails or exceeds that stop, preserve the exact
+result and end this lane without another edit or check. No other check or
+commit. This declaration precedes the one edit and invocation.
+
+#### Formatting-only lint result and final bounded repair predeclaration — 2026-09-30
+
+The Base-pinned lint exited 20 after 3.55 seconds. Its no-unnecessary-condition
+finding was absent. Dprint showed formatting diffs in only
+`packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts`
+and `packages/dalph/src/cassettes/catalog.ts`, ending with `Found 2 not
+formatted files. Run dprint fmt to fix.` Current status: branch
+`work/issue386-lab-claim-fixtures-r1`, HEAD
+`a0f4071f12e809cbd5305461a1d963eb9c569fc9`, seven modified and uncommitted
+scoped files listed immediately above.
+
+Predeclared commands: format only those two files with
+`pnpm exec dprint fmt packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts packages/dalph/src/cassettes/catalog.ts` (expected under 30 seconds), then run only
+`DALPH_DIAGNOSTICS_BASE=a0f4071f12e809cbd5305461a1d963eb9c569fc9 pnpm lint:changed` (expected at most two minutes). Absolute stop is 2026-09-30 14:50:00 UTC. If lint fails, preserve exact output and stop without further edits or checks. This declaration precedes both commands.
+
+#### Final candidate review and commit predeclaration — 2026-09-30
+
+Finalization is limited to the existing branch
+`work/issue386-lab-claim-fixtures-r1` at Base
+`a0f4071f12e809cbd5305461a1d963eb9c569fc9`, with seven scoped modified files:
+this audit, `packages/dalph/src/cassettes/catalog.ts`,
+`delivery-story-capstone-support.ts`, `delivery-story-capstone.ts`,
+`integration-finality-protocol-cassette-domain.ts`,
+`packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts`,
+and `scenario.test.ts`.
+
+Terminal verification received for this candidate: dprint reported
+`Formatted 2 files.`; Base-pinned `lint:changed` exited 0 in 3.14 seconds;
+root-reported `git diff --check` exited 0. No tests/checks will be run here.
+
+The narrow Sol review disposition is that the after-F/X authored boundary
+now asserts only `RunMustRemainActive` through
+`RunMustRemainActiveReasonUnasserted`. The accepted active-return, graph,
+finality, and ordering assertions remain, and no runtime behavior changed.
+This does not claim Issue 386 complete.
+
+Capture current Git status and a SHA-256 of the six non-audit source/test
+diffs with read-only Git commands (expected under 30 seconds; stop by
+2026-09-30 14:54:00 UTC). Then stage exactly the seven paths listed above and
+run `git commit -m "Repair Issue 386 S8 authored claim fixtures"` with normal
+hooks (expected under four minutes; absolute stop 2026-09-30 15:00:00 UTC).
+Do not bypass hooks. If commit or a hook has not completed at the stop, stop
+safely and report its state. No integration or Issue 386 closure is claimed.
+This declaration precedes hashing, staging, and commit.
+
+Finalization timing addendum — 2026-09-30: the declared 14:54:00 UTC stop for
+the short status/hash capture elapsed before that capture began; no operation
+was running and no hash was captured in that window. Updated declaration:
+capture status and the six non-audit source/test diff hash with
+`git diff --binary -- packages/dalph/src/cassettes/catalog.ts packages/dalph/src/cassettes/delivery-story-capstone-support.ts packages/dalph/src/cassettes/delivery-story-capstone.ts packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts packages/dalph/test/cassettes/scenario.test.ts | sha256sum`
+and `git status --short --branch` (expected under 20 seconds; stop by
+2026-09-30 14:55:00 UTC). Then commit the seven listed files with normal hooks,
+expected under four minutes and stop at 2026-09-30 15:00:00 UTC. This updated
+declaration precedes the capture and commit.
+
+#### Final formatting/lint terminal evidence and fresh finalization predeclaration — 2026-09-30
+
+Prior terminal evidence for this candidate: `pnpm exec dprint fmt
+packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts
+packages/dalph/src/cassettes/catalog.ts` exited 0 and printed `Formatted 2
+files.`; Base-pinned `DALPH_DIAGNOSTICS_BASE=a0f4071f12e809cbd5305461a1d963eb9c569fc9
+pnpm lint:changed` exited 0 in 3.14 seconds; root-reported `git diff --check`
+exited 0. No tests or gates were run in that terminal qualification.
+
+Fresh custody: exact worktree
+`/workspace/typescript/dalph-worktrees/issue386-lab-claim-fixtures-r1`, branch
+`work/issue386-lab-claim-fixtures-r1`, Base/HEAD
+`a0f4071f12e809cbd5305461a1d963eb9c569fc9`, with only the seven intended
+paths listed in the prior status record. First capture
+`GIT_OPTIONAL_LOCKS=0 git status --short --branch` and the six non-audit
+source/test digest using exactly
+`git diff --binary -- packages/dalph/src/cassettes/catalog.ts packages/dalph/src/cassettes/delivery-story-capstone-support.ts packages/dalph/src/cassettes/delivery-story-capstone.ts packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts packages/dalph/test/cassettes/scenario.test.ts | sha256sum`
+(expected at most 20 seconds; stop 2026-09-30 14:57:00 UTC). Record both. If
+status or paths differ from the seven intended files, stop. Otherwise stage
+exactly those seven paths and run
+`git commit -m "Repair Issue 386 S8 authored claim fixtures"` with normal
+hooks (expected at most four minutes; absolute task stop 2026-09-30 15:04:00
+UTC). Do not bypass hooks or run checks/gates. No integration or Issue 386
+closure is claimed. This declaration precedes all commands.
+
+Fresh read-only capture result: `GIT_OPTIONAL_LOCKS=0 git status --short
+--branch` reported branch `work/issue386-lab-claim-fixtures-r1` and exactly
+these seven modified paths: this audit, `packages/dalph/src/cassettes/catalog.ts`,
+`delivery-story-capstone-support.ts`, `delivery-story-capstone.ts`,
+`integration-finality-protocol-cassette-domain.ts`,
+`packages/dalph/test/cassettes/double-diamond-activation-chronology.test.ts`,
+and `scenario.test.ts`. HEAD was Base
+`a0f4071f12e809cbd5305461a1d963eb9c569fc9`. The SHA-256 of the six
+non-audit source/test diffs from the exact predeclared command is
+`e807c778ffa6816d568217c44b8a0a6d3d6877d6e3c00f6eca7e6babfa233058`.
+Status and path set matched; stage the seven paths and commit as predeclared.

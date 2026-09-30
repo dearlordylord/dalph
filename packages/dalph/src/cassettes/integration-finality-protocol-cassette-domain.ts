@@ -161,7 +161,7 @@ const completionSettlementStory = (
   expected: CompletionClaimProtocolTerminalExpectation,
   readCalls = expected.readCalls
 ): ReadonlyArray<CompletionClaimProtocolStoryItem> => [
-  CompletionClaimProtocolStoryItem.cases.RunReplacement.make({}),
+  CompletionClaimProtocolStoryItem.cases.RestartReplacement.make({}),
   CompletionClaimProtocolStoryItem.cases.ObserveFocusedTaskCompletionSuccess.make({}),
   CompletionClaimProtocolStoryItem.cases.RunDeletion.make({}),
   CompletionClaimProtocolStoryItem.cases.AwaitSettlement.make({ expected: { ...expected, readCalls } })
@@ -248,7 +248,7 @@ export const doesNotMutateAForeignClaimWhileSettlingAPromotedTask = IntegrationF
       expected: {
         deletionCalls: 0,
         failureTag: "IntegrationFinality.CompletionClaimOwnershipConflict",
-        journalTags: ["CompletionClaimReplacementIntended"],
+        journalTags: [],
         readCalls: 1,
         replacementCalls: 0
       }
@@ -280,7 +280,7 @@ export const reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess = Int
   initialClaim: "Completion",
   name: "reconciles a lost completion-claim deletion without reopening success",
   story: [
-    CompletionClaimProtocolStoryItem.cases.RunReplacement.make({}),
+    CompletionClaimProtocolStoryItem.cases.RestartReplacement.make({}),
     CompletionClaimProtocolStoryItem.cases.ObserveFocusedTaskCompletionSuccess.make({}),
     CompletionClaimProtocolStoryItem.cases.RestartDeletion.make({}),
     CompletionClaimProtocolStoryItem.cases.AwaitSettlement.make({
@@ -318,7 +318,7 @@ export const waitsWithoutReplacingWhenTheCurrentCompletionClaimCannotBeRead = In
       expected: {
         deletionCalls: 0,
         failureTag: "IntegrationFinality.CompletionClaimReadFailure",
-        journalTags: ["CompletionClaimReplacementIntended"],
+        journalTags: [],
         readCalls: 1,
         replacementCalls: 0
       }

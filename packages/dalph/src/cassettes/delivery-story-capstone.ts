@@ -11,7 +11,6 @@ import {
   bIntegrationReleasingE,
   bPromotionRequest,
   candidateCommit,
-  changedSpecification,
   cleanupFor,
   cPositions,
   changedHead,
@@ -47,7 +46,7 @@ const admissionPlanEnd = 6
 const admissionReconciliationEnd = 7
 const integrationPreparationEnd = 4
 const integrationPromotionEnd = 6
-const integrationCompletionReplacementEnd = 8
+const integrationCompletionReplacementEnd = 14
 const finalTaskIds = ["E", "F", "G"] as const
 const finalTaskProfiles = {
   E: { positions: ePositions },
@@ -174,12 +173,16 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
       taskId: "B",
       attemptId: attempt("B"),
       expected: { _tag: "Applied" },
-      observedTaskRevision: makeTaskWorkSpecification(changedSpecification).fingerprint,
+      observedTaskRevision: makeTaskWorkSpecification(specification("B")).fingerprint,
       requestNonce: "continue-original-B"
     },
     ...readGraph(graphs.G2),
     ...readCurrent("B"),
     terminal("A"),
+    select({ _tag: "ReadTaskClaim", taskId: "B" }),
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
+    select({ _tag: "ReadTaskClaim", taskId: "B" }),
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
     report("B", "Resume"),
     ...rerunA,
     ...predecessorCleanup,
