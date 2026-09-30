@@ -1216,7 +1216,8 @@ that code. Public control exposure retains the qualification limit stated above.
 Before the fresh supervised hosted S1, require passing evidence from the
 controlled S1–S8 checks and the competing-push S2 check. Also run focused tests
 mapped to each changed accepted scenario and `pnpm check:fast` for integration
-readiness. Local `check:all` remains an optional maintainer/release diagnostic,
+readiness. This documentation-only change does not alter Dalph runtime workflow
+or provider operations. Local `check:all` remains an optional maintainer/release diagnostic,
 not a prerequisite for each implementation attempt. Run one fresh supervised
 disposable S1 dogfood journey only after the #390 retained-run closure; do not
 repair the retained failed candidate. Record expected duration and wall-clock
