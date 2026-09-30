@@ -26,6 +26,9 @@ const paidG2BoundaryPositions = () => {
     throw new Error(`expected one double-diamond-paid-G2 anchor, found ${anchors.length}`)
   }
   const anchor = anchors[0]
+  if (anchor === undefined) {
+    throw new Error("double-diamond-paid-G2 anchor is absent after uniqueness validation")
+  }
   if (anchor.causalAnchor.expectedBoundary !== "CoordinatorActivationReturned") {
     throw new Error("double-diamond-paid-G2 anchor has no authored activation-return boundary")
   }
