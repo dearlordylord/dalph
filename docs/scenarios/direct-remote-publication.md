@@ -2,7 +2,14 @@
 
 Issue: [Specify final remote publication before task completion](https://github.com/dearlordylord/dalph/issues/383).
 
-**Status: accepted by the maintainer on 2026-09-19; the maintained capstone chronology repair and controlled S1/S7 checks are recorded. An earlier candidate passed its exact-head full gate, but the current candidate still requires a frozen full gate. Acceptance also remains unproven because the fresh supervised disposable S1 dogfood has not reached publication, promotion, and closure.** Issue #390's retained-run closure is complete; the supervised S1 must be a fresh disposable run and must not repair the retained failed candidate.
+**Status: accepted by the maintainer on 2026-09-19; the maintained capstone
+chronology repair and controlled S1/S7 checks are recorded. An earlier candidate
+passed its exact-head full gate, but no full gate has been run on the current
+candidate; local `check:all` is optional under current policy. Acceptance remains
+unproven because the required fresh supervised hosted S1 dogfood has not reached
+publication, promotion, and closure.** Issue #390's retained-run closure is
+complete; the supervised S1 must be a fresh disposable run and must not repair
+the retained failed candidate.
 Alice selected direct publication, remote-first order, ordinary non-force push,
 and automatic integration recovery with user-authorized continuation after
 exhaustion. This document consolidates those decisions and their acceptance tests.
@@ -1206,14 +1213,15 @@ acceptance evidence must preserve the #384 facts and order. Automatic successors
 need an explicit cleanup disposition; no issue may fabricate Full rerun to reuse
 that code. Public control exposure retains the qualification limit stated above.
 
-Use focused tests mapped to each changed accepted scenario and
-`pnpm check:fast` for integration readiness. The local `check:all` is an
-optional maintainer/release diagnostic, not a prerequisite for each
-implementation attempt. Finally run one fresh supervised disposable S1 dogfood
-journey only after the #390 retained-run closure; do not repair the retained
-failed candidate. Record expected duration and wall-clock stop time before
-long operations; reconcile retained Runs before retry, preserve failed evidence
-and unexecuted suffixes, and never retry throttled mutations.
+Before the fresh supervised hosted S1, require passing evidence from the
+controlled S1–S8 checks and the competing-push S2 check. Also run focused tests
+mapped to each changed accepted scenario and `pnpm check:fast` for integration
+readiness. Local `check:all` remains an optional maintainer/release diagnostic,
+not a prerequisite for each implementation attempt. Run one fresh supervised
+disposable S1 dogfood journey only after the #390 retained-run closure; do not
+repair the retained failed candidate. Record expected duration and wall-clock
+stop time before long operations; reconcile retained Runs before retry, preserve
+failed evidence and unexecuted suffixes, and never retry throttled mutations.
 
 The Astra review identified public control exposure, temporary-failure
 resumption, mandatory revalidation of conclusive proof, and a prescribed
@@ -1228,7 +1236,8 @@ creation; it performed no hosted mutation. The exact candidate passed the
 frozen full gate in run
 `24e9c9ee-1302-4b57-a1dd-0b533332148d` against Base
 `309a94e87ab7898e45cc81cc5240e64ae5b4092a` at HEAD
-`a29737d9b00612d407d6b7eb5c7de10fdb2bb29a`. That result does not qualify the
-current candidate. Its frozen full gate and the fresh supervised disposable
-S1 journey remain unproven acceptance boundaries. No GitHub issue closure is
-claimed.
+`a29737d9b00612d407d6b7eb5c7de10fdb2bb29a`. That historical result does not
+qualify the current candidate. No frozen full gate has been run for the current
+candidate; local `check:all` is an optional maintainer/release diagnostic under
+current policy. The required fresh supervised hosted S1 remains unproven. No
+GitHub issue closure is claimed.
