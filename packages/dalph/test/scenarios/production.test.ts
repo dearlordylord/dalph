@@ -210,6 +210,10 @@ import {
 } from "../../../orchestrator/test/task-tracker-facts.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+import {
+  RemotePublicationAttemptIntendedEvent,
+  remotePublicationAdmissionIdFor
+} from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
 import { materializeJournalRecords } from "../../../orchestrator/src/workflow-journal/record-sequence.js"
 import { unpublishedAcceptedJournalReaderTestLayer } from "../../../orchestrator/src/workflow-journal/test-accepted-reader.js"
@@ -4153,18 +4157,7 @@ it.effect("retains remote delivery across Pause and Exit", () =>
   )
 )
 
-it.effect.each([
-  {
-    name: "ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination",
-    premise: "unchanged"
-  },
-  {
-    name: "ordinary production Run retains resumed finality when a dependency becomes unfinished",
-    premise: "dependency"
-  },
-  { name: "ordinary production Run retains resumed finality when the task revision changes", premise: "revision" },
-  { name: "ordinary production Run retains resumed finality when its claim is replaced", premise: "claim" }
-] as const)("$name", ({ premise }) =>
+const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision" | "claim" | "denial") =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -4310,12 +4303,34 @@ it.effect.each([
       const publicationPrefix = published.promotedRecords.slice(0, oldProofIndex)
       const retainedRecord = append(publicationPrefix, retained)
       const receiptRecord = append([...publicationPrefix, retainedRecord], receipt)
+      const resumedAttemptTemplate = publicationPrefix.findLast(
+        ({ event }) => event._tag === "RemotePublicationAttemptIntended"
+      )
+      if (resumedAttemptTemplate?.event._tag !== "RemotePublicationAttemptIntended") {
+        return yield* Effect.die("resumed denial fixture requires the original attempt intent")
+      }
+      const resumedAttempt = RemotePublicationAttemptIntendedEvent.make({
+        ...resumedAttemptTemplate.event,
+        attemptOrdinal: RemotePublicationAttemptOrdinal.make(2)
+      })
+      const resumedAttemptRecord = append([...publicationPrefix, retainedRecord, receiptRecord], resumedAttempt)
+      const resumedDenial = RemotePublicationRetainedEvent.make({
+        authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: request.requestId }),
+        cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+        correlation: oldProof.correlation,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+      const resumedDenialRecord = append(
+        [...publicationPrefix, retainedRecord, receiptRecord, resumedAttemptRecord],
+        resumedDenial
+      )
       const resumedProofRecord = append([...publicationPrefix, retainedRecord, receiptRecord], resumedProof)
       const resumedRecords: ReadonlyArray<JournalRecord> = [
         ...publicationPrefix,
         retainedRecord,
         receiptRecord,
-        resumedProofRecord
+        ...(premise === "denial" ? [resumedAttemptRecord, resumedDenialRecord] : [resumedProofRecord])
       ]
       const reduced = reduceWorkflowJournalHistory(runId, resumedRecords)
       if (reduced._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die("resumed fixture must reduce")
@@ -4601,7 +4616,12 @@ it.effect.each([
           Effect.andThen(Effect.die(`unexpected remote ${name}`))
         )
       const remoteGit = RemotePublicationGit.of({
-        admit: () => unexpectedRemote("admit"),
+        admit: () =>
+          premise === "denial"
+            ? Ref.update(remoteCalls, (calls) => [...calls, "admit"]).pipe(
+                Effect.as(RemotePublicationAdmissionObservation.cases.ExistingBranch.make({ remoteHead: baseSha }))
+              )
+            : unexpectedRemote("admit"),
         observe: () => unexpectedRemote("observe"),
         prepareSenderCustody: () => unexpectedRemote("prepareSenderCustody"),
         reconcileSenderCustody: () => unexpectedRemote("reconcileSenderCustody"),
@@ -4842,6 +4862,181 @@ it.effect.each([
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       expect(after).toEqual(capturedAfter)
       expect(reduceWorkflowJournalHistory(runId, after)._tag).toBe("ValidWorkflowJournalHistory")
+      if (premise === "denial") {
+        const appendedRecords = after.slice(resumedRecords.length)
+        expect(after.slice(0, resumedRecords.length)).toEqual(resumedRecords)
+        expect(after.every(({ runId: recordedRunId }) => recordedRunId === runId)).toBe(true)
+        expect(oldProof.correlation.qualifiedCandidate.run.session.plannedAttempt).toEqual(attempt)
+        expect(oldProof.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId).toBe(taskId)
+        expect(oldProof.correlation.qualifiedCandidate.run.session.plannedAttempt.runId).toBe(runId)
+        expect(oldProof.correlation.qualifiedCandidate.run.session.queuedAt).toBe(accepted.responsibility.queuedAt)
+        expect(oldProof.correlation.qualifiedCandidate.candidateCommit).toBe(candidateCommit)
+        expect(oldProof.correlation.target).toEqual(remotePublicationTargetForTest)
+        const resumedDenials = after.filter(({ event }) => event._tag === "RemotePublicationRetained")
+        expect(resumedDenials).toHaveLength(2)
+        expect(
+          resumedDenials.map(({ event }) => (event._tag === "RemotePublicationRetained" ? event.correlation : null))
+        ).toEqual([oldProof.correlation, oldProof.correlation])
+        expect(resumedDenials.at(-1)?.event).toMatchObject({
+          _tag: "RemotePublicationRetained",
+          authorization: { _tag: "ResumeRequest", requestId: request.requestId },
+          cause: { _tag: "AuthenticationDenied" },
+          correlation: oldProof.correlation
+        })
+
+        const admissionIntents = appendedRecords.filter(
+          ({ event }) => event._tag === "RemotePublicationAdmissionReadIntended"
+        )
+        const admissionObservations = appendedRecords.filter(
+          ({ event }) => event._tag === "RemotePublicationAdmissionObserved"
+        )
+        expect(admissionIntents).toHaveLength(1)
+        expect(admissionObservations).toHaveLength(1)
+        expect(admissionIntents[0]?.event).toMatchObject({
+          admissionId: remotePublicationAdmissionIdFor(runId, remotePublicationTargetForTest),
+          runId,
+          target: remotePublicationTargetForTest
+        })
+        expect(admissionObservations[0]?.event).toMatchObject({
+          admissionId: remotePublicationAdmissionIdFor(runId, remotePublicationTargetForTest),
+          runId,
+          target: remotePublicationTargetForTest,
+          observation: { _tag: "ExistingBranch", remoteHead: baseSha }
+        })
+
+        const trackerIntents = appendedRecords.flatMap(({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" ? [event.operation] : []
+        )
+        expect(trackerIntents.map(({ _tag }) => _tag)).toEqual([
+          "ReadTrackerGraph",
+          "ReadTaskClaim",
+          "ReadTrackerGraph"
+        ])
+        const graphIntents = trackerIntents.flatMap((operation) =>
+          operation._tag === "ReadTrackerGraph" ? [operation] : []
+        )
+        expect(graphIntents).toHaveLength(2)
+        expect(graphIntents.map(({ readShape, target: graphTarget }) => ({ target: graphTarget, readShape }))).toEqual([
+          { target, readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [] } },
+          { target, readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [] } }
+        ])
+        expect(graphIntents[1]).toMatchObject({
+          cause: { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: graphIntents[0]?.operationId },
+          predecessorOperationIds: expect.arrayContaining([graphIntents[0]?.operationId])
+        })
+        const claimIntent = trackerIntents.find(({ _tag }) => _tag === "ReadTaskClaim")
+        expect(claimIntent).toMatchObject({ _tag: "ReadTaskClaim", target, taskId })
+        const trackerObservations = appendedRecords.flatMap(({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" ? [event] : []
+        )
+        expect(trackerObservations.map(({ operationId }) => operationId)).toEqual(
+          trackerIntents.map(({ operationId }) => operationId)
+        )
+        expect(trackerObservations.map(({ observation }) => observation._tag)).toEqual([
+          "CompleteTaskTrackerFacts",
+          "FocusedTaskClaimFacts",
+          "UnchangedTaskTrackerFactsReconfirmed"
+        ])
+        const firstGraphObservation = trackerObservations[0]
+        const claimObservation = trackerObservations[1]
+        const reconfirmedGraphObservation = trackerObservations[2]
+        if (
+          firstGraphObservation?.observation._tag !== "CompleteTaskTrackerFacts" ||
+          claimObservation?.observation._tag !== "FocusedTaskClaimFacts" ||
+          reconfirmedGraphObservation?.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+        ) {
+          return yield* Effect.die("denial continuation requires full graph, claim, then unchanged graph facts")
+        }
+        const firstGraphFacts = firstGraphObservation.observation
+        const reconfirmedGraphFacts = reconfirmedGraphObservation.observation
+        const [firstIdentities, firstLifecycles, firstPrerequisites, firstGroupings, firstMembership] =
+          firstGraphFacts.factFamilies
+        expect(firstGraphObservation.operationId).toBe(graphIntents[0]?.operationId)
+        expect(firstGraphFacts).toMatchObject({ target, rootTaskId: taskId })
+        expect([
+          firstIdentities.taskIds,
+          firstLifecycles.subjectTaskIds,
+          firstPrerequisites.subjectTaskIds,
+          firstGroupings.subjectTaskIds,
+          firstMembership.memberTaskIds
+        ]).toEqual([[taskId], [taskId], [taskId], [taskId], [taskId]])
+        const firstContentIdentity = firstIdentities.contentIdentity
+        const reconfirmedFamilies = reconfirmedGraphFacts.factFamilies
+        expect(reconfirmedGraphObservation.operationId).toBe(graphIntents[1]?.operationId)
+        expect(reconfirmedGraphFacts).toMatchObject({
+          _tag: "UnchangedTaskTrackerFactsReconfirmed",
+          operationId: graphIntents[1]?.operationId,
+          priorFullObservationOperationId: graphIntents[0]?.operationId,
+          target,
+          rootTaskId: taskId
+        })
+        expect(reconfirmedFamilies.map(({ freshness }) => freshness.operationId)).toEqual([
+          graphIntents[1]?.operationId,
+          graphIntents[1]?.operationId,
+          graphIntents[1]?.operationId,
+          graphIntents[1]?.operationId,
+          graphIntents[1]?.operationId
+        ])
+        expect(reconfirmedFamilies.map(({ contentIdentity }) => contentIdentity)).toEqual([
+          firstContentIdentity,
+          firstContentIdentity,
+          firstContentIdentity,
+          firstContentIdentity,
+          firstContentIdentity
+        ])
+        expect(reconfirmedFamilies.map(({ coverage }) => coverage)).toEqual([
+          { _tag: "CompleteTargetClosure", target, explicitlyCoveredTaskIds: [] },
+          { _tag: "CompleteTargetClosure", target, explicitlyCoveredTaskIds: [] },
+          { _tag: "CompleteTargetClosure", target, explicitlyCoveredTaskIds: [] },
+          { _tag: "CompleteTargetClosure", target, explicitlyCoveredTaskIds: [] },
+          { _tag: "CompleteTargetClosure", target, explicitlyCoveredTaskIds: [] }
+        ])
+        expect([
+          reconfirmedFamilies[1].subjectTaskIds,
+          reconfirmedFamilies[2].subjectTaskIds,
+          reconfirmedFamilies[3].subjectTaskIds
+        ]).toEqual([[taskId], [taskId], [taskId]])
+        expect(reconfirmedFamilies[0].target).toEqual(target)
+        expect(reconfirmedFamilies[4].target).toEqual(target)
+        expect(trackerObservations[1]?.observation).toMatchObject({
+          _tag: "FocusedTaskClaimFacts",
+          operationId: claimIntent?.operationId,
+          target,
+          coverage: { taskId },
+          observation: { taskId }
+        })
+
+        const lineageIntent = appendedRecords.find(
+          ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
+        )?.event
+        const lineageObservation = appendedRecords.find(({ event }) => event._tag === "TargetLineageObserved")?.event
+        if (
+          lineageIntent?._tag !== "GitReadIntentRecorded" ||
+          lineageIntent.operation._tag !== "ReadTargetLineage" ||
+          lineageObservation?._tag !== "TargetLineageObserved"
+        ) {
+          return yield* Effect.die("denial continuation requires one paired target-lineage read")
+        }
+        expect(lineageIntent.operation).toMatchObject({ integrationTarget, plannedAttempt: attempt })
+        expect(lineageObservation.operationId).toBe(lineageIntent.operation.operationId)
+        expect(lineageObservation.plannedAttempt).toEqual(attempt)
+
+        expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+        expect(after.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+        expect(
+          after.flatMap(({ event }) =>
+            event._tag === "RemotePublicationAttemptIntended" ? [event.attemptOrdinal] : []
+          )
+        ).toEqual([1, 2])
+        expect(yield* Ref.get(remoteCalls)).toEqual(["admit"])
+        expect(yield* Ref.get(integratorCalls)).toEqual([])
+        expect(yield* Ref.get(executorCommands)).toEqual([])
+        expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 0, read: 0 })
+        expect(yield* Ref.get(completionCalls)).toEqual([])
+        expect(yield* Ref.get(completionAttempts)).toBe(0)
+        expect(after.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(0)
+        return
+      }
       const promotions = after.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
       const completions = after.filter(({ event }) => event._tag === "CompletionTaskAcknowledged")
       const lostResponses = after.filter(({ event }) => event._tag === "CompletionTaskResponseLost")
@@ -4898,76 +5093,38 @@ it.effect.each([
             ({ event }) =>
               event._tag === "IntegratorCandidateCleanupAuthorized" ||
               event._tag === "IntegratorCandidateCleanupObservationIntended" ||
-              event._tag === "IntegratorCandidateCleanupMutationIntended"
+              event._tag === "IntegratorCandidateCleanupObserved" ||
+              event._tag === "IntegratorCandidateCleanupMutationIntended" ||
+              event._tag === "IntegratorCandidateCleanupMutationResultRecorded" ||
+              event._tag === "IntegratorCandidateCleanupSettled"
           )
         ).toEqual([])
+        expect(focusedCompletionFacts).toEqual([])
+        expect(completeGraphObservations).toEqual([])
         expect(finalitySettlements).toEqual([])
-        expect(after.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toEqual([])
-        expect(yield* Ref.get(completionCalls)).toEqual([])
-        expect(yield* Ref.get(completionAppliedCalls)).toBe(0)
-        expect(yield* Ref.get(candidateEvidenceReads)).toBe(0)
-        expect(yield* Ref.get(candidateRemovals)).toBe(0)
-        expect((yield* Ref.get(candidateResources)).get(candidateResource)).toBe(candidateSessionId)
-        if (premise === "dependency") {
-          expect(focusedCompletionFacts.at(-1)?.unfinishedPrerequisiteTaskIds).toEqual([unfinishedPrerequisiteTaskId])
-        } else if (premise === "revision") {
-          expect(focusedCompletionFacts.at(-1)?.taskRevision).toBe(changedSpecification.fingerprint)
-        } else {
-          expect(after.filter(({ event }) => event._tag === "CompletionClaimReplaced")).toEqual([])
-          expect(yield* Ref.get(trackerClaim)).toEqual(foreignClaim)
-        }
       }
-      expect(completeGraphObservations[0]?.rootTaskId).toBe(taskId)
-      expect(completeGraphObservations.at(-1)?.rootTaskId).toBe(taskId)
-      expect(after.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toEqual([
-        expect.objectContaining({ event: receipt })
-      ])
-      expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toEqual([
-        expect.objectContaining({ event: resumedProof })
-      ])
-      expect(after.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(
-        published.promotedRecords.filter(({ event }) => event._tag === "IntegratorRunStarted").length
-      )
-      for (const tag of [
-        "TaskClaimAcquired",
-        "TaskAttemptPlanned",
-        "IntegratorSessionFixed",
-        "RemotePublicationIntended",
-        "RemotePublicationAttemptIntended"
-      ] as const) {
-        expect(after.filter(({ event }) => event._tag === tag)).toHaveLength(
-          resumedRecords.filter(({ event }) => event._tag === tag).length
-        )
-      }
-      expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
-      expect(yield* Ref.get(promotionCalls)).toMatchObject({ compareAndSet: 1 })
-      expect(yield* Ref.get(remoteCalls)).toEqual([])
-      expect(yield* Ref.get(integratorCalls)).toEqual([])
-      expect(yield* Ref.get(executorCommands)).toEqual([])
-      const currentCompletionClaims = yield* Ref.get(completionClaimReads)
       if (premise === "unchanged") {
-        expect(yield* Ref.get(completionCalls)).toEqual([completionRequest, completionRequest])
         expect(yield* Ref.get(completionAppliedCalls)).toBe(1)
-        expect(yield* Ref.get(completionAttempts)).toBe(2)
-        expect(currentCompletionClaims.length).toBeGreaterThanOrEqual(3)
-        expect(
-          currentCompletionClaims.every((observed) => completionTaskClaimEquals(observed, completionRequest.claim))
-        ).toBe(true)
-        expect(yield* Ref.get(completionReads)).toBeGreaterThan(0)
+        expect(yield* Ref.get(completionLookups)).toEqual(["NotApplied"])
+        expect(yield* Ref.get(completionClaimReads)).toHaveLength(1)
+        expect(yield* Ref.get(candidateEvidenceReads)).toBe(1)
+        expect(yield* Ref.get(candidateObservations)).toBe(2)
+        expect(yield* Ref.get(candidateRemovals)).toBe(1)
+        expect((yield* Ref.get(candidateResources)).size).toBe(0)
+        expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
+        expect(yield* Ref.get(trackerClaim)).toEqual(UnclaimedTask.make({ taskId }))
+        expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
+        expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 1, read: 0 })
+        expect(yield* Ref.get(remoteCalls)).toEqual([])
       } else {
-        expect(yield* Ref.get(completionAttempts)).toBe(0)
-        if (premise === "claim") {
-          expect(yield* Ref.get(completionReads)).toBe(0)
-          expect(yield* Ref.get(completionClaimReads)).toEqual([])
-          expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
-        } else {
-          expect(yield* Ref.get(completionReads)).toBeGreaterThan(0)
-          expect(currentCompletionClaims.length).toBeGreaterThan(0)
-          expect(
-            currentCompletionClaims.every((observed) => completionTaskClaimEquals(observed, completionRequest.claim))
-          ).toBe(true)
-          expect(Option.isSome(yield* Ref.get(completionMarker))).toBe(true)
-        }
+        expect(yield* Ref.get(completionAppliedCalls)).toBe(0)
+        expect(yield* Ref.get(completionLookups)).toEqual([])
+        expect(yield* Ref.get(completionClaimReads)).toEqual([])
+        expect(yield* Ref.get(lifecycle)).toBe("Open")
+        expect(yield* Ref.get(trackerClaim)).toEqual(premise === "claim" ? foreignClaim : claim)
+        expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
+        expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 1, read: 1 })
+        expect(yield* Ref.get(remoteCalls)).toEqual([])
       }
       expect(yield* Ref.get(trackerReads)).toBeGreaterThan(0)
       if (premise === "unchanged") {
@@ -5012,7 +5169,23 @@ it.effect.each([
       expect(yield* Ref.get(remoteCalls)).toEqual(remoteCallsBeforeFollowup)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
+
+it.effect("ordinary production Run does not retry a conclusive resumed authentication denial", () =>
+  exerciseResumedFinality("denial")
 )
+
+it.effect.each([
+  {
+    name: "ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination",
+    premise: "unchanged"
+  },
+  {
+    name: "ordinary production Run retains resumed finality when a dependency becomes unfinished",
+    premise: "dependency"
+  },
+  { name: "ordinary production Run retains resumed finality when the task revision changes", premise: "revision" },
+  { name: "ordinary production Run retains resumed finality when its claim is replaced", premise: "claim" }
+] as const)("$name", ({ premise }) => exerciseResumedFinality(premise))
 
 it.effect("terminates once only after G2 proves the target complete and responsibilities settled", () =>
   Effect.scoped(

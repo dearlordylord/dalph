@@ -190,3 +190,81 @@ Vitest reported `Test Files 1 passed (1)` and `Tests 12 passed (12)`, duration
 run completed before the recorded `18:10Z` stop; the worktree stayed on the
 same source HEAD. This closes the composition-file check left unrun by the
 scoped repair, but does not claim the full integrated #385/#386/#387 gate.
+
+## Integrated #387 evidence assertion repair — 2026-09-30
+
+**Accepted mapping:** The conclusive resumed-authentication-denial ordinary-Run
+scenario maps to
+`packages/dalph/test/scenarios/production.test.ts::ordinary production Run does not retry a conclusive resumed authentication denial`.
+Its added denial branch preserves the exact resumed journal prefix and binds
+the retained publication to the fixture's Run, task attempt, responsibility,
+target, and candidate. It checks the deterministic admission ID with exact Run
+and target; both target-wide graph read subjects with empty explicit task
+coverage; the second read's `PostQuiescenceReconfirmation` cause and predecessor
+link to the first; the exact claim read subject; all tracker intent/observation
+operation IDs; both graph observations' root and task-family subjects; and the
+target-lineage intent/observation operation ID pair.
+Existing no-additional-attempt, Git push, Integrator session, executor,
+promotion, completion, and termination assertions remain in the branch.
+
+The receipt-A-after-B chronology maps to
+`packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts::does not wake the active Run owner for receipt A after a later resume request B`.
+It now checks `storage.read(runId) === afterB` immediately after replay A,
+alongside the existing exact receipt, no-extra-wake, Git-call, and attempt
+counter assertions.
+
+**Disposition:** Sol's read-only review confirmed that the accepted retained
+denial path needs fresh graph and claim facts only; it does not cross a task
+work-specification boundary. The second graph read is a target-wide
+`PostQuiescenceReconfirmation` with empty explicit task coverage; its complete
+facts still name the task as root and in each task family. An earlier assertion
+overclaimed explicit task coverage on that second graph read. The denial
+assertion now records the accepted chronology and Sol's exact cause/predecessor
+finding. The latest focused run passed the graph intent tags, empty coverage,
+post-quiescence cause/predecessor, and exact claim subject, then failed at the
+observation-tag assertion in 2.20s: expected a second
+`CompleteTaskTrackerFacts`, observed `UnchangedTaskTrackerFactsReconfirmed`.
+The later graph subject assertions were not reached. This result differs from
+the reviewed expectation and stops the remaining checks. The bootstrap
+receipt-A and core denial-after-restart tests, typecheck, Base-pinned lint, and
+final diff check were not run. No production source changed and no commit has
+been made.
+
+## D36 compact reconfirmation and typecheck repair — 2026-09-30
+
+**Reviewer disposition:** Sol's D36 review accepts the second graph observation
+as `UnchangedTaskTrackerFactsReconfirmed`, a compact post-quiescence
+reconfirmation. The test now expects the observation sequence
+`CompleteTaskTrackerFacts`, `FocusedTaskClaimFacts`, then
+`UnchangedTaskTrackerFactsReconfirmed`; it pairs each outer operation ID with
+its intent, ties G2 to G1 through `priorFullObservationOperationId`, checks all
+five family freshness IDs and content identities, verifies target-wide empty
+explicit coverage, and checks the graph's root and task subjects. The existing
+claim, lineage, and no-forward-effect assertions remain.
+
+**Typecheck discriminator and repair:** On Node `v24.20.0`, the clean Base
+`e9c6b21509a78217ed8b522f9c7794b3d207f1b3` passed `pnpm typecheck` (exit 0).
+The candidate at the same Base exited 1 with two added test-file errors:
+`production.test.ts(4921,31)` TS2339 because filtering the operation union did
+not narrow `ReadTrackerGraph` before accessing `readShape`, and
+`production.test.ts(5110,15)` TS2367 because
+`IntegratorCandidateCleanupMutationObserved` is not a workflow event tag. The
+complete captured logs are `/tmp/issue387-typecheck-base-e9c6.log` and
+`/tmp/issue387-typecheck-candidate-e9c6.log`. The candidate now narrows graph
+operations through a type-safe `flatMap` and checks the actual event tag
+`IntegratorCandidateCleanupMutationResultRecorded`. The destructuring follows
+the lint diagnostic's required key order, `readShape` before `target`. These
+repairs change test assertions only; production source remains unchanged.
+
+**Verification:** After the repair, Node `v24.20.0` `pnpm typecheck` passed
+(exit 0; full output: `/tmp/issue387-typecheck-final-e9c6.log`). The named
+denial, receipt-A-after-B, and denial-after-restart Vitest cases passed
+sequentially (1 passed each; durations 1.93s, 1.12s, and 1.04s). Base-pinned
+`DALPH_DIAGNOSTICS_BASE=e9c6b21509a78217ed8b522f9c7794b3d207f1b3 pnpm
+lint:changed` passed (exit 0). Its first run reported dprint formatting only
+(exit 20); `pnpm exec dprint fmt packages/dalph/test/scenarios/production.test.ts`
+formatted the one selected test file, after which typecheck, all three focused
+cases, and Base-pinned lint passed again. Typecheck and lint were budgeted at
+under 2 minutes each with a `2026-09-30T03:00:00Z` stop and completed before
+that stop. Final `git diff --check` passed (exit 0). No production source
+changed; no commit was created during this scoped repair.

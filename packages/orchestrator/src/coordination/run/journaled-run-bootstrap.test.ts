@@ -2956,6 +2956,7 @@ it.effect("does not wake the active Run owner for receipt A after a later resume
 
       const replayA = yield* bootstrap.operatorControl.applyRemotePublicationResume(request)
       expect(replayA).toEqual(receiptA)
+      expect(yield* storage.read(runId)).toEqual(afterB)
       expect(yield* Ref.get(ownerWakes)).toEqual([
         AcceptedRunFactPublication.WorkflowProgress(),
         AcceptedRunFactPublication.WorkflowProgress()
