@@ -46,11 +46,13 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 ## Verification and closure
 
-- After a failed qualification, inspect its logs and run the focused reproducer
-  or diagnostic for the failed stage; when the failure is a test, run that test
-  directly. Repair the cause and observe the focused check passing before
-  another full run. An incomplete process retains its custody fence until
-  stopped writers are proved through reconciliation.
+- After a failed qualification, use retained gate evidence to identify and
+  diagnose the failed boundary. Run a focused reproducer or diagnostic for that
+  boundary; run a test directly only when the failed child was a test.
+  Preparation and input-guard failures can occur before a child stage launches,
+  leaving no stage result or child-stage log. Repair the cause and observe the
+  focused check passing before another full run. An incomplete process retains
+  its custody fence until stopped writers are proved through reconciliation.
 - Before starting or waiting on an operation expected to exceed one minute,
   record its expected duration and wall-clock stop time. At that time, stop
   safely, preserve evidence, and name the next discriminating action before a
