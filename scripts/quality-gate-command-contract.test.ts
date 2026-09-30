@@ -28,7 +28,9 @@ it(
   async () => {
     const scripts = readPackageScripts()
     expect(scripts["check:baseline"]).toBe("node scripts/with-gate-slot.mjs -- node scripts/run-baseline.mjs")
-    expect(scripts["check:fast"]).toBe("pnpm typecheck && pnpm lint:changed")
+    expect(scripts["check:fast"]).toBe(
+      "pnpm typecheck && pnpm lint:changed && node scripts/check-quality-selection-fixtures.mjs"
+    )
     const { invocations, result } = await runQualityGateFixture({ fixtureName: "command-contract" })
 
     expect(result.exitCode).toBe(0)
@@ -57,7 +59,8 @@ it("clone/search has no active refs and retains unrelated production memory impl
   const acceptanceTestPath = "scripts/quality-gate-command-contract.test.ts"
   for (const path of trackedPaths) {
     expect(path).not.toMatch(removedToolReference)
-    if (path !== acceptanceTestPath) expect(readRepositoryFile(path), path).not.toMatch(removedToolReference)
+    if (path !== acceptanceTestPath && existsSync(new URL(path, repositoryRoot)))
+      expect(readRepositoryFile(path), path).not.toMatch(removedToolReference)
   }
   for (const path of [
     "packages/orchestrator/src/workflow-journal/adapters/memory-store.ts",

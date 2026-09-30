@@ -5,6 +5,7 @@ import type {
   IntegrationTarget,
   PlannedTaskAttempt,
   RunId,
+  TaskId,
   TaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect } from "effect"
@@ -48,6 +49,7 @@ export interface AcceptedIntegrationHistoryInput {
   readonly integrationTarget: IntegrationTarget
   readonly initialControlPolicy?: InitialControlPolicy
   readonly plannedAttempt: PlannedTaskAttempt
+  readonly rootTaskId?: TaskId
   readonly runId: RunId
   readonly targetHeadSha: GitCommitSha
   readonly taskSpecification?: TaskWorkSpecification

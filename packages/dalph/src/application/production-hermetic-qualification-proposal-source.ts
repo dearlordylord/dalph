@@ -40,7 +40,10 @@ import {
   validateReplacementRequest,
   validateDeletionRequest
 } from "./production-hermetic-qualification-fixture-source.js"
-import { validateFreshStep } from "./production-hermetic-qualification-fresh-source.js"
+import {
+  validateAcceptedExecutorProgress,
+  validateFreshStep
+} from "./production-hermetic-qualification-fresh-source.js"
 import {
   isContinuationRead,
   validateContinuationRead
@@ -203,6 +206,12 @@ const validateQueuedIntegrationTransition = Effect.fn("HermeticQualification.val
 
 const validateRunningIntegrationTransition = Effect.fn("HermeticQualification.validateRunningIntegrationTransition")(
   function* (transition: IntegrationTransition, context: QualificationContext) {
+    if (transition._tag === "ObservePlannedAttemptExecutorWork")
+      return {
+        _tag: transition._tag,
+        plannedAttempt: yield* validatePlannedAttempt(transition.plannedAttempt, context),
+        acceptedProgress: yield* validateAcceptedExecutorProgress(transition.acceptedProgress)
+      }
     if (transition._tag === "ReconcilePlannedAttemptExecutorWork")
       return {
         _tag: transition._tag,

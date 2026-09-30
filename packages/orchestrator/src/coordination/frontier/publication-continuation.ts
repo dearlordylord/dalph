@@ -1,0 +1,140 @@
+import type { ReconstructedRunState } from "../reconstruction/state.js"
+import { journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
+import {
+  integratorRunQualifiedCandidateFromState,
+  type CurrentIntegratorState
+} from "../../workflow/protocols/integrator/state.js"
+import {
+  integratorSessionCapacityAfterPublicationBatchGrantForJournal,
+  integratorSessionCapacityForJournal
+} from "../../workflow/protocols/integrator/session-capacity.js"
+import { integratorCompetingHeadSuccessorAuthorizationIdFor } from "../../workflow/protocols/integrator/automatic-successor-events.js"
+import {
+  remotePublicationCorrelationEquals,
+  remotePublicationCorrelationFor
+} from "../../workflow/protocols/direct-publication/events.js"
+import { deriveRemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
+import {
+  remotePublicationBatchGrantForNextAttempt,
+  remotePublicationEventsFor
+} from "../../workflow/protocols/direct-publication/transition-journal.js"
+
+const lastRecordOffset = -1
+
+/** A transient projection of exact publication evidence; never a journal authority or retry permission. */
+export type PublicationContinuation = ReturnType<typeof derivePublicationContinuation>
+
+/** One history projection feeds actions, target retention, and visible waits for a responsibility. */
+export const derivePublicationContinuation = (runState: ReconstructedRunState, state: CurrentIntegratorState) => {
+  if (state._tag !== "GitQualifiedPrepared") return undefined
+  const source = runState.workflowHistory.evidence
+  const began = Array.from(journalRecordsOfKind(source, "WorkflowRunBegan"))[0]
+  if (began?.event._tag !== "WorkflowRunBegan") return undefined
+  const candidate = integratorRunQualifiedCandidateFromState(state)
+  const target = began.event.remotePublicationTarget
+  const correlation = remotePublicationCorrelationFor(candidate, target)
+  const events = remotePublicationEventsFor(source, correlation)
+  const publication = deriveRemotePublicationState(events)
+  const qualified = { candidate, correlation, publication, target }
+  if (publication._tag === "PublicationRetained" && publication.cause._tag === "AttemptsExhausted") {
+    const grant = remotePublicationBatchGrantForNextAttempt(source, correlation, publication)
+    const exhausted = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).findLast(
+      ({ event }) =>
+        event._tag === "RemotePublicationRetained" && remotePublicationCorrelationEquals(event.correlation, correlation)
+    )
+    if (grant !== undefined && exhausted !== undefined && grant.event.request.exhaustionAt === exhausted.position) {
+      return { ...qualified, _tag: "GrantedExhaustion" as const }
+    }
+  }
+  if (publication._tag !== "PublicationRetained" || publication.cause._tag !== "CompatibleCompetingHead") {
+    return {
+      ...qualified,
+      _tag: "Publication" as const,
+      succeeded: events.findLast((event) => event._tag === "RemotePublicationSucceeded")
+    }
+  }
+  const { mergeBase, remoteHead } = publication.cause
+  const compatibleRetainedForCorrelation = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).filter(
+    ({ event }) =>
+      event._tag === "RemotePublicationRetained" &&
+      remotePublicationCorrelationEquals(event.correlation, correlation) &&
+      event.cause._tag === "CompatibleCompetingHead" &&
+      event.cause.mergeBase === mergeBase
+  )
+  const retained = compatibleRetainedForCorrelation
+    .filter(
+      ({ event }) =>
+        event._tag === "RemotePublicationRetained" &&
+        event.cause._tag === "CompatibleCompetingHead" &&
+        event.cause.remoteHead === remoteHead
+    )
+    .at(lastRecordOffset)
+  const authorizationRecords = Array.from(
+    journalRecordsOfKind(source, "IntegratorCompetingHeadSuccessorAuthorized")
+  ).filter(
+    ({ event }) =>
+      event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+      remotePublicationCorrelationEquals(event.correlation, correlation)
+  )
+  // A later receipt can observe a newer compatible head at the same merge base.
+  // Validate authorization against its original retained head; the latest head
+  // selects baseline work without authorizing another session.
+  const authorizations = authorizationRecords.filter(
+    ({ event, position }) =>
+      event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+      event.mergeBase === mergeBase &&
+      compatibleRetainedForCorrelation.some(
+        ({ event: retainedEvent, position: retainedAt }) =>
+          retainedEvent._tag === "RemotePublicationRetained" &&
+          retainedEvent.cause._tag === "CompatibleCompetingHead" &&
+          event.remoteHead === retainedEvent.cause.remoteHead &&
+          event.remotePublicationRetainedAt === retainedAt &&
+          position > retainedAt &&
+          event.authorizationId ===
+            integratorCompetingHeadSuccessorAuthorizationIdFor(
+              correlation.requestId,
+              retainedAt,
+              mergeBase,
+              retainedEvent.cause.remoteHead
+            )
+      )
+  )
+  const compatible = { ...qualified, mergeBase, remoteHead }
+  if (retained === undefined) return { ...compatible, _tag: "BlockedCompatibleHead" as const }
+  const hasSuccessorCapacity = (): boolean => {
+    if (integratorSessionCapacityForJournal(source, state.run.session)._tag !== "Exhausted") return true
+    const grant = remotePublicationBatchGrantForNextAttempt(source, correlation, publication)
+    return (
+      grant !== undefined &&
+      grant.event.request.exhaustionAt === retained.position &&
+      integratorSessionCapacityAfterPublicationBatchGrantForJournal(source, state.run.session, grant.position)._tag !==
+        "Exhausted"
+    )
+  }
+  if (!hasSuccessorCapacity()) {
+    return { ...compatible, _tag: "BoundedRetainedWait" as const, retainedAt: retained.position }
+  }
+  const authorization = authorizations[0]
+  if (authorization !== undefined) {
+    return {
+      ...compatible,
+      _tag: "AuthorizedSuccessor" as const,
+      authorization,
+      retainsTarget: authorizations.some(({ runId }) => runId === state.run.session.plannedAttempt.runId)
+    }
+  }
+  if (authorizationRecords.length > 0) {
+    return { ...compatible, _tag: "BlockedCompatibleHead" as const }
+  }
+  return {
+    ...compatible,
+    _tag: "NeedsAuthorization" as const,
+    retainedAt: retained.position,
+    authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+      correlation.requestId,
+      retained.position,
+      mergeBase,
+      remoteHead
+    )
+  }
+}

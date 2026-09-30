@@ -19,3 +19,6 @@ _apalache-out/
 
 # Scratchpad for local tooling runs, not part of the repository.
 .scratch/
+
+# Quint/Apalache creates this generated working directory.
+/tmp/

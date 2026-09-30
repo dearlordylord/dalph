@@ -26,6 +26,7 @@ import {
 } from "../src/qualification/qualification-artifact.js"
 import { QualificationFormalProvenance } from "../src/qualification/qualification-provenance.js"
 import { CodexProcessIdentity } from "../src/application/codex-attempt-store.js"
+import { formalCommandCount, formalShardByPosition } from "../src/qualification/formal-command-inventory.generated.js"
 
 const sha = (digit: string) => GitCommitSha.make(digit.repeat(40))
 const digest = (digit: string) => EvidenceDigest.make(digit.repeat(64))
@@ -48,7 +49,7 @@ const startedAt = "2026-09-13T14:00:00.000Z"
 const endedAt = "2026-09-13T14:05:00.000Z"
 
 const formalCommands = (custodyOffset: number) =>
-  Array.from({ length: 105 }, (_value, position) => ({
+  Array.from({ length: formalCommandCount }, (_value, position) => ({
     position,
     kind: "test" as const,
     name: `formal command ${position}`,
@@ -92,17 +93,8 @@ const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: numbe
       name: `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard}`
     },
     reportDigest: digest(String((jobId + shard) % 10)),
-    positions: Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
-      shard === 0
-        ? position <= 36 ||
-          (position >= 42 && position <= 46) ||
-          (position >= 60 && position <= 64) ||
-          (position >= 86 && position <= 90) ||
-          position >= 100
-        : (position >= 37 && position <= 41) ||
-          (position >= 47 && position <= 59) ||
-          (position >= 65 && position <= 85) ||
-          (position >= 91 && position <= 99)
+    positions: Array.from({ length: formalCommandCount }, (_value, position) => position).filter(
+      (position) => formalShardByPosition[position] === String(shard)
     ),
     setupInstallSeconds: 10,
     formalSeconds: 105 - shard,
@@ -410,6 +402,20 @@ it.effect("Alice receives only same-source protected hosted and required dedicat
               { ...input.formal.stressed.shards[0], job: input.formal.dedicated.shards[0].job },
               input.formal.stressed.shards[1]
             ]
+          }
+        }
+      },
+      {
+        ...input,
+        formal: {
+          ...input.formal,
+          dedicated: {
+            ...input.formal.dedicated,
+            commands: input.formal.dedicated.commands.slice(0, 115),
+            shards: input.formal.dedicated.shards.map((shard) => ({
+              ...shard,
+              positions: shard.positions.filter((position) => position < 115)
+            }))
           }
         }
       },

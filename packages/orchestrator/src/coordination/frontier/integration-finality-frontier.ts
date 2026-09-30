@@ -259,10 +259,13 @@ const completionTaskTransitionsFor = (
   if (focusedSuccess !== undefined) return []
   const confirmation = latestCompletionConfirmationFor(records, request)
   const completeGraphAt = latestCompleteGraphPosition(records)
-  const lookupTransitions = decisiveLookupTransitionsFor(lookup, completeGraphAt, request, responsibility)
-  if (lookupTransitions !== undefined) return lookupTransitions
   const outcome = latestCompletionTaskOutcomeFor(records, request)
-  const confirmationRequiredAfter = confirmationRequiredAfterFor(lookup, outcome)
+  const lookupIsNewerThanOutcome = lookup !== undefined && (outcome === undefined || lookup.position > outcome.position)
+  const lookupTransitions = lookupIsNewerThanOutcome
+    ? decisiveLookupTransitionsFor(lookup, completeGraphAt, request, responsibility)
+    : undefined
+  if (lookupTransitions !== undefined) return lookupTransitions
+  const confirmationRequiredAfter = confirmationRequiredAfterFor(lookupIsNewerThanOutcome ? lookup : undefined, outcome)
   if (confirmationRequiredAfter !== undefined) {
     return confirmationTransitionsAfter(
       confirmation,
@@ -380,16 +383,14 @@ const waitsForFreshSuccess = (
   )
 }
 
-const latestFocusedRecordFor = (records: JournalHistorySource, request: CompletionTaskRequest) => {
-  let focusedObservation: JournalRecord | undefined
-  for (const record of journalRecordsForOperationId(records, request.operationId))
-    if (
-      record.event._tag === "TaskTrackerFactsObserved" &&
-      record.event.observation._tag === "FocusedTaskCompletionFacts"
-    )
-      focusedObservation = record
-  return focusedObservation
-}
+const latestFocusedRecordFor = (records: JournalHistorySource, request: CompletionTaskRequest) =>
+  Array.from(journalRecordsForOperationId(records, request.operationId)).reduce<JournalRecord | undefined>(
+    (latest, record) =>
+      record.event._tag === "TaskTrackerFactsObserved" && record.event.observation._tag === "FocusedTaskCompletionFacts"
+        ? record
+        : latest,
+    undefined
+  )
 
 const focusedSuccessWaitReasonFor = (
   records: JournalHistorySource,

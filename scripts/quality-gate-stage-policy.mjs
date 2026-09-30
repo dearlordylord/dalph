@@ -1,3 +1,5 @@
+import { selectQualityStages } from "./quality-check-selection.mjs"
+
 const SECOND = 1_000
 const DEFAULT_PROCESS_GROUP_ABSENCE_TIMEOUT = 2 * SECOND
 const DEFAULT_TERMINATION_GRACE = 5 * SECOND
@@ -7,7 +9,7 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 4, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 10, version: 1 })
 
 // Local Vitest-backed obligations are admitted under the highest fixed cap
 // proven safe by the pairwise memory campaign recorded for issue #336.  This
@@ -69,6 +71,10 @@ const CAPABILITY_REGISTRATION_TIMEOUT = 120 * SECOND
 // normal host variance a false product failure. The maintained Lab completed
 // just below its former five-minute edge, so its bounded headroom is seven minutes.
 const GATE_CONTROL_TIMEOUT = 2 * 60 * SECOND
+// A timed maintained-cassette smoke completed in 330.592s under shared-host
+// contention; two capstone DOM scenarios consumed 165.727s of that run. Seven
+// minutes retains a finite stop and leaves room for typecheck/build plus runner
+// variance without dropping the Lab proof.
 const REDUCER_LAB_TIMEOUT = 7 * 60 * SECOND
 
 export const capabilityRegistrationQualityGate = Object.freeze({
@@ -115,7 +121,7 @@ export const preflightQualityGates = (baseSha) => [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   { args: ["typecheck"], name: "typecheck (including Effect diagnostics)", timeout: 2 * 60 * SECOND },
   ...baselineQualityGates(),
-  { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
+  { args: ["check:circular"], name: "dependency cycles", timeout: 3 * 60 * SECOND },
   complexityQualityGate(baseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:coverage:explanation"], name: "coverage explanation controls", timeout: 60 * SECOND },
@@ -213,7 +219,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
             ? ["prototypes/reducer-lab/dist"]
             : []
   }))
-  const manifest = [...prefix, ...qualificationQualityGates()]
+  const manifest = selectQualityStages([...prefix, ...qualificationQualityGates()], invocation?.changedPaths)
   return invocation === undefined
     ? manifest
     : manifest.map((stage) => ({

@@ -2,7 +2,7 @@ import { Context, Effect, Option } from "effect"
 import type { IntegrationTarget } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import { journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   integratorRunCandidateGitObservedRecordKey,
   integratorRunResultRecordedRecordKey
@@ -27,9 +27,15 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
   integratorCandidateHasExactParents,
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorSuccessorGeneration,
   firstFullRerunSuccessorGeneration
 } from "./events.js"
+import {
+  IntegratorCompetingHeadSuccessorAuthorizationId,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
+  integratorCompetingHeadSuccessorAuthorizationIdFor
+} from "./automatic-successor-events.js"
 import {
   IntegratorCallFailure,
   IntegratorGitReadFailure,
@@ -104,17 +110,28 @@ export {
   IntegratorRunOrdinal,
   IntegratorSessionId,
   integratorCandidateHasExactParents,
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorSuccessorGeneration,
   firstFullRerunSuccessorGeneration
 }
 export type {
   IntegratorSessionCorrelation as IntegratorSessionCorrelationType,
+  IntegratorAutomaticSuccessorGeneration as IntegratorAutomaticSuccessorGenerationType,
   IntegratorGitObservation as IntegratorGitObservationType,
   IntegratorJournalEvent as IntegratorJournalEventType,
   IntegratorRequest as IntegratorRequestType,
   IntegratorResult as IntegratorResultType
 } from "./events.js"
 export type { IntegratorResponsibilityFacts } from "./events.js"
+export {
+  IntegratorCompetingHeadSuccessorAuthorizationId,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
+  integratorCompetingHeadSuccessorAuthorizationIdFor
+}
+export type {
+  IntegratorCompetingHeadSuccessorAuthorizationId as IntegratorCompetingHeadSuccessorAuthorizationIdType,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent as IntegratorCompetingHeadSuccessorAuthorizedEventType
+} from "./automatic-successor-events.js"
 
 /** The generic outer service owns private process, turn, review, and provider retry state. */
 export interface IntegratorService {
@@ -260,6 +277,44 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
   return qualifyRunCandidate(result, run, observation)
 })
 
+const automaticSuccessorRetrySessionFor = (
+  records: JournalHistorySource,
+  activeSession: Option.Option<IntegratorSessionCorrelation>,
+  requestedSession: IntegratorSessionCorrelation
+): IntegratorSessionCorrelation | undefined => {
+  if (Option.isNone(activeSession) || !integratorCorrelationsEqual(activeSession.value, requestedSession)) {
+    return undefined
+  }
+  for (const { event } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
+    if (
+      event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(event.successor, activeSession.value)
+    ) {
+      return activeSession.value
+    }
+  }
+  return undefined
+}
+
+const exactRetrySessionForRequestedRun = Effect.fn("IntegratorProtocol.exactRetrySessionForRequestedRun")(function* (
+  request: IntegratorRunPreparationInput,
+  records: JournalHistorySource
+) {
+  const runId = request.preparation.responsibility.plannedAttempt.runId
+  const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)
+  if (Option.isNone(recordedSession)) {
+    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
+  }
+  const activeSession = yield* readActiveIntegratorSession(records, request.preparation.responsibility)
+  const isOriginalSession = integratorCorrelationsEqual(recordedSession.value, request.run.session)
+  const automaticSuccessorSession = automaticSuccessorRetrySessionFor(records, activeSession, request.run.session)
+  const isExactAutomaticSuccessor = automaticSuccessorSession !== undefined
+  if (!isOriginalSession && !isExactAutomaticSuccessor) {
+    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
+  }
+  return automaticSuccessorSession ?? recordedSession.value
+})
+
 const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForRequestedRun")(function* (
   journal: InRunJournal["Service"],
   request: IntegratorRunPreparationInput,
@@ -271,10 +326,7 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
   if (request.run.ordinal !== integratorRetryRunOrdinal) {
     return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
   }
-  const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)
-  if (Option.isNone(recordedSession) || !integratorCorrelationsEqual(recordedSession.value, request.run.session)) {
-    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
-  }
+  const retrySession = yield* exactRetrySessionForRequestedRun(request, records)
   if (!integratorLineageIsCompatible(request.preparation)) {
     return yield* new IntegratorTargetLineageIncompatible({
       observation: request.preparation.targetLineage,
@@ -285,14 +337,14 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
   if (authorizationIssue !== undefined) {
     return yield* new IntegratorJournalContradiction({ detail: authorizationIssue, runId })
   }
-  if (recordedSession.value.expectedTargetHead !== request.preparation.targetLineage.targetHeadSha) {
+  if (retrySession.expectedTargetHead !== request.preparation.targetLineage.targetHeadSha) {
     return yield* new IntegratorTargetHeadChanged({
       observedTargetHead: request.preparation.targetLineage.targetHeadSha,
-      recordedTargetHead: recordedSession.value.expectedTargetHead,
+      recordedTargetHead: retrySession.expectedTargetHead,
       responsibility: request.preparation.responsibility
     })
   }
-  return recordedSession.value
+  return retrySession
 })
 
 /**

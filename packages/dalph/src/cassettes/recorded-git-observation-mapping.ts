@@ -24,13 +24,6 @@ export const isRecordedGitObservationCassetteEntry = (
   entry: RecordedCassetteEntry
 ): entry is RecordedGitObservationEntry => Object.hasOwn(recordedGitObservationEntryTags, entry._tag)
 
-export const isRecordedGitObservationEntry = <Value extends { readonly _tag: string }>(
-  value: Value
-): value is Extract<
-  Value,
-  { readonly _tag: "GitReadInitiated" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
-> => Object.hasOwn(recordedGitObservationEntryTags, value._tag)
-
 export const recordGitObservationEntry = (
   event: Extract<
     WorkflowJournalEvent,

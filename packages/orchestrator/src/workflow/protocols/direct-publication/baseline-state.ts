@@ -20,6 +20,7 @@ export const RemoteBaselineState = Schema.TaggedUnion({
   Retained: {
     correlation: RemoteBaselineCorrelation,
     cause: Schema.TaggedUnion({
+      CatchUpChanged: { expectedLocalHead: GitCommitSha, observedLocalHead: GitCommitSha, remoteHead: GitCommitSha },
       CatchUpUnavailable: { reason: RemoteBaselineFailureReason },
       UnsafeObservation: { observation: RemoteBaselineObservation }
     })
@@ -112,11 +113,10 @@ export const deriveRemoteBaselineState = (events: ReadonlyArray<RemoteBaselineJo
   return applied._tag === "Rejected"
     ? RemoteBaselineState.cases.Retained.make({
         cause: {
-          _tag: "UnsafeObservation",
-          observation: RemoteBaselineObservation.cases.Diverged.make({
-            localHead: applied.observedHead,
-            remoteHead: intent.remoteHead
-          })
+          _tag: "CatchUpChanged",
+          expectedLocalHead: intent.expectedLocalHead,
+          observedLocalHead: applied.observedHead,
+          remoteHead: intent.remoteHead
         },
         correlation: readIntent.correlation
       })

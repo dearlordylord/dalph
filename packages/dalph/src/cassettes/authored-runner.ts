@@ -938,6 +938,10 @@ const proposalActionLabels = {
   ResumePlannedAttemptExecutorWorkAfterCurrentFacts:
     "Authorize current tracker and Git facts, then tell the executor to resume the exact safely suspended attempt",
   FixIntegratorSuccessorSession: "Fix the one FullRerun successor after the operator direction and fresh Git lineage",
+  AuthorizeIntegratorCompetingHeadSuccessor:
+    "Record Dalph's exact authorization for one successor after a compatible competing remote head",
+  FixIntegratorAutomaticSuccessorSession:
+    "Fix the one Dalph-authorized successor after its baseline catch-up and fresh target lineage",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
   ObserveCancelledAttemptClaim: "Check the tracker claim after cancelling the exact attempt",
   ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",

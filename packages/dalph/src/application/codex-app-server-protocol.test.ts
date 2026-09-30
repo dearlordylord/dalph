@@ -3,7 +3,7 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import type { PlatformError } from "effect"
 import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
-import { TestClock } from "effect/testing"
+import { TestClock, TestConsole } from "effect/testing"
 import { expect, expectTypeOf } from "vitest"
 import {
   CodexAppServer,
@@ -16,6 +16,7 @@ import {
 } from "./codex-app-server.js"
 import {
   CodexOwnedTurnToken,
+  CodexThreadId,
   CodexThreadOwnershipToken,
   CodexTurnId,
   memoryCodexAttemptStoreLayer
@@ -422,6 +423,9 @@ const responseFor = (method, params = {}) => {
   }
   if (mode === "terminate-invalid" && method === "thread/backgroundTerminals/terminate") return { terminated: "yes" }
   if (mode === "malformed-json" && method === "thread/start") return "__MALFORMED__"
+  if ((mode === "turn-completed-burst" || mode === "turn-completed-overflow") && method === "turn/start") {
+    return { turn: { ...validTurn, status: "inProgress", items: [] } }
+  }
   return method === "initialize"
     ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
     : method === "thread/start" || method === "thread/read" || method === "thread/resume"
@@ -528,15 +532,67 @@ const onMessage = (message) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "fixture/notice" }) + "\n")
   }
   if (mode === "turn-completed-hint" && message.method === "thread/start") {
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { opaque: true } }) + "\n")
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { opaque: true, threadId: "protocol-thread", turn: { id: "protocol-turn", status: "completed" } }
+    }) + "\n")
+  }
+  if (mode === "turn-completed-repeated-post-bind" && message.method === "thread/read") {
+    for (let index = 0; index < 2; index += 1) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: { threadId: "protocol-thread", turn: { id: "protocol-turn", status: "completed" } }
+      }) + "\n")
+    }
+  }
+  if (mode === "turn-completed-malformed" && message.method === "thread/start") {
+    for (const params of [
+      { turn: { id: "protocol-turn" } },
+      { threadId: "protocol-thread", turn: {} },
+      { threadId: 42, turn: { id: "protocol-turn" } }
+    ]) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params }) + "\n")
+    }
+  }
+  if (mode === "turn-completed-before-start-response" && message.method === "turn/start") {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { threadId: "protocol-thread", turn: { id: "protocol-turn", status: "inProgress" } }
+    }) + "\n")
+    write(message.id, { turn: { ...validTurn, status: "inProgress", items: [] } })
+    return
   }
   if (mode === "owned-activity-hint" && message.method === "thread/start") {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "item/completed", params: { opaque: true } }) + "\n")
   }
-  if (mode === "turn-completed-burst" && message.method === "thread/start") {
-    for (let index = 0; index < 64; index += 1) {
+  if ((mode === "turn-completed-burst" || mode === "turn-completed-overflow") && message.method === "turn/start") {
+    const total = mode === "turn-completed-overflow" ? 65 : 64
+    const matchingIndex = mode === "turn-completed-overflow" ? 64 : 63
+    for (let index = 0; index < total; index += 1) {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "thread/status/changed", params: { index } }) + "\n")
-      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { index } }) + "\n")
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: "protocol-thread",
+          turn: {
+            id: index === matchingIndex ? "protocol-turn" : "unrelated-turn-" + index,
+            status: "completed"
+          }
+        }
+      }) + "\n")
+    }
+  }
+  if (mode === "turn-completed-repeated-pre-response" && message.method === "turn/start") {
+    for (let index = 0; index < 65; index += 1) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: { threadId: "protocol-thread", turn: { id: "protocol-turn", status: "completed" } }
+      }) + "\n")
     }
   }
   if (mode === "turn-completed-burst" && message.method === "thread/read" && message.params?.includeTurns === true && threadReadNumber === 1) {
@@ -545,7 +601,11 @@ const onMessage = (message) => {
     }
   }
   if (mode === "turn-completed-burst" && message.method === "thread/read" && message.params?.includeTurns === true && threadReadNumber === 2) {
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { terminal: true } }) + "\n")
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: { threadId: "protocol-thread", turn: { id: "protocol-turn-late", status: "completed" } }
+    }) + "\n")
   }
   if (mode === "unexpected-approval-request" && message.method === "turn/start") {
     write(message.id, responseFor(message.method, message.params))
@@ -662,6 +722,12 @@ const withFixture = <A>(
       }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer))
     }).pipe(Effect.provide(NodeServices.layer))
   )
+
+const attachExactCompletionHints = (app: CodexAppServerService) => {
+  const attach = app.attachExactTurnCompletedHints
+  if (attach === undefined) return Effect.die("the Codex app-server must expose exact turn-completion hints")
+  return attach(CodexThreadId.make("protocol-thread"))
+}
 
 const unansweredFixture = (
   mode:
@@ -1244,15 +1310,24 @@ it.effect("fails policy admission before creating a task thread when effective p
   )
 )
 
-it.effect("turns an unexpected approval request into a sticky provider-protocol failure", () =>
+it.effect("publishes an app-server protocol failure separately from exact completion hints", () =>
   withFixture("unexpected-approval-request", (app) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const hints = yield* app.attachTurnCompletedHints
-        const approvalObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const hints = yield* attachExactCompletionHints(app)
+        const hintObserved = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
+        const legacyHints = yield* app.attachTurnCompletedHints
+        const attachFailures = app.attachProtocolFailures
+        if (attachFailures === undefined) return yield* Effect.die("protocol failure stream is required")
+        const failures = yield* attachFailures
+        const failureObserved = yield* failures.pipe(Stream.runHead, Effect.forkChild)
         const thread = yield* app.startThread("/fixture/worktree")
         yield* app.startTurn(thread.id, "/fixture/worktree", "work")
-        expect(yield* Fiber.join(approvalObserved)).toEqual(Option.some(undefined))
+        const protocolFailure = yield* Fiber.join(failureObserved)
+        expect(Option.getOrThrow(protocolFailure)).toMatchObject({ kind: "Protocol", operation: "turn/start" })
+        expect(hintObserved.pollUnsafe()).toBeUndefined()
+        expect(yield* Stream.runHead(legacyHints)).toEqual(Option.none())
+        yield* Fiber.interrupt(hintObserved)
         const exit = yield* Effect.exit(app.readThread(thread.id))
         expectAppFailure(exit, "turn/start")
         if (Exit.isFailure(exit)) {
@@ -1262,6 +1337,30 @@ it.effect("turns an unexpected approval request into a sticky provider-protocol 
             expect(failure.value.detail).toContain("unexpected approval request")
           }
         }
+      })
+    )
+  )
+)
+
+it.effect("replays a sticky app-server protocol failure to a later lifecycle subscriber", () =>
+  withFixture("unexpected-approval-request", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        expectAppFailure(yield* Effect.exit(app.readThread(thread.id)), "turn/start")
+        if (app.attachProtocolFailures === undefined) return expect.fail("protocol failure stream is required")
+        const failures = yield* app.attachProtocolFailures
+        const exactHints = yield* attachExactCompletionHints(app)
+        const hintObserved = yield* exactHints.hints.pipe(Stream.runHead, Effect.forkChild)
+        const legacyHints = yield* app.attachTurnCompletedHints
+        expect(Option.getOrThrow(yield* Stream.runHead(failures))).toMatchObject({
+          kind: "Protocol",
+          operation: "turn/start"
+        })
+        expect(yield* Stream.runHead(legacyHints)).toEqual(Option.none())
+        expect(hintObserved.pollUnsafe()).toBeUndefined()
+        yield* Fiber.interrupt(hintObserved)
       })
     )
   )
@@ -1460,11 +1559,13 @@ it.effect("keeps an idle malformed JSON-RPC failure sticky before the next reque
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const hints = yield* app.attachTurnCompletedHints
-        const malformedObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const failureStream = app.attachProtocolFailures
+        if (failureStream === undefined) return expect.fail("protocol failure stream is required")
+        const failures = yield* failureStream
+        const malformedObserved = yield* failures.pipe(Stream.runHead, Effect.forkChild)
         const thread = yield* app.startThread("/fixture/worktree")
         expect(thread.id).toBe("protocol-thread")
-        expect(yield* Fiber.join(malformedObserved)).toEqual(Option.some(undefined))
+        expect(Option.getOrThrow(yield* Fiber.join(malformedObserved)).operation).toBe("initialize")
 
         const result = yield* Effect.exit(app.readThread(thread.id))
         expectAppFailure(result, "initialize")
@@ -1503,15 +1604,17 @@ it.effect("rejects an admitted request when malformed protocol state wins before
           Effect.gen(function* () {
             const fileSystem = yield* FileSystem.FileSystem
             const path = yield* Path.Path
-            const hints = yield* app.attachTurnCompletedHints
-            const malformedObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+            const failureStream = app.attachProtocolFailures
+            if (failureStream === undefined) return expect.fail("protocol failure stream is required")
+            const failures = yield* failureStream
+            const malformedObserved = yield* failures.pipe(Stream.runHead, Effect.forkChild)
             const thread = yield* app.startThread("/fixture/worktree")
             const request = yield* Effect.exit(app.readThread(thread.id)).pipe(Effect.forkChild)
             yield* Deferred.await(admissionEntered)
             const executable = path.join(root, "malformed-during-admission")
             yield* fileSystem.writeFileString(`${executable}.malformed`, "malformed")
             yield* awaitFile(fileSystem, `${executable}.malformed-sent`)
-            expect(yield* Fiber.join(malformedObserved)).toEqual(Option.some(undefined))
+            expect(Option.getOrThrow(yield* Fiber.join(malformedObserved)).operation).toBe("initialize")
             yield* Deferred.succeed(admissionRelease, undefined)
             const result = yield* Fiber.join(request)
             expectAppFailure(result, "thread/read")
@@ -1571,28 +1674,133 @@ it.effect("keeps diagnostic stderr, blank lines, and notifications outside proto
   )
 )
 
-it.effect("keeps existing ID-less completion notifications as wake hints only", () =>
-  withFixture("turn-completed-hint", (app) =>
+it.effect("traces real turn/completed ingress and hint publication without retaining notification payload", () => {
+  return withFixture("turn-completed-hint", (app) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const hints = yield* app.attachTurnCompletedHints
-        const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const hints = yield* attachExactCompletionHints(app)
+        const received = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
         yield* app.startThread("/fixture/worktree")
-        expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+        yield* hints.expectTurnId(CodexTurnId.make("protocol-turn"))
+        expect(yield* Fiber.join(received)).toEqual(
+          Option.some({ threadId: "protocol-thread", turnId: "protocol-turn" })
+        )
+        const traces = (yield* TestConsole.errorLines).map(
+          (message) => JSON.parse(String(message)) as Record<string, unknown>
+        )
+        expect(traces).toContainEqual(
+          expect.objectContaining({
+            _tag: "CodexExecutorCompletionTrace",
+            appServerIncarnation: app.incarnation,
+            method: "turn/completed",
+            notificationOrdinal: 1,
+            phase: "Ingress",
+            threadId: "protocol-thread",
+            turnId: "protocol-turn"
+          })
+        )
+        expect(traces).toContainEqual(
+          expect.objectContaining({
+            _tag: "CodexExecutorCompletionTrace",
+            appServerIncarnation: app.incarnation,
+            method: "turn/completed",
+            notificationOrdinal: 1,
+            phase: "HintPublished",
+            threadId: "protocol-thread",
+            turnId: "protocol-turn"
+          })
+        )
+        expect(JSON.stringify(traces)).not.toContain("opaque")
+      })
+    )
+  ).pipe(Effect.provide(TestConsole.layer))
+})
+
+it.effect("routes repeated exact completion notifications after the turn ID is bound", () =>
+  withFixture("turn-completed-repeated-post-bind", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* attachExactCompletionHints(app)
+        const thread = yield* app.startThread("/fixture/worktree")
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        yield* hints.expectTurnId(turn.id)
+        const received = yield* hints.hints.pipe(Stream.take(2), Stream.runCollect, Effect.forkChild)
+
+        yield* app.readThread(thread.id)
+
+        expect(Array.from(yield* Fiber.join(received))).toEqual([
+          { threadId: "protocol-thread", turnId: "protocol-turn" },
+          { threadId: "protocol-thread", turnId: "protocol-turn" }
+        ])
       })
     )
   )
 )
 
-it.effect("accepts Codex versionless JSON-RPC-shaped responses and notifications", () =>
+it.effect("bounds repeated completion notifications received before the turn ID is bound", () =>
+  withFixture("turn-completed-repeated-pre-response", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* attachExactCompletionHints(app)
+        const thread = yield* app.startThread("/fixture/worktree")
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        yield* hints.expectTurnId(turn.id)
+        const received = yield* hints.hints.pipe(Stream.take(64), Stream.runCollect)
+
+        expect(Array.from(received)).toHaveLength(64)
+        expect(
+          Array.from(received).every((hint) => hint.threadId === "protocol-thread" && hint.turnId === "protocol-turn")
+        ).toBe(true)
+      })
+    )
+  )
+)
+
+it.effect("preserves exact completion IDs emitted before the turn/start response", () =>
+  withFixture("turn-completed-before-start-response", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        const hints = yield* attachExactCompletionHints(app)
+        const received = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        expect(turn.status).toBe("inProgress")
+        yield* hints.expectTurnId(turn.id)
+        expect(yield* Fiber.join(received)).toEqual(
+          Option.some({ threadId: "protocol-thread", turnId: "protocol-turn" })
+        )
+      })
+    )
+  )
+)
+
+it.effect("ignores malformed completion notification IDs without publishing a hint", () =>
+  withFixture("turn-completed-malformed", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* attachExactCompletionHints(app)
+        const received = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        expect(thread.id).toBe("protocol-thread")
+        yield* Effect.yieldNow
+        expect(received.pollUnsafe()).toBeUndefined()
+        yield* Fiber.interrupt(received)
+      })
+    )
+  )
+)
+
+it.effect("ignores a versionless malformed completion notification without exact identity", () =>
   withFixture("versionless-envelope", (app) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const hints = yield* app.attachTurnCompletedHints
-        const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const hints = yield* attachExactCompletionHints(app)
+        const received = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
         const thread = yield* app.startThread("/fixture/worktree")
         expect(thread.id).toBe("protocol-thread")
-        expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+        yield* Effect.yieldNow
+        expect(received.pollUnsafe()).toBeUndefined()
+        yield* Fiber.interrupt(received)
       })
     )
   )
@@ -1611,27 +1819,38 @@ it.effect("forwards a late item completion as a non-authoritative owned-activity
   )
 )
 
-it.effect("coalesces a provider burst while retaining a later terminal wake", () =>
+it.effect("retains the exact matching identity from a pre-response burst without unrelated hints overwriting it", () =>
   withFixture("turn-completed-burst", (app) =>
     Effect.scoped(
       Effect.gen(function* () {
-        // Subscribe before the current read, then let the provider publish a burst before consumption.
-        const hints = yield* app.attachTurnCompletedHints
+        const hints = yield* attachExactCompletionHints(app)
+        const received = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
         const thread = yield* app.startThread("/fixture/worktree")
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        yield* hints.expectTurnId(turn.id)
+        expect(yield* Fiber.join(received)).toEqual(
+          Option.some({ threadId: "protocol-thread", turnId: "protocol-turn" })
+        )
+      })
+    )
+  )
+)
 
-        expect(yield* Stream.runHead(hints)).toEqual(Option.some(undefined))
-        const next = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+it.effect("fails closed when the pre-response identity buffer is full before the matching turn hint", () =>
+  withFixture("turn-completed-overflow", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* attachExactCompletionHints(app)
+        const received = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        yield* hints.expectTurnId(turn.id)
         yield* Effect.yieldNow
-        expect(next.pollUnsafe()).toBeUndefined()
 
-        // Unrelated notifications remain ignored rather than creating a busy loop.
-        yield* app.readThread(thread.id)
-        yield* Effect.yieldNow
-        expect(next.pollUnsafe()).toBeUndefined()
-
-        // A later qualified notification must still wake the attached reader exactly once.
-        yield* app.readThread(thread.id)
-        expect(yield* Fiber.join(next)).toEqual(Option.some(undefined))
+        // The 65th distinct identity was not retained; it cannot authorize a
+        // lifecycle read after the expected turn ID becomes known.
+        expect(received.pollUnsafe()).toBeUndefined()
+        yield* Fiber.interrupt(received)
       })
     )
   )

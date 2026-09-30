@@ -12,6 +12,7 @@ import { FrontierExplanation, type RunnableFrontier, RunnableFrontierTransition 
 import type { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { claimAuthorityWaitsFor, queuedTargetWaitsFor } from "./integration-claim-waits.js"
 import { deriveStartedIntegrationFrontier } from "./integration-frontier-transitions.js"
@@ -22,11 +23,15 @@ export interface IntegrationFrontierRuntimeFacts {
   /** Tasks covered by a complete graph observation committed in this activation. */
   readonly activeResponsibilities?: ReadonlyArray<IntegrationResponsibilityIdentity>
   readonly currentTrackerTaskIds: ReadonlySet<TaskId>
+  /** Fresh graph subjects whose current lifecycle cannot authorize further integration work. */
+  readonly ineligibleCurrentTaskIds?: ReadonlySet<TaskId>
   readonly heldResponsibilities: ReadonlyArray<IntegrationResponsibilityIdentity>
   readonly integrationTarget: Option.Option<IntegrationTarget>
   readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>
   /** Attempts whose current graph authority is newer than their last Git target-lineage observation. */
   readonly targetLineageRefreshRequiredAttemptIds?: ReadonlySet<AttemptId>
+  /** Stable Run-entry boundary used to schedule one bounded automatic-baseline refresh. */
+  readonly activationBaselinePosition?: Option.Option<JournalPosition>
   readonly targetPromotionConfigured?: boolean
   readonly remotePublicationConfigured?: boolean
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
@@ -42,6 +47,7 @@ const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   integrationTarget: Option.none(),
   targetLineageByAttemptId: new Map(),
   targetLineageRefreshRequiredAttemptIds: new Set(),
+  activationBaselinePosition: Option.none(),
   targetPromotionConfigured: false,
   remotePublicationConfigured: false,
   taskClaimAuthorityByAttemptId: new Map()

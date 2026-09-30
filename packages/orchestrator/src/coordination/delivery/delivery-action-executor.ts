@@ -58,8 +58,6 @@ import type {
   IntegratorGitReadFailure,
   prepareIntegrationCandidateRun
 } from "../../workflow/protocols/integrator/protocol.js"
-import type { appendChangedHeadRetryQuarantine } from "../../workflow/protocols/integration-quarantine/changed-head-retry.js"
-import type { appendPromotionStaleIntegrationQuarantine } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 import type { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import type {
   recoverTaskClaimOperation,
@@ -67,9 +65,15 @@ import type {
   recoverTaskWorktreeOperation
 } from "../frontier/recovery.js"
 import type { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
+import type { appendChangedHeadRetryQuarantine } from "../../workflow/protocols/integration-quarantine/changed-head-retry.js"
+import type { appendPromotionStaleIntegrationQuarantine } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 import type { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
-import type { runRemotePublication } from "../../workflow/protocols/direct-publication/protocol-engine.js"
+import type { RemotePublicationResumeRuntimeUnavailable } from "../../workflow/protocols/direct-publication/resume-runtime.js"
+import type {
+  RemotePublicationResumeRequestConflict,
+  RemotePublicationResumeSubjectMismatch
+} from "../../workflow/protocols/direct-publication/errors.js"
 import type { establishRemoteBaseline } from "../../workflow/protocols/direct-publication/baseline-protocol-engine.js"
 import type {
   runCompletionClaimDeletionProtocol,
@@ -84,6 +88,7 @@ import type {
   CompletionTaskPreconditionConflict
 } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import type { OperationId } from "../../workflow/identity.js"
+import type { runPlannedAttemptExecutorResumeRedelivery } from "../../workflow/protocols/planned-attempt-executor-work/resume-redelivery.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import type { AtomicBoundaryExecution } from "../application-exit/lifecycle.js"
@@ -190,6 +195,7 @@ export type DeliveryActionResult =
         | "CompletionTaskNonConvergent"
         | "CompletionTaskUnavailable"
         | "ContinuationAuthorizationStale"
+        | "RemoteBaselineReconciliationPending"
         | "FocusedTaskCompletionSuccessRequired"
         | "TargetPromotionDestinationUnreadable"
         | "TargetPromotionRetryAuthorityRequired"
@@ -237,11 +243,14 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof recoverTaskClaimReleaseOperation>
   | EffectFunctionFailure<typeof recoverTaskWorktreeOperation>
   | EffectFunctionFailure<typeof prepareIntegrationCandidateRun>
-  | EffectFunctionFailure<typeof appendChangedHeadRetryQuarantine>
-  | EffectFunctionFailure<typeof appendPromotionStaleIntegrationQuarantine>
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetPromotion>
-  | EffectFunctionFailure<typeof runRemotePublication>
+  | EffectFunctionFailure<typeof appendChangedHeadRetryQuarantine>
+  | EffectFunctionFailure<typeof appendPromotionStaleIntegrationQuarantine>
+  | EffectFunctionFailure<typeof runPlannedAttemptExecutorResumeRedelivery>
+  | RemotePublicationResumeRuntimeUnavailable
+  | RemotePublicationResumeRequestConflict
+  | RemotePublicationResumeSubjectMismatch
   | EffectFunctionFailure<typeof establishRemoteBaseline>
   | EffectFunctionFailure<typeof runCompletionClaimReplacementProtocol>
   | EffectFunctionFailure<typeof runCompletionClaimDeletionProtocol>
@@ -276,6 +285,7 @@ export type DeliveryActionExecutionError =
   | PlannedAttemptExecutorStateUnreadable
   | PlannedAttemptContinuationAuthorizationRejected
   | PlannedAttemptExecutorSuspensionLimitReached
+  | Schema.SchemaError
   | DeliveryRelationSourceError
   | ServiceFailure<InRunJournalService>
   | ServiceFailure<PlannedAttemptExecutorService>

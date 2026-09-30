@@ -2430,7 +2430,7 @@ const targetPromotionGitRequest = (repository: string, candidateCommit: string, 
 
 const pipelineIntegrationPositions = {
   A: authoredIntegrationPositionsAfterDirectPublication({ queuedAt: 21, startedAt: 22, targetLineageObservedAt: 24 }),
-  B: authoredIntegrationPositionsAfterDirectPublication({ queuedAt: 77, startedAt: 78, targetLineageObservedAt: 80 }, 1)
+  B: authoredIntegrationPositionsAfterDirectPublication({ queuedAt: 83, startedAt: 84, targetLineageObservedAt: 86 }, 1)
 } as const
 
 const pipelineIntegrationFinality = (
@@ -2500,6 +2500,20 @@ const pipelineIntegrationFinality = (
       result: { _tag: "Applied" as const }
     },
     { _tag: "CompletionClaimReadReturned" as const, claim: "Active" as const, taskId },
+    {
+      _tag: "DalphSelects" as const,
+      operation: { _tag: "ReadTrackerGraph" as const, target: "pipeline-cassette-target" }
+    },
+    { _tag: "TrackerGraphReadReturned" as const, graph: taskId === "A" ? blockedPipelineGraph : releasedPipelineGraph },
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned" as const,
+      body: taskId === "A" ? "Complete task A." : "Complete task B after A.",
+      taskId,
+      title: taskId === "A" ? "Complete A" : "Complete B"
+    },
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
     { _tag: "CompletionClaimReplacementApplied" as const, taskId },
     {
       _tag: "CompletionTaskFocusedReadReturned" as const,
@@ -4008,6 +4022,20 @@ const deliveryFinalityBase = (() => {
     if (item._tag !== "ExpectedBehavior") return [item]
     return [
       { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      {
+        _tag: "TrackerGraphReadReturned",
+        graph: recovered ? deliveryFinalityExpandedGraph : deliveryFinalityStartingGraph
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+      {
+        _tag: "TaskWorkSpecificationReadReturned",
+        body: "Produce an accepted commit.",
+        taskId: "A",
+        title: "Produce accepted result"
+      },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
       { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
       { _tag: "CompletionTaskFocusedReadReturned", lifecycle: "Open", taskId: "A", unfinishedPrerequisiteTaskIds: [] },
       targetPromotionGitReadReturned("/dalph/cassettes/integration.git", promotionCandidateCommit, {
@@ -4552,6 +4580,16 @@ const doubleDiamondGraphs = {
   dCompleteBeforeX: doubleDiamondGraph("double-diamond-G3-D-complete", new Set(["A", "B", "C", "D"]), true),
   dAndXComplete: doubleDiamondGraph("double-diamond-G4", new Set(["A", "B", "C", "D", "X"]), true),
   eComplete: doubleDiamondGraph("double-diamond-G4-E-complete", new Set(["A", "B", "C", "D", "E", "X"]), true),
+  eCompleteBeforeF: doubleDiamondGraph(
+    "double-diamond-G4-E-complete-before-F",
+    new Set(["A", "B", "C", "D", "E"]),
+    true
+  ),
+  fCompleteBeforeX: doubleDiamondGraph(
+    "double-diamond-G4-F-complete-before-X",
+    new Set(["A", "B", "C", "D", "E", "F"]),
+    true
+  ),
   lowerPairComplete: doubleDiamondGraph("double-diamond-G5", new Set(["A", "B", "C", "D", "E", "F", "X"]), true),
   hComplete: doubleDiamondGraph(
     "double-diamond-G5-H-complete",
@@ -4666,10 +4704,10 @@ const defaultDiamondIntegrationPositions = {
 
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 94, startedAt: 100, targetLineageObservedAt: 107 },
-  C: { queuedAt: 92, startedAt: 145, targetLineageObservedAt: 147 },
-  D: { queuedAt: 237, startedAt: 238, targetLineageObservedAt: 240 },
-  E: { queuedAt: 183, startedAt: 184, targetLineageObservedAt: 186 },
+  B: { queuedAt: 100, startedAt: 106, targetLineageObservedAt: 113 },
+  C: { queuedAt: 98, startedAt: 157, targetLineageObservedAt: 159 },
+  D: { queuedAt: 261, startedAt: 262, targetLineageObservedAt: 264 },
+  E: { queuedAt: 201, startedAt: 202, targetLineageObservedAt: 204 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,
@@ -4677,18 +4715,69 @@ const fiveTaskDiamondIntegrationPositions = {
   X: defaultDiamondIntegrationPositions
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
+// Each post-promotion graph/specification/claim sequence contributes six
+// authored positions. The earlier B correlation mismatch measured that block
+// directly: the stale fixture was 111/117/122 while the loaded story was
+// 117/123/128. The task lists below follow where each integration field occurs
+// relative to those blocks in this authored chronology.
+const doubleDiamondFinalityPremiseItems = 6
+const doubleDiamondPositionAfterFinalityPremises = (
+  position: number,
+  tasks: ReadonlyArray<DoubleDiamondTaskId>
+): number => position + tasks.length * doubleDiamondFinalityPremiseItems
+
+const doubleDiamondUnsettledFinalityTasks = ["A", "B", "C", "D", "E", "F", "X", "H", "I"] as const
+
+/* eslint-disable no-magic-numbers -- These are exact authored occurrence anchors; keep the loaded-story positions literal in this field-specific chronology formula. */
 const doubleDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 104, startedAt: 110, targetLineageObservedAt: 113 },
-  C: { queuedAt: 102, startedAt: 151, targetLineageObservedAt: 153 },
-  D: { queuedAt: 204, startedAt: 205, targetLineageObservedAt: 207 },
-  E: { queuedAt: 258, startedAt: 261, targetLineageObservedAt: 276 },
-  F: { queuedAt: 346, startedAt: 348, targetLineageObservedAt: 358 },
-  G: { queuedAt: 551, startedAt: 552, targetLineageObservedAt: 554 },
-  H: { queuedAt: 460, startedAt: 462, targetLineageObservedAt: 464 },
-  I: { queuedAt: 456, startedAt: 496, targetLineageObservedAt: 498 },
-  X: { queuedAt: 342, startedAt: 390, targetLineageObservedAt: 392 }
+  B: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(104, ["A"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(110, ["A"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(113, ["A"])
+  },
+  C: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(102, ["A"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(151, ["A", "B"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(153, ["A", "B"])
+  },
+  D: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(204, ["A", "B", "C"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(205, ["A", "B", "C"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(207, ["A", "B", "C"])
+  },
+  E: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(258, ["A", "B", "C", "D"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(261, ["A", "B", "C", "D"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(276, ["A", "B", "C", "D"])
+  },
+  F: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(346, ["A", "B", "C", "D", "E"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(348, ["A", "B", "C", "D", "E"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(358, ["A", "B", "C", "D", "E"])
+  },
+  G: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(551, doubleDiamondUnsettledFinalityTasks),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(552, doubleDiamondUnsettledFinalityTasks),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(554, doubleDiamondUnsettledFinalityTasks)
+  },
+  H: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(460, ["A", "B", "C", "D", "E", "F", "X"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(462, ["A", "B", "C", "D", "E", "F", "X"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(464, ["A", "B", "C", "D", "E", "F", "X"])
+  },
+  I: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(456, ["A", "B", "C", "D", "E", "F", "X"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(496, ["A", "B", "C", "D", "E", "F", "X", "H"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(498, ["A", "B", "C", "D", "E", "F", "X", "H"])
+  },
+  X: {
+    queuedAt: doubleDiamondPositionAfterFinalityPremises(342, ["A", "B", "C", "D", "E"]),
+    startedAt: doubleDiamondPositionAfterFinalityPremises(390, ["A", "B", "C", "D", "E", "F"]),
+    targetLineageObservedAt: doubleDiamondPositionAfterFinalityPremises(392, ["A", "B", "C", "D", "E", "F"])
+  }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
+/* eslint-enable no-magic-numbers */
 
 const integrationPositionsForDiamondTask = (
   taskId: DoubleDiamondTaskId,
@@ -4708,7 +4797,8 @@ const doubleDiamondIntegrationFinality = (
     readonly integrationOrdinal: number
     readonly expectedTargetHead: string
   },
-  repository = "/dalph/cassettes/double-diamond.git"
+  repository: string,
+  postPromotionGraph: DoubleDiamondGraph
 ) => {
   const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
   const candidateCommit = doubleDiamondCandidateCommit(attempt.taskId)
@@ -4775,6 +4865,14 @@ const doubleDiamondIntegrationFinality = (
       result: { _tag: "Applied" as const }
     },
     { _tag: "CompletionClaimReadReturned" as const, claim: "Active" as const, taskId: attempt.taskId },
+    ...doubleDiamondGraphRead(postPromotionGraph),
+    {
+      _tag: "DalphSelects" as const,
+      operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: attempt.taskId }
+    },
+    { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(attempt.taskId) },
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId: attempt.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: attempt.taskId },
     { _tag: "CompletionClaimReplacementApplied" as const, taskId: attempt.taskId },
     {
       _tag: "CompletionTaskFocusedReadReturned" as const,
@@ -4813,13 +4911,14 @@ const doubleDiamondFreshIntegrationFinality = (
     readonly integrationOrdinal: number
     readonly expectedTargetHead: string
   },
-  repository = "/dalph/cassettes/double-diamond.git"
+  repository: string,
+  postPromotionGraph: DoubleDiamondGraph
 ) => [
   {
     _tag: "DalphSelects" as const,
     operation: { _tag: "ReadTargetLineage" as const, attemptId: attempt.attemptId, taskId: attempt.taskId }
   },
-  ...doubleDiamondIntegrationFinality(attempt, repository)
+  ...doubleDiamondIntegrationFinality(attempt, repository, postPromotionGraph)
 ]
 
 const doubleDiamondAttempts = {
@@ -4928,9 +5027,10 @@ const doubleDiamondIntegrationReleasingWork = (
     readonly integrationOrdinal: number
     readonly expectedTargetHead: string
   },
-  repository = "/dalph/cassettes/double-diamond.git"
+  repository: string,
+  postPromotionGraph: DoubleDiamondGraph
 ) =>
-  doubleDiamondIntegrationFinality(promoted, repository).flatMap(
+  doubleDiamondIntegrationFinality(promoted, repository, postPromotionGraph).flatMap(
     (item): ReadonlyArray<AuthoredCassetteStoryItem> =>
       item._tag === "TargetPromotionCompareAndSetReturned"
         ? [
@@ -4996,7 +5096,11 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.a),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.a),
-    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.a),
+    ...doubleDiamondFreshIntegrationFinality(
+      doubleDiamondAttempts.a,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.initialAEligible
+    ),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
     {
       _tag: "CoordinatorActivationReturned",
@@ -5026,7 +5130,12 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       releasedByAttemptId: doubleDiamondAttempts.x.attemptId,
       releasedByTaskId: doubleDiamondAttempts.x.taskId
     },
-    ...doubleDiamondIntegrationReleasingWork(doubleDiamondAttempts.b, doubleDiamondAttempts.x),
+    ...doubleDiamondIntegrationReleasingWork(
+      doubleDiamondAttempts.b,
+      doubleDiamondAttempts.x,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.xObservedDuringRestart
+    ),
     {
       _tag: "DalphSelects",
       operation: {
@@ -5035,7 +5144,11 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
         taskId: doubleDiamondAttempts.c.taskId
       }
     },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.c),
+    ...doubleDiamondIntegrationFinality(
+      doubleDiamondAttempts.c,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.bComplete
+    ),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(
@@ -5045,7 +5158,11 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ),
     doubleDiamondExecutorReport(doubleDiamondAttempts.d),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.d),
-    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.d),
+    ...doubleDiamondFreshIntegrationFinality(
+      doubleDiamondAttempts.d,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.middlePairComplete
+    ),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
@@ -5062,7 +5179,11 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       0
     ),
     doubleDiamondExecutorReport(doubleDiamondAttempts.f),
-    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.e),
+    ...doubleDiamondFreshIntegrationFinality(
+      doubleDiamondAttempts.e,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.dCompleteBeforeX
+    ),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
     {
       _tag: "CoordinatorActivationReturned",
@@ -5148,12 +5269,17 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     { _tag: "TaskClaimCurrentReadReturned", taskId: "X" },
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:F:1", taskId: "F" } },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.f),
-    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.x),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
-    },
+    ...doubleDiamondIntegrationFinality(
+      doubleDiamondAttempts.f,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.eCompleteBeforeF
+    ),
+    ...doubleDiamondFreshIntegrationFinality(
+      doubleDiamondAttempts.x,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.fCompleteBeforeX
+    ),
+    { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.lowerPairComplete, [
       doubleDiamondAttempts.h,
       doubleDiamondAttempts.i
@@ -5162,9 +5288,17 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     doubleDiamondExecutorReport(doubleDiamondAttempts.i),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.h),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.i),
-    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.h),
+    ...doubleDiamondFreshIntegrationFinality(
+      doubleDiamondAttempts.h,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.lowerPairComplete
+    ),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:I:1", taskId: "I" } },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.i),
+    ...doubleDiamondIntegrationFinality(
+      doubleDiamondAttempts.i,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.hComplete
+    ),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
     {
       _tag: "CoordinatorActivationReturned",
@@ -5175,7 +5309,11 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.g),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.g),
-    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.g),
+    ...doubleDiamondFreshIntegrationFinality(
+      doubleDiamondAttempts.g,
+      "/dalph/cassettes/double-diamond.git",
+      doubleDiamondGraphs.deepPairComplete
+    ),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.allComplete),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
     {
@@ -5252,7 +5390,8 @@ const fiveTaskDiamondBIntegrationFinality = () =>
   doubleDiamondIntegrationReleasingWork(
     fiveTaskDiamondAttempts.b,
     fiveTaskDiamondAttempts.e,
-    "/dalph/cassettes/five-task-diamond.git"
+    "/dalph/cassettes/five-task-diamond.git",
+    fiveTaskDiamondGraphs.aComplete
   )
 
 /** Capacity two consumes A -> (B, C, E) -> D only after exact tracker-confirmed finality. */
@@ -5287,7 +5426,11 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ]),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.a),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.a),
-    ...doubleDiamondFreshIntegrationFinality(fiveTaskDiamondAttempts.a, "/dalph/cassettes/five-task-diamond.git"),
+    ...doubleDiamondFreshIntegrationFinality(
+      fiveTaskDiamondAttempts.a,
+      "/dalph/cassettes/five-task-diamond.git",
+      fiveTaskDiamondGraphs.noneComplete
+    ),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.noneComplete),
     {
       _tag: "CoordinatorActivationReturned",
@@ -5348,11 +5491,19 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     },
     ...fiveTaskDiamondBIntegrationFinality(),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:1", taskId: "C" } },
-    ...doubleDiamondIntegrationFinality(fiveTaskDiamondAttempts.c, "/dalph/cassettes/five-task-diamond.git"),
+    ...doubleDiamondIntegrationFinality(
+      fiveTaskDiamondAttempts.c,
+      "/dalph/cassettes/five-task-diamond.git",
+      fiveTaskDiamondGraphs.aComplete
+    ),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.abcComplete),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.e),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:E:2", taskId: "E" } },
-    ...doubleDiamondIntegrationFinality(fiveTaskDiamondAttempts.e, "/dalph/cassettes/five-task-diamond.git"),
+    ...doubleDiamondIntegrationFinality(
+      fiveTaskDiamondAttempts.e,
+      "/dalph/cassettes/five-task-diamond.git",
+      fiveTaskDiamondGraphs.abcComplete
+    ),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -5362,7 +5513,11 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ]),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.d),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.d),
-    ...doubleDiamondFreshIntegrationFinality(fiveTaskDiamondAttempts.d, "/dalph/cassettes/five-task-diamond.git"),
+    ...doubleDiamondFreshIntegrationFinality(
+      fiveTaskDiamondAttempts.d,
+      "/dalph/cassettes/five-task-diamond.git",
+      fiveTaskDiamondGraphs.abceComplete
+    ),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.abceComplete),
     {
       _tag: "CoordinatorActivationReturned",
@@ -5575,7 +5730,20 @@ export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Sc
           result: { _tag: "Applied" }
         },
         { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Produce an accepted commit.",
+          taskId: "A",
+          title: "Produce accepted result"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
         { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
         {
           _tag: "CompletionTaskFocusedReadReturned",
           lifecycle: "Open",

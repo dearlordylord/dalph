@@ -73,6 +73,7 @@ import {
   type WorkflowJournalEvent
 } from "@dalph/orchestrator"
 import { ProductionLiveFixtureCleanup } from "../src/qualification/live-fixture-cleanup.js"
+import { formalCommandCount, formalShardByPosition } from "../src/qualification/formal-command-inventory.generated.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
@@ -169,20 +170,11 @@ const termResistantDescendant = [
   "setInterval(() => {}, 1000)"
 ].join(";")
 const formalPositions = (shard: number) =>
-  Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
-    shard === 0
-      ? position <= 36 ||
-        (position >= 42 && position <= 46) ||
-        (position >= 60 && position <= 64) ||
-        (position >= 86 && position <= 90) ||
-        position >= 100
-      : (position >= 37 && position <= 41) ||
-        (position >= 47 && position <= 59) ||
-        (position >= 65 && position <= 85) ||
-        (position >= 91 && position <= 99)
+  Array.from({ length: formalCommandCount }, (_value, position) => position).filter(
+    (position) => formalShardByPosition[position] === String(shard)
   )
 const formalCommands = (offset: number) =>
-  Array.from({ length: 105 }, (_value, position) => ({
+  Array.from({ length: formalCommandCount }, (_value, position) => ({
     position,
     kind: "test",
     name: `formal command ${position}`,

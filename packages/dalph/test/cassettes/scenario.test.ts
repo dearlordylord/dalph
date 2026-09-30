@@ -62,6 +62,10 @@ import {
   FixtureTarget,
   GitWorktreeReadFailure,
   IntegrationResponsibilityIdentity,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
   Journal,
   JournalPosition,
   makeFocusedTaskClaimFactsObserved,
@@ -213,6 +217,8 @@ import {
   runCachedAuthoredScenarioCassette,
   runCachedRecordedCassette
 } from "../../test-support/prototype-authored-run-cache.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../../../orchestrator/src/workflow/protocols/integrator/automatic-successor-session.js"
+import { makeSuccessorPrefix } from "../../../orchestrator/test/support/automatic-successor-history.js"
 
 const evidenceDigestHexLength = 64
 
@@ -7072,6 +7078,8 @@ it.effect(
         RemotePublicationAttemptRejectedNonFastForward: true,
         RemotePublicationIntended: true,
         RemotePublicationRetained: true,
+        RemotePublicationBatchGrantApplied: true,
+        RemotePublicationResumeRequested: true,
         RemotePublicationSucceeded: true,
         PlannedAttemptContinuationAuthorized: true,
         PlannedAttemptReplaced: true,
@@ -7089,6 +7097,8 @@ it.effect(
         CompletionClaimDeletionReadObserved: true,
         CompletionClaimDeleted: true,
         IntegrationFinalitySettled: true,
+        IntegratorAutomaticSuccessorSessionFixed: true,
+        IntegratorCompetingHeadSuccessorAuthorized: true,
         IntegratorSessionFixed: true,
         IntegratorSuccessorSessionFixed: true,
         IntegratorRunStarted: true,
@@ -7503,6 +7513,16 @@ it.effect(
       ) {
         return yield* Effect.die("direct-publication alpha-renaming fixture requires exact baseline and publication")
       }
+      const publicationRunId = publication.correlation.qualifiedCandidate.run.session.plannedAttempt.runId
+      const resumeRequest = RemotePublicationResumeRequest.make({
+        requestId: RemotePublicationResumeRequestId.make("cassette-alpha-renaming-resume"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: publication.correlation.qualifiedCandidate.run.session.queuedAt,
+          runId: publicationRunId
+        }),
+        runId: publicationRunId,
+        schemaVersion: 1
+      })
       const directPublicationEntries: ReadonlyArray<RecordedCassetteEntry> = [
         ...directPublicationSeedEntries,
         {
@@ -7529,9 +7549,33 @@ it.effect(
         },
         {
           _tag: "RemotePublicationRetained",
-          cause: { _tag: "AttemptsExhausted" },
+          authorization: { _tag: "InitialAttempt" },
+          cause: { _tag: "PolicyDenied" },
           correlation: publication.correlation,
           occurrenceClassification: "NonActionOccurrence"
+        },
+        {
+          _tag: "RemotePublicationResumeRequested",
+          correlation: publication.correlation,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          request: resumeRequest
+        },
+        {
+          _tag: "RemotePublicationBatchGrantApplied",
+          direction: "FullRerun",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          request: RemotePublicationBatchGrantRequest.make({
+            exhaustionAt: JournalPosition.make(1),
+            requestId: RemotePublicationBatchGrantRequestId.make("cassette-alpha-renaming-batch-grant"),
+            responsibility: IntegrationResponsibilityIdentity.make({
+              queuedAt: publication.correlation.qualifiedCandidate.run.session.queuedAt,
+              runId: publicationRunId
+            }),
+            runId: publicationRunId,
+            schemaVersion: 1
+          })
         }
       ]
       const fixedSession = completionEntries.find((entry) => entry._tag === "IntegratorSessionFixed")
@@ -7593,6 +7637,19 @@ it.effect(
           successorGeneration: firstFullRerunSuccessorGeneration
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const automaticSuccessor = makeSuccessorPrefix()
+      const automaticSuccessorAppend = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+        automaticSuccessor.input,
+        automaticSuccessor.reduction.prefix
+      )
+      if (automaticSuccessorAppend._tag !== "Append") {
+        return yield* Effect.die("automatic successor catalog fixture must authorize and fix one session")
+      }
+      automaticSuccessor.append(automaticSuccessorAppend.event)
+      const automaticSuccessorEntries = (yield* projectRecordedCassette(automaticSuccessor.records())).entries.filter(
+        ({ _tag }) =>
+          _tag === "IntegratorAutomaticSuccessorSessionFixed" || _tag === "IntegratorCompetingHeadSuccessorAuthorized"
+      )
       expect(
         new Set(
           [
@@ -7610,6 +7667,7 @@ it.effect(
             resumeRedeliveryEntry,
             ...completionEntries,
             ...directPublicationEntries,
+            ...automaticSuccessorEntries,
             ...quarantineEntries
           ]
             .map(({ _tag }) => _tag)
@@ -8238,7 +8296,11 @@ it.effect("does not mutate a foreign claim while settling a promoted task", () =
     expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimOwnershipConflict")
     expect(run.replacementCalls).toBe(0)
     expect(run.deletionCalls).toBe(0)
+    expect(run.journalTags).not.toContain("CompletionClaimReplacementIntended")
     expect(run.journalTags).not.toContain("CompletionClaimReplacementAttemptIntended")
+    expect(run.journalTags).not.toContain("CompletionClaimReplaced")
+    expect(run.journalTags).not.toContain("CompletionTaskIntended")
+    expect(run.journalTags).not.toContain("IntegrationFinalitySettled")
   })
 )
 
@@ -8374,6 +8436,11 @@ it.effect("waits without replacing when the current completion claim cannot be r
     expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimReadFailure")
     expect(run.replacementCalls).toBe(0)
     expect(run.deletionCalls).toBe(0)
+    expect(run.journalTags).not.toContain("CompletionClaimReplacementIntended")
+    expect(run.journalTags).not.toContain("CompletionClaimReplacementAttemptIntended")
+    expect(run.journalTags).not.toContain("CompletionClaimReplaced")
+    expect(run.journalTags).not.toContain("CompletionTaskIntended")
+    expect(run.journalTags).not.toContain("IntegrationFinalitySettled")
     expect(run.boundaryCalls).toEqual(["readTaskClaim"])
   })
 )

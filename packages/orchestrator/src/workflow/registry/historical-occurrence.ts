@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The closed historical occurrence registry stays exhaustive and centralized. */
 import { Schema } from "effect"
 import { PlannedTaskAttempt, RunId } from "@dalph/contracts"
 import {
@@ -19,9 +20,11 @@ import {
   IntegratorCandidateText,
   IntegratorGitObservation,
   IntegratorResult,
+  IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation
 } from "../protocols/integrator/events.js"
+import { IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../protocols/integrator/automatic-successor-events.js"
 import {
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
@@ -61,12 +64,14 @@ import {
   LocalTargetCatchUpObserved,
   RemoteBaselineObserved,
   RemoteBaselineReadInitiated,
+  RemotePublicationBatchGrantApplied,
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
+  RemotePublicationResumeRequested,
   RemotePublicationSucceeded
 } from "../protocols/direct-publication/historical-occurrence.js"
 import {
@@ -82,12 +87,14 @@ export {
   LocalTargetCatchUpObserved,
   RemoteBaselineObserved,
   RemoteBaselineReadInitiated,
+  RemotePublicationBatchGrantApplied,
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
+  RemotePublicationResumeRequested,
   RemotePublicationSucceeded
 } from "../protocols/direct-publication/historical-occurrence.js"
 export {
@@ -241,6 +248,37 @@ export const IntegratorSuccessorSessionFixed = Schema.TaggedStruct("IntegratorSu
   successorGeneration: Schema.Literal(successorGeneration)
 })
 export type IntegratorSuccessorSessionFixed = typeof IntegratorSuccessorSessionFixed.Type
+
+/** One compatible competing-head occurrence authorized one fresh successor session. */
+export const IntegratorCompetingHeadSuccessorAuthorized = Schema.TaggedStruct(
+  "IntegratorCompetingHeadSuccessorAuthorized",
+  {
+    ...initiatedByCoordinator,
+    authorizationId: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.authorizationId,
+    correlation: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.correlation,
+    mergeBase: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.mergeBase,
+    recordedAt: JournalPosition,
+    remoteHead: IntegratorCompetingHeadSuccessorAuthorizedEvent.fields.remoteHead,
+    remotePublicationRetainedAt: JournalPosition,
+    runId: RunId
+  }
+)
+export type IntegratorCompetingHeadSuccessorAuthorized = typeof IntegratorCompetingHeadSuccessorAuthorized.Type
+
+/** A newly fixed automatic successor retains the original integration responsibility. */
+export const IntegratorAutomaticSuccessorSessionFixed = Schema.TaggedStruct(
+  "IntegratorAutomaticSuccessorSessionFixed",
+  {
+    ...initiatedByCoordinator,
+    authorizationAt: JournalPosition,
+    predecessor: IntegratorSessionCorrelation,
+    recordedAt: JournalPosition,
+    runId: RunId,
+    successor: IntegratorSessionCorrelation,
+    successorGeneration: IntegratorAutomaticSuccessorSessionFixedEvent.fields.successorGeneration
+  }
+)
+export type IntegratorAutomaticSuccessorSessionFixed = typeof IntegratorAutomaticSuccessorSessionFixed.Type
 
 /** Dalph began one bounded call for an exact opaque Integrator run. */
 export const IntegratorRunStarted = Schema.TaggedStruct("IntegratorRunStarted", {
@@ -403,16 +441,20 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   IntegratorCandidateCleanupOccurred,
   IntegratorCandidateQualificationInitiated,
   IntegratorCandidateQualificationObserved,
+  IntegratorCompetingHeadSuccessorAuthorized,
+  IntegratorAutomaticSuccessorSessionFixed,
   IntegratorRunResultRecorded,
   IntegratorRunStarted,
   IntegratorSessionFixed,
   IntegratorSuccessorSessionFixed,
+  RemotePublicationBatchGrantApplied,
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
+  RemotePublicationResumeRequested,
   RemotePublicationSucceeded,
   RemoteBaselineReadInitiated,
   RemoteBaselineObserved,

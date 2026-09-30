@@ -11,6 +11,7 @@ import {
   classifyFormalChangedPaths,
   classifyChangedPaths,
   hostedFormalInputPathsBetween,
+  isFormalControlsOnlyPackageChange,
   isDocsOnlyPath,
   planCiChange,
   resolveComparisonBase
@@ -122,6 +123,89 @@ void test("one exact classifier accepts an unchanged candidate and rejects unava
       }),
     /path set is empty/u
   )
+})
+
+void test("only a formal-controls test script edit leaves the root package formal-neutral", () => {
+  const before = {
+    name: "@dalph/root",
+    scripts: {
+      "check:ci:formal": "node scripts/check-quint-models.mjs",
+      "test:formal:controls": "node --test scripts/old.test.mjs"
+    },
+    devDependencies: { "@informalsystems/quint": "0.32.0" }
+  }
+  const after = structuredClone(before)
+  after.scripts["test:formal:controls"] += " scripts/new.test.mjs"
+  assert.equal(isFormalControlsOnlyPackageChange(JSON.stringify(before), JSON.stringify(after)), true)
+  const classify = (changed, readPackageAt = (sha) => JSON.stringify(sha === baseSha ? before : changed)) =>
+    classifyFormalChangeBetween({
+      baseSha,
+      headSha,
+      listChangedPaths: () => ["package.json"],
+      listFormalInputPaths: () => ["package.json"],
+      readPackageAt
+    })
+  assert.deepEqual(classify(after).affectedPaths, [])
+  assert.equal(classify(after).status, "unaffected")
+
+  for (const changed of [
+    { ...after, devDependencies: { "@informalsystems/quint": "0.33.0" } },
+    { ...after, scripts: { ...after.scripts, "check:ci:formal": "node scripts/other.mjs" } },
+    { ...after, name: "@dalph/other" }
+  ]) {
+    assert.deepEqual(classify(changed).affectedPaths, ["package.json"])
+    assert.equal(classify(changed).status, "affected")
+  }
+  assert.deepEqual(
+    classifyFormalChangeBetween({
+      baseSha,
+      headSha,
+      listChangedPaths: () => ["package.json", "specs/model.qnt"],
+      listFormalInputPaths: () => ["package.json", "specs/model.qnt"],
+      readPackageAt: (sha) => JSON.stringify(sha === baseSha ? before : after)
+    }).affectedPaths,
+    ["specs/model.qnt"]
+  )
+  assert.throws(() => classify(after, () => "not json"), /JSON/u)
+  assert.throws(() => isFormalControlsOnlyPackageChange("{}", JSON.stringify(after)), /malformed root package/u)
+})
+
+void test("exact committed package contents select formal proof only for consequential edits", () => {
+  const root = mkdtempSync(join(tmpdir(), "dalph-formal-package-"))
+  temporaryRoots.push(root)
+  execFileSync("git", ["init", "-q", "-b", "master"], { cwd: root })
+  execFileSync("git", ["config", "user.email", "formal-package@example.test"], { cwd: root })
+  execFileSync("git", ["config", "user.name", "Formal Package"], { cwd: root })
+  mkdirSync(join(root, "scripts"))
+  writeFileSync(
+    join(root, hostedFormalInputManifestPath),
+    serializeHostedFormalInputManifest(createHostedFormalInputManifest(["package.json"]))
+  )
+  const original = {
+    name: "@dalph/root",
+    scripts: {
+      "check:ci:formal": "node scripts/check-quint-models.mjs",
+      "test:formal:controls": "node --test scripts/old.test.mjs"
+    },
+    devDependencies: { "@informalsystems/quint": "0.32.0" }
+  }
+  const commit = (value, message) => {
+    writeFileSync(join(root, "package.json"), `${JSON.stringify(value, null, 2)}\n`)
+    execFileSync("git", ["add", "package.json", hostedFormalInputManifestPath], { cwd: root })
+    execFileSync("git", ["commit", "-qm", message], { cwd: root })
+    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim()
+  }
+  const base = commit(original, "base")
+  const controlsOnly = structuredClone(original)
+  controlsOnly.scripts["test:formal:controls"] += " scripts/new.test.mjs"
+  const controlsHead = commit(controlsOnly, "add formal control")
+  assert.deepEqual(classifyFormalChangeBetween({ baseSha: base, headSha: controlsHead, cwd: root }).affectedPaths, [])
+  const dependencyEdit = structuredClone(controlsOnly)
+  dependencyEdit.devDependencies["@informalsystems/quint"] = "0.33.0"
+  const dependencyHead = commit(dependencyEdit, "change Quint")
+  assert.deepEqual(classifyFormalChangeBetween({ baseSha: base, headSha: dependencyHead, cwd: root }).affectedPaths, [
+    "package.json"
+  ])
 })
 
 void test("fails closed for missing identities, unsupported events, empty diffs, and unavailable projections", () => {

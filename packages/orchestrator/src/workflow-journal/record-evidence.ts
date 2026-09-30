@@ -6,6 +6,7 @@ import type { OperationId } from "../workflow/identity.js"
 import type { TargetPromotionRequestId } from "../workflow/protocols/target-promotion/events.js"
 import type { IntegratorSessionId } from "../workflow/protocols/integrator/events.js"
 import type { IntegrationQuarantineDirectionRequestId } from "../workflow/protocols/integration-quarantine/events.js"
+import type { RemotePublicationBatchGrantRequestId } from "../workflow/protocols/direct-publication/events.js"
 import {
   appendCompletionReadCycleEvidence,
   completionReadCycleAt,
@@ -658,7 +659,9 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       event._tag === "RemotePublicationAttemptIntended" ||
       event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
       event._tag === "RemotePublicationRetained" ||
-      event._tag === "RemotePublicationSucceeded"
+      event._tag === "RemotePublicationResumeRequested" ||
+      event._tag === "RemotePublicationSucceeded" ||
+      event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
     ) {
       return undefined
     }
@@ -1015,6 +1018,16 @@ export const journalRecordsForQuarantineDirectionRequest = (
           record.event.requestId.runId === requestId.runId &&
           record.event.requestId.nonce === requestId.nonce
       )
+
+/** Every durable batch-grant receipt carrying one exact transport request identity. */
+export const journalRecordsForRemotePublicationBatchGrantRequest = (
+  source: JournalHistorySource,
+  requestId: RemotePublicationBatchGrantRequestId
+): Iterable<JournalRecord> =>
+  Array.from(journalRecordsOfKind(source, "RemotePublicationBatchGrantApplied")).filter(
+    (record) =>
+      record.event._tag === "RemotePublicationBatchGrantApplied" && record.event.request.requestId === requestId
+  )
 
 export const journalRestartReadIntents = (
   source: JournalHistorySource,

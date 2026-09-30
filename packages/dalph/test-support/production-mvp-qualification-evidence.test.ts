@@ -355,12 +355,13 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
     if (result._tag !== "DedicatedAndStressed") return yield* Effect.die("supplied profiles must be present")
     for (const value of [result.dedicated, result.stressed]) {
       expect(value.sourceSha).toBe(sourceSha)
-      expect(value.commands).toHaveLength(105)
+      expect(value.commands).toHaveLength(quintGateCommandManifest.length)
       expect(value.commands.map(({ kind, name }) => ({ kind, name }))).toEqual(quintGateCommandManifest)
-      expect(value.commands.filter(({ kind }) => kind === "typecheck")).toHaveLength(15)
-      expect(value.commands.filter(({ kind }) => kind === "test")).toHaveLength(46)
-      expect(value.commands.filter(({ kind }) => kind === "sampled-run")).toHaveLength(23)
-      expect(value.commands.filter(({ kind }) => kind === "verify")).toHaveLength(21)
+      for (const kind of ["typecheck", "test", "sampled-run", "verify"] as const) {
+        expect(value.commands.filter((command) => command.kind === kind)).toHaveLength(
+          quintGateCommandManifest.filter((command) => command.kind === kind).length
+        )
+      }
       expect(value.negativeControls).toContain(
         "planned-attempt executor temporal mutant releasableEvidenceNeverReleasesPosition (TLC)"
       )

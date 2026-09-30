@@ -14,6 +14,7 @@ import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacqui
 import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 import { CompletionTaskFocusedReadPurpose, CompletionTaskRequest } from "../protocols/integration-finality/events.js"
 import { completionTaskFocusedReadOperationIdFor } from "../protocols/integration-finality/completion-task-operation-identity.js"
+import { TargetPromotionRequestId } from "../protocols/target-promotion/events.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -27,10 +28,10 @@ const TaskGraphReadShape = Schema.TaggedUnion({
  *
  * Establishing a workflow, checking one continuing attempt, checking whether
  * one attempt may restart, reconfirming all executing subjects, confirming
- * post-delivery quiescence, and checking task-control membership are six
- * distinct causal observations. They share the ordinary tracker-read
- * protocol, but an unsettled intent from one cause cannot satisfy another
- * cause after restart.
+ * post-delivery quiescence, checking task-control membership, and rechecking
+ * finality premises after promotion are distinct causal observations. They
+ * share the ordinary tracker-read protocol, but an unsettled intent from one
+ * cause cannot satisfy another cause after restart.
  */
 export const TrackerGraphReadCause = Schema.TaggedUnion({
   WorkflowEstablishment: {},
@@ -38,6 +39,7 @@ export const TrackerGraphReadCause = Schema.TaggedUnion({
   AttemptRestartAuthorityCheck: {},
   ExecutingWorkAuthorityCheck: {},
   PostQuiescenceReconfirmation: { quiescentGraphOperationId: OperationId },
+  PostPromotionFinalityCheck: { promotionRequestId: TargetPromotionRequestId },
   TaskControlMembershipCheck: {}
 })
 

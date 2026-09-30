@@ -40,11 +40,6 @@ const specification = (taskId: string) => ({
   title: `Implement ${taskId}`,
   body: `Implement task ${taskId}.`
 })
-const changedSpecification = {
-  taskId: TaskId.make("B"),
-  title: "Changed B",
-  body: "Alice changed task B instructions."
-}
 const graph = (revision: string, completed: ReadonlyArray<string> = [], closedC = false, expanded = false) => ({
   revision,
   rootTaskId: "A",
@@ -73,7 +68,7 @@ const readGraph = (value: ReturnType<typeof graph>) => [
 ]
 const readSpecification = (taskId: string) => [
   select({ _tag: "ReadTaskWorkSpecification", taskId }),
-  { _tag: "TaskWorkSpecificationReadReturned", ...(taskId === "B" ? changedSpecification : specification(taskId)) }
+  { _tag: "TaskWorkSpecificationReadReturned", ...specification(taskId) }
 ]
 const readCurrent = (taskId: string) => [
   ...readSpecification(taskId),
@@ -123,7 +118,16 @@ const gitRead = (candidateCommit: string, head: string) => ({
 })
 const completion = (taskId: string, candidateCommit: string) => [
   { _tag: "CompletionClaimReadReturned", claim: "Active", taskId },
+  ...(taskId === "B"
+    ? [
+        ...readGraph(graphs.G5),
+        ...readSpecification(taskId),
+        select({ _tag: "ReadTaskClaim", taskId }),
+        { _tag: "TaskClaimCurrentReadReturned", taskId }
+      ]
+    : []),
   { _tag: "CompletionClaimReplacementApplied", taskId },
+  ...(taskId === "B" ? readGraph(graphs.G5) : []),
   { _tag: "CompletionTaskFocusedReadReturned", lifecycle: "Open", taskId, unfinishedPrerequisiteTaskIds: [] },
   gitRead(candidateCommit, candidateCommit),
   { _tag: "CompletionTaskRequestReturned", outcome: "Acknowledged", taskId },
@@ -375,7 +379,6 @@ export {
   successorCommit,
   attempt,
   specification,
-  changedSpecification,
   graphs,
   select,
   readGraph,

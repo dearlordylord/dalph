@@ -30,6 +30,7 @@ import {
 import { PlannedAttemptWorktreeObservation } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { IntegratorJournalEvent } from "../protocols/integrator/events.js"
+import { IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../protocols/integrator/automatic-successor-events.js"
 import { TargetPromotionJournalEvent } from "../protocols/target-promotion/events.js"
 import { IntegrationFinalityJournalEvent } from "../protocols/integration-finality/events.js"
 import { IntegrationQuarantineJournalEvent } from "../protocols/integration-quarantine/events.js"
@@ -67,6 +68,7 @@ const ResponsibilityJournalEvent = Schema.Union([
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
   IntegratorJournalEvent,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
   RemotePublicationJournalEvent,
   RemoteBaselineJournalEvent,
   TargetPromotionJournalEvent,

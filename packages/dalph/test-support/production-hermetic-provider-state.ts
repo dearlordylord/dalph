@@ -5,10 +5,9 @@ import {
   CodexThreadListSummary,
   CodexThreadWorkingDirectory,
   type CodexAppServerService,
-  type CodexThreadSnapshot,
-  type CodexTurnSnapshot
+  type CodexThreadSnapshot
 } from "../src/application/codex-app-server.js"
-import { CodexServerIncarnation, CodexThreadId, CodexTurnId } from "../src/application/codex-attempt-store.js"
+import { CodexServerIncarnation, CodexThreadId } from "../src/application/codex-attempt-store.js"
 import {
   hermeticQualificationPublicTaskSpecification,
   hermeticQualificationDependantTaskSpecification,
@@ -25,6 +24,7 @@ import {
 import { makeHermeticProviderFingerprint } from "./production-hermetic-provider-fingerprint.js"
 import { makeHermeticProviderGraph, makeHermeticProviderGraphHandlers } from "./production-hermetic-provider-graph.js"
 import { makeHermeticProviderResult, providerFailure } from "./production-hermetic-provider-result.js"
+import { makeHermeticProviderTurnStarter } from "./production-hermetic-provider-turn.js"
 import type { ProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
 
 /** Calls observed at this controlled provider, not workflow retry ordinals. */
@@ -230,6 +230,12 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
     if (thread === undefined) return yield* providerFailure("thread/read", "unknown controlled thread")
     return thread
   })
+  const startTurnWithCompletion = makeHermeticProviderTurnStarter({
+    countStartTurn: () => count("CodexStartTurn"),
+    produceResult,
+    readThread,
+    threads
+  })
   const codex: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("hermetic-provider-incarnation"),
     attachTurnCompletedHints: Effect.succeed(Stream.never),
@@ -276,28 +282,7 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
         return thread
       }),
     startTurn: (id, cwd, text, ownedTurnToken) =>
-      Effect.gen(function* () {
-        yield* count("CodexStartTurn")
-        const thread = yield* readThread(id)
-        if (thread.cwd !== cwd || ownedTurnToken === undefined)
-          return yield* providerFailure("turn/start", "thread or turn ownership is missing")
-        const retained = thread.turns.find((turn) => turn.ownedTurnToken === ownedTurnToken)
-        if (retained !== undefined) return retained
-        const response = yield* produceResult(cwd, text).pipe(
-          Effect.mapError(() => providerFailure("turn/start", "controlled result could not be produced"))
-        )
-        const turn: CodexTurnSnapshot = {
-          id: CodexTurnId.make(`hermetic-turn:${id}:${thread.turns.length}`),
-          status: "completed",
-          ownedTurnToken,
-          items: [{ type: "agentMessage", text: response }]
-        }
-        yield* Ref.update(
-          threads,
-          (values) => new Map([...values, [id, { ...thread, turns: [...thread.turns, turn] }]])
-        )
-        return turn
-      }),
+      startTurnWithCompletion(id, cwd, text, ownedTurnToken).pipe(Effect.map(({ turn }) => turn)),
     interruptTurn: () => count("CodexInterruptTurn"),
     listBackgroundTerminals: () => count("CodexListBackgroundTerminals").pipe(Effect.as([])),
     terminateBackgroundTerminal: () => count("CodexTerminateBackgroundTerminal").pipe(Effect.as(false)),
@@ -353,6 +338,7 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
   return {
     github,
     codex,
+    startTurnWithCompletion,
     setPublicTaskSpecification: (specification: TaskWorkSpecification) =>
       specification.taskId === taskId
         ? Ref.set(taskSpecification, specification)

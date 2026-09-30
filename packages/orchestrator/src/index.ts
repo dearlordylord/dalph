@@ -429,6 +429,7 @@ export {
   plannedAttemptProtocolControllerLayer,
   type PlannedAttemptProtocolControllerService
 } from "./workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+export { PlannedAttemptResumeRedeliveryRejected } from "./workflow/protocols/planned-attempt-executor-work/resume-redelivery.js"
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
@@ -445,11 +446,28 @@ export * from "./workflow/protocols/direct-publication/events.js"
 export * from "./workflow/protocols/direct-publication/baseline-events.js"
 export { establishRemoteBaseline } from "./workflow/protocols/direct-publication/baseline-protocol-engine.js"
 export { RemoteBaselineHistoryContradiction } from "./workflow/protocols/direct-publication/baseline-transition-journal.js"
-export { runRemotePublication } from "./workflow/protocols/direct-publication/protocol-engine.js"
+export {
+  remotePublicationResumeDispatchOf,
+  resumeRemotePublicationAndDispatch,
+  resumeRemotePublication,
+  runRemotePublication,
+  type RemotePublicationResumeDispatch,
+  type RemotePublicationResumeDispatchBoundary
+} from "./workflow/protocols/direct-publication/protocol-engine.js"
+export * from "./workflow/protocols/direct-publication/resume-runtime.js"
+export {
+  RemotePublicationResumeReceipt,
+  RemotePublicationResumeStatus,
+  type RemotePublicationResumeControlResult
+} from "./workflow/protocols/direct-publication/resume-control.js"
 export { RemotePublicationAdmissionRejected } from "./workflow/protocols/direct-publication/admission.js"
 export {
+  RemotePublicationBatchGrantRequestConflict,
+  RemotePublicationBatchGrantSubjectMismatch,
   RemotePublicationHistoryContradiction,
-  RemotePublicationResultContradiction
+  RemotePublicationResultContradiction,
+  RemotePublicationResumeRequestConflict,
+  RemotePublicationResumeSubjectMismatch
 } from "./workflow/protocols/direct-publication/errors.js"
 export * from "./workflow/protocols/evidence-store.js"
 export * from "./workflow/protocols/target-promotion/events.js"
@@ -616,6 +634,7 @@ export {
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
+  RemotePublicationResumeRequested,
   RemotePublicationSucceeded,
   StoppedAttemptClaimPreserved,
   TargetPromotionAttemptRequested,

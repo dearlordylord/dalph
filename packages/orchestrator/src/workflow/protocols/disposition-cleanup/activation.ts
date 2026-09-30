@@ -23,6 +23,7 @@ import type { PlannedAttemptWorktreeObservedEvent, TaskWorktreeReadyEvent } from
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import { IntegratorRunCorrelation, integratorRetryRunOrdinal } from "../integrator/events.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "../integrator/automatic-successor-session.js"
 import { evaluateIntegratorFullRerunAuthorization } from "../integrator/retry-authorization.js"
 import { AttemptImplementationAbandonedEvent } from "../attempt-choice/events.js"
 import { PlannedAttemptReplacedEvent } from "../attempt-choice/replacement-events.js"
@@ -31,6 +32,7 @@ import {
   BranchCleanupEvidenceRevision,
   BranchCleanupAuthorization as BranchCleanupAuthorizationSchema,
   IntegratorCandidateCleanupDisposition,
+  IntegratorCandidateAutomaticSuccessorCleanupDisposition,
   IntegratorCandidateCleanupSettledDisposition,
   integratorCandidateCleanupSessionOf,
   IntegratorCandidateCleanupEvidenceRevision,
@@ -427,9 +429,24 @@ type CandidateSettlementEvidence = {
   readonly subject: IntegratorCandidateCleanupEvidenceSubject
 }
 
+type CandidateAutomaticSuccessorEvidence = {
+  readonly authorization: JournalRecord & {
+    readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorCompetingHeadSuccessorAuthorized" }>
+  }
+  readonly disposition: IntegratorCandidateAutomaticSuccessorCleanupDisposition
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorAutomaticSuccessorSessionFixed" }>
+  readonly lineage: NonNullable<ReturnType<typeof exactTargetLineageRecord>>
+  readonly subject: IntegratorCandidateCleanupEvidenceSubject
+}
+
 const isCandidateDirectionRecord = (
   record: JournalRecord | undefined
 ): record is CandidateSuccessorEvidence["direction"] => record?.event._tag === "IntegrationQuarantineDirectionApplied"
+
+const isCandidateAutomaticSuccessorAuthorizationRecord = (
+  record: JournalRecord | undefined
+): record is CandidateAutomaticSuccessorEvidence["authorization"] =>
+  record?.event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
 
 const candidateSuccessorEvidence = (
   records: JournalHistorySource,
@@ -464,6 +481,39 @@ const candidateSuccessorEvidence = (
   return {
     disposition,
     direction,
+    event,
+    lineage,
+    subject: { locator: event.predecessor.candidateResource, predecessor: event.predecessor }
+  }
+}
+
+const candidateAutomaticSuccessorEvidence = (
+  records: JournalHistorySource,
+  record: JournalRecord
+): CandidateAutomaticSuccessorEvidence | undefined => {
+  if (record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") return undefined
+  const event = record.event
+  if (validateAutomaticSuccessorSessionFixedRecord(records, record, event.predecessor)._tag !== "Valid") {
+    return undefined
+  }
+  const authorization = journalRecordByPosition(records, event.authorizationAt)
+  if (!isCandidateAutomaticSuccessorAuthorizationRecord(authorization)) return undefined
+  const lineage = exactTargetLineageRecord(records, {
+    expectedTargetHead: event.predecessor.expectedTargetHead,
+    integrationTarget: event.predecessor.integrationTarget,
+    plannedAttempt: event.predecessor.plannedAttempt,
+    targetLineageObservedAt: event.predecessor.targetLineageObservedAt
+  })
+  if (lineage === undefined) return undefined
+  const disposition = IntegratorCandidateAutomaticSuccessorCleanupDisposition.make({
+    authorizationAt: authorization.position,
+    dispositionAt: record.position,
+    predecessor: event.predecessor,
+    successor: event.successor
+  })
+  return {
+    authorization,
+    disposition,
     event,
     lineage,
     subject: { locator: event.predecessor.candidateResource, predecessor: event.predecessor }
@@ -562,11 +612,46 @@ const candidateAuthorizationsFromSettlements = (
     return [authorization]
   })
 
+const candidateAuthorizationsFromAutomaticSuccessors = (
+  records: JournalHistorySource,
+  evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
+): ReadonlyArray<IntegratorCandidateCleanupAuthorization> =>
+  Array.from(journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")).flatMap((record) => {
+    const evidence = candidateAutomaticSuccessorEvidence(records, record)
+    if (evidence === undefined) return []
+    const evidenceRevision = evidenceRevisionFor?.(evidence.subject)
+    if (evidenceRevision === undefined) return []
+    const authorization = decodeCandidateAuthorization({
+      causalPredecessors: [
+        OperationId.make(`automatic-successor-authorization:${evidence.authorization.event.authorizationId}`)
+      ],
+      disposition: evidence.disposition,
+      evidenceRevision,
+      locator: evidence.event.predecessor.candidateResource,
+      observationAt: evidence.lineage.observation.position,
+      observationOperationId: evidence.lineage.observation.event.operationId,
+      operationId: operationFor("integrator-candidate", evidence.event.predecessor.sessionId),
+      owner: IntegratorCandidateCleanupOwner.make({ sessionId: evidence.event.predecessor.sessionId }),
+      writerQuiescent: true
+    })
+    if (authorization === undefined) return []
+    if (hasValidatedAuthorization(records, authorization, candidateAuthorizationValidation)) return []
+    const canonicalRecords = recordsWithoutAuthorizationTag(records, "IntegratorCandidateCleanupAuthorized")
+    const provenance = validateIntegratorCandidateCleanupProvenance(canonicalRecords, authorization)
+    const history = validateIntegratorCandidateCleanupHistory(canonicalRecords, authorization)
+    if (provenance._tag !== "Valid" || history._tag !== "Valid") return []
+    return [authorization]
+  })
+
 export const candidateCleanupEvidenceSubjects = (
   records: JournalHistorySource
 ): ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject> => [
   ...Array.from(journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")).flatMap((record) => {
     const evidence = candidateSuccessorEvidence(records, record)
+    return evidence === undefined ? [] : [evidence.subject]
+  }),
+  ...Array.from(journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")).flatMap((record) => {
+    const evidence = candidateAutomaticSuccessorEvidence(records, record)
     return evidence === undefined ? [] : [evidence.subject]
   }),
   ...Array.from(journalRecordsOfKind(records, "IntegrationFinalitySettled")).flatMap((record) => {
@@ -591,6 +676,7 @@ export const deriveCleanupAuthorizations = (
   branch: uniqueByOperation(branchAuthorizationsFromSettledWorktrees(records)),
   candidate: uniqueByOperation([
     ...candidateAuthorizationsFromSuccessors(records, evidenceRevisionFor),
+    ...candidateAuthorizationsFromAutomaticSuccessors(records, evidenceRevisionFor),
     ...candidateAuthorizationsFromSettlements(records, evidenceRevisionFor)
   ]),
   worktree: uniqueByOperation(worktreeAuthorizationsFromTerminalFacts(records))

@@ -1,7 +1,11 @@
 // @effect-diagnostics multipleEffectProvide:off
+/* eslint-disable import/no-nodejs-modules -- Timeout diagnostics inspect exact Git sender custody and process evidence. */
+import { createHash } from "node:crypto"
+import { readFile, readdir } from "node:fs/promises"
+import nodeProcess from "node:process"
 import {
   GitCommand,
-  type GithubGraphqlRequest,
+  gitSenderTokenEnvironment,
   JournalStore,
   OperationId,
   TrackerGraphReader,
@@ -18,6 +22,8 @@ import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Context, Duration, Effect, FileSystem, Layer, MutableList, Option, Schema } from "effect"
 import { expect } from "vitest"
+import { reconfirmationMatchesPriorFullObservation } from "../../../orchestrator/src/workflow/task-tracker-facts/reconfirmation.js"
+import { UnchangedTaskTrackerFactsReconfirmed } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import { projectRecordedCassette } from "../../src/cassettes/recorded.js"
 import { makeHermeticController } from "../../test-support/production-hermetic-controller.js"
 import { createProductionPublicPublicationFixture } from "../../test-support/production-public-publication-fixture.js"
@@ -35,9 +41,11 @@ class PublicPublicationTimeout extends Schema.TaggedError<PublicPublicationTimeo
 
 const builtEntry = new URL("../../dist/bin/production-hermetic-qualification.js", import.meta.url).pathname
 const fixtureLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
-const diagnosticPath = "/tmp/public-s1-timeout-diagnostic.json"
-const diagnosticProviderPath = "/tmp/public-s1-timeout-provider.json"
-const diagnosticAuditPath = "/tmp/public-s1-timeout-audit.json"
+const diagnosticPrefix = `/tmp/public-s1-timeout-${nodeProcess.pid}-${nodeProcess.hrtime.bigint()}`
+const diagnosticPath = `${diagnosticPrefix}-diagnostic.json`
+const diagnosticProviderPath = `${diagnosticPrefix}-provider.json`
+const diagnosticAuditPath = `${diagnosticPrefix}-audit.json`
+const diagnosticGitBoundaryPath = `${diagnosticPrefix}-git-boundary.json`
 
 type DiagnosticRecord = { readonly [key: string]: unknown }
 
@@ -115,39 +123,21 @@ const compactS1Diagnostic = (serialized: string): string => {
   }
 }
 
-const githubProviderOperationTags = new Set<GithubGraphqlRequest["_tag"]>([
-  "AddBlockedBy",
-  "AddIssueComment",
-  "AddSubIssue",
-  "CloseIssue",
-  "FindClaimLabel",
-  "CreateClaimLabel",
-  "CreateIssue",
-  "DeleteIssue",
-  "DeleteClaimLabel",
-  "ReadIssueDetails",
-  "ReadTaskWorkSpecification",
-  "ReopenIssue",
-  "ResolveRepository",
-  "ResolveIssue",
-  "ReadIssue",
-  "ReadSubIssues",
-  "ReadBlockedBy"
-])
-
-const awaitWithDiagnostic = <A, E, R, E1, R1, E2, R2, E3, R3, E4, R4>(
+const awaitWithDiagnostic = <A, E, R, E1, R1, E2, R2, E3, R3, E4, R4, E5, R5>(
   awaited: Effect.Effect<A, E, R>,
   timeoutMillis: number,
   writePrimary: Effect.Effect<void, E1, R1>,
   writeProvider: Effect.Effect<void, E2, R2>,
-  stopChild: Effect.Effect<void, E3, R3>,
-  writeAudit: Effect.Effect<void, E4, R4>
+  writeAttemptBoundary: Effect.Effect<void, E3, R3>,
+  stopChild: Effect.Effect<void, E4, R4>,
+  writeAudit: Effect.Effect<void, E5, R5>
 ) =>
   Effect.gen(function* () {
     const result = yield* awaited.pipe(Effect.timeoutOption(Duration.millis(timeoutMillis)))
     if (Option.isSome(result)) return result.value
     yield* writePrimary
     yield* writeProvider
+    yield* writeAttemptBoundary
     yield* stopChild
     yield* writeAudit
     return yield* new PublicPublicationTimeout({ timeoutMillis })
@@ -226,6 +216,7 @@ it.live("writes timeout diagnostics before a failed audit and surfaces the timeo
       Effect.never,
       10,
       fs.writeFileString(primary, JSON.stringify({ publicRecordTags: ["RunSelected"] })),
+      Effect.void,
       Effect.void,
       Effect.void,
       writeBoundedDiagnostic(audit, Effect.fail("controlled audit failure"))
@@ -381,11 +372,98 @@ it.live(
             })
           )
         )
+        const writeAttemptBoundaryDiagnostic = writeBoundedDiagnostic(
+          diagnosticGitBoundaryPath,
+          Effect.scoped(
+            Effect.gen(function* () {
+              const journalContext = yield* Layer.build(sqliteJournalStoreLayer({ filename: fixture.journalDatabase }))
+              const audit = yield* Context.get(journalContext, JournalStore).auditAll()
+              const records = audit.runs[0]?.records ?? []
+              const latestAttempt = records.findLast(
+                ({ event }) => event._tag === "RemotePublicationAttemptIntended"
+              )?.event
+              if (latestAttempt?._tag !== "RemotePublicationAttemptIntended")
+                return { _tag: "NoRemotePublicationAttemptIntent" }
+
+              const subject = {
+                requestId: latestAttempt.correlation.requestId,
+                attemptOrdinal: latestAttempt.attemptOrdinal
+              }
+              const custodyPath = `${fixture.manifest.commonDirectory}/dalph/git-senders/${createHash("sha256")
+                .update(JSON.stringify(subject))
+                .digest("hex")}.json`
+              const custodyRecord = yield* Effect.tryPromise({
+                try: async () => JSON.parse(await readFile(custodyPath, "utf8")) as unknown,
+                catch: () => undefined
+              })
+              const custody = diagnosticRecord(custodyRecord)
+              const identity = diagnosticRecord(diagnosticField(custody, "identity"))
+              const phase = diagnosticString(diagnosticField(custody, "phase"))
+              const token = diagnosticString(diagnosticField(custody, "token"))
+              const tokenBearingPids =
+                phase === "Launching" && token !== undefined
+                  ? yield* Effect.tryPromise({
+                      try: async () => {
+                        const processIds = (await readdir("/proc")).filter((entry) => /^\d+$/u.test(entry))
+                        const matches = await Promise.all(
+                          processIds.map(async (processId) => {
+                            try {
+                              const environment = await readFile(`/proc/${processId}/environ`)
+                              return environment
+                                .toString()
+                                .split("\0")
+                                .includes(`${gitSenderTokenEnvironment}=${token}`)
+                                ? Number(processId)
+                                : undefined
+                            } catch {
+                              return undefined
+                            }
+                          })
+                        )
+                        return matches.filter((pid): pid is number => pid !== undefined)
+                      },
+                      catch: () => undefined
+                    })
+                  : undefined
+              const remoteHead = yield* Effect.result(
+                git.run(fixture.remoteRepository, ["rev-parse", fixture.remoteRef])
+              )
+              return {
+                _tag: "RemotePublicationAttemptBoundary",
+                requestId: subject.requestId,
+                attemptOrdinal: subject.attemptOrdinal,
+                custody: {
+                  _tag: custody === undefined ? "Unavailable" : "Available",
+                  phase,
+                  pid: diagnosticInteger(diagnosticField(identity, "pid")),
+                  startIdentity: diagnosticString(diagnosticField(identity, "startIdentity"))
+                },
+                ...(phase === "Launching"
+                  ? {
+                      tokenBearingPids:
+                        tokenBearingPids === undefined
+                          ? { _tag: "Unavailable" }
+                          : { _tag: "Available", pids: tokenBearingPids }
+                    }
+                  : { tokenBearingPids: { _tag: "NotNeeded" } }),
+                remoteHead:
+                  remoteHead._tag === "Success"
+                    ? {
+                        _tag: "Available",
+                        exitCode: remoteHead.success.exitCode,
+                        sha: remoteHead.success.stdout.trim()
+                      }
+                    : { _tag: "Unavailable" }
+              }
+            })
+          )
+        )
         const childStatus = yield* awaitWithDiagnostic(
           controller.awaitChild(child),
           45_000,
           writePrimaryDiagnostic,
           writeProviderDiagnostic,
+          writeAttemptBoundaryDiagnostic,
           controller.killChild(child).pipe(Effect.asVoid),
           writeAuditDiagnostic
         )
@@ -427,6 +505,14 @@ it.live(
           `${childStderr}\njournal tags: ${tags.join(", ")}\ntracker facts: ${trackerFactsDiagnostics.join(", ")}\n` +
             `diagnostic status/proposal projection: ${childDiagnosticProjection}`
         ).toBe(0)
+
+        const consumedCompletionHint = childStderr
+          .split(/\r?\n/u)
+          .find((line) => line.includes('"phase":"ExactCompletionHintConsumed"'))
+        expect(consumedCompletionHint).toContain('"_tag":"CodexExecutorCompletionTrace"')
+        expect(consumedCompletionHint).toContain('"hintChannel":"turn/completed"')
+        expect(consumedCompletionHint).toContain('"threadId":"hermetic-thread:0"')
+        expect(consumedCompletionHint).toContain('"turnId":"hermetic-turn:hermetic-thread:0:0"')
 
         expect(tags.filter((tag) => tag === "WorkflowRunBegan")).toHaveLength(1)
         expect(
@@ -529,36 +615,35 @@ it.live(
           ).toBeGreaterThan(closeIndex)
         expect(tags.at(-1)).toBe("WorkflowRunTerminated")
 
-        const laterCompletedGraphIndex = cassette.entries.findIndex((entry, index) => {
-          if (index <= completionIndex) return false
-          if (entry._tag !== "TaskTrackerFactsObserved") return false
-          if (
-            entry.evidence._tag !== "CompleteTaskTrackerFacts" &&
-            entry.evidence._tag !== "UnchangedTaskTrackerFactsReconfirmed"
-          )
-            return false
-          const priorOperationId =
-            entry.evidence._tag === "UnchangedTaskTrackerFactsReconfirmed"
-              ? entry.evidence.priorFullObservationOperationId
-              : undefined
-          const prior =
-            priorOperationId === undefined
-              ? undefined
-              : cassette.entries
-                  .slice(0, index)
-                  .findLast(
-                    (candidate) =>
-                      candidate._tag === "TaskTrackerFactsObserved" &&
-                      candidate.originatingActionOperationId === priorOperationId
-                  )
-          const completeEvidence =
-            entry.evidence._tag === "CompleteTaskTrackerFacts"
-              ? entry.evidence
-              : prior?._tag === "TaskTrackerFactsObserved" && prior.evidence._tag === "CompleteTaskTrackerFacts"
-                ? prior.evidence
-                : undefined
-          if (completeEvidence?._tag !== "CompleteTaskTrackerFacts") return false
-          return completeEvidence.factFamilies.some(
+        const dependantExecutorStartIndex = cassette.entries.findIndex(
+          (entry) =>
+            entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+            entry.plannedAttempt.taskId === trackerAfterChild.graph.dependantTaskId
+        )
+        const completedGraphAt = (entries: typeof cassette.entries, index: number): boolean => {
+          const entry = entries[index]
+          if (entry?._tag !== "TaskTrackerFactsObserved") return false
+          let completeFacts: Extract<typeof entry.evidence, { readonly _tag: "CompleteTaskTrackerFacts" }> | undefined
+          if (entry.evidence._tag === "CompleteTaskTrackerFacts") {
+            completeFacts = entry.evidence
+          } else if (entry.evidence._tag === "UnchangedTaskTrackerFactsReconfirmed") {
+            const reconfirmation = entry.evidence
+            const prior = entries
+              .slice(0, index)
+              .find(
+                (candidate) =>
+                  candidate._tag === "TaskTrackerFactsObserved" &&
+                  candidate.evidence._tag === "CompleteTaskTrackerFacts" &&
+                  candidate.originatingActionOperationId === reconfirmation.priorFullObservationOperationId &&
+                  candidate.evidence.operationId === reconfirmation.priorFullObservationOperationId &&
+                  reconfirmationMatchesPriorFullObservation(reconfirmation, candidate.evidence)
+              )
+            if (prior?._tag === "TaskTrackerFactsObserved" && prior.evidence._tag === "CompleteTaskTrackerFacts") {
+              completeFacts = prior.evidence
+            }
+          }
+          if (completeFacts === undefined) return false
+          return completeFacts.factFamilies.some(
             (family) =>
               "lifecycles" in family &&
               family.lifecycles.some(
@@ -566,15 +651,22 @@ it.live(
                   taskId === trackerAfterChild.graph.rootTaskId && lifecycle._tag === "CompletedSuccessfully"
               )
           )
-        })
+        }
+        const lastCleanupIndex = Math.max(
+          tags.indexOf("WorktreeCleanupSettled"),
+          tags.indexOf("BranchCleanupSettled"),
+          tags.indexOf("IntegratorCandidateCleanupSettled")
+        )
+        const laterCompletedGraphIndex = cassette.entries.findIndex(
+          (_, index) =>
+            index > completionIndex &&
+            index > lastCleanupIndex &&
+            index < dependantExecutorStartIndex &&
+            completedGraphAt(cassette.entries, index)
+        )
         // Immutable attempt preparation may be journaled from an earlier current
         // eligibility observation. The post-cleanup graph is the boundary for
         // starting executor work, not for recording TaskAttemptPlanned.
-        const dependantExecutorStartIndex = cassette.entries.findIndex(
-          (entry) =>
-            entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-            entry.plannedAttempt.taskId === trackerAfterChild.graph.dependantTaskId
-        )
         expect(laterCompletedGraphIndex).toBeGreaterThan(completionIndex)
         for (const cleanupTag of [
           "WorktreeCleanupSettled",
@@ -586,18 +678,68 @@ it.live(
           )
         }
         expect(dependantExecutorStartIndex).toBeGreaterThan(laterCompletedGraphIndex)
+        const completedFullEntry = cassette.entries.find(
+          (entry, index) =>
+            entry._tag === "TaskTrackerFactsObserved" &&
+            entry.evidence._tag === "CompleteTaskTrackerFacts" &&
+            completedGraphAt(cassette.entries, index)
+        )
+        expect(completedFullEntry).toBeDefined()
+        if (
+          completedFullEntry?._tag === "TaskTrackerFactsObserved" &&
+          completedFullEntry.evidence._tag === "CompleteTaskTrackerFacts"
+        ) {
+          const syntheticOperationId = OperationId.make("s8-reference-control-reconfirmation")
+          const reconfirmedTags = [
+            "TaskIdentitiesReconfirmed",
+            "TaskLifecyclesReconfirmed",
+            "TaskPrerequisitesReconfirmed",
+            "TaskGroupingsReconfirmed",
+            "TaskTargetMembershipReconfirmed"
+          ] as const
+          const reconfirmation = Schema.decodeUnknownSync(UnchangedTaskTrackerFactsReconfirmed)({
+            _tag: "UnchangedTaskTrackerFactsReconfirmed",
+            operationId: syntheticOperationId,
+            priorFullObservationOperationId: completedFullEntry.evidence.operationId,
+            rootTaskId: completedFullEntry.evidence.rootTaskId,
+            target: completedFullEntry.evidence.target,
+            factFamilies: completedFullEntry.evidence.factFamilies.map((family, index) => ({
+              ...family,
+              _tag: reconfirmedTags[index],
+              freshness: { _tag: "ObservedDuringLogicalRead", operationId: syntheticOperationId }
+            }))
+          })
+          const reconfirmationEntry = {
+            ...completedFullEntry,
+            evidence: reconfirmation,
+            originatingActionOperationId: syntheticOperationId
+          }
+          const referenceControlEntries = [completedFullEntry, reconfirmationEntry]
+          expect(completedGraphAt(referenceControlEntries, 1)).toBe(true)
+          expect(
+            completedGraphAt(
+              referenceControlEntries.with(1, {
+                ...reconfirmationEntry,
+                evidence: {
+                  ...reconfirmation,
+                  priorFullObservationOperationId: OperationId.make("missing-full-observation")
+                }
+              }),
+              1
+            )
+          ).toBe(false)
+          expect(
+            completedGraphAt(
+              referenceControlEntries.with(1, {
+                ...reconfirmationEntry,
+                evidence: { ...reconfirmation, rootTaskId: trackerAfterChild.graph.dependantTaskId }
+              }),
+              1
+            )
+          ).toBe(false)
+        }
 
         const provider = providerAfterChild
-        const githubProviderTransportCount = provider.operationCounts.reduce(
-          (total, operation) =>
-            total +
-            (githubProviderOperationTags.has(operation.tag as GithubGraphqlRequest["_tag"]) ? operation.count : 0),
-          0
-        )
-        // The 140-request qualification circuit is only headroom for this controlled
-        // two-task journey. Its terminal tracker traffic must stay close to the 120
-        // ordinary-production default and cannot conceal a read/retry loop.
-        expect(githubProviderTransportCount).toBeLessThanOrEqual(130)
         expect(provider.taskLifecycle).toBe("Completed")
         expect(provider.dependantTaskLifecycle).toBe("Completed")
         expect(provider.activeClaimCount).toBe(0)

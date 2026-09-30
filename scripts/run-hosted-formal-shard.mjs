@@ -1,3 +1,5 @@
+import { hostedAffectedQuintFamilies } from "./quint-affected-selection.mjs"
+import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 
@@ -16,11 +18,13 @@ const parseArguments = (args) => {
 
 const { reportPath, shard } = parseArguments(process.argv.slice(2))
 assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
-const report = await runQuintEffectiveProfile({ hostedShard: shard })
+const binding = readQuintHostedShardBinding()
+const affectedFamilies = await hostedAffectedQuintFamilies({ binding, profile: createQuintEffectiveProfile() })
+const report = await runQuintEffectiveProfile({ hostedShard: shard, affectedFamilies })
 assertQuintHostedCommandCustody(report)
 const envelope = {
   version: 1,
-  binding: readQuintHostedShardBinding(),
+  binding,
   profileDigest: report.shard.profileDigest,
   shard: report.shard.shard,
   shardCount: report.shard.shardCount,

@@ -234,7 +234,8 @@ export const makeHermeticController: (
       StartThread: (value) => provider.codex.startThread(value.cwd, value.ownedThreadToken),
       ReadThread: (value) => provider.codex.readThread(value.threadId),
       ResumeThread: (value) => provider.codex.resumeThread(value.threadId, value.cwd),
-      StartTurn: (value) => provider.codex.startTurn(value.threadId, value.cwd, value.text, value.ownedTurnToken),
+      StartTurn: (value) =>
+        provider.startTurnWithCompletion(value.threadId, value.cwd, value.text, value.ownedTurnToken),
       InterruptTurn: (value) => provider.codex.interruptTurn(value.threadId, value.turnId).pipe(Effect.as({})),
       ListThreads: () =>
         provider.codex.listThreads?.() ??

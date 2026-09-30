@@ -1262,6 +1262,105 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  run incompatiblePublicationResumeKeepsUnchangedFactsRetainedWithoutWorkTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumePriorPhase == PublicationIncompatible,
+        state.results.get(1).publicationResumePriorObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 77,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationAttemptsAreBounded,
+      })
+      .then(refreshIncompatiblePublicationWithoutRepair(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationIncompatible,
+        state.results.get(1).publicationObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        not(state.results.get(1).publicationOrdinaryRefspecRequested),
+        not(state.results.get(1).publicationProofRecorded),
+        not(state.results.get(1).targetHeld),
+        state.results.get(1).publicationResumeFactsRefreshed,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationAttemptsAreBounded,
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
+  run incompatiblePublicationResumeUsesOnlyFreshCandidateCurrentProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 78))
+      .then(refreshIncompatiblePublicationToCandidateCurrent(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationProofRecorded,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateCurrent,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateCurrent,
+        state.results.get(1).publicationObservedRemoteHead == 31,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationLastAttempt == 1,
+        not(state.results.get(1).publicationOrdinaryRefspecRequested),
+        not(state.results.get(1).publicationForceRequested),
+        state.results.get(1).publicationResumePriorObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationResumeFactsRefreshed,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 78,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationAttemptsAreBounded,
+        publicationProofRequiresPerRefSuccess,
+      })
+  }
+
   run ambiguousPublicationReconcilesToRetainedAncestorProofTest = {
     init
       .then(admitDestination)
@@ -1328,5 +1427,391 @@ module acceptedResultIntegrationTest {
         publicationWaitRetainsResponsibility,
       })
       .then(observeInitialPublicationRemoteAncestorOfCandidate(1).fail())
+  }
+
+  run resumeAfterDeniedPublicationUsesSameRunCandidateAndRemainingAllowanceTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .then(recoverCoordinator)
+      .then(redeliverPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumeRequestRecorded,
+        not(state.results.get(1).targetHeld),
+        state.results.get(1).publicationResumeDispatchCount == 0,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(activatePublicationResume(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeReady,
+        state.results.get(1).targetHeld,
+        state.results.get(1).publicationResumeActive,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integrationResponsibilityIdentity == 8001,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 77,
+        targetHeldOnlyForActiveIntegration,
+        publicationResumeIdentityIsExact,
+      })
+      .then(recordResumedPublicationAttemptIntent(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == 2,
+        state.results.get(1).publicationLastAttempt == 2,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).publicationRequestId == 1 + 31,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        publicationResumeDoesNotMintWork,
+      })
+  }
+
+  // S6 composes the already-authorized same-session Retry with a later
+  // retained publication wait. Resume preserves that existing run-two history
+  // without treating it as work newly minted by the resume request.
+  run resumeAfterAuthorizedRetryPreservesExistingIntegratorHistoryTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 30))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeWrongParentCandidate(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(startRetryOne)
+      .expect(and {
+        state.results.get(1).phase == RetryInFlight,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).integratorRunSession == state.results.get(1).integrationSession,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        retryRequiresOneExplicitChoice,
+        retryAdvancesSameSessionToOrdinalTwo,
+      })
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 81))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumePriorPhase == PublicationIncompatible,
+        state.results.get(1).publicationResumePriorObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 81,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).integratorRunSession == state.results.get(1).integrationSession,
+        state.results.get(1).integrationResponsibilityIdentity == 8001,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == state.results.get(1).integrationSession,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        state.results.get(1).publicationResumeDispatchCount == 0,
+        not(state.results.get(1).publicationResumeActive),
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+      })
+      .then(refreshIncompatiblePublicationWithoutRepair(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationIncompatible,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).integratorRunSession == state.results.get(1).integrationSession,
+        state.results.get(1).integrationResponsibilityIdentity == 8001,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == state.results.get(1).integrationSession,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
+  run resumePreExistingCompatibleHeadWakesOrdinaryFrontierWithoutMintingWorkTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationCompetingHead(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .then(continueCompetingHeadThroughOrdinaryRunFrontier(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumePriorPhase == PublicationCompetingHead,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 77,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).publicationAttemptCount < PROMOTION_ATTEMPT_LIMIT,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+      })
+      .then(redeliverPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .expect(and {
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+      })
+      .then(continueCompetingHeadThroughOrdinaryRunFrontier(1).fail())
+  }
+
+  run resumeDeniedPublicationOperatorMatchesTheProductionResumeEndpointTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .then(resumeDeniedPublication(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == 2,
+        state.results.get(1).publicationLastAttempt == 2,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).publicationRequestId == 1 + 31,
+        state.results.get(1).publicationProofBasis == PushApplied,
+        state.results.get(1).publicationResumeRequestRecorded,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 77,
+        state.results.get(1).publicationResumePriorPhase == PublicationDenied,
+        state.results.get(1).publicationResumePriorObservation == PublicationRemoteDenied,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        not(state.results.get(1).publicationResumeFactsRefreshed),
+        not(state.results.get(1).publicationResumeActive),
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+      })
+  }
+
+  run resumeSchemaMismatchFailsBeforeMutationTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationDenied,
+        state.results.get(1).publicationAttemptCount == 1,
+        not(state.results.get(1).publicationResumeRequestRecorded),
+      })
+      .then(recordPublicationResumeRequest(1, 2, 9000, 8001, 81).fail())
+  }
+
+  run throttleResumeRecordsStatusButCannotRetryMutationTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationThrottled(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 78))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumePriorPhase == PublicationThrottled,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        not(state.results.get(1).publicationResumeActive),
+        publicationResumeCannotExceedAllowance,
+      })
+      .then(activatePublicationResume(1).fail())
+  }
+
+  run pauseDoesNotGetOverriddenByAcceptedResumeTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 79))
+      .then(pauseRun)
+      .expect(and {
+        state.runPaused,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        not(state.results.get(1).publicationResumeActive),
+      })
+      .then(activatePublicationResume(1).fail())
+  }
+
+  run exitDoesNotGetOverriddenByAcceptedResumeTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 79))
+      .then(admitRunExit)
+      .expect(and {
+        state.runExitAdmitted,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        publicationResumeCannotOverridePauseOrExit,
+      })
+      .then(activatePublicationResume(1).fail())
+  }
+
+  run settledDeliveryResumeReturnsStatusWithoutWorkTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(observePromotionCandidateCurrent(1))
+      .then(settleDelivery(1))
+      .expect(and {
+        state.results.get(1).phase == DeliverySettled,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+      })
+      .then(readSettledDeliveryStatus(1, 1, 9000, 8001, 80))
+      .expect(and {
+        state.results.get(1).phase == DeliverySettled,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).promotionAttemptCount == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        settledDeliveryResumeIsReadOnly,
+      })
   }
 }

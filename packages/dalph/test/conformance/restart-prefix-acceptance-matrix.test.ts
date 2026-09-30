@@ -55,6 +55,7 @@ import {
   TargetPromotionReconciliationDeferredEvent,
   TargetPromotionReconciliationDeferral,
   TargetPromotionRuntime,
+  deriveTargetPromotionState,
   intentRecordKey,
   integrationQuarantinedRecordKey,
   makeTrackerGraphObservationOperation,
@@ -1837,6 +1838,7 @@ it.effect(
       }
       const scenarios = [
         {
+          activation: "Single",
           calls: ["read", "compare-and-set"],
           label: "outer intent",
           observation: TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
@@ -1845,6 +1847,7 @@ it.effect(
           prefix: intentPrefix
         },
         {
+          activation: "Single",
           calls: ["read"],
           label: "applied response lost",
           observation: TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
@@ -1853,6 +1856,7 @@ it.effect(
           prefix: attemptPrefix
         },
         {
+          activation: "Single",
           calls: ["read", "compare-and-set"],
           label: "stopped unapplied sender",
           observation: TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
@@ -1861,6 +1865,16 @@ it.effect(
           prefix: attemptPrefix
         },
         {
+          activation: "InitialReadResponseDeadline",
+          calls: ["read", "read", "compare-and-set"],
+          label: "pre-CAS ResponseDeadline followed by a later exact-H retry",
+          observation: TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+            currentHeadSha: attempt.event.correlation.qualifiedCandidate.run.session.expectedTargetHead
+          }),
+          prefix: intentPrefix
+        },
+        {
+          activation: "Single",
           calls: [],
           label: "success append acknowledgement lost",
           observation: TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
@@ -1886,6 +1900,12 @@ it.effect(
                       journalLayer(began.runId, runBeginning.target, history, storage)
                     )
                     const calls = yield* Ref.make<ReadonlyArray<string>>([])
+                    const readCount = yield* Ref.make(0)
+                    const deadline = new TargetPromotionGitReadFailure({
+                      candidateCommit: promotionCorrelation.qualifiedCandidate.candidateCommit,
+                      detail: "ResponseDeadline",
+                      target: promotionCorrelation.qualifiedCandidate.run.session.integrationTarget
+                    })
                     const git = TargetPromotionGit.of({
                       compareAndSet: () =>
                         Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
@@ -1896,12 +1916,61 @@ it.effect(
                           )
                         ),
                       read: () =>
-                        Ref.update(calls, (current) => [...current, "read"]).pipe(Effect.as(scenario.observation))
+                        Ref.update(calls, (current) => [...current, "read"]).pipe(
+                          Effect.andThen(
+                            scenario.activation === "InitialReadResponseDeadline"
+                              ? Ref.getAndUpdate(readCount, (count) => count + 1).pipe(
+                                  Effect.flatMap((count) =>
+                                    count === 0 ? Effect.fail(deadline) : Effect.succeed(scenario.observation)
+                                  )
+                                )
+                              : Effect.succeed(scenario.observation)
+                          )
+                        )
                     })
-                    const result = yield* runTargetPromotion({
-                      candidate: promotionCorrelation.qualifiedCandidate,
-                      publication: publicationProof
-                    }).pipe(Effect.provide(journalContext), Effect.provideService(TargetPromotionGit, git))
+                    const result = yield* Effect.gen(function* () {
+                      const firstActivation = runTargetPromotion({
+                        candidate: promotionCorrelation.qualifiedCandidate,
+                        publication: publicationProof
+                      }).pipe(Effect.provide(journalContext), Effect.provideService(TargetPromotionGit, git))
+                      if (scenario.activation !== "InitialReadResponseDeadline") return yield* firstActivation
+
+                      const failure = yield* Effect.flip(firstActivation)
+                      expect(failure).toBeInstanceOf(TargetPromotionGitReadFailure)
+                      expect(failure).toMatchObject({
+                        _tag: "TargetPromotionGitReadFailure",
+                        candidateCommit: promotionCorrelation.qualifiedCandidate.candidateCommit,
+                        detail: "ResponseDeadline",
+                        target: promotionCorrelation.qualifiedCandidate.run.session.integrationTarget
+                      })
+                      expect(yield* Ref.get(calls)).toEqual(["read"])
+                      const afterDeadline = yield* storage.read(began.runId)
+                      expect(afterDeadline.filter(({ event }) => event._tag === "TargetPromotionIntended")).toEqual([
+                        intent
+                      ])
+                      expect(
+                        afterDeadline.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+                      ).toEqual([])
+                      expect(
+                        afterDeadline.filter(({ event }) => event._tag === "TargetPromotionReconciliationDeferred")
+                      ).toEqual([])
+                      const pending = deriveTargetPromotionState(afterDeadline, promotionCorrelation)
+                      expect(pending).toMatchObject({
+                        _tag: "PromotionPending",
+                        retry: { _tag: "NeedInitialReconciliationRead" }
+                      })
+                      const reopenedHistory = reduceWorkflowJournalHistory(began.runId, afterDeadline)
+                      if (reopenedHistory._tag === "InvalidWorkflowJournalHistory") {
+                        return yield* Effect.die("ResponseDeadline must retain valid pending initial-read history")
+                      }
+                      const freshJournalContext = yield* Layer.build(
+                        journalLayer(began.runId, runBeginning.target, reopenedHistory, storage)
+                      )
+                      return yield* runTargetPromotion({
+                        candidate: promotionCorrelation.qualifiedCandidate,
+                        publication: publicationProof
+                      }).pipe(Effect.provide(freshJournalContext), Effect.provideService(TargetPromotionGit, git))
+                    })
                     expect(result._tag, scenario.label + " / " + lane).toBe("PromotionSucceeded")
                     expect(yield* Ref.get(calls), scenario.label + " / " + lane).toEqual(scenario.calls)
                     const recovered = yield* storage.read(began.runId)
@@ -1913,6 +1982,37 @@ it.effect(
                       recovered.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess"),
                       scenario.label + " / " + lane
                     ).toHaveLength(1)
+                    if (scenario.activation === "InitialReadResponseDeadline") {
+                      expect(recovered.filter(({ event }) => event._tag === "TargetPromotionIntended")).toEqual([
+                        intent
+                      ])
+                      const resumedAttempt = exactlyOne(
+                        recovered.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended"),
+                        "one exact-H initial attempt after the later activation"
+                      )
+                      if (resumedAttempt.event._tag !== "TargetPromotionAttemptIntended") {
+                        return yield* Effect.die("later exact-H activation must retain one initial attempt intent")
+                      }
+                      expect(resumedAttempt.event.reason).toEqual(
+                        TargetPromotionAttemptReason.cases.Initial.make({
+                          observedHeadSha: promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead
+                        })
+                      )
+                      for (const tag of [
+                        "RemotePublicationIntended",
+                        "RemotePublicationAttemptIntended",
+                        "RemotePublicationSucceeded",
+                        "IntegratorCompetingHeadSuccessorAuthorized",
+                        "IntegratorSessionFixed",
+                        "IntegratorRunStarted",
+                        "IntegratorRunResultRecorded"
+                      ] as const) {
+                        expect(
+                          recovered.filter(({ event }) => event._tag === tag),
+                          tag + " / " + lane
+                        ).toEqual(authored.filter(({ event }) => event._tag === tag))
+                      }
+                    }
                   })
                 )
               ),

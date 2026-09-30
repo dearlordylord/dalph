@@ -704,6 +704,14 @@ const routeFixtures = (
     {
       _tag: "IdentityFreeWorkflowRoute",
       transition: {
+        _tag: "ObservePlannedAttemptExecutorWork",
+        plannedAttempt,
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) }
+      }
+    },
+    {
+      _tag: "IdentityFreeWorkflowRoute",
+      transition: {
         _tag: "RunIntegrator",
         responsibility: fixture.responsibility,
         lineage: fixture.lineage,
@@ -1931,11 +1939,60 @@ describe("qualification original source boundary", () => {
     expect(rejected).not.toHaveProperty("registration")
   })
 
-  it("checks all six measured route families and twenty-eight direct roots without accepting added opaque source fields", async () => {
+  it("accepts only the exact claim-derived replacement identity for its materialized action", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
     const { context, routes } = routeFixtures(originalContext)
-    expect(routes).toHaveLength(30)
+    const route = routes.find(
+      (candidate) =>
+        candidate._tag === "IdentityFreeWorkflowRoute" && candidate.transition._tag === "ReplacePromotedTaskClaim"
+    )
+    if (route?._tag !== "IdentityFreeWorkflowRoute" || route.transition._tag !== "ReplacePromotedTaskClaim")
+      return expect.fail("replacement route fixture must exist")
+    const proposal = proposalForRoute(route, context)
+    const expectedOperationId = completionClaimReplacementRequestFor(route.transition.request.claim).operationId
+    expect(originalContext.derivedOperationIds).not.toContain(expectedOperationId)
+    expect(route.transition.request.operationId).toBe(expectedOperationId)
+    const state = readyFor(context, [proposal])
+    if (state._tag !== "Ready") return expect.fail("replacement source fixture must be ready")
+    const ownerFor = (operationId: OperationId) =>
+      ticketOwnerSnapshotForTest(proposal, {
+        _tag: "MaterializedDeliveryAction",
+        intent: "IntentRecorded",
+        operationId
+      })
+    const accepted = await Effect.runPromise(
+      validateHermeticQualificationStatus(
+        manifest,
+        configuration,
+        { ...state, liveOwners: [ownerFor(expectedOperationId)] },
+        runId
+      )
+    )
+    expect(accepted).toHaveProperty("registration")
+
+    const foreignOperationId = OperationId.make(`${expectedOperationId}:foreign`)
+    const rejected = await Effect.runPromise(
+      validateHermeticQualificationStatus(
+        manifest,
+        configuration,
+        { ...state, liveOwners: [ownerFor(foreignOperationId)] },
+        runId
+      ).pipe(Effect.flip)
+    )
+    expect(rejected).toMatchObject({
+      _tag: "HermeticQualificationSourceRejected",
+      code: "InvalidOperationIdentity",
+      operation: "ReplacePromotedTaskClaim"
+    })
+    expect(rejected).not.toHaveProperty("registration")
+  })
+
+  it("checks all six measured route families and twenty-nine direct roots without accepting added opaque source fields", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { context, routes } = routeFixtures(originalContext)
+    expect(routes).toHaveLength(31)
     expect(new Set(routes.map((route) => route._tag)).size).toBe(6)
     for (const route of routes) {
       const proposal = proposalForRoute(route, context)
@@ -1956,6 +2013,24 @@ describe("qualification original source boundary", () => {
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
       if (code !== undefined) expect(rejected.code).toBe(code)
     }
+    const observeRoute = routes.find(
+      (route) =>
+        route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "ObservePlannedAttemptExecutorWork"
+    )
+    if (
+      observeRoute?._tag !== "IdentityFreeWorkflowRoute" ||
+      observeRoute.transition._tag !== "ObservePlannedAttemptExecutorWork"
+    )
+      return expect.fail("identity-free Observe route fixture must exist")
+    const malformedObserveRoute: unknown = {
+      ...observeRoute,
+      transition: { ...observeRoute.transition, acceptedProgress: { _tag: "UnsupportedProgress" } }
+    }
+    await rejectProposal(
+      proposalForRoute(malformedObserveRoute as DeliveryActionProposal["route"], context),
+      "InvalidAcceptedProgress"
+    )
+
     const foreignTrackerTarget = await Effect.runPromise(
       Schema.decodeUnknownEffect(TrackerTarget)({
         _tag: "GithubIssue",
@@ -2235,6 +2310,59 @@ describe("qualification original source boundary", () => {
         expect.fail(`controlled route ${route._tag} was rejected: ${JSON.stringify(checked.failure)}`)
       expect(checked.success.status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
     }
+  })
+
+  it("accepts a completion-derived original claim release in a post-completion tracker wait", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { completionEvidence, context } = routeFixtures(originalContext)
+    const focusedCompletion = completionEvidence.find((item) => item._tag === "FocusedTaskCompletionSuccess")
+    if (focusedCompletion === undefined) return expect.fail("accepted completion evidence must be present")
+    const release = completionOriginalTaskClaimReleaseFor(focusedCompletion.observed.observation.request.claim)
+    expect(context.derivedOperationIds).not.toContain(release.operationId)
+    const releaseOperation = WorkflowOperation.cases.ReleaseTaskClaim.make({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+      predecessorOperationIds: [focusedCompletion.observed.observation.request.claim.originalClaim.operationId],
+      release
+    })
+    const releaseResponsibility = WorkflowResponsibilityEntry.cases.TaskClaimReleaseResponsibility.make({
+      beganAt: JournalPosition.make(21),
+      operation: releaseOperation,
+      taskId: context.taskId
+    })
+    const state = withFirstDelivery(
+      readyFor(context, [], completionEvidence, false, true),
+      [
+        {
+          _tag: "ResponsibilitySituation",
+          facts: {
+            _tag: "WorkflowOperationFreshFacts",
+            disposition: ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: "Missing" }),
+            responsibility: releaseResponsibility
+          }
+        }
+      ],
+      [{ _tag: "WorkflowResponsibility", responsibility: releaseResponsibility }]
+    )
+
+    const checked = await Effect.runPromise(
+      validateHermeticQualificationStatus(manifest, configuration, state, runId).pipe(Effect.result)
+    )
+    if (checked._tag === "Failure")
+      return expect.fail(`completion-derived claim release must remain valid: ${JSON.stringify(checked.failure)}`)
+    expect(checked.success.status._tag).toBe("DeliveryStatusAvailable")
+    if (checked.success.status._tag !== "DeliveryStatusAvailable") return
+    expect(checked.success.status.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          _tag: "TrackerFactWait",
+          responsibility: { _tag: "WorkflowResponsibility", responsibility: releaseResponsibility }
+        })
+      ])
+    )
+    expect(release.operationId).toBe(
+      completionOriginalTaskClaimReleaseFor(focusedCompletion.observed.observation.request.claim).operationId
+    )
   })
 
   it("checks controlled waiting, live, unavailable, integration, dependency, and settlement status entries", async () => {

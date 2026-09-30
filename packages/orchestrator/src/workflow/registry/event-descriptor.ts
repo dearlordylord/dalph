@@ -72,12 +72,16 @@ import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
   integratorSuccessorSessionFixedRecordKey,
+  integratorCompetingHeadSuccessorAuthorizedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   remotePublicationAdmissionObservedRecordKey,
   remotePublicationAdmissionReadIntendedRecordKey,
+  remotePublicationBatchGrantRecordKey,
   remotePublicationAttemptIntendedRecordKey,
   remotePublicationAttemptRejectedRecordKey,
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
+  remotePublicationResumeRequestedRecordKey,
   remotePublicationSucceededRecordKey,
   remoteBaselineReadIntendedRecordKey,
   remoteBaselineObservedRecordKey,
@@ -423,6 +427,14 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         event.directionAppliedAt
       )
     }),
+    IntegratorCompetingHeadSuccessorAuthorized: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCompetingHeadSuccessorAuthorizedRecordKey(event.authorizationId)
+    }),
+    IntegratorAutomaticSuccessorSessionFixed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorAutomaticSuccessorSessionFixedRecordKey(event.predecessor, event.authorizationAt)
+    }),
     IntegratorRunStarted: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorRunStartedRecordKey(event.run)
@@ -481,7 +493,19 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     }),
     RemotePublicationRetained: (event) => ({
       _tag: "GenericEventDescriptor",
-      expectedKey: remotePublicationRetainedRecordKey(event.correlation.requestId)
+      expectedKey: remotePublicationRetainedRecordKey(
+        event.correlation.requestId,
+        event.authorization,
+        event.batchGrantAt
+      )
+    }),
+    RemotePublicationResumeRequested: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationResumeRequestedRecordKey(event.request.requestId)
+    }),
+    RemotePublicationBatchGrantApplied: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationBatchGrantRecordKey(event.request)
     }),
     WorktreeCleanupAuthorized: (event) => ({
       _tag: "GenericEventDescriptor",

@@ -2,9 +2,9 @@
 import { type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { Deferred, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
-import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import { journalRecordsOfKind, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import {
@@ -111,6 +111,43 @@ const exactDeliveryEvidenceOf = (
     ...ticketDeliveryEvidenceOf(frame, projection.evidence.facts),
     ...projection.evidence.integrationWaits.map((wait): TicketDeliveryEvidence => ({ _tag: "IntegrationWait", wait }))
   ]
+}
+
+/** Finds the current activation's latest accepted WorkflowEstablishment graph-read outcome. */
+const failedWorkflowEstablishmentGraphReadAfter = (
+  records: JournalHistorySource,
+  target: TrackerTarget,
+  after: JournalPosition
+): JournalPosition | undefined => {
+  const targetKey = taskTrackerTargetKey(target)
+  const establishmentReadOperationIds = new Set(
+    Array.from(journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")).flatMap(({ event, position }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph" &&
+      event.operation.cause._tag === "WorkflowEstablishment" &&
+      position > after &&
+      taskTrackerTargetKey(event.operation.target) === targetKey
+        ? [event.operation.operationId]
+        : []
+    )
+  )
+  let latestPosition: JournalPosition | undefined
+  let latestReadFailed = false
+  for (const record of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    const { event, position } = record
+    if (
+      position <= after ||
+      event._tag !== "TaskTrackerFactsObserved" ||
+      !establishmentReadOperationIds.has(event.operationId) ||
+      taskTrackerTargetKey(event.observation.target) !== targetKey ||
+      (latestPosition !== undefined && position <= latestPosition)
+    ) {
+      continue
+    }
+    latestPosition = position
+    latestReadFailed = event.observation._tag === "TaskTrackerFactsReadFailed"
+  }
+  return latestReadFailed ? latestPosition : undefined
 }
 
 const safeContinuationRevalidationsOf = (
@@ -231,7 +268,20 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const frame =
       journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
+    const records = journal.prefix
     const activeRefreshBoundaryReached = projection.activeRefreshBoundary !== undefined
+    const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
+    const unsettledIntegrationTaskIds = new Set(
+      integrationResponsibilities.map(({ plannedAttempt }) => plannedAttempt.taskId)
+    )
+    const tasksWaitingForIntegrationFinality = new Set(
+      frame?.currentGraph
+        .toWire()
+        .tasks.filter(({ prerequisiteIds }) =>
+          prerequisiteIds.some((taskId) => unsettledIntegrationTaskIds.has(taskId))
+        )
+        .map(({ id }) => id) ?? []
+    )
     /** A complete evaluation derives decisions and admission authority from the same coherent frame. */
     const freshEvaluation = yield* deriveFreshTaskCandidateEvaluation({
       acceptedAt: journal.position,
@@ -239,6 +289,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       frame,
       opportunity,
       recoveredAttemptIds,
+      unsettledIntegrationTaskIds,
       runId,
       target
     })
@@ -257,6 +308,12 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const activeCurrentGraphRequired = activeRefreshNeedsCurrentGraph(journal, opportunity)
     const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds).filter((transition) => {
       if (
+        transition._tag === "BeginPlannedAttemptExecutorWork" &&
+        tasksWaitingForIntegrationFinality.has(transition.plannedAttempt.taskId)
+      ) {
+        return false
+      }
+      if (
         !activeCurrentGraphRequired ||
         opportunity._tag !== "ActiveWorkAuthorityRefresh" ||
         !transitionHasPlannedAttempt(transition)
@@ -268,8 +325,6 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const ordinaryCurrentGraphRequired = ordinaryContinuationNeedsCurrentGraph(journal, opportunity, recovered)
     const currentGraphRequired = activeCurrentGraphRequired || ordinaryCurrentGraphRequired
     const transitions = [...recovered, ...admittedFresh.map(({ transition }) => transition)]
-    const records = journal.prefix
-    const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,
       acceptedOperationIds: acceptedOperationIdsOf(records),
@@ -283,6 +338,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
     const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
+    const failedGraphReadAt = failedWorkflowEstablishmentGraphReadAfter(records, target, activationGraphBaseline)
     const trackerGraphProposals =
       !activeRefreshBoundaryReached || (currentGraphRequired && journal.graph._tag === "GraphNotEstablished")
         ? trackerGraphProposalsOf(journal, recovered.length, runIsPaused, runId, target, currentGraphRequired)
@@ -305,6 +361,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         runtimeFacts: {
           acceptedAt: journal.position,
           acceptedFactPublication,
+          ...(failedGraphReadAt === undefined ? {} : { failedWorkflowEstablishmentGraphReadAt: failedGraphReadAt }),
           runId,
           pauseCoverage: pauseCoverageFactsOf(journal),
           quiescence: runIsPaused

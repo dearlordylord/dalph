@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- The exhaustive integration transition-to-boundary routing stays in one auditable adapter. */
 import { Context, Effect, Option } from "effect"
+import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   AcceptedResultEvidenceUnavailable,
   queueAcceptedResultIntegrationResponsibility,
@@ -26,16 +27,19 @@ import {
 import type { IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
 import {
   runCompletionClaimDeletionProtocol,
-  runCompletionClaimReplacementProtocol
+  runCompletionClaimReplacementProtocolWithFreshPremises
 } from "../../workflow/protocols/integration-finality/protocol.js"
 import {
   CompletionClaimBoundary,
-  CompletionTaskBoundary
+  CompletionTaskBoundary,
+  completionTaskRequestFor
 } from "../../workflow/protocols/integration-finality/events.js"
 import {
   authorizeCompletionTaskAttempt,
   CompletionTaskAuthorizationConflict,
+  CompletionTaskAuthorizationWait,
   CompletionTaskConfirmationWait,
+  CompletionTaskPreconditionConflict,
   completionTaskConfirmationDisposition,
   readCompletionConfirmation,
   readCurrentCompletionConfirmation,
@@ -43,6 +47,11 @@ import {
 } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { InRunJournal } from "../../workflow-journal/store.js"
+import {
+  journaledTaskClaimRead,
+  journaledTaskWorkSpecificationRead
+} from "../../workflow-journal/journaled-interpreter.js"
 import {
   journalRecordsForOperationId,
   journalRecordsForTask,
@@ -53,8 +62,11 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import type { RunReactivationHint } from "../run/run-reactivation-owner.js"
 import {
   executeIntegratorAction,
+  authorizeIntegratorCompetingHeadSuccessor,
+  fixIntegratorAutomaticSuccessorSession,
   fixIntegratorSuccessorSession,
   recordInitialConclusiveIntegrationQuarantine,
   recordProviderRunFailureIntegrationQuarantine,
@@ -66,11 +78,30 @@ import { readPostPromotionBlockerCandidateAncestry } from "../../workflow/protoc
 import { pendingPromotionStaleIntegrationQuarantineFor } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 import {
   PublishedIntegratorRunQualifiedCandidate,
+  remotePublicationCorrelationFor,
   RemotePublicationGit
 } from "../../workflow/protocols/direct-publication/events.js"
 import { runRemotePublication } from "../../workflow/protocols/direct-publication/protocol-engine.js"
+import {
+  remotePublicationEventsFor,
+  validateRemotePublicationState
+} from "../../workflow/protocols/direct-publication/transition-journal.js"
+import {
+  RemotePublicationResumeRuntimeUnavailable,
+  resumeRemotePublicationInRuntime
+} from "../../workflow/protocols/direct-publication/resume-runtime.js"
+import type { RemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
 import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { establishRemoteBaseline } from "../../workflow/protocols/direct-publication/baseline-protocol-engine.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import { OperationSelected } from "../../presentation/tracker-workflow-trace.js"
+import {
+  makeTaskClaimObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
+import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
+import { journaledTrackerGraphRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -111,6 +142,8 @@ type OuterIntegratorTransition = Extract<
   IntegrationTransition,
   {
     readonly _tag:
+      | "AuthorizeIntegratorCompetingHeadSuccessor"
+      | "FixIntegratorAutomaticSuccessorSession"
       | "FixIntegratorSuccessorSession"
       | "RecordChangedHeadRetryQuarantine"
       | "RecordPromotionStaleIntegrationQuarantine"
@@ -141,13 +174,242 @@ const completionClaimBoundary = Effect.fn("DeliveryAction.completionClaimBoundar
   return Option.isSome(boundary) ? boundary.value : yield* new IntegrationFinalityRuntimeUnavailable()
 })
 
+const readPostPromotionFinalityPremises = Effect.fn("DeliveryAction.readPostPromotionFinalityPremises")(function* (
+  request: ReplacePromotedTaskClaim["request"],
+  target: TrackerTarget,
+  lease: DeliveryActionExecutionLease
+) {
+  const completionRequest = completionTaskRequestFor(request.claim)
+  const runId = request.claim.plannedAttempt.runId
+  const context = yield* Effect.context<never>()
+  const interpreter = Context.getOption(context, WorkflowInterpreter)
+  const operationIds = Context.getOption(context, OperationIdAllocator)
+  const trace = Context.getOption(context, WorkflowTrace)
+  const inRunJournal = Context.getOption(context, InRunJournal)
+  const acceptedJournal = Context.getOption(context, AcceptedJournalReader)
+  if (
+    Option.isNone(interpreter) ||
+    Option.isNone(operationIds) ||
+    Option.isNone(trace) ||
+    Option.isNone(inRunJournal) ||
+    Option.isNone(acceptedJournal)
+  ) {
+    return yield* new IntegrationFinalityRuntimeUnavailable()
+  }
+  const currentInterpreter = interpreter.value
+  const currentOperationIds = operationIds.value
+  const currentTrace = trace.value
+  const currentInRunJournal = inRunJournal.value
+  const currentAcceptedJournal = acceptedJournal.value
+  const graphOperationId = yield* currentOperationIds.allocate()
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "PostPromotionFinalityCheck", promotionRequestId: request.claim.promotionCorrelation.requestId },
+    graphOperationId,
+    target,
+    [],
+    [completionRequest.taskId]
+  )
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    yield* currentOperationIds.allocate(),
+    target,
+    completionRequest.taskId,
+    [graphOperationId]
+  )
+  const claimOperation = makeTaskClaimObservationOperation(
+    yield* currentOperationIds.allocate(),
+    target,
+    completionRequest.taskId,
+    [graphOperationId]
+  )
+  const { claimRead, graphRead, specificationRead } = yield* interruptibleBoundaryOf(lease).run(
+    {
+      _tag: "PostPromotionFinalityReads",
+      family: "TaskTracker",
+      request: completionRequest,
+      graphOperationId: graphOperation.operationId,
+      specificationOperationId: specificationOperation.operationId,
+      claimOperationId: claimOperation.operationId
+    },
+    Effect.gen(function* () {
+      yield* currentTrace.emit(OperationSelected.make({ operation: graphOperation }))
+      const graphRead = yield* journaledTrackerGraphRead(runId, currentInterpreter, currentInRunJournal)(
+        graphOperation,
+        Effect.void,
+        undefined
+      ).pipe(
+        Effect.provideService(AcceptedJournalReader, currentAcceptedJournal),
+        Effect.catchTags({
+          "FixtureReader.FixtureReadError": () =>
+            Effect.fail(
+              new CompletionTaskAuthorizationWait({
+                detail: "current complete tracker graph was unavailable after target promotion",
+                reason: "FocusedFactsUnavailable",
+                request: completionRequest
+              })
+            ),
+          TaskTrackerKnowledgeUnavailable: () =>
+            Effect.fail(
+              new CompletionTaskAuthorizationWait({
+                detail: "current complete tracker graph was unavailable after target promotion",
+                reason: "FocusedFactsUnavailable",
+                request: completionRequest
+              })
+            ),
+          TaskTrackerFactsReadUnavailable: () =>
+            Effect.fail(
+              new CompletionTaskAuthorizationWait({
+                detail: "current complete tracker graph was unavailable after target promotion",
+                reason: "FocusedFactsUnavailable",
+                request: completionRequest
+              })
+            ),
+          "TrackerGraphReader.AdapterReadError": (failure) =>
+            failure.reason._tag === "IncompleteSnapshot" ||
+            failure.reason._tag === "ResourceLimitExceeded" ||
+            failure.reason._tag === "Throttled" ||
+            failure.reason._tag === "CircuitOpen" ||
+            failure.reason._tag === "Transport"
+              ? Effect.fail(
+                  new CompletionTaskAuthorizationWait({
+                    detail: "current complete tracker graph was unavailable after target promotion",
+                    reason: "FocusedFactsUnavailable",
+                    request: completionRequest
+                  })
+                )
+              : Effect.fail(failure)
+        })
+      )
+
+      yield* currentTrace.emit(OperationSelected.make({ operation: specificationOperation }))
+      const specificationRead = yield* journaledTaskWorkSpecificationRead(
+        runId,
+        currentInterpreter,
+        currentInRunJournal,
+        currentAcceptedJournal
+      )(specificationOperation, Effect.void, undefined).pipe(
+        Effect.catchTags({
+          "FixtureReader.FixtureReadError": () =>
+            Effect.fail(
+              new CompletionTaskAuthorizationWait({
+                detail: "current task specification was unavailable after target promotion",
+                reason: "FocusedFactsUnavailable",
+                request: completionRequest
+              })
+            ),
+          TaskTrackerKnowledgeUnavailable: () =>
+            Effect.fail(
+              new CompletionTaskAuthorizationWait({
+                detail: "current task specification was unavailable after target promotion",
+                reason: "FocusedFactsUnavailable",
+                request: completionRequest
+              })
+            ),
+          "TrackerGraphReader.AdapterReadError": (failure) =>
+            failure.reason._tag === "IncompleteSnapshot" ||
+            failure.reason._tag === "ResourceLimitExceeded" ||
+            failure.reason._tag === "Throttled" ||
+            failure.reason._tag === "CircuitOpen" ||
+            failure.reason._tag === "Transport"
+              ? Effect.fail(
+                  new CompletionTaskAuthorizationWait({
+                    detail: "current task specification was unavailable after target promotion",
+                    reason: "FocusedFactsUnavailable",
+                    request: completionRequest
+                  })
+                )
+              : Effect.fail(failure)
+        })
+      )
+
+      yield* currentTrace.emit(OperationSelected.make({ operation: claimOperation }))
+      const claimRead = yield* journaledTaskClaimRead(
+        runId,
+        currentInterpreter,
+        currentInRunJournal,
+        currentAcceptedJournal
+      )(claimOperation, Effect.void, undefined)
+      if (claimRead._tag !== "AuthoritativeTaskClaimObserved") {
+        return yield* new CompletionTaskAuthorizationWait({
+          detail: "current task claim was unavailable after target promotion",
+          reason: "FocusedFactsUnavailable",
+          request: completionRequest
+        })
+      }
+      return { claimRead, graphRead, specificationRead }
+    }),
+    Effect.succeed
+  )
+
+  const taskLifecycle = Option.getOrUndefined(graphRead.lifecycleOf(completionRequest.taskId))
+  if (taskLifecycle === undefined) {
+    return yield* new CompletionTaskPreconditionConflict({
+      detail: "promoted task is not present in the current complete tracker graph",
+      reason: "TaskNotInTarget",
+      request: completionRequest
+    })
+  }
+  if (taskLifecycle._tag !== "Open") {
+    return yield* new CompletionTaskPreconditionConflict({
+      detail: `promoted task lifecycle is ${taskLifecycle._tag}, not Open`,
+      reason: "TaskLifecycleConflict",
+      request: completionRequest
+    })
+  }
+  const unfinishedPrerequisite = graphRead
+    .prerequisitesOf(completionRequest.taskId)
+    .find(
+      (prerequisiteTaskId) =>
+        Option.getOrUndefined(graphRead.lifecycleOf(prerequisiteTaskId))?._tag !== "CompletedSuccessfully"
+    )
+  if (unfinishedPrerequisite !== undefined) {
+    return yield* new CompletionTaskPreconditionConflict({
+      detail: `promoted task has unfinished prerequisite ${unfinishedPrerequisite}`,
+      reason: "PrerequisitesIncomplete",
+      request: completionRequest
+    })
+  }
+
+  if (
+    specificationRead.taskId !== completionRequest.taskId ||
+    specificationRead.fingerprint !== completionRequest.taskRevision
+  ) {
+    return yield* new CompletionTaskPreconditionConflict({
+      detail: "current task specification differs from the immutable promoted task revision",
+      reason: "TaskIdentityOrRevisionChanged",
+      request: completionRequest
+    })
+  }
+
+  if (
+    claimRead.observation._tag !== "ActiveTaskClaim" ||
+    !isExactTaskClaim(claimRead.observation, request.claim.originalClaim)
+  ) {
+    return yield* new CompletionTaskPreconditionConflict({
+      detail: "current task claim differs from the exact claim that authorized this promoted result",
+      reason: claimRead.observation._tag === "UnclaimedTask" ? "CompletionClaimMissing" : "CompletionClaimForeign",
+      request: completionRequest
+    })
+  }
+})
+
 const replacePromotedTaskClaim = Effect.fn("DeliveryAction.replacePromotedTaskClaim")(function* (
   action: IdentityFreeAction,
-  transition: ReplacePromotedTaskClaim
+  transition: ReplacePromotedTaskClaim,
+  target: TrackerTarget,
+  lease: DeliveryActionExecutionLease
 ) {
-  return yield* runCompletionClaimReplacementProtocol(yield* completionClaimBoundary(), transition.request).pipe(
+  yield* lease.recordIntent(transition.request.operationId)
+  return yield* runCompletionClaimReplacementProtocolWithFreshPremises(
+    yield* completionClaimBoundary(),
+    transition.request,
+    () => readPostPromotionFinalityPremises(transition.request, target, lease)
+  ).pipe(
     Effect.as(deliveryActionCompleted(action.proposal.id)),
     Effect.catchTags({
+      "IntegrationFinality.CompletionTaskAuthorizationWait": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
+      "IntegrationFinality.CompletionTaskPreconditionConflict": (failure) =>
+        Effect.succeed(deliveryActionDeferred(action.proposal.id, failure)),
       /* v8 ignore next -- @preserve The bounded protocol tests own non-convergence; the runtime test owns deferred-result admission. */
       "IntegrationFinality.CompletionClaimDidNotConverge": () =>
         Effect.succeed(deliveryActionDeferred(action.proposal.id, "CompletionClaimNonConvergent")),
@@ -389,13 +651,34 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
 ) {
   const git = yield* RemotePublicationGit
   const acceptedJournal = yield* AcceptedJournalReader
-  const publicationSenderPhase = <A, E, R>(phase: Effect.Effect<A, E, R>) =>
+  const activeResumeRequest = (records: JournalHistorySource) =>
+    Effect.gen(function* () {
+      const correlation = remotePublicationCorrelationFor(transition.candidate, transition.target)
+      const state: RemotePublicationState = yield* validateRemotePublicationState(records, correlation)
+      if (state._tag === "PublicationResumeReady") return state.request
+      const resumeRequestId =
+        state._tag === "PublicationPending" && state.authorization._tag === "ResumeRequest"
+          ? state.authorization.requestId
+          : state._tag === "PublicationRetained" &&
+              state.cause._tag === "CompatibleCompetingHead" &&
+              state.authorization._tag === "ResumeRequest"
+            ? state.authorization.requestId
+            : undefined
+      if (resumeRequestId === undefined) return undefined
+      const receipt = remotePublicationEventsFor(records, correlation).find(
+        (event) => event._tag === "RemotePublicationResumeRequested" && event.request.requestId === resumeRequestId
+      )
+      if (receipt?._tag === "RemotePublicationResumeRequested") return receipt.request
+      return yield* new RemotePublicationResumeRuntimeUnavailable({
+        detail: "active publication attempt refers to a missing exact resume receipt",
+        runId: transition.responsibility.plannedAttempt.runId
+      })
+    })
+  const publicationPhase = <A, E, R>(phase: Effect.Effect<A, E, R>) =>
     runAtomicDeliveryBoundary(
       lease,
       Effect.gen(function* () {
-        const records = yield* acceptedJournal
-          .readAccepted(transition.responsibility.plannedAttempt.runId)
-          .pipe(Effect.orDie)
+        const records = yield* acceptedJournal.readAccepted(transition.responsibility.plannedAttempt.runId)
         let runPaused = false
         let taskPaused = false
         for (const { event } of journalRecordsOfKind(records, "ControlDirectionApplied")) {
@@ -412,10 +695,27 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
   yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
-      runRemotePublication(transition.candidate, transition.target, {
-        runObservation: (phase) => runAtomicDeliveryBoundary(lease, phase),
-        runSender: publicationSenderPhase
-      }).pipe(Effect.provideService(RemotePublicationGit, git))
+      Effect.gen(function* () {
+        const records = yield* acceptedJournal.readAccepted(transition.responsibility.plannedAttempt.runId)
+        const request = yield* activeResumeRequest(records)
+        const phaseBoundary = { runObservation: publicationPhase, runSender: publicationPhase }
+        if (request === undefined) {
+          return yield* runRemotePublication(transition.candidate, transition.target, phaseBoundary).pipe(
+            Effect.provideService(RemotePublicationGit, git)
+          )
+        }
+        return yield* resumeRemotePublicationInRuntime(
+          transition.candidate,
+          transition.target,
+          request,
+          phaseBoundary,
+          {
+            // The live delivery runtime is already inside the ordinary Run selector. ActionCompleted feeds its next
+            // evaluation; a hint here would enqueue a duplicate activation for the same Run.
+            ordinaryRun: { hint: (_hint: RunReactivationHint) => Effect.void }
+          }
+        ).pipe(Effect.provideService(RemotePublicationGit, git))
+      })
     )
     .pipe(Effect.ensuring(lease.integrationTargets.release(transition.responsibility).pipe(Effect.ignore)))
   return deliveryActionCompleted(action.proposal.id)
@@ -427,12 +727,15 @@ const executeRemoteBaseline = Effect.fn("DeliveryAction.establishRemoteBaseline"
   lease: DeliveryActionExecutionLease
 ) {
   const git = yield* RemoteBaselineGit
-  yield* lease.integrationTargets.withPermit(
+  const state = yield* lease.integrationTargets.withPermit(
     transition.responsibility,
     establishRemoteBaseline(transition.correlation, interruptibleBoundaryOf(lease)).pipe(
       Effect.provideService(RemoteBaselineGit, git)
     )
   )
+  if (state._tag === "CatchUpRequired" || state._tag === "CatchUpPending") {
+    return deliveryActionDeferred(action.proposal.id, "RemoteBaselineReconciliationPending")
+  }
   return deliveryActionCompleted(action.proposal.id)
 })
 
@@ -489,6 +792,12 @@ const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterInteg
   transition: OuterIntegratorTransition,
   lease: DeliveryActionExecutionLease
 ) {
+  if (transition._tag === "AuthorizeIntegratorCompetingHeadSuccessor") {
+    return yield* authorizeIntegratorCompetingHeadSuccessor(action, transition)
+  }
+  if (transition._tag === "FixIntegratorAutomaticSuccessorSession") {
+    return yield* fixIntegratorAutomaticSuccessorSession(action, transition)
+  }
   if (transition._tag === "FixIntegratorSuccessorSession") {
     return yield* fixIntegratorSuccessorSession(action, transition)
   }
@@ -525,7 +834,9 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
   if (transition._tag === "ObservePromotedCandidateAncestryAfterBlockerClear") {
     return yield* observePromotedCandidateAncestryAfterBlockerClear(action, transition)
   }
-  if (transition._tag === "ReplacePromotedTaskClaim") return yield* replacePromotedTaskClaim(action, transition)
+  if (transition._tag === "ReplacePromotedTaskClaim") {
+    return yield* replacePromotedTaskClaim(action, transition, target, lease)
+  }
   if (transition._tag === "CompletePromotedTask") return yield* completePromotedTask(action, transition, target)
   if (transition._tag === "ObserveFocusedTaskCompletion") {
     return yield* observeFocusedTaskCompletion(action, transition, target)
@@ -583,8 +894,10 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     yield* lease.integrationTargets.release(transition.responsibility)
     return deliveryActionCompleted(action.proposal.id)
   }
+  if (transition._tag === "RunRemotePublication") {
+    return yield* executeRemotePublication(action, transition, lease)
+  }
   const execution = executeAdvancedIntegrationAction(action, transition, lease, target)
-  if (transition._tag === "RunRemotePublication") return yield* execution
   return yield* integrationExitBoundaryFamilyFor(transition) === null
     ? execution
     : runAtomicDeliveryBoundary(lease, execution)

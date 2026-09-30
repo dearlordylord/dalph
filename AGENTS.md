@@ -55,6 +55,7 @@ questions. Reuse guidance already read unless it changed or scope changed.
   outcome supports; only a subsequent passing verification of the repaired
   candidate admits one qualification attempt. An inconclusive diagnosis or
   failed verification requires changed work rather than a broad rerun.
+- An incomplete process retains its custody fence until stopped writers are proved through reconciliation.
 - Before starting or waiting on an operation expected to exceed one minute,
   record its expected duration and wall-clock stop time. At that time, stop
   safely, preserve evidence, and name the next discriminating action before a
@@ -84,10 +85,10 @@ questions. Reuse guidance already read unless it changed or scope changed.
   `GIT_OPTIONAL_LOCKS=0`; shared tools, dependencies, Git configuration, packed
   refs, and unknown shared writes wait. Blocking edges still forbid
   implementation, though read-only planning may continue.
-- A maintainer can resume only `pnpm check:all --candidate=<base sha> --resume=<run-id>`
-  in the same worktree with complete monitored input/artifact evidence. Fresh and
-  resumed full gates require Python 3 with Linux inotify; failed/unproven stages
-  and the remaining suffix run normally. Never manually skip required stages.
+- `pnpm check:all --candidate=<base sha>` runs the clean frozen candidate's
+  own command manifest once. Ordinary qualification does not resume stages or
+  reuse cross-worktree formal certification. Interrupted runs restart after
+  stopped-writer reconciliation. Never credit missing or failed stages.
 - Before declaring Playwright environment-blocked, try the documented
   [browser setup](docs/DEVELOPMENT.md#browser-and-real-host-setup); report the exact unrun command
   and missing dependency if privileges block setup.

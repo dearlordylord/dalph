@@ -33,7 +33,10 @@ export const acceptedRunFactPublicationFromPrefix = Effect.fn("AcceptedRunFactPu
       (event._tag === "PlannedAttemptExecutorStateObserved" ||
         event._tag === "PlannedAttemptExecutorCommandProjectionObserved") &&
       event.observation._tag === "ExecutorStateUnreadable"
-    return retainedExecutorWait || event._tag === "TaskClaimAcquisitionRejected"
+    // An unreadable tracker observation establishes no current facts and cannot wake its own retained wait.
+    const retainedTrackerReadWait =
+      event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "TaskTrackerFactsReadFailed"
+    return retainedExecutorWait || retainedTrackerReadWait || event._tag === "TaskClaimAcquisitionRejected"
       ? AcceptedRunFactPublication.RetainedWait()
       : AcceptedRunFactPublication.WorkflowProgress()
   }

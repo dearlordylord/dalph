@@ -189,6 +189,8 @@ it.effect("reports both recoverable and unhandled non-retryable production activ
         readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
         registerAcceptedRunReactivationObservers: () => Effect.void,
         operatorControl: {
+          applyRemotePublicationBatchGrant: () => Effect.die("unused"),
+          applyRemotePublicationResume: () => Effect.die("unused"),
           applyRunCancellation: () => Effect.die("unused"),
           applyIntegrationQuarantineDirection: () => Effect.die("unused"),
           applyAttemptChoice: () => Effect.die("unused"),
@@ -299,6 +301,8 @@ const makeTerminalBootstrap = (
       ),
     registerAcceptedRunReactivationObservers: (_observers) => Effect.void,
     operatorControl: {
+      applyRemotePublicationBatchGrant: () => Effect.die("unused"),
+      applyRemotePublicationResume: () => Effect.die("unused"),
       applyRunCancellation: () => Effect.die("unused"),
       applyIntegrationQuarantineDirection: () => Effect.die("unused"),
       applyAttemptChoice: () => Effect.die("unused"),
@@ -495,6 +499,8 @@ it.effect("production composition wires current-first tracker notifications and 
           ),
         registerAcceptedRunReactivationObservers: (observers) => Ref.set(registeredObservers, observers),
         operatorControl: {
+          applyRemotePublicationBatchGrant: () => Effect.die("unused"),
+          applyRemotePublicationResume: () => Effect.die("unused"),
           applyRunCancellation: () => Effect.die("unused"),
           applyIntegrationQuarantineDirection: () => Effect.die("unused"),
           applyAttemptChoice: () => Effect.die("unused"),
@@ -1301,6 +1307,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       >(undefined)
       const latestJournalPosition = yield* Ref.make<JournalRecord["position"] | undefined>(undefined)
       const stableJournalRecordsBeforeWake = yield* Ref.make<ReadonlyArray<JournalRecord> | undefined>(undefined)
+      const stableTrackerCallsBeforeWake = yield* Ref.make<
+        ReadonlyArray<"graph" | "specification" | "claim" | "acquire"> | undefined
+      >(undefined)
       const failpoint = yield* Ref.make<ProductionRefreshFailpoint | undefined>(undefined)
       const failpointConsumed = yield* Ref.make(false)
       const activeReadStarted = yield* Deferred.make<void>()
@@ -1694,10 +1703,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                         program,
                         activationOpportunity
                       )
+                const observedOrdinaryActivation =
+                  options.stableStartupWake === undefined
+                    ? ordinaryActivation
+                    : ordinaryActivation.pipe(
+                        Effect.tap((decision) => Ref.update(activeDecisions, (current) => [...current, decision]))
+                      )
                 return activationOpportunity._tag === "OrdinaryRunEntry"
                   ? options.actualOrdinaryStartup === true
                     ? recordActivation.pipe(
-                        Effect.andThen(ordinaryActivation),
+                        Effect.andThen(observedOrdinaryActivation),
                         Effect.onExit((exit) => Queue.offer(ordinaryActivationSettled, exit).pipe(Effect.asVoid))
                       )
                     : recordActivation.pipe(
@@ -1871,6 +1886,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     journalRecordAt(accepted.records, offset)
                   ).filter((record): record is JournalRecord => record !== undefined)
                 )
+                yield* Ref.set(stableTrackerCallsBeforeWake, yield* Ref.get(trackerCalls))
                 if (options.stableStartupWake === "OperatorWake") {
                   yield* owner.hint(RunReactivationHint.OperatorWake())
                   yield* awaitOrdinaryActivation
@@ -2013,6 +2029,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         graphTaskIds: snapshot.taskIds(),
         journalRecords,
         stableJournalRecordsBeforeWake: yield* Ref.get(stableJournalRecordsBeforeWake),
+        stableTrackerCallsBeforeWake: yield* Ref.get(stableTrackerCallsBeforeWake),
         taskWorkSnapshots: yield* Ref.get(taskWorkSnapshots),
         trackerCalls: yield* Ref.get(trackerCalls)
       }
@@ -2132,6 +2149,161 @@ it.effect(
           ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Begin"
         )
       ).toHaveLength(1)
+    }),
+  45_000
+)
+
+it.effect(
+  "an unreadable ordinary-startup graph waits for an explicit operator wake",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* runProductionRefreshHarness({
+        actualOrdinaryStartup: true,
+        graph: "Unreadable",
+        stableStartupWake: "OperatorWake"
+      })
+
+      const recordsBeforeWake = result.stableJournalRecordsBeforeWake ?? []
+      const graphIntentsBeforeWake = recordsBeforeWake.filter(
+        ({ event }) => event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+      )
+      const failedReadsBeforeWake = recordsBeforeWake.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "TaskTrackerFactsReadFailed"
+      )
+      const failedOperationIdsBeforeWake = new Set(
+        failedReadsBeforeWake.flatMap(({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" ? [event.operationId] : []
+        )
+      )
+      const failedGraphIntentsBeforeWake = graphIntentsBeforeWake.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          failedOperationIdsBeforeWake.has(event.operation.operationId)
+      )
+      const setupGraphIntentsBeforeWake = graphIntentsBeforeWake.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          !failedOperationIdsBeforeWake.has(event.operation.operationId)
+      )
+      const setupGraphOperationId =
+        setupGraphIntentsBeforeWake[0]?.event._tag === "TaskTrackerReadIntentRecorded"
+          ? setupGraphIntentsBeforeWake[0].event.operation.operationId
+          : undefined
+      const setupGraphOutcomeBeforeWake = recordsBeforeWake.find(
+        ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === setupGraphOperationId
+      )
+      expect(result.stableJournalRecordsBeforeWake).toBeDefined()
+      expect(result.stableTrackerCallsBeforeWake?.filter((call) => call === "graph")).toHaveLength(1)
+      expect(graphIntentsBeforeWake).toHaveLength(2)
+      expect(failedGraphIntentsBeforeWake).toHaveLength(1)
+      expect(failedGraphIntentsBeforeWake[0]?.event).toMatchObject({
+        _tag: "TaskTrackerReadIntentRecorded",
+        operation: { _tag: "ReadTrackerGraph", cause: { _tag: "WorkflowEstablishment" } }
+      })
+      expect(setupGraphIntentsBeforeWake).toHaveLength(1)
+      expect(setupGraphIntentsBeforeWake[0]?.position).toBeLessThan(failedGraphIntentsBeforeWake[0]?.position ?? 0)
+      expect(setupGraphOutcomeBeforeWake?.event).toMatchObject({
+        _tag: "TaskTrackerFactsObserved",
+        observation: { _tag: "CompleteTaskTrackerFacts" }
+      })
+      expect(failedReadsBeforeWake).toHaveLength(1)
+      expect(failedReadsBeforeWake[0]?.event).toMatchObject({
+        _tag: "TaskTrackerFactsObserved",
+        observation: { _tag: "TaskTrackerFactsReadFailed", failure: { _tag: "TrackerReadError" } }
+      })
+      expect(
+        failedGraphIntentsBeforeWake[0]?.event._tag === "TaskTrackerReadIntentRecorded" &&
+          failedReadsBeforeWake[0]?.event._tag === "TaskTrackerFactsObserved"
+          ? failedGraphIntentsBeforeWake[0].event.operation.operationId === failedReadsBeforeWake[0].event.operationId
+          : false
+      ).toBe(true)
+      expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "OrdinaryRunEntry"])
+      expect(result.trackerCalls.filter((call) => call === "graph")).toHaveLength(2)
+      expect(result.activeDecisions).toEqual([
+        RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }),
+        RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+      ])
+
+      const graphIntents = result.journalRecords.filter(
+        ({ event }) => event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+      )
+      const failedReads = result.journalRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "TaskTrackerFactsReadFailed"
+      )
+      const failedOperationIds = new Set(
+        failedReads.flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.operationId] : []))
+      )
+      const failedGraphIntents = graphIntents.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" && failedOperationIds.has(event.operation.operationId)
+      )
+      const setupGraphIntents = graphIntents.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" && !failedOperationIds.has(event.operation.operationId)
+      )
+      expect(graphIntents).toHaveLength(3)
+      expect(failedGraphIntents).toHaveLength(2)
+      expect(setupGraphIntents).toHaveLength(1)
+      expect(
+        failedGraphIntents.every(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph" &&
+            event.operation.cause._tag === "WorkflowEstablishment"
+        )
+      ).toBe(true)
+      expect(failedReads).toHaveLength(2)
+      expect(
+        failedReads.every(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "TaskTrackerFactsReadFailed" &&
+            event.observation.failure._tag === "TrackerReadError"
+        )
+      ).toBe(true)
+      expect(
+        failedGraphIntents.map(({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" ? event.operation.operationId : undefined
+        )
+      ).toEqual(
+        failedReads.map(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? event.operationId : undefined))
+      )
+      expect(failedGraphIntents[0]?.position).toBeLessThan(failedReads[0]?.position ?? 0)
+      expect(failedReads[0]?.position).toBeLessThan(failedGraphIntents[1]?.position ?? 0)
+      expect(failedGraphIntents[1]?.position).toBeLessThan(failedReads[1]?.position ?? 0)
+
+      const firstFailedReadPosition = failedReads[0]?.position ?? 0
+      const secondFailedGraphIntentPosition = failedGraphIntents[1]?.position ?? Number.MAX_SAFE_INTEGER
+      const forwardEffectsBeforeWake = result.journalRecords.filter(
+        ({ event, position }) =>
+          position > firstFailedReadPosition &&
+          position < secondFailedGraphIntentPosition &&
+          (event._tag === "TaskAttemptPlanned" ||
+            event._tag.startsWith("Integrator") ||
+            event._tag.startsWith("PlannedAttemptExecutor") ||
+            event._tag.startsWith("RemotePublication"))
+      )
+      expect(forwardEffectsBeforeWake).toEqual([])
+
+      const lastFailedReadPosition = failedReads.at(-1)?.position ?? 0
+      const postReadForwardEffects = result.journalRecords.filter(
+        ({ event, position }) =>
+          position > lastFailedReadPosition &&
+          (event._tag === "TaskAttemptPlanned" ||
+            event._tag.startsWith("Integrator") ||
+            event._tag.startsWith("PlannedAttemptExecutor") ||
+            event._tag.startsWith("RemotePublication"))
+      )
+      expect(postReadForwardEffects).toEqual([])
+      expect(
+        result.journalRecords.filter(
+          ({ event }) => event._tag === "WorkflowRunTerminated" || event._tag === "IntegrationFinalitySettled"
+        )
+      ).toEqual([])
+      expect(result.executorCalls.filter(({ command }) => command !== "observe")).toEqual([])
+      expect(result.executorEntries.filter(({ command }) => command !== "observe")).toEqual([])
     }),
   45_000
 )

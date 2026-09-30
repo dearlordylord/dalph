@@ -591,6 +591,13 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "publicationProofRequiresPerRefSuccess",
     "publicationWaitRetainsResponsibility",
     "publicationProofIsRetainedAcrossRecovery",
+    "publicationResumeIdentityIsExact",
+    "publicationResumeDoesNotMintWork",
+    "publicationResumeActivationHasReceipt",
+    "publicationResumeRequiresRecoverableDenial",
+    "publicationResumeCannotOverridePauseOrExit",
+    "publicationResumeCannotExceedAllowance",
+    "settledDeliveryResumeIsReadOnly",
     "promotionRetryOrdinalsHaveFreshHeadReads",
     "quarantineReleaseRequiresDurableOccurrence",
     "quarantinePhaseRequiresRecordedOccurrence",
@@ -637,6 +644,9 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "publicationReconciliationReached",
     "publicationProvedReached",
     "publicationWaitReached",
+    "publicationResumeRecordedReached",
+    "publicationResumeReadyReached",
+    "deliverySettledReached",
     "candidateRejectedReached",
     "promotionPremiseReached",
     "promotionIntentReached",
@@ -693,5 +703,97 @@ export const acceptedResultIntegrationQuarantineProofObligations = Object.freeze
     "freshHeadObservedReached",
     "successorSessionFixedReached",
     "conflictRejectedReached"
+  ])
+})
+
+// This bounded projection covers automatic competing-head authorization,
+// journal-first local catch-up, and restart reuse of one fixed successor run.
+// The activation invariant covers every modeled pre-fixation Git observation
+// and compare-and-set; the negative test supplies an independent second-read
+// mutation rather than relying on a model action's guard alone.
+export const acceptedResultIntegrationAutomaticSuccessorProofObligations = Object.freeze({
+  invariants: Object.freeze([
+    "journalFirstAutomaticAuthorization",
+    "authorizationRequiresCurrentExactAuthority",
+    "catchUpRequiresJournaledExactCompareAndSet",
+    "catchUpCasIsBoundedByBaselineRounds",
+    "successorRefreshRoundsAreBounded",
+    "localCatchUpPreservesUnsafeWork",
+    "successorRequiresFreshBaseLineageAndJournaledAuthorization",
+    "successorKeepsAcceptedResultLineage",
+    "successorUsesLatestBaselineRoundUnderOriginalAuthorization",
+    "successorRecoveryReusesOneFixedRun",
+    "automaticSuccessorRetryRequiresExactOperatorChronology",
+    "automaticSuccessorBoundsAreFinite",
+    "automaticAuthorizationIsOccurrenceScoped",
+    "predecessorCleanupRequiresStoppedWriter",
+    "noUnrequestedFourthSession",
+    "oneGitObservationOrCompareAndSetPerActivation",
+    "noReadUntilStableLoop",
+    "pauseAndExitStopNewSuccessorActions",
+    "exactTaskAndResponsibilityAreRetained",
+    "forbiddenProofAndForceShortcutsRemainFalse",
+    "proofStateIsBounded"
+  ]),
+  witnesses: Object.freeze([
+    "competingHeadRetainedReached",
+    "automaticAuthorizationReached",
+    "baselineReadReached",
+    "refreshedH3BaselineReached",
+    "catchUpIntentReached",
+    "catchUpAppliedReached",
+    "successorSessionFixedReached",
+    "successorRecoveryReached",
+    "boundedWaitReached",
+    "unsafeLocalWaitReached"
+  ])
+})
+
+// This proof-only projection owns the accepted #385 authorization/read/CAS
+// counter bound and the one-refresh cap. Its source-transition map is
+// documented in the paired model; the canonical model remains the behavior and
+// sampled/conformance subject.
+export const acceptedResultIntegrationAutomaticSuccessorCountersProofObligations = Object.freeze({
+  invariants: Object.freeze(["successorRefreshRoundsAreBounded", "catchUpCasIsBoundedByBaselineRounds"]),
+  witnesses: Object.freeze(["catchUpAppliedReached", "secondRoundCatchUpReached"])
+})
+
+// #386's compact transition model owns the exact publication-exhaustion grant
+// chronology. It treats the Journal as the retained workflow authority and
+// consumes Git/tracker outcomes only through explicit observations.
+export const directPublicationBatchGrantObligations = Object.freeze({
+  invariants: Object.freeze([
+    "grantIsBoundToRetainedExhaustion",
+    "oneGrantPerExactOccurrence",
+    "grantReceiptMatchesExactOccurrence",
+    "grantAcknowledgementMatchesProgress",
+    "grantReplayIsIdempotent",
+    "batchBoundsHold",
+    "cumulativeOrdinalsAreNotReset",
+    "pauseDefersQForwardEffects",
+    "exitCutoffStopsQForwardEffects",
+    "taskBeginIsRetainedOnce",
+    "grantDoesNotProvePublication",
+    "completionRequiresProofPromotionAndCurrentPermission",
+    "settlementRequiresExactCompletionAndCleanup",
+    "exactSuccessorParentsAreRetained",
+    "successorCandidateIsBoundToItsSession",
+    "postGrantEffectsMatchSelectedPath",
+    "postGrantPathMatchesSelectedPath",
+    "grantReceiptIsVisibleBeforeForwardEffects",
+    "runTerminationRequiresSettledResponsibility"
+  ]),
+  witnesses: Object.freeze([
+    "exactExhaustionReached",
+    "grantCommittedReached",
+    "pausedGrantReached",
+    "grantSessionReached",
+    "grantPushReached",
+    "secondExhaustionReached",
+    "secondGrantReached",
+    "unrelatedProgressReached",
+    "exactProofReached",
+    "blockedWaitReached",
+    "settledReached"
   ])
 })

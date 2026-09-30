@@ -544,6 +544,8 @@ export type PauseCoverageFacts =
 
 /** Runtime facts are descriptive inputs; the runtime never reconstructs them from route tags. */
 interface DeliveryRuntimeFactsBase {
+  /** Latest failed WorkflowEstablishment graph read after this activation's accepted baseline. */
+  readonly failedWorkflowEstablishmentGraphReadAt?: JournalPosition
   readonly pauseCoverage: PauseCoverageFacts
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
@@ -591,6 +593,8 @@ export interface DeliveryRelationInputBundle {
 export interface DeliveryRuntimeEvaluation {
   readonly _tag: "DeliveryRuntimeEvaluation"
   readonly acceptedAt: JournalPosition | null
+  /** Latest failed WorkflowEstablishment graph read after this activation's accepted baseline. */
+  readonly failedWorkflowEstablishmentGraphReadAt?: JournalPosition
   readonly current: DeliveryRuntimeSnapshot
   readonly pauseCoverage: PauseCoverageFacts
   readonly proposedActions: DeliveryProposalFrontier

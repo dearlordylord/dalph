@@ -230,6 +230,37 @@ export const IntegratorSuccessorSessionFixedEvent = Schema.TaggedStruct("Integra
 }).check(Schema.makeFilter(successorSessionFixedEventIssue))
 export type IntegratorSuccessorSessionFixedEvent = typeof IntegratorSuccessorSessionFixedEvent.Type
 
+/** Generation for an automatically authorized competing-head session after the original session. */
+export const IntegratorAutomaticSuccessorGeneration = Schema.Int.check(
+  Schema.isGreaterThan(firstFullRerunSuccessorGeneration - 1)
+).pipe(Schema.brand("IntegratorAutomaticSuccessorGeneration"))
+export type IntegratorAutomaticSuccessorGeneration = typeof IntegratorAutomaticSuccessorGeneration.Type
+
+/** A fresh session fixed only after one journaled competing-head authorization and new target lineage. */
+export const IntegratorAutomaticSuccessorSessionFixedEvent = Schema.TaggedStruct(
+  "IntegratorAutomaticSuccessorSessionFixed",
+  {
+    authorizationAt: JournalPosition,
+    predecessor: IntegratorSessionCorrelation,
+    /** Exact publication batch grant when this fixation consumes its session allowance. */
+    publicationBatchGrantAt: Schema.optionalKey(JournalPosition),
+    successor: IntegratorSessionCorrelation,
+    successorGeneration: IntegratorAutomaticSuccessorGeneration,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+).check(
+  Schema.makeFilter((event) =>
+    integratorSuccessorResponsibilityMatches(event.predecessor, event.successor) &&
+    integratorSuccessorIdentitiesAreDistinct(event.predecessor, event.successor) &&
+    event.predecessor.expectedTargetHead !== event.successor.expectedTargetHead &&
+    event.predecessor.targetLineageObservedAt < event.authorizationAt &&
+    event.authorizationAt < event.successor.targetLineageObservedAt
+      ? undefined
+      : "automatic successor must preserve responsibility and follow its journaled authorization with fresh lineage"
+  )
+)
+export type IntegratorAutomaticSuccessorSessionFixedEvent = typeof IntegratorAutomaticSuccessorSessionFixedEvent.Type
+
 /** Durable intent written before each opaque call for one exact run ordinal. */
 export const IntegratorRunStartedEvent = Schema.TaggedStruct("IntegratorRunStarted", {
   run: IntegratorRunCorrelation,
@@ -261,6 +292,7 @@ export const IntegratorRunCandidateGitObservedEvent = Schema.TaggedStruct("Integ
 export const IntegratorJournalEvent = Schema.Union([
   IntegratorSessionFixedEvent,
   IntegratorSuccessorSessionFixedEvent,
+  IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorRunStartedEvent,
   IntegratorRunResultRecordedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,

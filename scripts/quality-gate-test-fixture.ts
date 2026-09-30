@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -19,6 +20,35 @@ export const qualityGateFixtureTestTimeoutMilliseconds = 45_000
 export const qualityGateFixturePairTestTimeoutMilliseconds = 65_000
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
+
+export const broadQualityGateStructuralCommands = [
+  "check:artifacts",
+  "typecheck",
+  "lint:code",
+  "check:lab",
+  "check:circular",
+  "test:coverage:explanation",
+  "test:gate-custody",
+  "test:gate-previous-boot-reconcile",
+  "test:gate-resume",
+  "test:preflight",
+  "test:ci-change-classification",
+  "test:formal:controls",
+  "check:secrets",
+  "test:capability-registration"
+] as const
+
+export const qualityGateBroadPlanBaseSha = () => {
+  const rootSha = execFileSync("git", ["rev-list", "--max-parents=0", "HEAD"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }
+  })
+    .trim()
+    .split("\n")[0]
+  if (rootSha === undefined || rootSha.length === 0) throw new Error("quality-gate fixture cannot resolve the Git root")
+  return rootSha
+}
 
 export const resolveVitestConfig = (mode: string) => {
   if (typeof vitestConfig !== "function") throw new Error("Vitest configuration must be mode-aware")

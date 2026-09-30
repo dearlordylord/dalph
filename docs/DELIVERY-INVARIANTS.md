@@ -355,6 +355,86 @@ user-authorized new batches; #387 owns the retained-delivery resume request.
 seams; the later issues extend these rules without changing the initial
 publication order.
 
+**D28f Retained-delivery resume is exact, durable, and bounded.** A resume
+request names the exact Run, integration responsibility, and request identity.
+Schema or subject mismatch is rejected before journal mutation; exact redelivery
+returns the recorded receipt/result without duplicate Git, session, or task
+effects. Recovery after `RemotePublicationRetained(CompatibleCompetingHead)` may
+repeat the accepted-fact hint after a crash between durable outcome and dispatch.
+The ordinary Run selector rereads the exact retained C, target, merge base, and
+competing head, then uses #385's same-commit path under the remaining cycle
+allowance. A request creates no task attempt, Integrator invocation, Begin, or
+allowance. A conclusive authentication or policy denial needs an explicit
+request and fresh required facts; a repeated denial
+retains work and stops. Throttled mutation is never retried. Resume cannot
+override Pause, Exit, or exhaustion. Compatible competition wakes the ordinary
+Run selector, which dispatches the retained occurrence through #385's existing
+same-commit path. A settled subject returns its actual
+status without work.
+→ `packages/orchestrator/src/workflow/protocols/direct-publication/resume.test.ts`:
+`recovers the same retained resume receipt after restart with memory and reopened SQLite journals`,
+`replays the exact compatible-head continuation after restart from memory and reopened SQLite`,
+`reconciles the active receipt after an ambiguous push before any later push`,
+`rejects resume schema and exact Run or responsibility mismatches before journal mutation`,
+`deduplicates one resume identity and allows a later distinct repair request within the same allowance`,
+`a persistent denial stops at the accepted attempt limit and cannot be resumed again`,
+`does not retry a throttled publication through a retained resume request`,
+`resumes a pre-existing compatible-head wait through the ordinary Run frontier`,
+and `application Exit interrupts resume before observation or a new publication attempt`.
+The ordinary Run boundary is covered by
+`packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.test.ts`:
+`ordinary Run replay leaves the exact compatible head for the normal frontier selector`,
+`replays the retained compatible head through the ordinary Run selector after restart`,
+`a paused retained Run stops before custody, head observation, or publication boundaries`,
+and `ordinary publication replay preserves settled success and conclusive denial without provider work`;
+these tests make no new task/session or Git action for settlement or exact handoff replay. The resumed-proof
+completion retry is covered by the passing
+`packages/dalph/test/scenarios/production.test.ts::ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination`.
+
+**D28g A compatible competing remote head authorizes one bounded same-result
+successor.** After a correlated, fresh Git observation proves that the pinned
+remote branch advanced compatibly beyond a candidate without containing it,
+Dalph may record one automatic successor authorization for that exact
+integration responsibility. This is a Dalph-initiated action, never an
+Operator Retry or Full rerun direction. The authorization retains the exact
+Run, task attempt, immutable Base, accepted result C, target, endpoint/ref,
+predecessor session/candidate/evidence, and derived same-target FIFO position.
+Before fixing a successor, Dalph requires current tracker, exact claim, current
+control permission, fresh remote and local Git facts, and a Git proof that the
+local direct target ref is an unoccupied ancestor of the remote head. It may
+compare-and-set only that exact local head to the proven remote head. Ahead,
+divergent, missing/unreadable, insufficiently proven, checked-out, dirty,
+foreign, symbolic, or ambiguous local state retains the responsibility and
+cannot authorize reset, cleanup, or a successor session. The successor keeps
+the same attempt, Base, accepted result, and queue position, and uses a distinct
+session/resource fixed to the latest Ready baseline head Hn with exact
+candidate parents `[Hn, C]`. Session
+fixation consumes one of the existing three sessions in the authorized batch,
+including a crash before provider contact. A compatible race cannot authorize
+an ungranted fourth session; an exact exhaustion wait preserves the
+responsibility and predecessor evidence. Conclusive Integrator failure,
+publication denial, throttle, incompatible history, or uncertain provider
+custody does not meet this trigger. Predecessor cleanup additionally requires
+proved stopped writers and its exact superseded disposition under D16–D17.
+
+The authorization's original competing head H2 is immutable. If its first
+baseline was Ready before a later activation begins, that activation records
+one recovery-entry refresh round under the same authorization, even when the
+remote branch has not advanced beyond H2. An incomplete round resumes its exact
+read intent or catch-up intent; Dalph does not create another round until the
+existing round is Ready. There are at most two baseline rounds for one
+authorization, and one activation admits at most one fresh remote read. Dalph
+fixes the successor only from the latest Ready round and a later target-lineage
+observation for that exact head. This closes the stale-H2 window without
+changing the accepted result or authorizing a third round.
+
+→ `acceptedResultIntegrationAutomaticSuccessorProof`'s
+`successorRefreshRoundsAreBounded`,
+`successorUsesLatestBaselineRoundUnderOriginalAuthorization`,
+`oneGitObservationOrCompareAndSetPerActivation`, and `noReadUntilStableLoop`
+laws; its collected positive and negative tests; and the direct-publication
+S2/S5/S7 production tests.
+
 ## Process and durability
 
 **D29 Authority separation.** Derived frontiers, placements, positions, queues,

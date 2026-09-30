@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { makeTaskWorkSpecification } from "@dalph/contracts"
+import { GitCommitSha, makeTaskWorkSpecification } from "@dalph/contracts"
 import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -58,7 +58,17 @@ import {
 } from "../integration-finality/events.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
+import {
+  appendAutomaticSuccessorGeneration,
+  makeSuccessorPrefix
+} from "../../../../test/support/automatic-successor-history.js"
 import { integratorCorrelationFor } from "../integrator/session.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../integrator/automatic-successor-session.js"
+import {
+  IntegratorAutomaticSuccessorGeneration,
+  IntegratorCandidateText,
+  IntegratorSessionId
+} from "../integrator/events.js"
 
 const begin = Effect.fn("DispositionCleanupActivationTest.begin")(function* () {
   const journal = yield* InRunJournal
@@ -199,6 +209,175 @@ const settledCandidateCleanupRecords = () => {
   )
   return { promoted, records }
 }
+
+it.effect("derives cleanup through exact S1-to-S2-to-S3 automatic fixation history", () =>
+  Effect.gen(function* () {
+    const successorPrefix = makeSuccessorPrefix()
+    const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      successorPrefix.input,
+      successorPrefix.reduction.prefix
+    )
+    if (prepared._tag !== "Append") return yield* Effect.die("accepted S2 prefix must fix its exact successor")
+    successorPrefix.append(prepared.event)
+
+    const session = prepared.event.successor
+    const candidateCommit = GitCommitSha.make("7".repeat(40))
+    const candidateText = IntegratorCandidateText.make("refs/heads/automatic-successor-settled-candidate")
+    const promoted = makePromotedIntegrationHistory({
+      candidateCommit,
+      candidateText,
+      originalClaim: successorPrefix.accepted.activeClaim,
+      records: successorPrefix.records(),
+      session
+    })
+    const successObservation = {
+      ...integrationFinalityFixture.successObservation,
+      claim: promoted.claim,
+      taskRevision: session.plannedAttempt.taskRevision
+    }
+    const deletionOperationId = completionClaimDeletionOperationIdFor(promoted.claim)
+    const replacementOperationId = completionClaimReplacementOperationIdFor(promoted.claim)
+    const terminalEvents: ReadonlyArray<JournalRecord["event"]> = [
+      CompletionClaimDeletionIntendedEvent.make({
+        claim: promoted.claim,
+        operationId: deletionOperationId,
+        successObservation,
+        version: workflowJournalEventVersion
+      }),
+      CompletionClaimDeletedEvent.make({
+        claim: promoted.claim,
+        operationId: deletionOperationId,
+        successObservation,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationFinalitySettledEvent.make({
+        claim: promoted.claim,
+        deletionOperationId,
+        replacementOperationId,
+        successObservation,
+        version: workflowJournalEventVersion
+      })
+    ]
+    const records = terminalEvents.reduce<ReadonlyArray<JournalRecord>>(
+      (current, event) => [
+        ...current,
+        JournalRecord.make({
+          event,
+          key: describeJournalEvent(event).expectedKey,
+          position: JournalPosition.make(current.length + 1),
+          runId: successorPrefix.runId
+        })
+      ],
+      promoted.replacedRecords
+    )
+
+    const derived = deriveCleanupAuthorizations(records, () =>
+      IntegratorCandidateCleanupEvidenceRevision.make(1)
+    ).candidate
+    const predecessor = derived.find(({ disposition }) => disposition._tag === "AutomaticSuccessorSuperseded")
+    const settled = derived.find(({ disposition }) => disposition._tag === "Settled")
+    expect(derived).toHaveLength(2)
+    expect(predecessor).toMatchObject({
+      locator: successorPrefix.input.predecessor.candidateResource,
+      owner: { sessionId: successorPrefix.input.predecessor.sessionId }
+    })
+    expect(settled).toMatchObject({
+      disposition: {
+        _tag: "Settled",
+        qualifiedCandidate: {
+          candidateCommit,
+          directParents: [session.expectedTargetHead, session.acceptedResult.commit],
+          run: { session }
+        }
+      },
+      locator: session.candidateResource,
+      owner: { sessionId: session.sessionId },
+      causalPredecessors: [deletionOperationId]
+    })
+
+    const threeSessionPrefix = makeSuccessorPrefix()
+    const fixedS2 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      threeSessionPrefix.input,
+      threeSessionPrefix.reduction.prefix
+    )
+    if (fixedS2._tag !== "Append") return yield* Effect.die("accepted S2 prefix must fix its exact successor")
+    threeSessionPrefix.append(fixedS2.event)
+    const s2 = fixedS2.event.successor
+    const nextSuccessor = appendAutomaticSuccessorGeneration(
+      threeSessionPrefix,
+      s2,
+      GitCommitSha.make("8".repeat(40)),
+      IntegratorAutomaticSuccessorGeneration.make(2)
+    )
+    const fixedS3 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      nextSuccessor.input,
+      nextSuccessor.reduction.prefix
+    )
+    if (fixedS3._tag !== "Append") return yield* Effect.die("accepted S3 prefix must fix its exact successor")
+    threeSessionPrefix.append(fixedS3.event)
+    const s2Cleanup = deriveCleanupAuthorizations(threeSessionPrefix.records(), () =>
+      IntegratorCandidateCleanupEvidenceRevision.make(2)
+    ).candidate.filter(
+      ({ disposition }) =>
+        disposition._tag === "AutomaticSuccessorSuperseded" && disposition.predecessor.sessionId === s2.sessionId
+    )
+    expect(s2Cleanup).toHaveLength(1)
+    expect(s2Cleanup[0]).toMatchObject({
+      disposition: { _tag: "AutomaticSuccessorSuperseded", predecessor: s2, successor: fixedS3.event.successor },
+      locator: s2.candidateResource,
+      owner: { sessionId: s2.sessionId }
+    })
+
+    const s2FixRecord = threeSessionPrefix
+      .records()
+      .find(
+        (record) =>
+          record.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+          record.event.successor.sessionId === s2.sessionId
+      )
+    expect(s2FixRecord).toBeDefined()
+    if (s2FixRecord === undefined || s2FixRecord.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+      return yield* Effect.die("S2 requires its exact automatic-fix journal record")
+    }
+    const withoutForeignFix = threeSessionPrefix.records().map((record) => {
+      if (record !== s2FixRecord || record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") return record
+      return {
+        ...record,
+        event: {
+          ...record.event,
+          successor: {
+            ...record.event.successor,
+            sessionId: IntegratorSessionId.make("session:foreign-automatic-successor")
+          }
+        }
+      }
+    })
+    const withoutInvalidFix = threeSessionPrefix.records().map((record) => {
+      if (record !== s2FixRecord || record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") return record
+      return {
+        ...record,
+        event: {
+          ...record.event,
+          predecessor: {
+            ...record.event.predecessor,
+            sessionId: IntegratorSessionId.make("session:foreign-automatic-predecessor")
+          }
+        }
+      }
+    })
+    for (const records of [withoutForeignFix, withoutInvalidFix]) {
+      const candidateAuthorizations = deriveCleanupAuthorizations(records, () =>
+        IntegratorCandidateCleanupEvidenceRevision.make(2)
+      ).candidate
+      expect(
+        candidateAuthorizations.some(
+          ({ disposition }) =>
+            disposition._tag === "AutomaticSuccessorSuperseded" && disposition.predecessor.sessionId === s2.sessionId
+        )
+      ).toBe(false)
+    }
+  })
+)
 
 it.effect("fails closed when replacement authority has no exact ready-worktree witness", () =>
   Effect.sync(() => {

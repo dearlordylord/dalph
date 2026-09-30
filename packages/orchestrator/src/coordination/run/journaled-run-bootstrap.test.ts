@@ -150,7 +150,7 @@ import {
 import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontier/run-finality.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
-import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
+import { AcceptedRunFactPublication, JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
 import {
   acceptedRunFactPublicationFromPrefix,
   AcceptedRunFactPublicationRecordMissing
@@ -198,11 +198,34 @@ import {
 } from "../../workflow/protocols/integrator/events.js"
 import { integratorResponsibilityFactsFromCorrelation } from "../../workflow/protocols/integrator/state.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { integratorCorrelationFor } from "../../workflow/protocols/integrator/session.js"
+import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../test/support/promoted-integration-history.js"
+import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
+import {
+  RemotePublicationAttemptAuthorization,
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId,
+  RemotePublicationGit,
+  RemotePublicationGitObservation,
+  RemotePublicationIntendedEvent,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
+  RemotePublicationPushResult,
+  RemotePublicationRetainedCause,
+  RemotePublicationRetainedEvent,
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
+} from "../../workflow/protocols/direct-publication/events.js"
+import { runRemotePublication } from "../../workflow/protocols/direct-publication/protocol-engine.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
 } from "../../workflow/protocols/integration-admission/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { deterministicOperationIdAllocatorLayer } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
@@ -588,6 +611,93 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     runTermination: observation.runTermination
   }
 })
+
+const makeRetainedResumeOperatorFixture = Effect.fn("JournaledRunBootstrapTest.retainedResumeOperatorFixture")(
+  function* () {
+    const source = integrationFinalityFixture
+    const specification = makeTaskWorkSpecification({
+      body: "Exercise the JournaledRunBootstrap retained-publication Operator control.",
+      taskId: source.taskId,
+      title: "Retained publication Operator control"
+    })
+    const plannedAttempt = { ...source.plannedAttempt, taskRevision: specification.fingerprint }
+    const accepted = makeAcceptedIntegrationHistory({
+      acceptedResult: source.qualifiedCandidate.run.session.acceptedResult,
+      activeClaim: source.activeClaim,
+      integrationTarget: source.integrationTarget,
+      plannedAttempt,
+      runId: source.runId,
+      targetHeadSha: source.qualifiedCandidate.run.session.expectedTargetHead,
+      taskSpecification: specification,
+      trackerTarget: source.target
+    })
+    const promoted = makePromotedIntegrationHistory({
+      candidateCommit: source.qualifiedCandidate.candidateCommit,
+      candidateText: source.qualifiedCandidate.candidateText,
+      originalClaim: accepted.activeClaim,
+      records: accepted.records,
+      session: integratorCorrelationFor(accepted)
+    })
+    const runId = AllocatedWorkflowRunId.make(source.runId)
+    const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+    const storage = Context.get(journalContext, JournalStore)
+    const [beginning, ...remainder] = promoted.qualifiedRecords
+    if (beginning?.event._tag !== "WorkflowRunBegan") {
+      return yield* Effect.die("retained-resume Operator fixture must begin with WorkflowRunBegan")
+    }
+    yield* storage.beginRun(
+      runId,
+      beginning.event.target,
+      beginning.event.initialControlPolicy,
+      beginning.event.remotePublicationTarget
+    )
+    for (const record of remainder) {
+      if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+        return yield* Effect.die(`retained-resume Operator fixture contains non-appendable ${record.event._tag}`)
+      }
+      yield* storage.append(runId, record.key, record.event)
+    }
+
+    const correlation = remotePublicationCorrelationFor(promoted.qualifiedCandidate, remotePublicationTargetForTest)
+    const intention = RemotePublicationIntendedEvent.make({
+      correlation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    })
+    yield* storage.append(runId, describeJournalEvent(intention).expectedKey, intention)
+    const ordinal = RemotePublicationAttemptOrdinal.make(1)
+    const attempt = RemotePublicationAttemptIntendedEvent.make({
+      attemptOrdinal: ordinal,
+      correlation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
+      version: workflowJournalEventVersion
+    })
+    yield* storage.append(runId, describeJournalEvent(attempt).expectedKey, attempt)
+    const retained = RemotePublicationRetainedEvent.make({
+      authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+      cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+      correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+    yield* storage.append(runId, describeJournalEvent(retained).expectedKey, retained)
+
+    const bootstrap = yield* buildBootstrap(runId, storage)
+    const request = RemotePublicationResumeRequest.make({
+      requestId: RemotePublicationResumeRequestId.make("journaled-bootstrap-retained-resume"),
+      responsibility: IntegrationResponsibilityIdentity.make({
+        queuedAt: promoted.qualifiedCandidate.run.session.queuedAt,
+        runId
+      }),
+      runId,
+      schemaVersion: 1
+    })
+    return { bootstrap, candidate: promoted.qualifiedCandidate, request, runId, storage, target: source.target }
+  }
+)
 
 it.effect(
   "Alice receives accepted history only after append acknowledgement and never receives duplicate or older cursors",
@@ -2681,6 +2791,424 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
       const records = yield* storage.read(runId)
       expect(records.at(-1)?.event._tag).toBe("IntegrationQuarantineDirectionApplied")
       expect(records.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toHaveLength(1)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("records an exact retained-resume request and wakes the ordinary Run only for the first receipt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { bootstrap, candidate, request, runId, storage } = yield* makeRetainedResumeOperatorFixture()
+      const notifications = yield* Ref.make<ReadonlyArray<AcceptedRunFactPublication>>([])
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: () => Effect.void,
+        acceptedFactPublication: (publication) => Ref.update(notifications, (current) => [...current, publication])
+      })
+      const before = yield* storage.read(runId)
+
+      const first = yield* bootstrap.operatorControl.applyRemotePublicationResume(request)
+      expect(first).toMatchObject({
+        _tag: "RemotePublicationResumeReceipt",
+        publicationRequestId: expect.any(String),
+        requestId: request.requestId
+      })
+      const conflicting = RemotePublicationResumeRequest.make({
+        ...request,
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: JournalPosition.make(Number(request.responsibility.queuedAt) + 1),
+          runId
+        })
+      })
+      expect(yield* Effect.flip(bootstrap.operatorControl.applyRemotePublicationResume(conflicting))).toMatchObject({
+        _tag: "RemotePublicationResumeRequestConflict",
+        requestId: request.requestId
+      })
+      const redelivery = yield* bootstrap.operatorControl.applyRemotePublicationResume(request)
+      expect(redelivery).toEqual(first)
+      expect(yield* Ref.get(notifications)).toEqual([AcceptedRunFactPublication.WorkflowProgress()])
+
+      const after = yield* storage.read(runId)
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
+      expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(
+        before.filter(({ event }) => event._tag === "WorkflowRunBegan").length
+      )
+      expect(after.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(
+        before.filter(({ event }) => event._tag === "IntegrationStarted").length
+      )
+      expect(after.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(
+        before.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+      )
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(
+        before.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended").length
+      )
+      expect(after.find(({ event }) => event._tag === "RemotePublicationResumeRequested")?.event).toMatchObject({
+        correlation: { qualifiedCandidate: candidate },
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        request
+      })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("does not wake the active Run owner for receipt A after a later resume request B", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { bootstrap, candidate, request, runId, storage, target } = yield* makeRetainedResumeOperatorFixture()
+      const activationEntered = yield* Deferred.make<void>()
+      const finishActivation = yield* Deferred.make<void>()
+      const ownerSignals = yield* Queue.unbounded<AcceptedRunFactPublication>()
+      const ownerCycles = yield* Queue.unbounded<unknown>()
+      const ownerWakes = yield* Ref.make<ReadonlyArray<AcceptedRunFactPublication>>([])
+      const gitCalls = yield* Ref.make({ observations: 0, custody: 0, preparations: 0, pushes: 0 })
+      const controlledDenial = RemotePublicationGit.of({
+        admit: () => Effect.die("the retained publication already has its admitted exact target"),
+        observe: () =>
+          Ref.update(gitCalls, (current) => ({ ...current, observations: current.observations + 1 })).pipe(
+            Effect.as(
+              RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                remoteHead: candidate.run.session.expectedTargetHead
+              })
+            )
+          ),
+        prepareSenderCustody: () =>
+          Ref.update(gitCalls, (current) => ({ ...current, preparations: current.preparations + 1 })),
+        reconcileSenderCustody: () => Ref.update(gitCalls, (current) => ({ ...current, custody: current.custody + 1 })),
+        push: () =>
+          Ref.update(gitCalls, (current) => ({ ...current, pushes: current.pushes + 1 })).pipe(
+            Effect.as(RemotePublicationPushResult.cases.RejectedDefinite.make({ cause: "Authentication" }))
+          )
+      })
+      const activation = yield* bootstrap
+        .activate(
+          target,
+          Effect.die("an established Run must not evaluate a replacement initial policy"),
+          runId,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(activationEntered, undefined)
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              yield* Queue.take(ownerSignals)
+              const state = yield* runRemotePublication(candidate, remotePublicationTargetForTest, {
+                runObservation: (phase) => phase,
+                runSender: (phase) => phase
+              }).pipe(Effect.provideService(RemotePublicationGit, controlledDenial), Effect.exit)
+              yield* Queue.offer(ownerCycles, state)
+            }
+            yield* Deferred.await(finishActivation)
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(activationEntered)
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: () => Effect.void,
+        acceptedFactPublication: (publication) =>
+          Ref.update(ownerWakes, (current) => [...current, publication]).pipe(
+            Effect.andThen(Queue.offer(ownerSignals, publication))
+          )
+      })
+      const before = yield* storage.read(runId)
+
+      const requestB = RemotePublicationResumeRequest.make({
+        ...request,
+        requestId: RemotePublicationResumeRequestId.make("journaled-bootstrap-retained-resume-B")
+      })
+      const receiptA = yield* bootstrap.operatorControl.applyRemotePublicationResume(request)
+      expect(receiptA).toMatchObject({ _tag: "RemotePublicationResumeReceipt", requestId: request.requestId })
+      expect(yield* Queue.take(ownerCycles)).toMatchObject({
+        _tag: "Success",
+        value: {
+          _tag: "PublicationRetained",
+          authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({
+            requestId: request.requestId
+          })
+        }
+      })
+      const afterA = yield* storage.read(runId)
+      expect(afterA.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(2)
+      expect(afterA.at(-1)?.event).toMatchObject({
+        _tag: "RemotePublicationRetained",
+        cause: { _tag: "AuthenticationDenied" },
+        authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: request.requestId })
+      })
+      expect(yield* Ref.get(gitCalls)).toEqual({ observations: 1, custody: 1, preparations: 1, pushes: 1 })
+
+      const receiptB = yield* bootstrap.operatorControl.applyRemotePublicationResume(requestB)
+      expect(receiptB).toMatchObject({ _tag: "RemotePublicationResumeReceipt", requestId: requestB.requestId })
+      expect(yield* Queue.take(ownerCycles)).toMatchObject({
+        _tag: "Success",
+        value: {
+          _tag: "PublicationRetained",
+          authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({
+            requestId: requestB.requestId
+          })
+        }
+      })
+      const afterB = yield* storage.read(runId)
+      expect(afterB.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(3)
+      expect(afterB.at(-1)?.event).toMatchObject({
+        _tag: "RemotePublicationRetained",
+        cause: { _tag: "AuthenticationDenied" },
+        authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: requestB.requestId })
+      })
+      const callsAfterB = yield* Ref.get(gitCalls)
+      expect(callsAfterB).toEqual({ observations: 2, custody: 2, preparations: 2, pushes: 2 })
+
+      const replayA = yield* bootstrap.operatorControl.applyRemotePublicationResume(request)
+      expect(replayA).toEqual(receiptA)
+      expect(yield* storage.read(runId)).toEqual(afterB)
+      expect(yield* Ref.get(ownerWakes)).toEqual([
+        AcceptedRunFactPublication.WorkflowProgress(),
+        AcceptedRunFactPublication.WorkflowProgress()
+      ])
+      expect(yield* Queue.size(ownerSignals)).toBe(0)
+      expect(yield* Ref.get(gitCalls)).toEqual(callsAfterB)
+      const after = yield* storage.read(runId)
+      const acceptedResumeRequests = after.flatMap(({ event }) =>
+        event._tag === "RemotePublicationResumeRequested" ? [event.request.requestId] : []
+      )
+      expect(acceptedResumeRequests).toEqual([request.requestId, requestB.requestId])
+      expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(
+        before.filter(({ event }) => event._tag === "WorkflowRunBegan").length
+      )
+      expect(after.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(
+        before.filter(({ event }) => event._tag === "IntegrationStarted").length
+      )
+      expect(after.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(
+        before.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+      )
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(
+        before.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended").length + 2
+      )
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(
+        before.filter(({ event }) => event._tag === "RemotePublicationSucceeded").length
+      )
+
+      yield* Deferred.succeed(finishActivation, undefined)
+      expect((yield* Fiber.join(activation))._tag).toBe("RunMustRemainActive")
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("records a post-proof finality continuation and wakes the owner without another publication attempt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { bootstrap, candidate, request, runId, storage, target } = yield* makeRetainedResumeOperatorFixture()
+      const activationEntered = yield* Deferred.make<void>()
+      const finishActivation = yield* Deferred.make<void>()
+      const ownerSignals = yield* Queue.unbounded<AcceptedRunFactPublication>()
+      const ownerCycles = yield* Queue.unbounded<unknown>()
+      const ownerWakes = yield* Ref.make<ReadonlyArray<AcceptedRunFactPublication>>([])
+      const gitCalls = yield* Ref.make({ observations: 0, custody: 0, pushes: 0 })
+      const reconciledCurrentGit = RemotePublicationGit.of({
+        admit: () => Effect.die("publication was already admitted for this exact target"),
+        observe: ({ candidateCommit }) =>
+          Ref.update(gitCalls, (current) => ({ ...current, observations: current.observations + 1 })).pipe(
+            Effect.as(RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: candidateCommit }))
+          ),
+        prepareSenderCustody: () => Effect.die("reconciliation must not prepare a new sender"),
+        reconcileSenderCustody: () => Ref.update(gitCalls, (current) => ({ ...current, custody: current.custody + 1 })),
+        push: () =>
+          Ref.update(gitCalls, (current) => ({ ...current, pushes: current.pushes + 1 })).pipe(
+            Effect.andThen(Effect.die("candidate-current reconciliation must not push"))
+          )
+      })
+      const activation = yield* bootstrap
+        .activate(
+          target,
+          Effect.die("an established Run must not evaluate a replacement initial policy"),
+          runId,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(activationEntered, undefined)
+            for (let cycle = 0; cycle < 2; cycle += 1) {
+              yield* Queue.take(ownerSignals)
+              const state = yield* runRemotePublication(candidate, remotePublicationTargetForTest, {
+                runObservation: (phase) => phase,
+                runSender: (phase) => phase
+              }).pipe(Effect.provideService(RemotePublicationGit, reconciledCurrentGit), Effect.exit)
+              yield* Queue.offer(ownerCycles, state)
+            }
+            yield* Deferred.await(finishActivation)
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(activationEntered)
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: () => Effect.void,
+        acceptedFactPublication: (publication) =>
+          Ref.update(ownerWakes, (current) => [...current, publication]).pipe(
+            Effect.andThen(Queue.offer(ownerSignals, publication))
+          )
+      })
+      const before = yield* storage.read(runId)
+      const firstReceipt = yield* bootstrap.operatorControl.applyRemotePublicationResume(request)
+      expect(firstReceipt._tag).toBe("RemotePublicationResumeReceipt")
+      const firstOwnerResult = yield* Queue.take(ownerCycles)
+      expect(firstOwnerResult).toMatchObject({
+        _tag: "Success",
+        value: {
+          _tag: "PublicationSucceeded",
+          proof: { _tag: "ReconciledCandidateCurrent", remoteHead: candidate.candidateCommit }
+        }
+      })
+      const proofPrefix = yield* storage.read(runId)
+      const proved = proofPrefix.findLast(({ event }) => event._tag === "RemotePublicationSucceeded")
+      expect(proved?.event).toMatchObject({
+        _tag: "RemotePublicationSucceeded",
+        correlation: { qualifiedCandidate: candidate }
+      })
+
+      const requestB = RemotePublicationResumeRequest.make({
+        ...request,
+        requestId: RemotePublicationResumeRequestId.make("journaled-bootstrap-proved-finality-B")
+      })
+      const receiptB = yield* bootstrap.operatorControl.applyRemotePublicationResume(requestB)
+      expect(receiptB).toMatchObject({ _tag: "RemotePublicationResumeReceipt", requestId: requestB.requestId })
+      const resumedOwnerResult = yield* Queue.take(ownerCycles)
+      expect(resumedOwnerResult).toMatchObject({
+        _tag: "Success",
+        value: {
+          _tag: "PublicationSucceeded",
+          proof: proved?.event._tag === "RemotePublicationSucceeded" ? proved.event.proof : undefined
+        }
+      })
+      const replayB = yield* bootstrap.operatorControl.applyRemotePublicationResume(requestB)
+      expect(replayB).toEqual(receiptB)
+      expect(yield* Ref.get(ownerWakes)).toEqual([
+        AcceptedRunFactPublication.WorkflowProgress(),
+        AcceptedRunFactPublication.WorkflowProgress()
+      ])
+      expect(yield* Queue.size(ownerSignals)).toBe(0)
+      expect(yield* Ref.get(gitCalls)).toEqual({ observations: 1, custody: 1, pushes: 0 })
+      const after = yield* storage.read(runId)
+      const projected = yield* projectWorkflowOccurrences(after)
+      const projectedResumePath = projected.occurrences.filter(({ _tag }) =>
+        ["RemotePublicationResumeRequested", "RemotePublicationSucceeded"].includes(_tag)
+      )
+      expect(projectedResumePath.map(({ _tag }) => _tag)).toEqual([
+        "RemotePublicationResumeRequested",
+        "RemotePublicationSucceeded",
+        "RemotePublicationResumeRequested"
+      ])
+      const projectedSuccess = projectedResumePath[1]
+      if (
+        projectedSuccess?._tag !== "RemotePublicationSucceeded" ||
+        proved?.event._tag !== "RemotePublicationSucceeded"
+      ) {
+        return yield* Effect.die("post-proof finality continuation requires its exact projected publication proof")
+      }
+      expect(projectedSuccess.correlation.qualifiedCandidate).toEqual(candidate)
+      expect(projectedSuccess.proof).toEqual(proved.event.proof)
+      const projectedResumeReceipts = projectedResumePath.flatMap((occurrence) =>
+        occurrence._tag === "RemotePublicationResumeRequested" ? [occurrence] : []
+      )
+      expect(projectedResumeReceipts.map(({ request: acceptedRequest }) => acceptedRequest.requestId)).toEqual([
+        request.requestId,
+        requestB.requestId
+      ])
+      expect(projectedResumeReceipts.map(({ correlation }) => correlation.qualifiedCandidate)).toEqual([
+        candidate,
+        candidate
+      ])
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(1)
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(
+        before.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended").length
+      )
+      expect(
+        after
+          .filter(({ event }) => event._tag === "RemotePublicationResumeRequested")
+          .map(({ event }) => (event._tag === "RemotePublicationResumeRequested" ? event.request.requestId : undefined))
+      ).toEqual([request.requestId, requestB.requestId])
+      expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(
+        before.filter(({ event }) => event._tag === "WorkflowRunBegan").length
+      )
+      expect(after.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(
+        before.filter(({ event }) => event._tag === "IntegrationStarted").length
+      )
+      expect(after.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(
+        before.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+      )
+
+      yield* Deferred.succeed(finishActivation, undefined)
+      expect((yield* Fiber.join(activation))._tag).toBe("RunMustRemainActive")
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects a wrong Run or responsibility before appending a resume receipt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { bootstrap, request, runId, storage } = yield* makeRetainedResumeOperatorFixture()
+      const before = yield* storage.read(runId)
+      const wrongRunId = RunId.make("foreign-retained-resume-run")
+      const wrongRun = RemotePublicationResumeRequest.make({
+        ...request,
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: request.responsibility.queuedAt,
+          runId: wrongRunId
+        }),
+        runId: wrongRunId
+      })
+      const wrongResponsibility = RemotePublicationResumeRequest.make({
+        ...request,
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: JournalPosition.make(Number(request.responsibility.queuedAt) + 1),
+          runId
+        })
+      })
+      for (const invalid of [wrongRun, wrongResponsibility, { ...request, candidateCommit: "caller-selected" }]) {
+        const failure = yield* Effect.flip(bootstrap.operatorControl.applyRemotePublicationResume(invalid))
+        expect(["JournaledRunIdentityMismatch", "RemotePublicationResumeSubjectMismatch", "SchemaError"]).toContain(
+          failure._tag
+        )
+      }
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(before.map(({ event }) => event._tag))
+      expect((yield* storage.read(runId)).some(({ event }) => event._tag === "RemotePublicationResumeRequested")).toBe(
+        false
+      )
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("an accepted resume request preserves Run Pause and Exit boundaries", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { bootstrap, request, runId, storage, target } = yield* makeRetainedResumeOperatorFixture()
+      yield* bootstrap.operatorControl.applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+      const accepted = yield* bootstrap.operatorControl.applyRemotePublicationResume(request)
+      expect(accepted._tag).toBe("RemotePublicationResumeReceipt")
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunPaused")
+
+      const afterAccepted = yield* storage.read(runId)
+      const requestAfterExit = RemotePublicationResumeRequest.make({
+        ...request,
+        requestId: RemotePublicationResumeRequestId.make("journaled-bootstrap-retained-resume-after-exit")
+      })
+      yield* bootstrap.applicationExitRequestBoundary.requestExit
+      expect(
+        yield* Effect.flip(bootstrap.operatorControl.applyRemotePublicationResume(requestAfterExit))
+      ).toMatchObject({ _tag: "ApplicationExiting" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(
+        afterAccepted.map(({ event }) => event._tag)
+      )
+      const batchGrantAfterExitRequest = RemotePublicationBatchGrantRequest.make({
+        exhaustionAt: JournalPosition.make(afterAccepted.length),
+        requestId: RemotePublicationBatchGrantRequestId.make("journaled-bootstrap-batch-grant-after-exit"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: integrationFinalityFixture.qualifiedCandidate.run.session.queuedAt,
+          runId
+        }),
+        runId,
+        schemaVersion: 1
+      })
+      expect(
+        yield* Effect.flip(bootstrap.operatorControl.applyRemotePublicationBatchGrant(batchGrantAfterExitRequest))
+      ).toMatchObject({ _tag: "ApplicationExiting" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(
+        afterAccepted.map(({ event }) => event._tag)
+      )
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunPaused")
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

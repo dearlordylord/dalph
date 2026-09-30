@@ -117,6 +117,9 @@ const TRACKER_COMPLETION_REQUEST_REVISION = 10n
 const STALE_TRACKER_REVISION = 10n
 const FRESH_TRACKER_REVISION = 11n
 const COMPLETION_CLAIM_REQUEST_LIMIT = 3n
+// Keep the driver projection's lifecycle witness counters aligned with the
+// saturating counters in integrationFinality.qnt.
+const PUBLICATION_LIFECYCLE_WITNESS_CAP = 2n
 
 const failTest = (message: string): never => Effect.runSync(Effect.die(message))
 
@@ -1945,12 +1948,24 @@ const integrationFinalityDriver = defineDriver(
       pauseAfterPublicationProof: () =>
         Effect.gen(function* () {
           yield* productionState.pauseAfterPublicationProof()
-          updatePromoted((subject) => ({ ...subject, publicationPauseCount: subject.publicationPauseCount + 1n }))
+          updatePromoted((subject) => ({
+            ...subject,
+            publicationPauseCount:
+              subject.publicationPauseCount < PUBLICATION_LIFECYCLE_WITNESS_CAP
+                ? subject.publicationPauseCount + 1n
+                : subject.publicationPauseCount
+          }))
         }),
       restartAfterPublicationProof: () =>
         Effect.gen(function* () {
           yield* productionState.restartAfterPublicationProof()
-          updatePromoted((subject) => ({ ...subject, publicationRestartCount: subject.publicationRestartCount + 1n }))
+          updatePromoted((subject) => ({
+            ...subject,
+            publicationRestartCount:
+              subject.publicationRestartCount < PUBLICATION_LIFECYCLE_WITNESS_CAP
+                ? subject.publicationRestartCount + 1n
+                : subject.publicationRestartCount
+          }))
         }),
       observeRemotePublicationContradiction: () =>
         Effect.die(
@@ -2547,6 +2562,7 @@ quintIt(
     nTraces: 100,
     seed: "141",
     spec: "specs/integrationFinality.qnt",
+    step: "integrationFinalityConformanceStep",
     stateCheck: stateCheck(
       (raw) =>
         Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(

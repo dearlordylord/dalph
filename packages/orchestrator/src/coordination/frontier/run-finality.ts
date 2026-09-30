@@ -254,7 +254,9 @@ export type RunFinalityProof =
 
 const unsettledExplanationTags = new Set<RunnableFrontier["explanations"][number]["_tag"]>([
   "IntegrationDependencyWait",
+  "BoundedRetainedWait",
   "IntegrationInProgress",
+  "IntegrationPublicationCompatibleHeadWait",
   "IntegrationTrackerFactsWait",
   "IntegrationTargetWait",
   "IntegrationConfigurationWait",

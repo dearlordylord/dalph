@@ -1,10 +1,10 @@
 import { EvidenceDigest, GitCommitSha } from "@dalph/contracts"
 import { Schema } from "effect"
+import { formalCommandCount } from "./formal-command-inventory.generated.js"
 
 const hostedJobLimitSeconds = 960
 const formalGateLimitSeconds = 750
 const stressedFormalParallelism = 2
-const formalCommandCount = 105
 const millisecondsPerSecond = 1_000
 
 export const QualificationFormalJobId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
@@ -61,7 +61,7 @@ export const CompleteProfileCommands = Schema.Array(ProfileCommand).check(
   Schema.makeFilter((commands) =>
     commands.length === formalCommandCount && commands.every(({ position }, index) => position === index)
       ? undefined
-      : "qualification formal profile must retain positions 0 through 104 exactly once"
+      : `qualification formal profile must retain positions 0 through ${formalCommandCount - 1} exactly once`
   )
 )
 /** One ARM formal-only shard job establishes half of the dedicated reference profile. */

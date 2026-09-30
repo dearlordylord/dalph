@@ -119,7 +119,7 @@ const executeFixtureDryRun = Effect.fn("Cli.executeFixtureDryRun")(function* (ta
       )
     )
   )
-})
+}, Effect.scoped)
 
 export const executeDryRun = Effect.fn("Cli.executeDryRun")(function* (target: TrackerTarget) {
   if (typeof target !== "string") return yield* executeGithubDryRun(target)

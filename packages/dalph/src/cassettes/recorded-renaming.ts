@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-redundant-type-constituents, typescript/no-duplicate-type-constituents -- Oxlint cannot resolve workspace-barrel types in this exhaustive mapper; TypeScript typecheck verifies them. */
 /* eslint-disable max-lines -- Exhaustive alpha-renaming keeps every closed recorded-cassette variant in one reviewable boundary. */
 import { Effect, Match, Schema, type Brand } from "effect"
 import {
@@ -49,6 +50,7 @@ import {
   IntegrationQuarantineDirectionRequestId,
   type IntegrationQuarantineFailureDetail,
   type IntegratorCandidateResourceLocator,
+  type IntegratorAutomaticSuccessorGenerationType,
   type IntegratorCandidateText,
   IntegratorSessionId,
   type IntegratorSessionCorrelation,
@@ -93,6 +95,7 @@ import {
   IntegratorCandidateCleanupOwner,
   type BranchCleanupEvidenceRevision,
   type IntegratorCandidateCleanupEvidenceRevision,
+  integratorCompetingHeadSuccessorAuthorizationIdFor,
   type WorktreeCleanupEvidenceRevision,
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
@@ -101,6 +104,10 @@ import {
   type RemotePublicationAttemptOrdinal,
   type RemotePublicationRefspec,
   type RemotePublicationCorrelation,
+  IntegrationResponsibilityIdentity,
+  RemotePublicationResumeRequest,
+  RemotePublicationBatchGrantRequest,
+  type RemotePublicationResumeRequestId,
   remotePublicationCorrelationFor,
   type RemotePublicationProofBasis,
   type RemoteBaselineCorrelation,
@@ -175,6 +182,7 @@ type PreservedCassetteBrand =
   | PlannedAttemptExecutorCommandOrdinal
   | PlannedAttemptExecutorCommandProjectionOrdinal
   | PlannedAttemptExecutorStateObservationOrdinal
+  | RemotePublicationResumeRequestId
   | IntegrationTargetRef
   | RemotePublicationAttemptOrdinal
   | RemotePublicationRefspec
@@ -183,6 +191,7 @@ type PreservedCassetteBrand =
   | JournalPosition
   | EvidenceDigest
   | IntegratorCandidateText
+  | IntegratorAutomaticSuccessorGenerationType
   | IntegratorNotPreparedDetail
   | IntegrationQuarantineFailureDetail
   | TargetPromotionAttemptOrdinal
@@ -232,7 +241,6 @@ function completeFieldsWithOptionalRoot<Value extends { readonly rootTaskId?: Ta
 function completeFieldsWithOptionalRoot(value: unknown): unknown {
   return value
 }
-
 const preserveCassetteValue = <Value>(value: PreservableCassetteValue<Value>): Value => value
 
 const renamed = <Identity>(value: Identity, map: ReadonlyMap<Identity, Identity>): Identity => map.get(value) ?? value
@@ -963,6 +971,14 @@ const renameIntegratorCandidateCleanupDisposition = (
         dispositionAt: preserveCassetteValue(value.dispositionAt),
         predecessor: renameIntegratorSessionCorrelation(value.predecessor, maps),
         successor: renameIntegratorSessionCorrelation(value.successor, maps)
+      }),
+    AutomaticSuccessorSuperseded: (value) =>
+      completeFields<typeof value>({
+        _tag: "AutomaticSuccessorSuperseded",
+        authorizationAt: preserveCassetteValue(value.authorizationAt),
+        dispositionAt: preserveCassetteValue(value.dispositionAt),
+        predecessor: renameIntegratorSessionCorrelation(value.predecessor, maps),
+        successor: renameIntegratorSessionCorrelation(value.successor, maps)
       })
   })
 
@@ -1597,6 +1613,24 @@ const renameRecordedCassetteEntry = (
       renameRecordedIntegrationEntry(integrationEntry, (attempt) => renamePlannedAttempt(attempt, maps))
     ),
     Match.tags({
+      IntegratorCompetingHeadSuccessorAuthorized: (entry) => {
+        const correlation = renameRemotePublicationCorrelation(entry.correlation, maps)
+        return completeFields<typeof entry>({
+          _tag: "IntegratorCompetingHeadSuccessorAuthorized",
+          authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+            correlation.requestId,
+            entry.remotePublicationRetainedAt,
+            entry.mergeBase,
+            entry.remoteHead
+          ),
+          correlation,
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          mergeBase: preserveCassetteValue(entry.mergeBase),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          remoteHead: preserveCassetteValue(entry.remoteHead),
+          remotePublicationRetainedAt: preserveCassetteValue(entry.remotePublicationRetainedAt)
+        })
+      },
       IntegratorSessionFixed: (entry) =>
         completeFields<typeof entry>({
           _tag: "IntegratorSessionFixed",
@@ -1609,6 +1643,14 @@ const renameRecordedCassetteEntry = (
           directionAppliedAt: preserveCassetteValue(entry.directionAppliedAt),
           predecessor: renameIntegratorSessionCorrelation(entry.predecessor, maps),
           quarantineAt: preserveCassetteValue(entry.quarantineAt),
+          successor: renameIntegratorSessionCorrelation(entry.successor, maps),
+          successorGeneration: preserveCassetteValue(entry.successorGeneration)
+        }),
+      IntegratorAutomaticSuccessorSessionFixed: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorAutomaticSuccessorSessionFixed",
+          authorizationAt: preserveCassetteValue(entry.authorizationAt),
+          predecessor: renameIntegratorSessionCorrelation(entry.predecessor, maps),
           successor: renameIntegratorSessionCorrelation(entry.successor, maps),
           successorGeneration: preserveCassetteValue(entry.successorGeneration)
         }),
@@ -1795,8 +1837,8 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
-      RemotePublicationAttemptIntended: (entry) =>
-        completeFields<typeof entry>({
+      RemotePublicationAttemptIntended: (entry) => ({
+        ...completeFields<Omit<typeof entry, "batchGrantAt">>({
           _tag: "RemotePublicationAttemptIntended",
           attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
@@ -1804,6 +1846,8 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           refspec: preserveCassetteValue(entry.refspec)
         }),
+        ...(entry.batchGrantAt === undefined ? {} : { batchGrantAt: preserveCassetteValue(entry.batchGrantAt) })
+      }),
       RemotePublicationSucceeded: (entry) =>
         completeFields<typeof entry>({
           _tag: "RemotePublicationSucceeded",
@@ -1818,12 +1862,48 @@ const renameRecordedCassetteEntry = (
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
-      RemotePublicationRetained: (entry) =>
-        completeFields<typeof entry>({
+      RemotePublicationRetained: (entry) => ({
+        ...completeFields<Omit<typeof entry, "batchGrantAt">>({
           _tag: "RemotePublicationRetained",
+          authorization:
+            entry.authorization._tag === "InitialAttempt"
+              ? preserveCassetteValue(entry.authorization)
+              : { _tag: "ResumeRequest", requestId: preserveCassetteValue(entry.authorization.requestId) },
           cause: preserveCassetteValue(entry.cause),
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+        ...(entry.batchGrantAt === undefined ? {} : { batchGrantAt: preserveCassetteValue(entry.batchGrantAt) })
+      }),
+      RemotePublicationResumeRequested: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationResumeRequested",
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: RemotePublicationResumeRequest.make({
+            ...entry.request,
+            responsibility: IntegrationResponsibilityIdentity.make({
+              queuedAt: entry.request.responsibility.queuedAt,
+              runId: renamed(entry.request.responsibility.runId, maps.runIds)
+            }),
+            runId: renamed(entry.request.runId, maps.runIds)
+          })
+        }),
+      RemotePublicationBatchGrantApplied: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationBatchGrantApplied",
+          direction: preserveCassetteValue(entry.direction),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: RemotePublicationBatchGrantRequest.make({
+            ...entry.request,
+            responsibility: IntegrationResponsibilityIdentity.make({
+              queuedAt: entry.request.responsibility.queuedAt,
+              runId: renamed(entry.request.responsibility.runId, maps.runIds)
+            }),
+            runId: renamed(entry.request.runId, maps.runIds)
+          })
         }),
       CompletionClaimReplacementIntended: (entry) =>
         completeFields<typeof entry>({

@@ -338,6 +338,9 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
                 quiescence: facts.quiescence,
                 runId,
                 taskWork: facts.taskWork,
+                ...(facts.failedWorkflowEstablishmentGraphReadAt === undefined
+                  ? {}
+                  : { failedWorkflowEstablishmentGraphReadAt: facts.failedWorkflowEstablishmentGraphReadAt }),
                 ...(facts.activeRefreshBoundary === undefined
                   ? {}
                   : { activeRefreshBoundary: facts.activeRefreshBoundary })

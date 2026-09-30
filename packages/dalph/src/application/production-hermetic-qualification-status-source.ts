@@ -6,6 +6,7 @@ import {
   completionOriginalTaskClaimReleaseFor,
   deliveryStatusOf,
   DeliveryStatusSubject,
+  completionClaimReplacementRequestFor,
   FocusedTaskCompletionFactsObserved,
   PlannedTaskAttemptOrdinal,
   QueuedIntegrationResponsibility,
@@ -16,6 +17,7 @@ import { Effect, Schema } from "effect"
 import { deriveProductionPlannedAttemptLocations } from "./production-configuration.js"
 import {
   sourceRejected,
+  sourceRejectedBecause,
   sourceRejectedAt,
   isQualificationTaskId,
   strictSource,
@@ -175,8 +177,16 @@ const validateOwnedEntry = Effect.fn("HermeticQualification.validateOwnedEntry")
   context: QualificationContext
 ) {
   yield* validateProposal(entry.owner.proposal, context)
-  if (entry.owner._tag === "MaterializedDeliveryAction" || entry.owner._tag === "SettledMaterializedDeliveryAction")
+  if (entry.owner._tag === "MaterializedDeliveryAction" || entry.owner._tag === "SettledMaterializedDeliveryAction") {
+    const route = entry.owner.proposal.route
+    if (route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "ReplacePromotedTaskClaim") {
+      const expectedOperationId = completionClaimReplacementRequestFor(route.transition.request.claim).operationId
+      if (entry.owner.operationId !== expectedOperationId)
+        return yield* sourceRejectedBecause("InvalidOperationIdentity")()
+      return
+    }
     yield* validateWorkflowOperationId(entry.owner.operationId, context)
+  }
 })
 
 const validateTrackerWaitEntry = Effect.fn("HermeticQualification.validateTrackerWaitEntry")(function* (
@@ -297,11 +307,11 @@ const focusedCompletionOperationIds = Effect.fn("HermeticQualification.focusedCo
         FocusedTaskCompletionFactsObserved,
         strictSource
       )(item.observed.observation).pipe(Effect.mapError(sourceRejected))
-      yield* validateCompletionRequest(original.request, context)
+      const request = yield* validateCompletionRequest(original.request, context)
       yield* validateCompletionFacts(original.facts, context)
       if (!Schema.toEquivalence(TrackerTarget)(original.target, context.configuration.target))
         return yield* sourceRejected()
-      return [original.operationId]
+      return [original.operationId, completionOriginalTaskClaimReleaseFor(request.claim).operationId]
     })
   ).pipe(Effect.map((ids) => ids.flat()))
 })

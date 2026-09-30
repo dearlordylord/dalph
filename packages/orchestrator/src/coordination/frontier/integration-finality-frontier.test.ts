@@ -307,6 +307,32 @@ describe("#141 integration-finality frontier", () => {
     ).toMatchObject([{ _tag: "CompletePromotedTask", request }])
   })
 
+  it("requires focused confirmation when a later acknowledgement supersedes an earlier NotApplied lookup", () => {
+    const request = fixture.completionRequest
+    const lookup = CompletionTaskRequestLookupObservedEvent.make({
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+      lookup: CompletionTaskRequestLookup.cases.NotApplied.make({ request }),
+      operationId: request.operationId,
+      request,
+      version: workflowJournalEventVersion
+    })
+    const acknowledgement = CompletionTaskAcknowledgedEvent.make({
+      acknowledgement: CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId }),
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(2),
+      request,
+      version: workflowJournalEventVersion
+    })
+
+    expect(
+      integrationFinalityTransitionsFor(
+        [...replacementRecords, record(7, completionIntent), record(8, lookup), record(9, acknowledgement)],
+        responsibility,
+        promotion,
+        completionRuntimeFacts
+      )
+    ).toMatchObject([{ _tag: "ObserveFocusedTaskCompletion", request }])
+  })
+
   it("keeps an unreadable exact-request lookup waiting until a newer complete graph permits a focused reread", () => {
     const request = fixture.completionRequest
     const unreadable = CompletionTaskRequestLookupObservedEvent.make({

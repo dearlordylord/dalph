@@ -255,6 +255,22 @@ void test("a shell-wrapped broad gate is rejected at the nested admission bounda
     assert.equal(recovery.state, "diagnosis-required")
     const log = readFileSync(recovery.diagnosisAttempts.at(-1).log.path, "utf8")
     assert.match(log, /cannot launch a broad admitted command/u)
+
+    const candidateShell = join(f.root, ".scratch", "candidate-broad-wrapper.sh")
+    writeFileSync(
+      candidateShell,
+      `#!/bin/bash\nunset DALPH_GATE_RECOVERY_MODE\nexec ${process.execPath} ${wrapper} -- ${process.execPath} ${join(f.root, "scripts", "run-candidate-checks.mjs")} --candidate=${f.baseSha}\n`
+    )
+    const candidateResult = focusedDiagnosis({
+      command: ["bash", candidateShell],
+      expected: "passed",
+      failedRunId,
+      fixture_: f
+    })
+    assert.equal(candidateResult.status, 1, candidateResult.stderr)
+    const candidateRecovery = readRecord(gateRecoveryPath(location))
+    const candidateLog = readFileSync(candidateRecovery.diagnosisAttempts.at(-1).log.path, "utf8")
+    assert.match(candidateLog, /cannot launch a broad admitted command/u)
   } finally {
     f.cleanup()
   }

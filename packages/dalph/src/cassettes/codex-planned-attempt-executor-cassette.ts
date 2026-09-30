@@ -3,6 +3,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   type PlannedAttemptExecutorService,
   type PlannedAttemptExecutorReport,
   PlannedAttemptExecutorRequest,
@@ -26,7 +27,7 @@ import {
   OperationId,
   type GitCommandService
 } from "@dalph/orchestrator"
-import { Effect, Layer, Option, Ref, Schema, Stream, type Crypto } from "effect"
+import { Effect, Layer, Option, Queue, Ref, Schema, Stream, type Crypto } from "effect"
 import {
   CodexAppServerFailure,
   CodexThreadWorkingDirectory,
@@ -34,6 +35,7 @@ import {
   controlledCodexOwnedActivityCensusLayer,
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection,
+  type CodexTurnCompletedHint,
   type CodexThreadSnapshot,
   type CodexTurnSnapshot
 } from "../application/codex-app-server.js"
@@ -69,6 +71,7 @@ import {
 
 const gitShaHexLength = 40
 const requestDigestHexLength = 64
+const completionHintBufferCapacity = 64
 const acceptedCommit = GitCommitSha.make("a".repeat(gitShaHexLength))
 const worktree = WorktreeLocator.make("/dalph/cassettes/codex-executor")
 const specification = makeTaskWorkSpecification({
@@ -220,6 +223,12 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
     status: "idle",
     turns: replacementThreadHasPredecessor ? [predecessorTurn] : []
   })
+  const completionSubscribers = yield* Ref.make<
+    ReadonlyArray<{
+      readonly threadId: CodexThreadId
+      readonly publish: (hint: CodexTurnCompletedHint) => Effect.Effect<void>
+    }>
+  >([])
   const responseWasLost = yield* Ref.make(false)
 
   if (replacementScenario !== undefined && replacementScenario !== "PurgedWorkUnitSessionAbsent") {
@@ -356,6 +365,50 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
     // controlled provider has no autonomous notification boundary.
     attachOwnedActivityHints: Effect.succeed(Stream.empty),
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
+    attachExactTurnCompletedHints: (observedThreadId, expectedTurnId) =>
+      Effect.gen(function* () {
+        const queue = yield* Queue.sliding<CodexTurnCompletedHint>(completionHintBufferCapacity)
+        const routing = yield* Ref.make<{
+          readonly expectedTurnId: CodexTurnId | undefined
+          readonly pending: ReadonlyArray<CodexTurnCompletedHint>
+        }>({ expectedTurnId, pending: [] })
+        const subscriber = {
+          threadId: observedThreadId,
+          publish: (hint: CodexTurnCompletedHint) =>
+            Ref.modify(routing, (current) => {
+              if (hint.threadId !== observedThreadId) return [undefined, current] as const
+              if (current.expectedTurnId !== undefined) {
+                return current.expectedTurnId !== hint.turnId
+                  ? ([undefined, current] as const)
+                  : ([hint, current] as const)
+              }
+              if (current.pending.length >= completionHintBufferCapacity) return [undefined, current] as const
+              return [undefined, { ...current, pending: [...current.pending, hint] }] as const
+            }).pipe(
+              Effect.flatMap((selected) =>
+                selected === undefined ? Effect.void : Queue.offer(queue, selected).pipe(Effect.asVoid)
+              )
+            )
+        }
+        yield* Ref.update(completionSubscribers, (current) => [...current, subscriber])
+        yield* Effect.addFinalizer(() =>
+          Ref.update(completionSubscribers, (current) => current.filter((entry) => entry !== subscriber)).pipe(
+            Effect.andThen(Queue.shutdown(queue))
+          )
+        )
+        return {
+          hints: Stream.fromQueue(queue),
+          expectTurnId: (turnId) =>
+            Ref.modify(routing, (current) => {
+              const retained = current.pending.filter((hint) => hint.turnId === turnId)
+              return [retained, { expectedTurnId: turnId, pending: [] }] as const
+            }).pipe(
+              Effect.flatMap((retained) =>
+                Effect.forEach(retained, (hint) => Queue.offer(queue, hint), { discard: true })
+              )
+            )
+        }
+      }),
     startThread: (cwd) =>
       Ref.updateAndGet(thread, (current) => ({ ...current, cwd: CodexThreadWorkingDirectory.make(cwd) })).pipe(
         Effect.tap(() => Ref.update(threadStartCount, (count) => count + 1))
@@ -427,19 +480,41 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
   }
   return {
     app,
-    completeTurn: updateTurn((turn) => ({
-      ...turn,
-      status: "completed",
-      items: [
-        {
-          type: "agentMessage",
-          text: JSON.stringify({
-            commit: acceptedCommit,
-            correlation: { runId: attempt.runId, attemptId: attempt.attemptId }
-          })
-        }
-      ]
-    })),
+    completeTurn: Effect.gen(function* () {
+      const current = yield* Ref.get(thread)
+      const active = current.turns.find((turn) => turn.status === "inProgress" && turn.ownedTurnToken !== undefined)
+      if (active === undefined) return yield* Effect.die("cassette completion requires the exact owned active turn")
+      const completed: CodexTurnSnapshot = {
+        ...active,
+        status: "completed",
+        items: [
+          {
+            type: "agentMessage",
+            text: JSON.stringify({
+              commit: acceptedCommit,
+              correlation: { runId: attempt.runId, attemptId: attempt.attemptId }
+            })
+          }
+        ]
+      }
+      yield* Ref.set(thread, {
+        ...current,
+        status: "idle",
+        turns: current.turns.map((turn) => (turn.id === active.id ? completed : turn))
+      })
+      const observed = yield* Ref.get(thread)
+      const terminal = observed.turns.find((turn) => turn.id === active.id)
+      if (
+        terminal === undefined ||
+        terminal.status !== "completed" ||
+        terminal.ownedTurnToken !== active.ownedTurnToken
+      ) {
+        return yield* Effect.die("cassette completion lost the exact owned terminal turn")
+      }
+      const hint: CodexTurnCompletedHint = { threadId: observed.id, turnId: terminal.id }
+      const subscribers = yield* Ref.get(completionSubscribers)
+      yield* Effect.forEach(subscribers, (subscriber) => subscriber.publish(hint), { discard: true })
+    }),
     interruptForeignTurn: app.interruptTurn(threadId, CodexTurnId.make("codex-cassette-foreign-turn")),
     observeOwnedActivity,
     observeCurrentActivity: Ref.get(thread).pipe(Effect.flatMap(observeOwnedActivity)),
@@ -461,11 +536,14 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
   }
 })
 
+type CodexAttemptRecordTag = keyof typeof CodexAttemptRecord.cases
+type CodexProviderWorkUnitReplacementResultTag = keyof typeof CodexProviderWorkUnitReplacementResult.cases
+
 export interface CodexPlannedAttemptExecutorCassetteRun {
   readonly cassette: CodexPlannedAttemptExecutorCassetteType
   readonly activeActivity: Pick<CodexOwnedActivityCensusProjection, "_tag">
-  readonly privateRecordTag: CodexAttemptRecord["_tag"] | null
-  readonly replacementResultTag: CodexProviderWorkUnitReplacementResult["_tag"] | null
+  readonly privateRecordTag: CodexAttemptRecordTag | null
+  readonly replacementResultTag: CodexProviderWorkUnitReplacementResultTag | null
   readonly purgedWorkUnitPreserved: boolean | null
   readonly distinctReplacementWorkUnit: boolean | null
   readonly authorityObservationCount: number | null
@@ -485,9 +563,8 @@ export interface CodexPlannedAttemptExecutorCassetteRun {
 }
 
 /** Exposes only the record state needed by cassette assertions, never its private Codex thread id. */
-export const codexAttemptRecordTagOrNull = (
-  record: CodexAttemptRecord | undefined
-): CodexAttemptRecord["_tag"] | null => record?._tag ?? null
+export const codexAttemptRecordTagOrNull = (record: CodexAttemptRecord | undefined): CodexAttemptRecordTag | null =>
+  record?._tag ?? null
 
 /** Keeps the private process and turn identities inside the controlled harness. */
 const publicActivityProjection = (
@@ -593,6 +670,30 @@ export const runCodexPlannedAttemptExecutorCassette: (
     if (projection._tag === "Exact") return projection.report
     return yield* Effect.die(`expected exact Codex executor report, received ${projection._tag}`)
   })
+  const awaitAcceptedTerminalReport = Effect.fn("CodexExecutorCassette.awaitAcceptedTerminalReport")(() =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const attachment = yield* lifecycle.attach(plannedAttemptExecutorCorrelation(attempt))
+        if (attachment.current._tag === "Exact" && attachment.current.report._tag === "ExecutorWorkTerminal") {
+          return attachment.current.report
+        }
+        const terminal = yield* attachment.changes.pipe(
+          Stream.filter(
+            (projection) => projection._tag === "Exact" && projection.report._tag === "ExecutorWorkTerminal"
+          ),
+          Stream.runHead
+        )
+        if (Option.isNone(terminal)) {
+          return yield* Effect.die("exact completion hint did not produce a terminal report")
+        }
+        if (terminal.value._tag !== "Exact" || terminal.value.report._tag !== "ExecutorWorkTerminal") {
+          return yield* Effect.die("accepted terminal stream contained a different projection")
+        }
+        return terminal.value.report
+      })
+    )
+  )
   const executeHappyReplacement = Effect.fn("CodexExecutorCassette.executeHappyReplacement")(function* (
     executor: PlannedAttemptExecutorService,
     replacementResult: CodexProviderWorkUnitReplacementResult
@@ -647,7 +748,7 @@ export const runCodexPlannedAttemptExecutorCassette: (
         distinctReplacementWorkUnit: null,
         purgedWorkUnitPreserved: null,
         replacementResultTag: null,
-        reports: [first, yield* observeExactReport(executor)]
+        reports: [first, yield* awaitAcceptedTerminalReport()]
       }
     }
     yield* harness.interruptForeignTurn

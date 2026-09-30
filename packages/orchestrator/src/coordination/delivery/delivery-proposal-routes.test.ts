@@ -1,5 +1,6 @@
 import { unexpectedRemoteDeliveryLayer } from "../../../test/support/unexpected-remote-delivery.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import {
   AcceptedResult,
   AcceptedResultEvidenceManifest,
@@ -28,7 +29,22 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { HashSet, Context, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream } from "effect"
+import {
+  HashSet,
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Queue,
+  Ref,
+  Result,
+  Stream,
+  type Scope
+} from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -56,10 +72,14 @@ import {
 } from "../../../test/support/fresh-task-admission.js"
 import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
 import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
+import {
+  appendAutomaticSuccessorGeneration,
+  makeSuccessorPrefix
+} from "../../../test/support/automatic-successor-history.js"
 import { makePromotedIntegrationHistory } from "../../../test/support/promoted-integration-history.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
-import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
@@ -74,8 +94,10 @@ import {
 import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
 import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { TaskAttemptPlanRecordAcknowledged } from "../../workflow/protocols/task-attempt-planning/record.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalStore, type JournalRecord } from "../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { sqliteJournalStoreLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
@@ -164,11 +186,13 @@ import type {
   TrackerGraphActionProposal
 } from "./delivery-action-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
+import { Journal, journalLayer, type JournalStorageBoundary } from "./journal.js"
 import {
   Integrator,
   IntegratorCallFailure,
   IntegratorCandidateText,
   IntegratorGit,
+  IntegratorGitObservation,
   IntegratorGitReadFailure,
   IntegratorNotPreparedDetail,
   IntegratorProviderActivityAbsent,
@@ -178,10 +202,18 @@ import {
   IntegratorResult
 } from "../../workflow/protocols/integrator/protocol.js"
 import {
+  IntegratorAutomaticSuccessorGeneration,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent
+} from "../../workflow/protocols/integrator/events.js"
+import {
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineCause,
   IntegrationQuarantineFailureDetail,
+  IntegrationQuarantinedEvent,
   integrationQuarantineDirectionSubject
 } from "../../workflow/protocols/integration-quarantine/events.js"
 import { integrationQuarantineDirectionTargetLineageOperationId } from "../../workflow/protocols/integration-quarantine/direction-lineage-operation.js"
@@ -189,9 +221,11 @@ import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import {
   integratorCorrelationFor,
   integratorInitialRunCorrelationFor,
-  integratorSuccessorCorrelationFor
+  integratorSuccessorCorrelationFor,
+  integratorRunCorrelationForSession
 } from "../../workflow/protocols/integrator/session.js"
 import { IntegratorJournalContradiction } from "../../workflow/protocols/integrator/errors.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../../workflow/protocols/integrator/automatic-successor-session.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition as executePlannedAttemptTransitionRaw } from "./planned-attempt-delivery-action-adapter.js"
@@ -251,7 +285,6 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import { postPromotionBlockerClearAuthorizationFor } from "../../workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
 import { liveJournalTestLayer } from "./live-journal-test-layer.js"
-import { Journal } from "./journal.js"
 import { journalEvidenceFrom, journalGraphObservationAt } from "../../workflow-journal/record-evidence.js"
 
 const runId = RunId.make("route-matrix-run")
@@ -1281,6 +1314,11 @@ const completionPromotionRuntime = TargetPromotionRuntime.of({
       )
   }
 })
+
+type AutomaticS2ProviderQuarantineTransition = Extract<
+  Transition,
+  { readonly _tag: "RunIntegrator" | "RecordProviderRunFailureIntegrationQuarantine" }
+>
 
 describe("delivery proposal route matrix", () => {
   it("reuses accepted identity for every operation-reconciliation route", () => {
@@ -2422,6 +2460,1843 @@ describe("delivery proposal route matrix", () => {
     })
   )
 
+  effectIt.effect("routes automatic S2 through exact provider custody and quarantine recovery", () =>
+    Effect.gen(function* () {
+      const fixture = makeSuccessorPrefix()
+      const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+      if (prepared._tag !== "Append")
+        return yield* Effect.die("automatic S2 route requires the exact authorized append")
+
+      const session = prepared.event.successor
+      const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+      const responsibility = fixture.accepted.responsibility
+      const transition = RunnableFrontierTransition.RunIntegrator({
+        lineage: fixture.input.targetLineage,
+        lineageObservedAt: fixture.input.targetLineageObservedAt,
+        responsibility,
+        run
+      })
+      const routed = deliveryProposalsOf({
+        acceptedOperationIds: HashSet.empty(),
+        fresh: [],
+        integrationResponsibilities: [responsibility],
+        responsibilities: [],
+        runId: fixture.runId,
+        transitions: [transition]
+      })
+      const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("automatic S2 requires its ordinary identity-free RunIntegrator proposal")
+      }
+      const action = { _tag: "IdentityFreeAction" as const, proposal }
+      const harness = yield* makeLiveJournalHarness(fixture.records(), fixture.runId, target)
+      const preFixationRequests = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+      const preFixation = yield* Effect.exit(
+        executeIntegrationAction(action, transition, inertLease, target).pipe(
+          Effect.provideService(
+            Integrator,
+            Integrator.of({
+              prepare: (request) =>
+                Ref.update(preFixationRequests, (current) => [...current, request.correlation]).pipe(
+                  Effect.as(
+                    IntegratorResult.cases.NotPrepared.make({
+                      correlation: request.correlation,
+                      detail: IntegratorNotPreparedDetail.make("pre-fixation provider must remain unreachable")
+                    })
+                  )
+                )
+            })
+          ),
+          Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+          (effect) => provideLiveJournal(effect, harness)
+        )
+      )
+      expect(preFixation._tag).toBe("Failure")
+      expect(yield* Ref.get(preFixationRequests)).toEqual([])
+      const beforeFixationRecords = yield* harness.records
+      expect(
+        beforeFixationRecords.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+      ).toHaveLength(0)
+      expect(
+        beforeFixationRecords.filter(
+          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(0)
+
+      yield* harness.coordinatedJournal.append(fixture.runId, prepared.key, prepared.event)
+      const fixedHistory = reduceWorkflowJournalHistory(fixture.runId, yield* harness.records)
+      if (fixedHistory._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `recovered automatic S2 route fixture is invalid: ${JSON.stringify(fixedHistory.issues)}`
+        )
+      }
+      expect(fixedHistory.prefix.lastPosition).toBeGreaterThan(fixture.reduction.prefix.lastPosition ?? 0)
+
+      const requests = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+
+      const ambiguous = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Ref.update(requests, (current) => [...current, request.correlation]).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new IntegratorCallFailure({
+                      correlation: request.correlation,
+                      detail: "controlled ambiguous automatic S2 provider outcome"
+                    })
+                  )
+                )
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        (effect) => provideLiveJournal(effect, harness),
+        Effect.flip
+      )
+      expect(ambiguous).toMatchObject({ _tag: "IntegratorCallFailure" })
+      expect(yield* Ref.get(requests)).toEqual([run])
+      const afterAmbiguous = yield* harness.records
+      expect(
+        afterAmbiguous.filter(
+          ({ event }) =>
+            event._tag === "IntegrationProviderRunActivityAbsent" || event._tag === "IntegrationQuarantined"
+        )
+      ).toHaveLength(0)
+      expect(
+        afterAmbiguous.filter(
+          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(1)
+
+      const absent = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Effect.fail(
+                new IntegratorProviderActivityAbsent({
+                  correlation: request.correlation,
+                  detail: "controlled provider confirms no automatic S2 activity"
+                })
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        (effect) => provideLiveJournal(effect, harness)
+      )
+      expect(absent).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+      const recovered = yield* harness.records
+      expect(recovered.slice(-2).map(({ event }) => event._tag)).toEqual([
+        "IntegrationProviderRunActivityAbsent",
+        "IntegrationQuarantined"
+      ])
+      expect(
+        recovered.filter(
+          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(1)
+      expect(recovered.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+      expect(recovered.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+      expect(recovered.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+      expect(session.acceptedResult.commit).toBe(fixture.accepted.acceptedResult.commit)
+      expect(session.plannedAttempt.baseSha).toBe(fixture.accepted.plannedAttempt.baseSha)
+      expect(session.queuedAt).toBe(responsibility.queuedAt)
+      expect(session.startedAt).toBe(responsibility.startedAt)
+    })
+  )
+
+  effectIt.effect(
+    "restarts into an explicitly authorized Retry route for automatic S2's own conclusive quarantine",
+    () =>
+      Effect.gen(function* () {
+        const fixture = makeSuccessorPrefix()
+        const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+          fixture.input,
+          fixture.reduction.prefix
+        )
+        if (prepared._tag !== "Append") return yield* Effect.die("Retry route requires exact automatic S2 fixation")
+        fixture.append(prepared.event)
+
+        const responsibility = fixture.accepted.responsibility
+        const session = prepared.event.successor
+        const firstRun = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+        fixture.append(IntegratorRunStartedEvent.make({ run: firstRun, version: workflowJournalEventVersion }))
+        const resultDetail = IntegratorNotPreparedDetail.make("automatic S2 reports a conclusive no-candidate result")
+        const result = fixture.append(
+          IntegratorRunResultRecordedEvent.make({
+            result: IntegratorResult.cases.NotPrepared.make({ correlation: firstRun, detail: resultDetail }),
+            run: firstRun,
+            version: workflowJournalEventVersion
+          })
+        )
+        fixture.append(
+          IntegrationQuarantinedEvent.make({
+            basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+              cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: resultDetail }),
+              evidence: { resultRecordedAt: result.position }
+            }),
+            correlation: session,
+            occurrenceClassification: "NonActionOccurrence",
+            version: workflowJournalEventVersion
+          })
+        )
+        const beforeRetry = fixture.records()
+        const runTwo = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session })
+        const operatorRetry = RunnableFrontierTransition.RunIntegrator({
+          lineage: fixture.input.targetLineage,
+          lineageObservedAt: fixture.input.targetLineageObservedAt,
+          responsibility,
+          run: runTwo
+        })
+        const routeFor = (transition: Transition) => {
+          const routed = deliveryProposalsOf({
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [responsibility],
+            responsibilities: [],
+            runId: fixture.runId,
+            transitions: [transition]
+          })
+          const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+          if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+            throw new Error(`missing exact identity-free route for ${transition._tag}`)
+          }
+          return { _tag: "IdentityFreeAction" as const, proposal }
+        }
+
+        const unauthorizedRestart = yield* makeLiveJournalHarness(beforeRetry, fixture.runId, target)
+        const unauthorizedCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+        yield* Effect.exit(
+          executeIntegrationAction(routeFor(operatorRetry), operatorRetry, inertLease, target).pipe(
+            Effect.provideService(
+              Integrator,
+              Integrator.of({
+                prepare: (request) =>
+                  Ref.update(unauthorizedCalls, (calls) => [...calls, request.correlation]).pipe(
+                    Effect.as(
+                      IntegratorResult.cases.NotPrepared.make({
+                        correlation: request.correlation,
+                        detail: IntegratorNotPreparedDetail.make("must not be called without operator Retry")
+                      })
+                    )
+                  )
+              })
+            ),
+            Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+            (effect) => provideLiveJournal(effect, unauthorizedRestart)
+          )
+        )
+        expect(yield* Ref.get(unauthorizedCalls)).toEqual([])
+        expect(
+          (yield* unauthorizedRestart.records).filter(
+            ({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2)
+          )
+        ).toHaveLength(0)
+
+        const quarantine = fixture
+          .records()
+          .findLast(
+            ({ event }) => event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+          )
+        if (quarantine?.event._tag !== "IntegrationQuarantined") {
+          return yield* Effect.die("automatic S2 Retry route requires its exact conclusive quarantine")
+        }
+        const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+          direction: "Retry",
+          quarantineAt: quarantine.position,
+          sessionId: session.sessionId
+        })
+        fixture.append(
+          IntegrationQuarantineDirectionAppliedEvent.make({
+            fingerprint,
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId: IntegrationQuarantineDirectionRequestId.make({
+              nonce: "automatic-s2-retry-route",
+              runId: fixture.runId
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+        const operationId = OperationId.make("automatic-s2-retry-route-lineage")
+        const operation = makeTargetLineageObservationOperation({
+          integrationTarget: session.integrationTarget,
+          operationId,
+          plannedAttempt: session.plannedAttempt,
+          predecessorOperationIds: []
+        })
+        fixture.append(
+          GitReadIntentRecordedEvent.make({
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            operation,
+            version: workflowJournalEventVersion
+          })
+        )
+        const freshLineage = fixture.append(
+          TargetLineageObservedEvent.make({
+            observation: fixture.input.targetLineage,
+            occurrenceClassification: "NonActionOccurrence",
+            operationId,
+            plannedAttempt: session.plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+
+        const restarted = yield* makeLiveJournalHarness(fixture.records(), fixture.runId, target)
+        const retryTransition = RunnableFrontierTransition.RunIntegrator({
+          lineage: fixture.input.targetLineage,
+          lineageObservedAt: freshLineage.position,
+          responsibility,
+          run: runTwo
+        })
+        const retryAction = routeFor(retryTransition)
+        const retryCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+        const delivered = yield* executeIntegrationAction(retryAction, retryTransition, inertLease, target).pipe(
+          Effect.provideService(
+            Integrator,
+            Integrator.of({
+              prepare: (request) =>
+                Ref.update(retryCalls, (calls) => [...calls, request.correlation]).pipe(
+                  Effect.as(
+                    IntegratorResult.cases.NotPrepared.make({
+                      correlation: request.correlation,
+                      detail: IntegratorNotPreparedDetail.make("controlled automatic S2 Retry result")
+                    })
+                  )
+                )
+            })
+          ),
+          Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+          (effect) => provideLiveJournal(effect, restarted)
+        )
+        expect(delivered).toMatchObject({ _tag: "ActionCompleted", proposalId: retryAction.proposal.id })
+        expect(yield* Ref.get(retryCalls)).toEqual([runTwo])
+        const finalRecords = yield* restarted.records
+        expect(
+          finalRecords.filter(
+            ({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2)
+          )
+        ).toHaveLength(1)
+        expect(reduceWorkflowJournalHistory(fixture.runId, finalRecords)._tag).toBe("ValidWorkflowJournalHistory")
+      })
+  )
+
+  effectIt.effect("retries exact automatic S3 after its own quarantine without duplicating successor effects", () =>
+    Effect.gen(function* () {
+      const fixture = makeSuccessorPrefix()
+      const s2 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+      if (s2._tag !== "Append") return yield* Effect.die("S3 Retry requires exact automatic S2 fixation")
+      fixture.append(s2.event)
+      const s3Prefix = appendAutomaticSuccessorGeneration(
+        fixture,
+        s2.event.successor,
+        GitCommitSha.make("8".repeat(40)),
+        IntegratorAutomaticSuccessorGeneration.make(2)
+      )
+      const s3 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(s3Prefix.input, s3Prefix.reduction.prefix)
+      if (s3._tag !== "Append") return yield* Effect.die("S3 Retry requires exact automatic S3 fixation")
+      fixture.append(s3.event)
+
+      const responsibility = fixture.accepted.responsibility
+      const session = s3.event.successor
+      const runOne = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+      fixture.append(IntegratorRunStartedEvent.make({ run: runOne, version: workflowJournalEventVersion }))
+      const detail = IntegratorNotPreparedDetail.make("automatic S3 reports a conclusive no-candidate result")
+      const result = fixture.append(
+        IntegratorRunResultRecordedEvent.make({
+          result: IntegratorResult.cases.NotPrepared.make({ correlation: runOne, detail }),
+          run: runOne,
+          version: workflowJournalEventVersion
+        })
+      )
+      const quarantine = fixture.append(
+        IntegrationQuarantinedEvent.make({
+          basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+            cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail }),
+            evidence: { resultRecordedAt: result.position }
+          }),
+          correlation: session,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      )
+      fixture.append(
+        IntegrationQuarantineDirectionAppliedEvent.make({
+          fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+            direction: "Retry",
+            quarantineAt: quarantine.position,
+            sessionId: session.sessionId
+          }),
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: IntegrationQuarantineDirectionRequestId.make({
+            nonce: "automatic-s3-retry-route",
+            runId: fixture.runId
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const operationId = OperationId.make("automatic-s3-retry-route-lineage")
+      fixture.append(
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: makeTargetLineageObservationOperation({
+            integrationTarget: session.integrationTarget,
+            operationId,
+            plannedAttempt: session.plannedAttempt,
+            predecessorOperationIds: []
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const lineage = fixture.append(
+        TargetLineageObservedEvent.make({
+          observation: s3Prefix.input.targetLineage,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId,
+          plannedAttempt: session.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const runTwo = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session })
+      const transition = RunnableFrontierTransition.RunIntegrator({
+        lineage: s3Prefix.input.targetLineage,
+        lineageObservedAt: lineage.position,
+        responsibility,
+        run: runTwo
+      })
+      const routed = deliveryProposalsOf({
+        acceptedOperationIds: HashSet.empty(),
+        fresh: [],
+        integrationResponsibilities: [responsibility],
+        responsibilities: [],
+        runId: fixture.runId,
+        transitions: [transition]
+      })
+      const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal))
+        return yield* Effect.die("S3 Retry route is missing")
+      const action = { _tag: "IdentityFreeAction" as const, proposal }
+      const journal = yield* makeLiveJournalHarness(fixture.records(), fixture.runId, target)
+      const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+      const delivered = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Ref.update(providerCalls, (calls) => [...calls, request.correlation]).pipe(
+                Effect.as(
+                  IntegratorResult.cases.NotPrepared.make({
+                    correlation: request.correlation,
+                    detail: IntegratorNotPreparedDetail.make("controlled S3 Retry")
+                  })
+                )
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        (effect) => provideLiveJournal(effect, journal)
+      )
+      expect(delivered).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+      expect(yield* Ref.get(providerCalls)).toEqual([runTwo])
+      const records = yield* journal.records
+      expect(records.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")).toHaveLength(2)
+      expect(records.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")).toHaveLength(2)
+      expect(records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(2)
+      expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(4)
+      expect(
+        records.filter(
+          ({ event }) =>
+            event._tag === "IntegratorRunStarted" &&
+            event.run.ordinal === IntegratorRunOrdinal.make(2) &&
+            event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(1)
+      expect(reduceWorkflowJournalHistory(fixture.runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+    })
+  )
+
+  effectIt.effect(
+    "recovers automatic S2 provider-absence quarantine append cuts after process loss across memory and reopened SQLite",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = makeSuccessorPrefix()
+          const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+            fixture.input,
+            fixture.reduction.prefix
+          )
+          if (prepared._tag !== "Append") {
+            return yield* Effect.die("provider-quarantine recovery requires the exact automatic S2 session")
+          }
+          fixture.append(prepared.event)
+          const session = prepared.event.successor
+          const responsibility = fixture.accepted.responsibility
+          const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+          const detail = "controlled custody proves no automatic S2 provider activity"
+          const quarantineDetail = IntegrationQuarantineFailureDetail.make(detail)
+          const runTransition = RunnableFrontierTransition.RunIntegrator({
+            lineage: fixture.input.targetLineage,
+            lineageObservedAt: fixture.input.targetLineageObservedAt,
+            responsibility,
+            run
+          })
+          const providerRecoveryTransition = RunnableFrontierTransition.RecordProviderRunFailureIntegrationQuarantine({
+            input: { detail: quarantineDetail, run },
+            responsibility
+          })
+          const proposalFor = (transition: AutomaticS2ProviderQuarantineTransition) => {
+            const routed = deliveryProposalsOf({
+              acceptedOperationIds: HashSet.empty(),
+              fresh: [],
+              integrationResponsibilities: [responsibility],
+              responsibilities: [],
+              runId: fixture.runId,
+              transitions: [transition]
+            })
+            const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+            if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+              throw new Error(`missing ordinary identity-free proposal for ${transition._tag}`)
+            }
+            return { _tag: "IdentityFreeAction" as const, proposal }
+          }
+          const runAction = proposalFor(runTransition)
+          const providerRecoveryAction = proposalFor(providerRecoveryTransition)
+          const fixedRecords = fixture.records()
+          const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+          const writerStarts = yield* Ref.make(0)
+          const absenceProofs = yield* Ref.make(0)
+          const candidateGitReads = yield* Ref.make(0)
+          const absenceAppendAttempts = yield* Ref.make(0)
+          const quarantineAppendAttempts = yield* Ref.make(0)
+
+          const provider = (mode: "Ambiguous" | "ActivityAbsent" | "Unexpected") =>
+            Integrator.of({
+              prepare: (request) => {
+                if (JSON.stringify(request.correlation) !== JSON.stringify(run)) {
+                  return Effect.die("provider-absence recovery must retain the exact automatic S2 run")
+                }
+                const tracked = Ref.update(providerCalls, (calls) => [...calls, request.correlation])
+                if (mode === "Ambiguous") {
+                  return tracked.pipe(
+                    Effect.andThen(Ref.update(writerStarts, (count) => count + 1)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new IntegratorCallFailure({
+                          correlation: request.correlation,
+                          detail: "controlled ambiguous automatic S2 provider response"
+                        })
+                      )
+                    )
+                  )
+                }
+                if (mode === "ActivityAbsent") {
+                  return tracked.pipe(
+                    Effect.andThen(Ref.update(absenceProofs, (count) => count + 1)),
+                    Effect.andThen(Effect.fail(new IntegratorProviderActivityAbsent({ correlation: run, detail })))
+                  )
+                }
+                return tracked.pipe(Effect.andThen(Effect.die("quarantine recovery must not call the provider")))
+              }
+            })
+
+          const storageBoundary = (
+            store: JournalStore["Service"],
+            quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ): JournalStorageBoundary => ({
+            append: (runId, key, event) => {
+              if (
+                event._tag === "IntegrationProviderRunActivityAbsent" &&
+                event.run.session.sessionId === session.sessionId
+              ) {
+                return Ref.update(absenceAppendAttempts, (count) => count + 1).pipe(
+                  Effect.andThen(store.append(runId, key, event))
+                )
+              }
+              if (event._tag !== "IntegrationQuarantined" || event.correlation.sessionId !== session.sessionId) {
+                return store.append(runId, key, event)
+              }
+              return Ref.update(quarantineAppendAttempts, (count) => count + 1).pipe(
+                Effect.andThen(
+                  quarantineCut === "BeforeCommit"
+                    ? Effect.die("process stopped before automatic S2 provider quarantine committed")
+                    : quarantineCut === "LoseAcknowledgement"
+                      ? store
+                          .append(runId, key, event)
+                          .pipe(
+                            Effect.andThen(Effect.die("process lost after automatic S2 provider quarantine committed"))
+                          )
+                      : store.append(runId, key, event)
+                )
+              )
+            },
+            read: store.read,
+            terminateRun: store.terminateRun
+          })
+
+          const seedStore = Effect.fn("DeliveryProposalRoutesTest.seedAutomaticSuccessorProviderAbsenceStore")(
+            function* (store: JournalStore["Service"]) {
+              const [beginning, ...remaining] = fixedRecords
+              if (beginning?.event._tag !== "WorkflowRunBegan") {
+                return yield* Effect.die("automatic S2 provider-absence history must begin one Run")
+              }
+              yield* store.beginRun(
+                fixture.runId,
+                beginning.event.target,
+                beginning.event.initialControlPolicy,
+                beginning.event.remotePublicationTarget
+              )
+              for (const record of remaining) {
+                if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                  return yield* Effect.die("automatic S2 provider-absence history may not contain another Run event")
+                }
+                yield* store.append(fixture.runId, record.key, record.event)
+              }
+            }
+          )
+
+          const execute = (
+            store: JournalStore["Service"],
+            action: ReturnType<typeof proposalFor>,
+            transition: AutomaticS2ProviderQuarantineTransition,
+            providerMode: "Ambiguous" | "ActivityAbsent" | "Unexpected",
+            quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const stored = yield* store.read(fixture.runId)
+                const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+                if (history._tag !== "ValidWorkflowJournalHistory") {
+                  return yield* Effect.die(
+                    `reopened provider-quarantine prefix is invalid: ${JSON.stringify(history.issues)}`
+                  )
+                }
+                const git = IntegratorGit.of({
+                  readCandidate: () =>
+                    Ref.update(candidateGitReads, (count) => count + 1).pipe(
+                      Effect.andThen(Effect.die("provider-absence recovery must not read a candidate"))
+                    )
+                })
+                return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+                  Effect.provide(journalLayer(fixture.runId, target, history, storageBoundary(store, quarantineCut))),
+                  Effect.provideService(Integrator, provider(providerMode)),
+                  Effect.provideService(IntegratorGit, git),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
+                )
+              })
+            )
+
+          const fixedAuthorizationCount = fixedRecords.filter(
+            ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+          ).length
+          const fixedSessionCount = fixedRecords.filter(
+            ({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed"
+          ).length
+          const targetLineageReadCount = fixedRecords.filter(
+            ({ event }) => event._tag === "GitReadIntentRecorded"
+          ).length
+          const assertRecords = (
+            records: ReadonlyArray<JournalRecord>,
+            hasAbsence: boolean,
+            hasQuarantine: boolean
+          ) => {
+            const absences = records.filter(
+              ({ event }) =>
+                event._tag === "IntegrationProviderRunActivityAbsent" &&
+                event.run.session.sessionId === session.sessionId
+            )
+            expect(absences).toHaveLength(hasAbsence ? 1 : 0)
+            const quarantines = records.filter(
+              ({ event }) =>
+                event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+            )
+            expect(quarantines).toHaveLength(hasQuarantine ? 1 : 0)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(1)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunResultRecorded" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(0)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+            ).toHaveLength(fixedAuthorizationCount)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+            ).toHaveLength(fixedSessionCount)
+            expect(records.filter(({ event }) => event._tag === "GitReadIntentRecorded")).toHaveLength(
+              targetLineageReadCount
+            )
+            expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+            if (hasAbsence) {
+              const absence = absences[0]
+              if (absence?.event._tag !== "IntegrationProviderRunActivityAbsent") {
+                throw new Error("provider quarantine requires the exact durable absence event")
+              }
+              expect(absence.event).toMatchObject({
+                correlation: session,
+                detail: quarantineDetail,
+                occurrenceClassification: "NonActionOccurrence",
+                run
+              })
+              if (hasQuarantine) {
+                const quarantine = quarantines[0]
+                if (quarantine?.event._tag !== "IntegrationQuarantined") {
+                  throw new Error("provider quarantine recovery requires one exact quarantine event")
+                }
+                expect(quarantine.event).toMatchObject({
+                  basis: {
+                    _tag: "ProviderRunFailure",
+                    detail: quarantineDetail,
+                    ownedActivityProvenAbsentAt: absence.position
+                  },
+                  correlation: session
+                })
+                expect(quarantine.position).toBeGreaterThan(absence.position)
+              }
+            }
+          }
+
+          const resetCounts = Effect.gen(function* () {
+            yield* Ref.set(providerCalls, [])
+            yield* Ref.set(writerStarts, 0)
+            yield* Ref.set(absenceProofs, 0)
+            yield* Ref.set(candidateGitReads, 0)
+            yield* Ref.set(absenceAppendAttempts, 0)
+            yield* Ref.set(quarantineAppendAttempts, 0)
+          })
+
+          const exercise = <R>(
+            cut: "BeforeCommit" | "LoseAcknowledgement",
+            open: (
+              action: ReturnType<typeof proposalFor>,
+              transition: AutomaticS2ProviderQuarantineTransition,
+              providerMode: "Ambiguous" | "ActivityAbsent" | "Unexpected",
+              quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
+            ) => Effect.Effect<unknown, unknown, R>,
+            readCurrent: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown, R>
+          ) =>
+            Effect.gen(function* () {
+              yield* resetCounts
+              const ambiguous = yield* Effect.exit(open(runAction, runTransition, "Ambiguous", undefined))
+              expect(ambiguous._tag).toBe("Failure")
+              assertRecords(yield* readCurrent(), false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceProofs)).toBe(0)
+
+              const absent = yield* Effect.exit(open(runAction, runTransition, "ActivityAbsent", cut))
+              expect(absent._tag).toBe("Failure")
+              assertRecords(yield* readCurrent(), true, cut === "LoseAcknowledgement")
+              expect(yield* Ref.get(providerCalls)).toEqual([run, run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceProofs)).toBe(1)
+              expect(yield* Ref.get(candidateGitReads)).toBe(0)
+
+              let committedQuarantineBeforeRecovery: JournalRecord | undefined
+              if (cut === "LoseAcknowledgement") {
+                const beforeRetry = yield* readCurrent()
+                committedQuarantineBeforeRecovery = beforeRetry.find(
+                  ({ event }) =>
+                    event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+                )
+                if (committedQuarantineBeforeRecovery?.event._tag !== "IntegrationQuarantined") {
+                  throw new Error("lost provider-quarantine acknowledgement must leave its exact event committed")
+                }
+              }
+              expect(
+                yield* open(providerRecoveryAction, providerRecoveryTransition, "Unexpected", undefined)
+              ).toMatchObject({ _tag: "ActionCompleted", proposalId: providerRecoveryAction.proposal.id })
+              const recovered = yield* readCurrent()
+              assertRecords(recovered, true, true)
+              if (cut === "LoseAcknowledgement") {
+                const committedQuarantine = recovered.find(
+                  ({ event }) =>
+                    event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+                )
+                expect(committedQuarantine).toEqual(committedQuarantineBeforeRecovery)
+              }
+              expect(yield* Ref.get(providerCalls)).toEqual([run, run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceProofs)).toBe(1)
+              expect(yield* Ref.get(candidateGitReads)).toBe(0)
+              expect(yield* Ref.get(absenceAppendAttempts)).toBe(1)
+              expect(yield* Ref.get(quarantineAppendAttempts)).toBe(cut === "BeforeCommit" ? 2 : 1)
+            })
+
+          for (const cut of ["BeforeCommit", "LoseAcknowledgement"] as const) {
+            const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+            const memoryStore = Context.get(memoryContext, JournalStore)
+            yield* seedStore(memoryStore)
+            yield* exercise(
+              cut,
+              (action, transition, providerMode, quarantineCut) =>
+                execute(memoryStore, action, transition, providerMode, quarantineCut),
+              () => memoryStore.read(fixture.runId)
+            )
+          }
+
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "dalph-automatic-s2-provider-quarantine-"
+          })
+          for (const cut of ["BeforeCommit", "LoseAcknowledgement"] as const) {
+            const filename = JournalDatabaseLocator.make(path.join(directory, `${cut}.sqlite`))
+            const openSqlite = <A>(
+              use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>
+            ): Effect.Effect<A, unknown, Scope.Scope> =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const store = yield* JournalStore
+                  return yield* use(store)
+                }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+              )
+            yield* openSqlite((store) => seedStore(store))
+            yield* exercise(
+              cut,
+              (action, transition, providerMode, quarantineCut) =>
+                openSqlite((store) => execute(store, action, transition, providerMode, quarantineCut)),
+              () => openSqlite((store) => store.read(fixture.runId))
+            )
+          }
+        }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+      )
+  )
+
+  effectIt.effect(
+    "recovers an automatic S2 provider start after lost acknowledgement without overlapping or replacing its run",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = makeSuccessorPrefix()
+          const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+            fixture.input,
+            fixture.reduction.prefix
+          )
+          if (prepared._tag !== "Append") {
+            return yield* Effect.die("provider-start recovery requires the exact automatic fixed session")
+          }
+          fixture.append(prepared.event)
+          const session = prepared.event.successor
+          const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+          const responsibility = fixture.accepted.responsibility
+          const transition = RunnableFrontierTransition.RunIntegrator({
+            lineage: fixture.input.targetLineage,
+            lineageObservedAt: fixture.input.targetLineageObservedAt,
+            responsibility,
+            run
+          })
+          const routed = deliveryProposalsOf({
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [responsibility],
+            responsibilities: [],
+            runId: fixture.runId,
+            transitions: [transition]
+          })
+          const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+          if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+            return yield* Effect.die("automatic S2 requires its ordinary RunIntegrator proposal")
+          }
+          const action = { _tag: "IdentityFreeAction" as const, proposal }
+          const fixedRecords = fixture.records()
+          const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+          const writerStarts = yield* Ref.make(0)
+          const absenceObservations = yield* Ref.make(0)
+
+          const provider = (mode: "Unexpected" | "Ambiguous" | "ActivityAbsent") =>
+            Integrator.of({
+              prepare: (request) => {
+                if (JSON.stringify(request.correlation) !== JSON.stringify(run)) {
+                  return Effect.die("provider recovery must use the exact automatic S2 run correlation")
+                }
+                const trackedCall = Ref.update(providerCalls, (calls) => [...calls, request.correlation])
+                if (mode === "Ambiguous") {
+                  return trackedCall.pipe(
+                    Effect.andThen(Ref.update(writerStarts, (count) => count + 1)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new IntegratorCallFailure({
+                          correlation: request.correlation,
+                          detail: "controlled ambiguous automatic S2 provider response"
+                        })
+                      )
+                    )
+                  )
+                }
+                if (mode === "ActivityAbsent") {
+                  return trackedCall.pipe(
+                    Effect.andThen(Ref.update(absenceObservations, (count) => count + 1)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new IntegratorProviderActivityAbsent({
+                          correlation: request.correlation,
+                          detail: "controlled provider custody proves this exact S2 run absent"
+                        })
+                      )
+                    )
+                  )
+                }
+                return trackedCall.pipe(
+                  Effect.andThen(Effect.die("provider must remain unreachable before RunStarted"))
+                )
+              }
+            })
+
+          const storageBoundary = (
+            store: JournalStore["Service"],
+            startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ): JournalStorageBoundary => ({
+            append: (runId, key, event) => {
+              if (
+                event._tag !== "IntegratorRunStarted" ||
+                event.run.session.sessionId !== session.sessionId ||
+                startFailure === undefined
+              ) {
+                return store.append(runId, key, event)
+              }
+              if (startFailure === "BeforeCommit") {
+                return Effect.die("process stopped before automatic S2 RunStarted committed")
+              }
+              return store
+                .append(runId, key, event)
+                .pipe(Effect.andThen(Effect.die("process lost after automatic S2 RunStarted committed")))
+            },
+            read: store.read,
+            terminateRun: store.terminateRun
+          })
+
+          const runAction = (
+            store: JournalStore["Service"],
+            startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined,
+            providerMode: "Unexpected" | "Ambiguous" | "ActivityAbsent"
+          ) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const stored = yield* store.read(fixture.runId)
+                const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+                if (history._tag !== "ValidWorkflowJournalHistory") {
+                  return yield* Effect.die(
+                    `reopened provider-start prefix is invalid: ${JSON.stringify(history.issues)}`
+                  )
+                }
+                return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+                  Effect.provide(journalLayer(fixture.runId, target, history, storageBoundary(store, startFailure))),
+                  Effect.provideService(Integrator, provider(providerMode)),
+                  Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
+                )
+              })
+            )
+
+          const seedStore = Effect.fn("DeliveryProposalRoutesTest.seedAutomaticSuccessorStore")(function* (
+            store: JournalStore["Service"]
+          ) {
+            const [beginning, ...remaining] = fixedRecords
+            if (beginning?.event._tag !== "WorkflowRunBegan") {
+              return yield* Effect.die("automatic S2 provider history must begin one Run")
+            }
+            yield* store.beginRun(
+              fixture.runId,
+              beginning.event.target,
+              beginning.event.initialControlPolicy,
+              beginning.event.remotePublicationTarget
+            )
+            for (const record of remaining) {
+              if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                return yield* Effect.die("automatic S2 provider history may not contain another Run lifecycle event")
+              }
+              yield* store.append(fixture.runId, record.key, record.event)
+            }
+          })
+
+          const assertRunState = (
+            records: ReadonlyArray<JournalRecord>,
+            hasRunStart: boolean,
+            hasResult: boolean,
+            hasAbsence: boolean,
+            hasQuarantine: boolean
+          ) => {
+            const starts = records.filter(
+              ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+            )
+            expect(starts).toHaveLength(hasRunStart ? 1 : 0)
+            if (hasRunStart) expect(starts[0]?.event).toMatchObject({ run })
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunResultRecorded" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(hasResult ? 1 : 0)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegrationProviderRunActivityAbsent" &&
+                  event.correlation.sessionId === session.sessionId
+              )
+            ).toHaveLength(hasAbsence ? 1 : 0)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+              )
+            ).toHaveLength(hasQuarantine ? 1 : 0)
+            expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+            ).toHaveLength(1)
+          }
+
+          const exercise = <R>(
+            open: (
+              startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined,
+              providerMode: "Unexpected" | "Ambiguous" | "ActivityAbsent"
+            ) => Effect.Effect<unknown, unknown, R>,
+            readCurrent: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown, R>
+          ) =>
+            Effect.gen(function* () {
+              const precommit = yield* Effect.exit(open("BeforeCommit", "Unexpected"))
+              expect(precommit._tag).toBe("Failure")
+              assertRunState(yield* readCurrent(), false, false, false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([])
+              expect(yield* Ref.get(writerStarts)).toBe(0)
+
+              const lostAcknowledgement = yield* Effect.exit(open("LoseAcknowledgement", "Unexpected"))
+              expect(lostAcknowledgement._tag).toBe("Failure")
+              assertRunState(yield* readCurrent(), true, false, false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([])
+              expect(yield* Ref.get(writerStarts)).toBe(0)
+
+              const ambiguous = yield* Effect.exit(open(undefined, "Ambiguous"))
+              expect(ambiguous._tag).toBe("Failure")
+              assertRunState(yield* readCurrent(), true, false, false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceObservations)).toBe(0)
+
+              expect(yield* open(undefined, "ActivityAbsent")).toMatchObject({
+                _tag: "ActionCompleted",
+                proposalId: proposal.id
+              })
+              assertRunState(yield* readCurrent(), true, false, true, true)
+              expect(yield* Ref.get(providerCalls)).toEqual([run, run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceObservations)).toBe(1)
+            })
+
+          const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+          const memoryStore = Context.get(memoryContext, JournalStore)
+          yield* seedStore(memoryStore)
+          yield* exercise(
+            (startFailure, providerMode) => runAction(memoryStore, startFailure, providerMode),
+            () => memoryStore.read(fixture.runId)
+          )
+
+          yield* Ref.set(providerCalls, [])
+          yield* Ref.set(writerStarts, 0)
+          yield* Ref.set(absenceObservations, 0)
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-automatic-provider-start-" })
+          const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+          const openSqlite = <A>(
+            use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>,
+            _startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ): Effect.Effect<A, unknown, Scope.Scope> =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = yield* JournalStore
+                return yield* use(store)
+              }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+            )
+
+          yield* openSqlite((store) => seedStore(store), undefined)
+          yield* exercise(
+            (startFailure, providerMode) =>
+              openSqlite((store) => runAction(store, startFailure, providerMode), startFailure),
+            () => openSqlite((store) => store.read(fixture.runId), undefined)
+          )
+        }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+      )
+  )
+
+  effectIt.effect(
+    "recovers a committed automatic S2 provider result after process loss across memory and reopened SQLite",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = makeSuccessorPrefix()
+          const preparedSession = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+            fixture.input,
+            fixture.reduction.prefix
+          )
+          if (preparedSession._tag !== "Append") {
+            return yield* Effect.die("provider-result recovery requires the exact automatic fixed session")
+          }
+          fixture.append(preparedSession.event)
+          const session = preparedSession.event.successor
+          const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+          const responsibility = fixture.accepted.responsibility
+          const transition = RunnableFrontierTransition.RunIntegrator({
+            lineage: fixture.input.targetLineage,
+            lineageObservedAt: fixture.input.targetLineageObservedAt,
+            responsibility,
+            run
+          })
+          const routed = deliveryProposalsOf({
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [responsibility],
+            responsibilities: [],
+            runId: fixture.runId,
+            transitions: [transition]
+          })
+          const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+          if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+            return yield* Effect.die("automatic S2 result recovery requires its ordinary RunIntegrator proposal")
+          }
+          const action = { _tag: "IdentityFreeAction" as const, proposal }
+          const fixedRecords = fixture.records()
+          const candidateText = IntegratorCandidateText.make("refs/heads/dalph/automatic-s2-result-recovery")
+          const candidateCommit = GitCommitSha.make("9".repeat(40))
+          const preparedResult = IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run })
+          const candidateObservation = IntegratorGitObservation.cases.Commit.make({
+            candidateText,
+            commit: candidateCommit,
+            directParents: [session.expectedTargetHead, session.acceptedResult.commit]
+          })
+          const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+          const writerStarts = yield* Ref.make(0)
+          const activeWriters = yield* Ref.make(0)
+          const overlapObserved = yield* Ref.make(false)
+          const provider = Integrator.of({
+            prepare: (request) =>
+              Effect.gen(function* () {
+                if (JSON.stringify(request.correlation) !== JSON.stringify(run)) {
+                  return yield* Effect.die("provider result must use the exact automatic S2 run correlation")
+                }
+                yield* Ref.update(providerCalls, (calls) => [...calls, request.correlation])
+                const active = yield* Ref.get(activeWriters)
+                if (active !== 0) yield* Ref.set(overlapObserved, true)
+                yield* Ref.set(activeWriters, active + 1)
+                yield* Ref.update(writerStarts, (count) => count + 1)
+                yield* Ref.update(activeWriters, (count) => count - 1)
+                return preparedResult
+              })
+          })
+
+          const seedStore = Effect.fn("DeliveryProposalRoutesTest.seedAutomaticSuccessorResultStore")(function* (
+            store: JournalStore["Service"]
+          ) {
+            const [beginning, ...remaining] = fixedRecords
+            if (beginning?.event._tag !== "WorkflowRunBegan") {
+              return yield* Effect.die("automatic S2 provider history must begin one Run")
+            }
+            yield* store.beginRun(
+              fixture.runId,
+              beginning.event.target,
+              beginning.event.initialControlPolicy,
+              beginning.event.remotePublicationTarget
+            )
+            for (const record of remaining) {
+              if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                return yield* Effect.die("automatic S2 provider history may not contain another Run lifecycle event")
+              }
+              yield* store.append(fixture.runId, record.key, record.event)
+            }
+          })
+
+          const runAction = (store: JournalStore["Service"], loseResultAcknowledgement: boolean) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const stored = yield* store.read(fixture.runId)
+                const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+                if (history._tag !== "ValidWorkflowJournalHistory") {
+                  return yield* Effect.die(
+                    `reopened provider-result prefix is invalid: ${JSON.stringify(history.issues)}`
+                  )
+                }
+                const boundary: JournalStorageBoundary = {
+                  append: (runId, key, event) => {
+                    if (
+                      loseResultAcknowledgement &&
+                      event._tag === "IntegratorRunResultRecorded" &&
+                      event.run.session.sessionId === session.sessionId
+                    ) {
+                      return store
+                        .append(runId, key, event)
+                        .pipe(Effect.andThen(Effect.die("process lost after automatic S2 result committed")))
+                    }
+                    return store.append(runId, key, event)
+                  },
+                  read: store.read,
+                  terminateRun: store.terminateRun
+                }
+                return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+                  Effect.provide(journalLayer(fixture.runId, target, history, boundary)),
+                  Effect.provideService(Integrator, provider),
+                  Effect.provideService(
+                    IntegratorGit,
+                    IntegratorGit.of({
+                      readCandidate: (_integrationTarget, requestedCandidateText) =>
+                        requestedCandidateText === candidateText
+                          ? Effect.succeed(candidateObservation)
+                          : Effect.die("provider-result recovery must read the exact candidate text")
+                    })
+                  ),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
+                )
+              })
+            )
+
+          const assertRecords = (records: ReadonlyArray<JournalRecord>, hasCandidateProof: boolean) => {
+            const fixed = records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+            expect(fixed).toHaveLength(1)
+            expect(fixed[0]?.event).toMatchObject({ successor: session })
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(1)
+            const results = records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorRunResultRecorded" && event.run.session.sessionId === session.sessionId
+            )
+            expect(results).toHaveLength(1)
+            expect(results[0]?.event).toMatchObject({ run, result: preparedResult })
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunCandidateGitReadIntended" &&
+                  event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(hasCandidateProof ? 1 : 0)
+            const observations = records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorRunCandidateGitObserved" && event.run.session.sessionId === session.sessionId
+            )
+            expect(observations).toHaveLength(hasCandidateProof ? 1 : 0)
+            if (hasCandidateProof) {
+              expect(observations[0]?.event).toMatchObject({ candidateText, observation: candidateObservation, run })
+            }
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+              )
+            ).toHaveLength(0)
+            expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+            ).toHaveLength(1)
+          }
+
+          const exercise = <R>(
+            open: (loseResultAcknowledgement: boolean) => Effect.Effect<unknown, unknown, R>,
+            readCurrent: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown, R>
+          ) =>
+            Effect.gen(function* () {
+              const stopped = yield* Effect.exit(open(true))
+              expect(stopped._tag).toBe("Failure")
+              assertRecords(yield* readCurrent(), false)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(activeWriters)).toBe(0)
+              expect(yield* Ref.get(overlapObserved)).toBe(false)
+
+              expect(yield* open(false)).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+              assertRecords(yield* readCurrent(), true)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(activeWriters)).toBe(0)
+              expect(yield* Ref.get(overlapObserved)).toBe(false)
+            })
+
+          const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+          const memoryStore = Context.get(memoryContext, JournalStore)
+          yield* seedStore(memoryStore)
+          yield* exercise(
+            (loseResultAcknowledgement) => runAction(memoryStore, loseResultAcknowledgement),
+            () => memoryStore.read(fixture.runId)
+          )
+
+          yield* Ref.set(providerCalls, [])
+          yield* Ref.set(writerStarts, 0)
+          yield* Ref.set(activeWriters, 0)
+          yield* Ref.set(overlapObserved, false)
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-automatic-provider-result-" })
+          const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+          const openSqlite = <A>(
+            use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>
+          ): Effect.Effect<A, unknown, Scope.Scope> =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = yield* JournalStore
+                return yield* use(store)
+              }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+            )
+
+          yield* openSqlite((store) => seedStore(store))
+          yield* exercise(
+            (loseResultAcknowledgement) => openSqlite((store) => runAction(store, loseResultAcknowledgement)),
+            () => openSqlite((store) => store.read(fixture.runId))
+          )
+        }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+      )
+  )
+
+  effectIt.effect(
+    "recovers a committed automatic S2 CandidateRejected result after process loss across memory and reopened SQLite",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = makeSuccessorPrefix()
+          const preparedSession = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+            fixture.input,
+            fixture.reduction.prefix
+          )
+          if (preparedSession._tag !== "Append") {
+            return yield* Effect.die("CandidateRejected recovery requires the exact automatic fixed session")
+          }
+          fixture.append(preparedSession.event)
+          const session = preparedSession.event.successor
+          const responsibility = fixture.accepted.responsibility
+          const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+          const transition = RunnableFrontierTransition.RunIntegrator({
+            lineage: fixture.input.targetLineage,
+            lineageObservedAt: fixture.input.targetLineageObservedAt,
+            responsibility,
+            run
+          })
+          const routed = deliveryProposalsOf({
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [responsibility],
+            responsibilities: [],
+            runId: fixture.runId,
+            transitions: [transition]
+          })
+          const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+          if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+            return yield* Effect.die(
+              "automatic S2 CandidateRejected recovery requires its ordinary RunIntegrator proposal"
+            )
+          }
+          const action = { _tag: "IdentityFreeAction" as const, proposal }
+          const fixedRecords = fixture.records()
+          const candidateText = IntegratorCandidateText.make("refs/heads/dalph/automatic-s2-rejected-candidate")
+          const rejectedObservation = IntegratorGitObservation.cases.Commit.make({
+            candidateText,
+            commit: GitCommitSha.make("8".repeat(40)),
+            directParents: [responsibility.acceptedResult.commit, session.expectedTargetHead]
+          })
+          const preparedResult = IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run })
+          const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+          const candidateReads = yield* Ref.make(0)
+          const writerStarts = yield* Ref.make(0)
+          const activeWriters = yield* Ref.make(0)
+          const overlapObserved = yield* Ref.make(false)
+          const provider = Integrator.of({
+            prepare: (request) =>
+              Effect.gen(function* () {
+                if (JSON.stringify(request.correlation) !== JSON.stringify(run)) {
+                  return yield* Effect.die("CandidateRejected result must use the exact automatic S2 run correlation")
+                }
+                yield* Ref.update(providerCalls, (calls) => [...calls, request.correlation])
+                const active = yield* Ref.get(activeWriters)
+                if (active !== 0) yield* Ref.set(overlapObserved, true)
+                yield* Ref.set(activeWriters, active + 1)
+                yield* Ref.update(writerStarts, (count) => count + 1)
+                yield* Ref.set(activeWriters, active)
+                return preparedResult
+              })
+          })
+
+          const seedStore = Effect.fn("DeliveryProposalRoutesTest.seedAutomaticSuccessorCandidateRejectedStore")(
+            function* (store: JournalStore["Service"]) {
+              const [beginning, ...remaining] = fixedRecords
+              if (beginning?.event._tag !== "WorkflowRunBegan") {
+                return yield* Effect.die("automatic S2 CandidateRejected history must begin one Run")
+              }
+              yield* store.beginRun(
+                fixture.runId,
+                beginning.event.target,
+                beginning.event.initialControlPolicy,
+                beginning.event.remotePublicationTarget
+              )
+              for (const record of remaining) {
+                if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                  return yield* Effect.die("automatic S2 CandidateRejected history may not contain another Run event")
+                }
+                yield* store.append(fixture.runId, record.key, record.event)
+              }
+            }
+          )
+
+          const runAction = (store: JournalStore["Service"], loseObservationAcknowledgement: boolean) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const stored = yield* store.read(fixture.runId)
+                const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+                if (history._tag !== "ValidWorkflowJournalHistory") {
+                  return yield* Effect.die(
+                    `reopened CandidateRejected prefix is invalid: ${JSON.stringify(history.issues)}`
+                  )
+                }
+                const boundary: JournalStorageBoundary = {
+                  append: (runId, key, event) => {
+                    if (
+                      loseObservationAcknowledgement &&
+                      event._tag === "IntegratorRunCandidateGitObserved" &&
+                      event.run.session.sessionId === session.sessionId
+                    ) {
+                      return store
+                        .append(runId, key, event)
+                        .pipe(
+                          Effect.andThen(Effect.die("process lost after automatic S2 candidate observation committed"))
+                        )
+                    }
+                    return store.append(runId, key, event)
+                  },
+                  read: store.read,
+                  terminateRun: store.terminateRun
+                }
+                return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+                  Effect.provide(journalLayer(fixture.runId, target, history, boundary)),
+                  Effect.provideService(Integrator, provider),
+                  Effect.provideService(
+                    IntegratorGit,
+                    IntegratorGit.of({
+                      readCandidate: (integrationTarget, requestedCandidateText) =>
+                        Effect.gen(function* () {
+                          if (JSON.stringify(integrationTarget) !== JSON.stringify(responsibility.integrationTarget)) {
+                            return yield* Effect.die(
+                              "CandidateRejected recovery must retain the exact integration target"
+                            )
+                          }
+                          if (requestedCandidateText !== candidateText) {
+                            return yield* Effect.die("CandidateRejected recovery must read the exact candidate text")
+                          }
+                          yield* Ref.update(candidateReads, (count) => count + 1)
+                          return rejectedObservation
+                        })
+                    })
+                  ),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
+                )
+              })
+            )
+
+          const fixedAuthorizationCount = fixedRecords.filter(
+            ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+          ).length
+          const targetLineageReadCount = fixedRecords.filter(
+            ({ event }) => event._tag === "GitReadIntentRecorded"
+          ).length
+          const assertRecords = (records: ReadonlyArray<JournalRecord>, hasQuarantine: boolean) => {
+            const fixed = records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+            expect(fixed).toHaveLength(1)
+            expect(fixed[0]?.event).toMatchObject({ successor: session })
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(1)
+            const results = records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorRunResultRecorded" && event.run.session.sessionId === session.sessionId
+            )
+            expect(results).toHaveLength(1)
+            expect(results[0]?.event).toMatchObject({ run, result: preparedResult })
+            const intents = records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorRunCandidateGitReadIntended" &&
+                event.run.session.sessionId === session.sessionId
+            )
+            expect(intents).toHaveLength(1)
+            expect(intents[0]?.event).toMatchObject({ candidateText, run })
+            const observations = records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorRunCandidateGitObserved" && event.run.session.sessionId === session.sessionId
+            )
+            expect(observations).toHaveLength(1)
+            expect(observations[0]?.event).toMatchObject({ candidateText, observation: rejectedObservation, run })
+            const quarantines = records.filter(
+              ({ event }) =>
+                event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+            )
+            expect(quarantines).toHaveLength(hasQuarantine ? 1 : 0)
+            if (hasQuarantine) {
+              const resultRecord = results[0]
+              const observationRecord = observations[0]
+              const quarantine = quarantines[0]
+              if (
+                resultRecord?.event._tag !== "IntegratorRunResultRecorded" ||
+                observationRecord?.event._tag !== "IntegratorRunCandidateGitObserved" ||
+                quarantine?.event._tag !== "IntegrationQuarantined"
+              ) {
+                throw new Error("CandidateRejected recovery requires its exact result, Git observation, and quarantine")
+              }
+              expect(quarantine.event).toMatchObject({
+                basis: {
+                  _tag: "ConclusiveResult",
+                  cause: { _tag: "InvalidCandidate", candidateText, observation: rejectedObservation },
+                  evidence: {
+                    resultRecordedAt: resultRecord.position,
+                    candidateObservationAt: observationRecord.position
+                  }
+                },
+                correlation: session
+              })
+              expect(quarantine.position).toBeGreaterThan(observationRecord.position)
+            }
+            expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+            ).toHaveLength(fixedAuthorizationCount)
+            expect(records.filter(({ event }) => event._tag === "GitReadIntentRecorded")).toHaveLength(
+              targetLineageReadCount
+            )
+          }
+
+          const exercise = <R>(
+            open: (loseObservationAcknowledgement: boolean) => Effect.Effect<unknown, unknown, R>,
+            readCurrent: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown, R>
+          ) =>
+            Effect.gen(function* () {
+              const stopped = yield* Effect.exit(open(true))
+              expect(stopped._tag).toBe("Failure")
+              assertRecords(yield* readCurrent(), false)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(candidateReads)).toBe(1)
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(activeWriters)).toBe(0)
+              expect(yield* Ref.get(overlapObserved)).toBe(false)
+
+              expect(yield* open(false)).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+              assertRecords(yield* readCurrent(), true)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(candidateReads)).toBe(1)
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(activeWriters)).toBe(0)
+              expect(yield* Ref.get(overlapObserved)).toBe(false)
+            })
+
+          const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+          const memoryStore = Context.get(memoryContext, JournalStore)
+          yield* seedStore(memoryStore)
+          yield* exercise(
+            (loseObservationAcknowledgement) => runAction(memoryStore, loseObservationAcknowledgement),
+            () => memoryStore.read(fixture.runId)
+          )
+
+          yield* Ref.set(providerCalls, [])
+          yield* Ref.set(candidateReads, 0)
+          yield* Ref.set(writerStarts, 0)
+          yield* Ref.set(activeWriters, 0)
+          yield* Ref.set(overlapObserved, false)
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-automatic-candidate-rejected-" })
+          const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+          const openSqlite = <A>(
+            use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>
+          ): Effect.Effect<A, unknown, Scope.Scope> =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = yield* JournalStore
+                return yield* use(store)
+              }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+            )
+
+          yield* openSqlite((store) => seedStore(store))
+          yield* exercise(
+            (loseObservationAcknowledgement) => openSqlite((store) => runAction(store, loseObservationAcknowledgement)),
+            () => openSqlite((store) => store.read(fixture.runId))
+          )
+        }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+      )
+  )
+
+  effectIt.effect(
+    "recovers a committed automatic S2 NotPrepared result after process loss across memory and reopened SQLite",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = makeSuccessorPrefix()
+          const preparedSession = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+            fixture.input,
+            fixture.reduction.prefix
+          )
+          if (preparedSession._tag !== "Append") {
+            return yield* Effect.die("NotPrepared recovery requires the exact automatic fixed session")
+          }
+          fixture.append(preparedSession.event)
+          const session = preparedSession.event.successor
+          const responsibility = fixture.accepted.responsibility
+          const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+          const transition = RunnableFrontierTransition.RunIntegrator({
+            lineage: fixture.input.targetLineage,
+            lineageObservedAt: fixture.input.targetLineageObservedAt,
+            responsibility,
+            run
+          })
+          const routed = deliveryProposalsOf({
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [responsibility],
+            responsibilities: [],
+            runId: fixture.runId,
+            transitions: [transition]
+          })
+          const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+          if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+            return yield* Effect.die("automatic S2 NotPrepared recovery requires its ordinary RunIntegrator proposal")
+          }
+          const action = { _tag: "IdentityFreeAction" as const, proposal }
+          const fixedRecords = fixture.records()
+          const detail = IntegratorNotPreparedDetail.make("automatic S2 controlled NotPrepared result")
+          const notPreparedResult = IntegratorResult.cases.NotPrepared.make({ correlation: run, detail })
+          const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+          const writerStarts = yield* Ref.make(0)
+          const activeWriters = yield* Ref.make(0)
+          const overlapObserved = yield* Ref.make(false)
+          const provider = Integrator.of({
+            prepare: (request) =>
+              Effect.gen(function* () {
+                if (JSON.stringify(request.correlation) !== JSON.stringify(run)) {
+                  return yield* Effect.die("NotPrepared result must use the exact automatic S2 run correlation")
+                }
+                yield* Ref.update(providerCalls, (calls) => [...calls, request.correlation])
+                const active = yield* Ref.get(activeWriters)
+                if (active !== 0) yield* Ref.set(overlapObserved, true)
+                yield* Ref.set(activeWriters, active + 1)
+                yield* Ref.update(writerStarts, (count) => count + 1)
+                yield* Ref.update(activeWriters, (count) => count - 1)
+                return notPreparedResult
+              })
+          })
+
+          const seedStore = Effect.fn("DeliveryProposalRoutesTest.seedAutomaticSuccessorNotPreparedStore")(function* (
+            store: JournalStore["Service"]
+          ) {
+            const [beginning, ...remaining] = fixedRecords
+            if (beginning?.event._tag !== "WorkflowRunBegan") {
+              return yield* Effect.die("automatic S2 NotPrepared history must begin one Run")
+            }
+            yield* store.beginRun(
+              fixture.runId,
+              beginning.event.target,
+              beginning.event.initialControlPolicy,
+              beginning.event.remotePublicationTarget
+            )
+            for (const record of remaining) {
+              if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                return yield* Effect.die("automatic S2 NotPrepared history may not contain another Run lifecycle event")
+              }
+              yield* store.append(fixture.runId, record.key, record.event)
+            }
+          })
+
+          const runAction = (store: JournalStore["Service"], loseResultAcknowledgement: boolean) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const stored = yield* store.read(fixture.runId)
+                const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+                if (history._tag !== "ValidWorkflowJournalHistory") {
+                  return yield* Effect.die(`reopened NotPrepared prefix is invalid: ${JSON.stringify(history.issues)}`)
+                }
+                const boundary: JournalStorageBoundary = {
+                  append: (runId, key, event) => {
+                    if (
+                      loseResultAcknowledgement &&
+                      event._tag === "IntegratorRunResultRecorded" &&
+                      event.run.session.sessionId === session.sessionId
+                    ) {
+                      return store
+                        .append(runId, key, event)
+                        .pipe(
+                          Effect.andThen(Effect.die("process lost after automatic S2 NotPrepared result committed"))
+                        )
+                    }
+                    return store.append(runId, key, event)
+                  },
+                  read: store.read,
+                  terminateRun: store.terminateRun
+                }
+                return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+                  Effect.provide(journalLayer(fixture.runId, target, history, boundary)),
+                  Effect.provideService(Integrator, provider),
+                  Effect.provideService(
+                    IntegratorGit,
+                    IntegratorGit.of({
+                      readCandidate: () => Effect.die("NotPrepared results do not read or qualify a candidate")
+                    })
+                  ),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
+                )
+              })
+            )
+
+          const assertRecords = (records: ReadonlyArray<JournalRecord>, hasQuarantine: boolean) => {
+            const fixed = records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+            expect(fixed).toHaveLength(1)
+            expect(fixed[0]?.event).toMatchObject({ successor: session })
+            expect(session.acceptedResult.commit).toBe(responsibility.acceptedResult.commit)
+            expect(session.expectedTargetHead).toBe(fixture.input.targetLineage.targetHeadSha)
+            expect(session.integrationTarget).toEqual(responsibility.integrationTarget)
+            expect(session.plannedAttempt.baseSha).toBe(responsibility.plannedAttempt.baseSha)
+            expect(session.plannedAttempt.attemptId).toBe(responsibility.plannedAttempt.attemptId)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(1)
+            const results = records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorRunResultRecorded" && event.run.session.sessionId === session.sessionId
+            )
+            expect(results).toHaveLength(1)
+            expect(results[0]?.event).toMatchObject({ run, result: notPreparedResult })
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunCandidateGitReadIntended" &&
+                  event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(0)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunCandidateGitObserved" &&
+                  event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(0)
+            const quarantines = records.filter(
+              ({ event }) =>
+                event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+            )
+            expect(quarantines).toHaveLength(hasQuarantine ? 1 : 0)
+            if (hasQuarantine) {
+              const resultRecord = results[0]
+              const quarantine = quarantines[0]
+              if (
+                resultRecord?.event._tag !== "IntegratorRunResultRecorded" ||
+                quarantine?.event._tag !== "IntegrationQuarantined"
+              ) {
+                throw new Error("NotPrepared recovery requires its exact result and quarantine records")
+              }
+              expect(quarantine.event).toMatchObject({
+                basis: {
+                  _tag: "ConclusiveResult",
+                  cause: { _tag: "NotPrepared", detail },
+                  evidence: { resultRecordedAt: resultRecord.position }
+                },
+                correlation: session
+              })
+            }
+            expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+            const authorizations = records.filter(
+              ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+            )
+            expect(authorizations).toHaveLength(1)
+            const authorization = authorizations[0]
+            if (authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized") {
+              throw new Error("NotPrepared recovery must retain its exact automatic authorization")
+            }
+            expect(authorization.event.initiatedBy).toEqual({ _tag: "DalphCoordinator" })
+            expect(authorization.event.remoteHead).toBe(session.expectedTargetHead)
+            expect(authorization.event.mergeBase).toBe(fixture.input.predecessor.expectedTargetHead)
+            expect(authorization.event.correlation.target).toEqual(remotePublicationTargetForTest)
+            expect(authorization.event.correlation.qualifiedCandidate.run.session).toMatchObject({
+              acceptedResult: responsibility.acceptedResult,
+              integrationTarget: responsibility.integrationTarget,
+              plannedAttempt: { baseSha: responsibility.plannedAttempt.baseSha }
+            })
+          }
+
+          const exercise = <R>(
+            open: (loseResultAcknowledgement: boolean) => Effect.Effect<unknown, unknown, R>,
+            readCurrent: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown, R>
+          ) =>
+            Effect.gen(function* () {
+              const stopped = yield* Effect.exit(open(true))
+              expect(stopped._tag).toBe("Failure")
+              assertRecords(yield* readCurrent(), false)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(activeWriters)).toBe(0)
+              expect(yield* Ref.get(overlapObserved)).toBe(false)
+
+              expect(yield* open(false)).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+              assertRecords(yield* readCurrent(), true)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(activeWriters)).toBe(0)
+              expect(yield* Ref.get(overlapObserved)).toBe(false)
+            })
+
+          const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+          const memoryStore = Context.get(memoryContext, JournalStore)
+          yield* seedStore(memoryStore)
+          yield* exercise(
+            (loseResultAcknowledgement) => runAction(memoryStore, loseResultAcknowledgement),
+            () => memoryStore.read(fixture.runId)
+          )
+
+          yield* Ref.set(providerCalls, [])
+          yield* Ref.set(writerStarts, 0)
+          yield* Ref.set(activeWriters, 0)
+          yield* Ref.set(overlapObserved, false)
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "dalph-automatic-not-prepared-result-"
+          })
+          const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+          const openSqlite = <A>(
+            use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>
+          ): Effect.Effect<A, unknown, Scope.Scope> =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = yield* JournalStore
+                return yield* use(store)
+              }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+            )
+
+          yield* openSqlite((store) => seedStore(store))
+          yield* exercise(
+            (loseResultAcknowledgement) => openSqlite((store) => runAction(store, loseResultAcknowledgement)),
+            () => openSqlite((store) => store.read(fixture.runId))
+          )
+        }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+      )
+  )
+
   effectIt.effect("defers missing or contradictory acceptance evidence and rejects incomplete promotion runtime", () =>
     Effect.gen(function* () {
       const queue = RunnableFrontierTransition.QueueAcceptedResultIntegrationResponsibility({
@@ -2643,6 +4518,45 @@ describe("delivery proposal route matrix", () => {
         integrationFinalityFixture.target
       )
       const journal = harness.journal
+      const postPromotionGraph = projectTrackerSnapshot({
+        revision: "post-promotion-finality-route",
+        tasks: [
+          {
+            id: integrationFinalityFixture.taskId,
+            lifecycle: TaskLifecycle.cases.Open.make({}),
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        ]
+      })
+      if (postPromotionGraph._tag === "Invalid") {
+        return yield* Effect.die("the post-promotion finality graph fixture must be valid")
+      }
+      const readOrder = yield* Ref.make<ReadonlyArray<string>>([])
+      const recordRead = (name: string) => Ref.update(readOrder, (current) => [...current, name])
+      const traceTags = yield* Ref.make<ReadonlyArray<string>>([])
+      const interpreter = WorkflowInterpreter.of({
+        acquireTaskClaim: () => Effect.die("post-promotion finality does not acquire a task claim"),
+        readTaskClaim: () =>
+          recordRead("claim").pipe(
+            Effect.as(AuthoritativeTaskClaimObserved.make({ observation: integrationFinalityFixture.activeClaim }))
+          ),
+        readTaskWorktree: () => Effect.die("post-promotion finality does not read a worktree"),
+        readTargetLineage: () => Effect.die("post-promotion finality does not read target lineage"),
+        readTrackerGraph: () => recordRead("graph").pipe(Effect.as(postPromotionGraph.snapshot)),
+        readTaskWorkSpecification: () => recordRead("specification").pipe(Effect.as(finalitySpecification)),
+        reconcileTaskWorktree: () => Effect.die("post-promotion finality does not reconcile a worktree"),
+        recordTaskAttemptPlan: () => Effect.die("post-promotion finality does not plan an attempt"),
+        releaseTaskClaim: () => Effect.die("post-promotion finality does not release a task claim")
+      })
+      let postPromotionOperation = 0
+      const operationIds = OperationIdAllocator.of({
+        allocate: () =>
+          Effect.sync(() => {
+            postPromotionOperation += 1
+            return OperationId.make(`post-promotion-finality-read-${postPromotionOperation}`)
+          })
+      })
       let activeClaim: typeof integrationFinalityFixture.activeClaim | undefined =
         integrationFinalityFixture.activeClaim
       let completionMarker: typeof integrationFinalityFixture.claim | undefined
@@ -2666,10 +4580,14 @@ describe("delivery proposal route matrix", () => {
             activeClaim = undefined
           }),
         replaceTaskClaim: (request) =>
-          Effect.sync(() => {
-            completionMarker = request.claim
-            return request.claim
-          })
+          recordRead("replacement").pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                completionMarker = request.claim
+                return request.claim
+              })
+            )
+          )
       })
       const replacement = RunnableFrontierTransition.ReplacePromotedTaskClaim({
         request: completionClaimReplacementRequestFor(integrationFinalityFixture.claim),
@@ -2680,6 +4598,20 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing completion-claim replacement proposal")
       }
       const replacementAction = { _tag: "IdentityFreeAction" as const, proposal: replacementProposal }
+      const replacementBoundaryEntries = yield* Ref.make(0)
+      const replacementLease: DeliveryActionExecutionLease = {
+        ...inertLease,
+        forwardBoundary: {
+          _tag: "InterruptibleBoundary",
+          execution: {
+            run: (_intent, call, recordResult) =>
+              Ref.update(replacementBoundaryEntries, (count) => count + 1).pipe(
+                Effect.andThen(call),
+                Effect.flatMap(recordResult)
+              )
+          }
+        }
+      }
       expect(
         yield* executeIntegrationAction(
           replacementAction,
@@ -2692,12 +4624,23 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           replacementAction,
           replacement,
-          inertLease,
+          replacementLease,
           integrationFinalityFixture.target
-        ).pipe(Effect.provideService(CompletionClaimBoundary, boundary), (effect) =>
-          provideLiveJournal(effect, harness)
+        ).pipe(
+          (effect) => provideLiveJournal(effect, harness),
+          Effect.provideService(CompletionClaimBoundary, boundary),
+          Effect.provideService(WorkflowInterpreter, interpreter),
+          Effect.provideService(OperationIdAllocator, operationIds),
+          Effect.provideService(
+            WorkflowTrace,
+            WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
+          )
         )
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: replacementProposal.id })
+      expect(yield* Ref.get(readOrder)).toEqual(["graph", "specification", "claim", "replacement"])
+      expect(yield* Ref.get(traceTags)).toEqual(["OperationSelected", "OperationSelected", "OperationSelected"])
+      expect(yield* Ref.get(replacementBoundaryEntries)).toBe(1)
+      expect(acceptedFinalityHistory.plannedAttempt.taskRevision).toBe(finalitySpecification.fingerprint)
 
       const completionIntent = CompletionTaskIntendedEvent.make({
         request: integrationFinalityFixture.completionRequest,
@@ -2787,10 +4730,17 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           replacementAction,
           replacement,
-          inertLease,
+          replacementLease,
           integrationFinalityFixture.target
-        ).pipe(Effect.provideService(CompletionClaimBoundary, foreignBoundary), (effect) =>
-          provideLiveJournal(effect, waitingHarness)
+        ).pipe(
+          (effect) => provideLiveJournal(effect, waitingHarness),
+          Effect.provideService(CompletionClaimBoundary, foreignBoundary),
+          Effect.provideService(WorkflowInterpreter, interpreter),
+          Effect.provideService(OperationIdAllocator, operationIds),
+          Effect.provideService(
+            WorkflowTrace,
+            WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
+          )
         )
       ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimConflict" })
 
@@ -2812,10 +4762,17 @@ describe("delivery proposal route matrix", () => {
         yield* executeIntegrationAction(
           replacementAction,
           replacement,
-          inertLease,
+          replacementLease,
           integrationFinalityFixture.target
-        ).pipe(Effect.provideService(CompletionClaimBoundary, unreadableBoundary), (effect) =>
-          provideLiveJournal(effect, waitingHarness)
+        ).pipe(
+          (effect) => provideLiveJournal(effect, waitingHarness),
+          Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
+          Effect.provideService(WorkflowInterpreter, interpreter),
+          Effect.provideService(OperationIdAllocator, operationIds),
+          Effect.provideService(
+            WorkflowTrace,
+            WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
+          )
         )
       ).toMatchObject({ _tag: "ActionDeferred", reason: "CompletionClaimReadUnavailable" })
 

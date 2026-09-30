@@ -1,3 +1,4 @@
+import { candidateChangedPaths, requiresBroadSampling } from "./quality-check-selection.mjs"
 import { createHash } from "node:crypto"
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
@@ -96,14 +97,15 @@ export const createQualityGateStagePlan = ({
   nodeVersions,
   pnpmEntryPoint = "pnpm",
   policyIdentity = qualityGatePolicyIdentity,
-  stageIds = qualityGateQualificationStageIds,
-  worktree
+  stageIds,
+  worktree,
+  changedPaths = candidateChangedPaths(baseSha, candidateSha, worktree)
 } = {}) => {
   requireCanonicalSha("Quality stage plan Base SHA", baseSha)
   requireCanonicalSha("Quality stage plan candidate SHA", candidateSha)
-  const versions = requireNodeVersions(nodeVersions)
+  const supportedVersions = requireNodeVersions(nodeVersions)
+  const versions = requiresBroadSampling(changedPaths) ? supportedVersions : supportedVersions.slice(0, 1)
   const policy = requirePolicyIdentity(policyIdentity)
-  const selectedStageIds = requireStageIds(stageIds)
   if (typeof nodeExecutable !== "string" || nodeExecutable.trim() === "") {
     throw new Error("Quality stage plan requires a Node executable")
   }
@@ -116,11 +118,13 @@ export const createQualityGateStagePlan = ({
 
   const manifest = fullQualityGateManifest(baseSha, {
     candidateHeadSha: candidateSha,
+    changedPaths,
     nodeExecutable,
     pnpmEntryPoint,
     ...(worktree === undefined ? {} : { worktree })
   })
   const qualificationStages = manifest.filter(({ boundary }) => boundary === "qualification")
+  const selectedStageIds = requireStageIds(stageIds ?? qualificationStages.map(({ id }) => id))
   const byId = new Map(qualificationStages.map((stage) => [stage.id, stage]))
   const selectedStages = selectedStageIds.map((id) => {
     const stage = byId.get(id)

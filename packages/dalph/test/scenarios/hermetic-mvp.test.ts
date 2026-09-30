@@ -7,6 +7,9 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
@@ -31,19 +34,24 @@ import {
   type CompletionTaskClaim,
   CompletionTaskRequestLookup,
   CoordinatorOwnership,
+  DeliveryRuntimeObservationObserver,
   EvidenceStore,
   EvidenceStoreLocator,
   FixtureTarget,
   GitCommand,
   GitCommonDirectoryTarget,
+  IntegrationResponsibilityIdentity,
   InitialControlPolicy,
   IntegratorCandidateText,
   IntegratorResult,
   isExactTaskClaim,
   JournalDatabaseLocator,
+  JournaledRunBootstrap,
   JournalStore,
   nodeEvidenceStoreLayer,
+  nodeGitDirectPublicationLayer,
   nodeGitCommandLayer,
+  nodeGitRemoteBaselineLayer,
   nodeGitTargetPromotionLayer,
   OperationId,
   OperationIdAllocator,
@@ -71,6 +79,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ConfigProvider, Deferred, Effect, Exit, FileSystem, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
+import { derivePublicationContinuation } from "../../../orchestrator/src/coordination/frontier/publication-continuation.js"
+import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
+import { deriveCurrentIntegratorState } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
+import { fileGitSenderCustodyLayer } from "../../src/application/git-sender-custody.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import {
   acceptedManifestBytes,
@@ -83,6 +96,12 @@ import {
   remotePublicationGitLayerForProductionTest,
   remotePublicationTargetForTest
 } from "../../../orchestrator/test/support/direct-publication.js"
+import {
+  RemotePublicationGit,
+  RemotePublicationPushFailure,
+  RemotePublicationBatchGrantRequest,
+  RemotePublicationBatchGrantRequestId
+} from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
 
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
 const hasEventTag =
@@ -92,9 +111,22 @@ const hasEventTag =
   ): record is Record & { readonly event: Extract<WorkflowJournalEvent, { readonly _tag: Tag }> } =>
     record.event._tag === tag
 const maxActivationPasses = 64
-
-const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
+const runHermeticMvpJourney = (
+  crashAfterPromotion: boolean,
+  competingHeadBeforeDiscovery = false,
+  competingHeadBetweenDiscoveryAndPush = false,
+  competingHeadAfterLostPushResponse = false,
+  exhaustAutomaticSuccessorBounds = false,
+  grantExhaustedSuccessor = false,
+  progressUnrelatedTarget?: () => Effect.Effect<void, unknown, never>,
+  taskLabel: "A" | "B" = "A"
+) =>
   Effect.gen(function* () {
+    const competingHeadRace =
+      competingHeadBeforeDiscovery ||
+      competingHeadBetweenDiscoveryAndPush ||
+      competingHeadAfterLostPushResponse ||
+      exhaustAutomaticSuccessorBounds
     const fileSystem = yield* FileSystem.FileSystem
     const git = yield* GitCommand
     const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -105,7 +137,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const repository = `${root}/repository`
       const bareRemote = `${root}/target.git`
       const evidenceDirectory = `${root}/evidence`
-      const worktree = WorktreeLocator.make(`${root}/task-A`)
+      const worktree = WorktreeLocator.make(`${root}/task-${taskLabel}`)
       const journalFilename = JournalDatabaseLocator.make(`${root}/journal.sqlite`)
       yield* fileSystem.makeDirectory(repository)
       yield* fileSystem.makeDirectory(evidenceDirectory)
@@ -128,16 +160,76 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const baseSha = GitCommitSha.make(
         yield* runInWorktree(git, repository, ["rev-parse", "HEAD"], "read initial commit")
       )
+      const integrationRef = IntegrationTargetRef.make(
+        competingHeadRace ? "refs/heads/integration-target" : "refs/heads/master"
+      )
+      if (competingHeadRace) {
+        yield* runInWorktree(
+          git,
+          repository,
+          ["branch", integrationRef.slice("refs/heads/".length), baseSha],
+          "create unoccupied local integration target"
+        )
+      }
+      const competingHeads = yield* Effect.gen(function* () {
+        if (!competingHeadRace) return [] as const
+        const count = exhaustAutomaticSuccessorBounds ? 3 : 1
+        const heads: Array<GitCommitSha> = []
+        let parent = baseSha
+        for (let index = 0; index < count; index += 1) {
+          const generation = index + 2
+          const outsideWorktree = `${root}/outside-H${generation}`
+          const outsideBranch = `outside-H${generation}`
+          yield* runInWorktree(
+            git,
+            repository,
+            ["worktree", "add", "-b", outsideBranch, outsideWorktree, parent],
+            `create outside H${generation} worktree`
+          )
+          yield* fileSystem.writeFileString(
+            `${outsideWorktree}/OUTSIDE-${generation}.md`,
+            `compatible outside change ${generation}\n`
+          )
+          yield* runInWorktree(
+            git,
+            outsideWorktree,
+            ["add", `OUTSIDE-${generation}.md`],
+            `stage outside H${generation}`
+          )
+          yield* runInWorktree(
+            git,
+            outsideWorktree,
+            ["commit", "-m", `outside H${generation}`],
+            `commit outside H${generation}`
+          )
+          parent = GitCommitSha.make(
+            yield* runInWorktree(git, outsideWorktree, ["rev-parse", "HEAD"], `read outside H${generation}`)
+          )
+          heads.push(parent)
+          yield* runInWorktree(
+            git,
+            repository,
+            ["worktree", "remove", "--force", outsideWorktree],
+            `remove outside H${generation} worktree`
+          )
+        }
+        return heads
+      })
+      const competingHead = competingHeads[0]
       yield* runInWorktree(git, repository, ["branch", "unrelated", baseSha], "create unrelated branch")
 
-      const runId = RunId.make("hermetic-mvp-run")
-      const target = FixtureTarget.make("hermetic-mvp-target")
-      const taskId = TaskId.make("A")
-      const specification = makeTaskWorkSpecification({ body: "Create RESULT.md.", taskId, title: "Complete A" })
+      const runId = RunId.make(`hermetic-mvp-run-${taskLabel}`)
+      const target = FixtureTarget.make(`hermetic-mvp-target-${taskLabel}`)
+      const taskId = TaskId.make(taskLabel)
+      const specification = makeTaskWorkSpecification({
+        body: "Create RESULT.md.",
+        taskId,
+        title: `Complete ${taskLabel}`
+      })
       const plannedAttempt = PlannedTaskAttempt.make({
-        attemptId: AttemptId.make("hermetic-mvp-attempt-A"),
+        attemptId: AttemptId.make(`hermetic-mvp-attempt-${taskLabel}`),
         baseSha,
-        branch: TaskBranchRef.make("refs/heads/dalph/hermetic-mvp-A"),
+        branch: TaskBranchRef.make(`refs/heads/dalph/hermetic-mvp-${taskLabel}`),
         executor: TaskExecutorLocator.make("executor:hermetic-child"),
         runId,
         taskId,
@@ -145,9 +237,15 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         worktree
       })
       const integrationTarget = IntegrationTarget.make({
-        repository: GitRepositoryLocator.make(bareRemote),
-        ref: IntegrationTargetRef.make("refs/heads/master")
+        repository: GitRepositoryLocator.make(competingHeadRace ? repository + "/.git" : bareRemote),
+        ref: integrationRef
       })
+      const remotePublicationTarget = competingHeadRace
+        ? RemotePublicationTarget.make({
+            branch: RemotePublicationBranchRef.make("refs/heads/master"),
+            endpoint: RemotePublicationEndpoint.make(bareRemote)
+          })
+        : remotePublicationTargetForTest
       const lifecycle = yield* Ref.make<"Open" | "CompletedSuccessfully">("Open")
       const trackerClaim = yield* Ref.make<TrackerClaim>(UnclaimedTask.make({ taskId }))
       const completionMarker = yield* Ref.make<Option.Option<CompletionTaskClaim>>(Option.none())
@@ -162,6 +260,27 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const operationCounter = yield* Ref.make(0)
       const executorStarts = yield* Ref.make(0)
       const integratorCalls = yield* Ref.make(0)
+      const completionMutationCalls = yield* Ref.make(0)
+      const candidatePublicationPushCalls = yield* Ref.make(0)
+      const outsidePublicationPushCalls = yield* Ref.make(0)
+      const runtimeTrace = yield* Ref.make<ReadonlyArray<string>>([])
+      const runtimeObservation = DeliveryRuntimeObservationObserver.of({
+        observe: ({ evaluation, liveOwners }) => {
+          type ProposedAction = Extract<
+            typeof evaluation.proposedActions,
+            { readonly _tag: "DeliveryProposalsAvailable" }
+          >["proposals"][number]
+          const routeTag = (proposal: ProposedAction) =>
+            "transition" in proposal.route ? proposal.route.transition._tag : proposal.route._tag
+          const proposals =
+            evaluation.proposedActions._tag === "DeliveryProposalsAvailable"
+              ? evaluation.proposedActions.proposals.map((proposal) => `${proposal.owner}:${routeTag(proposal)}`)
+              : [`${evaluation.proposedActions._tag}`]
+          const owners = liveOwners.map((owner) => `${owner._tag}:${routeTag(owner.proposal)}`)
+          const entry = `acceptedAt=${evaluation.acceptedAt ?? "null"} proposals=${proposals.join(",")} owners=${owners.join(",")}`
+          return Ref.update(runtimeTrace, (entries) => [...entries.slice(-19), entry])
+        }
+      })
       const promotionAppliedWithoutResponse = yield* Deferred.make<void>()
       const terminalProjectionReady = yield* Deferred.make<void>()
 
@@ -172,6 +291,157 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         Effect.provide(nodeGitTargetPromotionLayer),
         Effect.provideService(GitCommand, git)
       )
+      const publicationObserved = yield* Ref.make(false)
+      const publicationPushed = yield* Ref.make(false)
+      const outsideHeadPublished = yield* Ref.make(false)
+      const lostPushResponseReturned = yield* Ref.make(false)
+      const lostPushResponseCount = yield* Ref.make(0)
+      const actualCompetingPushCalls = yield* Ref.make(0)
+      const suppressedNonFastForwardResponses = yield* Ref.make(0)
+      const remotePublicationGitLayer = yield* Effect.gen(function* () {
+        if (!competingHeadRace) return remotePublicationGitLayerForProductionTest
+        const publicationGitCommand = yield* GitCommand.pipe(
+          Effect.provide(
+            nodeGitCommandLayer.pipe(
+              Layer.provide(fileGitSenderCustodyLayer(GitCommonDirectoryTarget.make(`${repository}/.git`))),
+              Layer.provide(NodeServices.layer),
+              Layer.fresh
+            )
+          )
+        )
+        const gitAuthority = yield* RemotePublicationGit.pipe(
+          Effect.provide(
+            nodeGitDirectPublicationLayer(GitRepositoryLocator.make(repository + "/.git")).pipe(
+              Layer.provide(Layer.succeed(GitCommand, publicationGitCommand))
+            )
+          )
+        )
+        return Layer.succeed(
+          RemotePublicationGit,
+          RemotePublicationGit.of({
+            ...gitAuthority,
+            observe: (request) =>
+              Effect.gen(function* () {
+                const alreadyObserved = yield* Ref.getAndSet(publicationObserved, true)
+                if (!alreadyObserved && competingHeadBeforeDiscovery) {
+                  if (competingHead === undefined) return yield* Effect.die("automatic S2 lacked outside H2")
+                  yield* runInWorktree(
+                    git,
+                    repository,
+                    ["push", "target", `${competingHead}:refs/heads/master`],
+                    "publish outside H2 before publication discovery"
+                  ).pipe(Effect.orDie)
+                  yield* Ref.set(outsideHeadPublished, true)
+                }
+                return yield* gitAuthority.observe(request)
+              }),
+            push: (request, attemptOrdinal) =>
+              Effect.gen(function* () {
+                const candidatePush = yield* Ref.updateAndGet(candidatePublicationPushCalls, (count) => count + 1)
+                if (exhaustAutomaticSuccessorBounds) {
+                  if (grantExhaustedSuccessor && candidatePush === 4) {
+                    return yield* gitAuthority.push(request, attemptOrdinal)
+                  }
+                  if (candidatePush > 3) {
+                    return yield* Effect.die("an ungranted fourth automatic publication push reached Git")
+                  }
+                  const outsideHead = competingHeads[candidatePush - 1]
+                  if (outsideHead === undefined) {
+                    return yield* Effect.die(`bounded S2 push ${candidatePush} lacked its exact outside head`)
+                  }
+                  yield* runInWorktree(
+                    git,
+                    repository,
+                    ["push", "target", `${outsideHead}:refs/heads/master`],
+                    `publish outside H${candidatePush + 1} before candidate push ${candidatePush} settles`
+                  ).pipe(Effect.orDie)
+                  yield* Ref.update(outsidePublicationPushCalls, (count) => count + 1)
+                  yield* Ref.set(outsideHeadPublished, true)
+                  const actualResult = yield* gitAuthority.push(request, attemptOrdinal)
+                  yield* Ref.update(actualCompetingPushCalls, (count) => count + 1)
+                  if (actualResult._tag !== "RejectedNonFastForward") {
+                    return yield* Effect.die(
+                      `bounded S2 push ${candidatePush} expected a real non-fast-forward rejection, received ${actualResult._tag}`
+                    )
+                  }
+                  const remoteHeadAfterRejection = GitCommitSha.make(
+                    yield* runInGitDirectory(
+                      git,
+                      bareRemote,
+                      ["rev-parse", "refs/heads/master"],
+                      `verify candidate push ${candidatePush} preserved its outside head`
+                    ).pipe(Effect.orDie)
+                  )
+                  if (remoteHeadAfterRejection !== outsideHead) {
+                    return yield* Effect.die(`candidate push ${candidatePush} changed the outside remote head`)
+                  }
+                  if (candidatePush === 1) {
+                    yield* Ref.update(suppressedNonFastForwardResponses, (count) => count + 1)
+                    yield* Ref.update(lostPushResponseCount, (count) => count + 1)
+                    yield* Ref.set(lostPushResponseReturned, true)
+                    return yield* Effect.fail(
+                      new RemotePublicationPushFailure({ reason: "ResponseDeadline", target: request.target })
+                    )
+                  }
+                  return actualResult
+                }
+                const alreadyPushed = yield* Ref.getAndSet(publicationPushed, true)
+                if (!alreadyPushed && competingHeadAfterLostPushResponse) {
+                  if (!(yield* Ref.get(publicationObserved))) {
+                    return yield* Effect.die("lost-response S2 must follow the initial publication discovery read")
+                  }
+                  if (competingHead === undefined) return yield* Effect.die("automatic S2 lacked outside H2")
+                  yield* runInWorktree(
+                    git,
+                    repository,
+                    ["push", "target", `${competingHead}:refs/heads/master`],
+                    "publish outside H2 while the exact M push is in flight"
+                  ).pipe(Effect.orDie)
+                  yield* Ref.set(outsideHeadPublished, true)
+                  yield* Ref.update(actualCompetingPushCalls, (count) => count + 1)
+                  const actualResult = yield* gitAuthority.push(request, attemptOrdinal)
+                  if (actualResult._tag !== "RejectedNonFastForward") {
+                    return yield* Effect.die(`expected real non-fast-forward rejection, received ${actualResult._tag}`)
+                  }
+                  const remoteHeadAfterRejection = GitCommitSha.make(
+                    yield* runInGitDirectory(
+                      git,
+                      bareRemote,
+                      ["rev-parse", "refs/heads/master"],
+                      "verify the rejected push left H2 published"
+                    ).pipe(Effect.orDie)
+                  )
+                  if (remoteHeadAfterRejection !== competingHead) {
+                    return yield* Effect.die("real non-fast-forward rejection changed the remote target")
+                  }
+                  yield* Ref.update(suppressedNonFastForwardResponses, (count) => count + 1)
+                  yield* Ref.update(lostPushResponseCount, (count) => count + 1)
+                  yield* Ref.set(lostPushResponseReturned, true)
+                  return yield* Effect.fail(
+                    new RemotePublicationPushFailure({ reason: "ResponseDeadline", target: request.target })
+                  )
+                }
+                if (!alreadyPushed && competingHeadBetweenDiscoveryAndPush) {
+                  if (competingHead === undefined) return yield* Effect.die("automatic S2 lacked outside H2")
+                  if (!(yield* Ref.get(publicationObserved))) {
+                    return yield* Effect.die("between-discovery S2 race must follow the publication discovery read")
+                  }
+                  yield* runInWorktree(
+                    git,
+                    repository,
+                    ["push", "target", `${competingHead}:refs/heads/master`],
+                    "publish outside H2 between discovery and publication update"
+                  ).pipe(Effect.orDie)
+                  yield* Ref.set(outsideHeadPublished, true)
+                }
+                return yield* gitAuthority.push(request, attemptOrdinal)
+              })
+          })
+        )
+      })
+      const remoteBaselineLayer = competingHeadRace
+        ? nodeGitRemoteBaselineLayer.pipe(Layer.provide(Layer.succeed(GitCommand, git)))
+        : remoteBaselineGitLayerForCurrentHead(git)
 
       const trackerMutation = TrackerMutation.of({
         acquireTaskClaim: (acquisition) =>
@@ -245,6 +515,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
           }),
         completeTask: (request) =>
           Effect.gen(function* () {
+            yield* Ref.update(completionMutationCalls, (count) => count + 1)
             const candidate = yield* Ref.get(integratorCandidate)
             if (Option.isNone(candidate)) return yield* Effect.die("tracker completion preceded Integrator output")
             const currentTarget = GitCommitSha.make(
@@ -326,7 +597,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
                 yield* runInWorktree(
                   git,
                   request.plannedAttempt.worktree,
-                  ["commit", "-m", "complete A"],
+                  ["commit", "-m", `complete ${taskLabel}`],
                   "commit task result"
                 )
                 const commit = GitCommitSha.make(
@@ -340,7 +611,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
                 yield* runInWorktree(
                   git,
                   request.plannedAttempt.worktree,
-                  ["push", bareRemote, `${commit}:refs/dalph/transfer-A`],
+                  ["push", bareRemote, `${commit}:refs/dalph/transfer-${taskLabel}`],
                   "transfer accepted commit to target object database"
                 )
                 const evidenceManifest = yield* evidenceStore.put(acceptedManifestBytes(request.plannedAttempt, commit))
@@ -360,18 +631,22 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const integrator: IntegratorService = {
         prepare: (request) =>
           Effect.gen(function* () {
-            yield* Ref.update(integratorCalls, (calls) => calls + 1)
+            const call = yield* Ref.updateAndGet(integratorCalls, (calls) => calls + 1)
+            if (exhaustAutomaticSuccessorBounds && call > (grantExhaustedSuccessor ? 4 : 3)) {
+              return yield* Effect.die("an ungranted fourth Integrator provider start reached the test boundary")
+            }
             const acceptedCommit = request.correlation.session.acceptedResult.commit
+            const candidateRepository = competingHeadRace ? repository + "/.git" : bareRemote
             const tree = yield* runInGitDirectory(
               git,
-              bareRemote,
+              candidateRepository,
               ["rev-parse", `${acceptedCommit}^{tree}`],
               "read accepted tree"
             )
             const candidate = GitCommitSha.make(
               yield* runInGitDirectory(
                 git,
-                bareRemote,
+                candidateRepository,
                 [
                   "commit-tree",
                   tree,
@@ -380,18 +655,20 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
                   "-p",
                   acceptedCommit,
                   "-m",
-                  "integrate A"
+                  `integrate ${taskLabel}`
                 ],
                 "create explicit integration candidate"
               )
             )
             yield* Ref.set(integratorCandidate, Option.some(candidate))
-            yield* runInGitDirectory(
-              git,
-              bareRemote,
-              ["update-ref", "-d", "refs/dalph/transfer-A", acceptedCommit],
-              "remove private transfer ref"
-            )
+            if (call === 1) {
+              yield* runInGitDirectory(
+                git,
+                bareRemote,
+                ["update-ref", "-d", `refs/dalph/transfer-${taskLabel}`, acceptedCommit],
+                "remove private transfer ref"
+              )
+            }
             return IntegratorResult.cases.PreparedCandidate.make({
               candidateText: IntegratorCandidateText.make(candidate),
               correlation: request.correlation
@@ -412,9 +689,9 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
           completionTask,
           integrationFinality: completionClaim,
           integrator,
-          remoteBaselineGitLayer: remoteBaselineGitLayerForCurrentHead(git),
-          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
-          remotePublicationTarget: remotePublicationTargetForTest,
+          remoteBaselineGitLayer: remoteBaselineLayer,
+          remotePublicationGitLayer,
+          remotePublicationTarget,
           targetPromotion: {
             git: {
               compareAndSet: (request) =>
@@ -433,6 +710,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         }
       ).pipe(
         Layer.provide(Layer.succeed(TrackerGraphReader, trackerGraphReader)),
+        Layer.provide(Layer.succeed(DeliveryRuntimeObservationObserver, runtimeObservation)),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
 
@@ -468,18 +746,28 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         )
       )
       const terminated = yield* Ref.make(false)
+      const publicationBatchObserved = yield* Ref.make(false)
+      const grantApplied = yield* Ref.make(false)
+      const lastWorkflowDecision = yield* Ref.make<Option.Option<string>>(Option.none())
       const activationDriver = Effect.forEach(
         Array.from({ length: maxActivationPasses }),
         () =>
           Ref.get(terminated).pipe(
             Effect.flatMap((done) =>
-              done
-                ? Effect.void
-                : activate.pipe(
-                    Effect.flatMap((decision) =>
-                      decision._tag === "RunMayTerminate" ? Ref.set(terminated, true) : Effect.void
-                    )
-                  )
+              Effect.gen(function* () {
+                if (done || (yield* Ref.get(publicationBatchObserved))) return
+                const decision = yield* activate
+                yield* Ref.set(lastWorkflowDecision, Option.some(JSON.stringify(decision)))
+                if (decision._tag === "RunMayTerminate") yield* Ref.set(terminated, true)
+                if (
+                  exhaustAutomaticSuccessorBounds &&
+                  !(yield* Ref.get(grantApplied)) &&
+                  decision._tag === "RunMustRemainActive" &&
+                  (yield* Ref.get(candidatePublicationPushCalls)) === 3
+                ) {
+                  yield* Ref.set(publicationBatchObserved, true)
+                }
+              })
             )
           ),
         { discard: true }
@@ -520,13 +808,406 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         expect(yield* fileSystem.exists(worktree)).toBe(true)
       }
 
+      // Reactivate after the third push before checking the exact retained journal state and no fourth action.
+      // The retained outcome is intentionally active, so termination cannot stop this fixture.
+      yield* Ref.set(publicationBatchObserved, false)
       yield* activationDriver
+      if (exhaustAutomaticSuccessorBounds) {
+        const records = yield* Effect.gen(function* () {
+          return yield* (yield* JournalStore).read(runId)
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+        const evidenceReference = Option.getOrThrow(yield* Ref.get(acceptedEvidence))
+        const evidenceBytes = yield* evidenceStore.read(evidenceReference)
+        const decodedEvidence = yield* Schema.decodeUnknownEffect(AcceptedResultEvidenceManifest)(
+          JSON.parse(new TextDecoder().decode(evidenceBytes))
+        )
+        const runBeginningRecords = records.filter(hasEventTag("WorkflowRunBegan"))
+        const plannedAttemptRecords = records.filter(hasEventTag("TaskAttemptPlanned"))
+        const runStartedRecords = records.filter(hasEventTag("IntegratorRunStarted"))
+        const candidateProofs = records.filter(hasEventTag("IntegratorRunCandidateGitObserved"))
+        const automaticAuthorizations = records.filter(hasEventTag("IntegratorCompetingHeadSuccessorAuthorized"))
+        const automaticSessionFixations = records.filter(hasEventTag("IntegratorAutomaticSuccessorSessionFixed"))
+        const publicationIntents = records.filter(hasEventTag("RemotePublicationIntended"))
+        const publicationAttemptIntents = records.filter(hasEventTag("RemotePublicationAttemptIntended"))
+        const retainedPublications = records.filter(hasEventTag("RemotePublicationRetained"))
+        const h2 = competingHeads[0]
+        const h3 = competingHeads[1]
+        const h4 = competingHeads[2]
+        if (h2 === undefined || h3 === undefined || h4 === undefined) {
+          return yield* Effect.die("bounded S2 fixture requires outside heads H2, H3, and H4")
+        }
+
+        expect(records.every((record) => record.runId === runId)).toBe(true)
+        expect(runBeginningRecords).toHaveLength(1)
+        expect(plannedAttemptRecords).toHaveLength(1)
+        expect(yield* Ref.get(executorStarts)).toBe(1)
+        expect(yield* Ref.get(integratorCalls)).toBe(3)
+        expect(runStartedRecords).toHaveLength(3)
+        expect(records.filter(hasEventTag("IntegratorRunResultRecorded"))).toHaveLength(3)
+        expect(candidateProofs).toHaveLength(3)
+        expect(automaticAuthorizations).toHaveLength(2)
+        expect(automaticSessionFixations).toHaveLength(2)
+        expect(publicationIntents).toHaveLength(3)
+        expect(publicationAttemptIntents).toHaveLength(3)
+        expect(retainedPublications).toHaveLength(3)
+
+        const startedSessions = runStartedRecords.map(({ event }) => event.run.session)
+        expect(startedSessions.map(({ expectedTargetHead }) => expectedTargetHead)).toEqual([baseSha, h2, h3])
+        for (const session of startedSessions) {
+          expect(session.plannedAttempt).toEqual(plannedAttempt)
+          expect(session.acceptedResult.commit).toBe(decodedEvidence.commit)
+          expect(session.plannedAttempt.baseSha).toBe(baseSha)
+        }
+        const candidateCommits = candidateProofs.map(({ event }) =>
+          event.observation._tag === "Commit" ? event.observation.commit : `unexpected ${event.observation._tag}`
+        )
+        expect(
+          candidateProofs.map(({ event }) =>
+            event.observation._tag === "Commit" ? event.observation.directParents : [event.observation._tag]
+          )
+        ).toEqual([
+          [baseSha, decodedEvidence.commit],
+          [h2, decodedEvidence.commit],
+          [h3, decodedEvidence.commit]
+        ])
+        expect(publicationIntents.map(({ event }) => event.correlation.qualifiedCandidate.candidateCommit)).toEqual(
+          candidateCommits
+        )
+        expect(
+          publicationAttemptIntents.map(({ event }) => event.correlation.qualifiedCandidate.candidateCommit)
+        ).toEqual(candidateCommits)
+        expect(publicationAttemptIntents.map(({ event }) => event.attemptOrdinal)).toEqual([1, 1, 1])
+
+        const finalCandidate = candidateCommits[2]
+        if (typeof finalCandidate !== "string" || finalCandidate.startsWith("unexpected ")) {
+          return yield* Effect.die("third bounded S2 session did not produce its Git-qualified candidate")
+        }
+        const finalRetention = retainedPublications.findLast(
+          ({ event }) => event.correlation.qualifiedCandidate.candidateCommit === finalCandidate
+        )
+        if (finalRetention === undefined) {
+          return yield* Effect.die("third bounded S2 candidate lacks its exact retained competing head")
+        }
+        expect(finalRetention.event.cause).toMatchObject({
+          _tag: "CompatibleCompetingHead",
+          mergeBase: h3,
+          remoteHead: h4
+        })
+        expect(
+          automaticAuthorizations.some(
+            ({ event }) => event.correlation.qualifiedCandidate.candidateCommit === finalCandidate
+          )
+        ).toBe(false)
+        expect(automaticAuthorizations.every(({ position }) => position < finalRetention.position)).toBe(true)
+
+        expect(records.filter(hasEventTag("IntegratorSessionFixed"))).toHaveLength(1)
+        expect(records.filter(hasEventTag("RemotePublicationAttemptRejectedNonFastForward"))).toHaveLength(2)
+        expect(records.filter(hasEventTag("RemotePublicationSucceeded"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("TargetPromotionAttemptIntended"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("CompletionTaskAttemptIntended"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("CompletionTaskAcknowledged"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("WorkflowRunTerminated"))).toHaveLength(0)
+        expect(yield* Ref.get(candidatePublicationPushCalls)).toBe(3)
+        expect(yield* Ref.get(outsidePublicationPushCalls)).toBe(3)
+        expect(yield* Ref.get(actualCompetingPushCalls)).toBe(3)
+        expect(yield* Ref.get(targetPromotionCompareAndSetCalls)).toBe(0)
+        expect(yield* Ref.get(completionMutationCalls)).toBe(0)
+        expect(yield* Ref.get(lostPushResponseCount)).toBe(1)
+        expect(yield* Ref.get(lostPushResponseReturned)).toBe(true)
+        expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
+        expect(yield* Ref.get(lifecycle)).toBe("Open")
+        expect((yield* Ref.get(trackerClaim))._tag).toBe("ActiveTaskClaim")
+        expect(yield* Ref.get(terminated)).toBe(false)
+        const finalDecision = Option.getOrElse(yield* Ref.get(lastWorkflowDecision), () => "{}")
+        expect(JSON.parse(finalDecision)).toMatchObject({
+          _tag: "RunMustRemainActive",
+          reason: "UnsettledResponsibility"
+        })
+        const localTarget = GitCommitSha.make(
+          yield* runInWorktree(git, repository, ["rev-parse", integrationRef], "read retained bounded local target")
+        )
+        const remoteTarget = GitCommitSha.make(
+          yield* runInGitDirectory(
+            git,
+            bareRemote,
+            ["rev-parse", "refs/heads/master"],
+            "read retained bounded remote target"
+          )
+        )
+        expect(localTarget).toBe(h3)
+        expect(remoteTarget).toBe(h4)
+        if (progressUnrelatedTarget) {
+          yield* progressUnrelatedTarget()
+          const afterUnrelatedProgress = yield* Effect.gen(function* () {
+            return yield* (yield* JournalStore).read(runId)
+          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+          expect(afterUnrelatedProgress).toEqual(records)
+          expect(yield* Ref.get(terminated)).toBe(false)
+          expect(yield* Ref.get(lifecycle)).toBe("Open")
+        }
+        if (grantExhaustedSuccessor) {
+          const responsibility = records.find(hasEventTag("IntegrationResponsibilityBegan"))
+          if (responsibility === undefined) return yield* Effect.die("accepted responsibility must identify the grant")
+          const grant = yield* Effect.gen(function* () {
+            const bootstrap = yield* JournaledRunBootstrap
+            return yield* bootstrap.operatorControl.applyRemotePublicationBatchGrant(
+              RemotePublicationBatchGrantRequest.make({
+                exhaustionAt: finalRetention.position,
+                requestId: RemotePublicationBatchGrantRequestId.make("hermetic-mvp-s4-grant"),
+                responsibility: IntegrationResponsibilityIdentity.make({ queuedAt: responsibility.position, runId }),
+                runId,
+                schemaVersion: 1
+              })
+            )
+          }).pipe(
+            Effect.provide(application),
+            Effect.provide(
+              ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename }))
+            )
+          )
+          expect(grant.exhaustionAt).toBe(finalRetention.position)
+          yield* Ref.set(grantApplied, true)
+          yield* Ref.set(publicationBatchObserved, false)
+          yield* activationDriver
+          const grantedRecords = yield* Effect.gen(function* () {
+            return yield* (yield* JournalStore).read(runId)
+          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+          const grantedSessions = grantedRecords.filter(hasEventTag("IntegratorAutomaticSuccessorSessionFixed"))
+          const integrationStarted = grantedRecords.find(hasEventTag("IntegrationStarted"))
+          if (integrationStarted === undefined) return yield* Effect.die("started responsibility is missing")
+          const startedResponsibility = StartedIntegrationResponsibility.make({
+            acceptedResult: responsibility.event.acceptedResult,
+            integrationTarget: responsibility.event.integrationTarget,
+            plannedAttempt: responsibility.event.plannedAttempt,
+            queuedAt: responsibility.position,
+            startedAt: integrationStarted.position
+          })
+          const rebuilt = reduceWorkflowJournalHistory(runId, grantedRecords)
+          if (rebuilt._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die("granted history invalid")
+          const integratorState = deriveCurrentIntegratorState(rebuilt.prefix, startedResponsibility)
+          const continuation = derivePublicationContinuation(rebuilt.runState, integratorState)
+          expect(grantedRecords.filter(hasEventTag("RemotePublicationBatchGrantApplied"))).toHaveLength(1)
+          expect(grantedSessions).toHaveLength(3)
+          expect(grantedSessions[2]?.event.publicationBatchGrantAt).toBe(grant.acceptedAt)
+          expect(grantedSessions[2]?.event.successorGeneration).toBe(4)
+          expect(grantedSessions[2]?.event.successor.acceptedResult.commit).toBe(decodedEvidence.commit)
+          expect(grantedRecords.filter(hasEventTag("TaskAttemptPlanned"))).toHaveLength(1)
+          expect(yield* Ref.get(executorStarts)).toBe(1)
+          expect(yield* Ref.get(integratorCalls)).toBe(4)
+          expect(yield* Ref.get(candidatePublicationPushCalls)).toBe(4)
+          expect(grantedRecords.filter(hasEventTag("RemotePublicationSucceeded"))).toHaveLength(1)
+          expect({ state: integratorState._tag, publication: continuation?.publication._tag }).toEqual({
+            state: "GitQualifiedPrepared",
+            publication: "PublicationSucceeded"
+          })
+          expect(
+            grantedRecords.filter(hasEventTag("TargetPromotionObservedSuccess")),
+            JSON.stringify({
+              decision: Option.getOrElse(yield* Ref.get(lastWorkflowDecision), () => "missing"),
+              runtimeTrace: yield* Ref.get(runtimeTrace),
+              tail: grantedRecords.slice(-18).map(({ event }) => event._tag)
+            })
+          ).toHaveLength(1)
+          expect(grantedRecords.filter(hasEventTag("CompletionTaskAcknowledged"))).toHaveLength(1)
+          expect(grantedRecords.filter(hasEventTag("IntegrationFinalitySettled"))).toHaveLength(1)
+          expect(grantedRecords.filter(hasEventTag("WorkflowRunTerminated"))).toHaveLength(1)
+          expect(yield* Ref.get(terminated)).toBe(true)
+        }
+        return
+      }
       if (!(yield* Ref.get(terminated))) {
         const stalledRecords = yield* Effect.gen(function* () {
           return yield* (yield* JournalStore).read(runId)
         }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+        const s2MilestoneTags = [
+          "RemotePublicationRetained",
+          "IntegratorCompetingHeadSuccessorAuthorized",
+          "RemoteBaselineObserved",
+          "LocalTargetCatchUpObserved",
+          "TargetLineageObserved",
+          "IntegratorAutomaticSuccessorSessionFixed",
+          "IntegratorRunStarted",
+          "IntegratorRunResultRecorded",
+          "IntegratorRunCandidateGitObserved",
+          "RemotePublicationIntended",
+          "RemotePublicationSucceeded",
+          "TargetPromotionObservedSuccess",
+          "CompletionTaskAcknowledged",
+          "IntegrationFinalitySettled",
+          "IntegratorCandidateCleanupAuthorized",
+          "IntegratorCandidateCleanupSettled",
+          "WorktreeCleanupSettled",
+          "BranchCleanupSettled",
+          "WorkflowRunTerminated"
+        ] as const satisfies ReadonlyArray<WorkflowJournalEvent["_tag"]>
+        type S2MilestoneEvent = Extract<WorkflowJournalEvent, { readonly _tag: (typeof s2MilestoneTags)[number] }>
+        const s2MilestoneTagSet: ReadonlySet<string> = new Set(s2MilestoneTags)
+        const isS2MilestoneEvent = (event: WorkflowJournalEvent): event is S2MilestoneEvent =>
+          s2MilestoneTagSet.has(event._tag)
+        const s2Milestones = stalledRecords
+          .filter((record): record is typeof record & { readonly event: S2MilestoneEvent } =>
+            isS2MilestoneEvent(record.event)
+          )
+          .map(({ event, position }) => {
+            const common = { position, tag: event._tag }
+            switch (event._tag) {
+              case "RemotePublicationRetained":
+                return {
+                  ...common,
+                  cause: event.cause._tag,
+                  mergeBase: event.cause._tag === "CompatibleCompetingHead" ? event.cause.mergeBase : undefined,
+                  remoteHead: event.cause._tag === "CompatibleCompetingHead" ? event.cause.remoteHead : undefined
+                }
+              case "IntegratorCompetingHeadSuccessorAuthorized":
+                return {
+                  ...common,
+                  authorizationId: event.authorizationId,
+                  mergeBase: event.mergeBase,
+                  remoteHead: event.remoteHead
+                }
+              case "RemoteBaselineObserved":
+                return {
+                  ...common,
+                  observation: event.observation._tag,
+                  remoteHead: "remoteHead" in event.observation ? event.observation.remoteHead : undefined
+                }
+              case "LocalTargetCatchUpObserved":
+                return { ...common, remoteHead: event.remoteHead, result: event.result._tag }
+              case "TargetLineageObserved":
+                return { ...common, targetHead: event.observation.targetHeadSha }
+              case "IntegratorAutomaticSuccessorSessionFixed":
+                return {
+                  ...common,
+                  authorizationAt: event.authorizationAt,
+                  predecessor: {
+                    sessionId: event.predecessor.sessionId,
+                    targetHead: event.predecessor.expectedTargetHead
+                  },
+                  successor: { sessionId: event.successor.sessionId, targetHead: event.successor.expectedTargetHead },
+                  generation: event.successorGeneration
+                }
+              case "IntegratorRunStarted":
+                return {
+                  ...common,
+                  sessionId: event.run.session.sessionId,
+                  ordinal: event.run.ordinal,
+                  targetHead: event.run.session.expectedTargetHead,
+                  acceptedCommit: event.run.session.acceptedResult.commit
+                }
+              case "IntegratorRunResultRecorded":
+                return {
+                  ...common,
+                  sessionId: event.run.session.sessionId,
+                  ordinal: event.run.ordinal,
+                  result: event.result._tag
+                }
+              case "IntegratorRunCandidateGitObserved":
+                return {
+                  ...common,
+                  sessionId: event.run.session.sessionId,
+                  candidate: event.observation._tag === "Commit" ? event.observation.commit : undefined,
+                  directParents: event.observation._tag === "Commit" ? event.observation.directParents : undefined
+                }
+              case "RemotePublicationIntended":
+                return {
+                  ...common,
+                  candidate: event.correlation.qualifiedCandidate.candidateCommit,
+                  directParents: event.correlation.qualifiedCandidate.directParents
+                }
+              case "RemotePublicationSucceeded":
+                return {
+                  ...common,
+                  candidate: event.correlation.qualifiedCandidate.candidateCommit,
+                  directParents: event.correlation.qualifiedCandidate.directParents,
+                  proof: event.proof._tag,
+                  remoteHead: "remoteHead" in event.proof ? event.proof.remoteHead : undefined
+                }
+              case "TargetPromotionObservedSuccess":
+                return {
+                  ...common,
+                  candidate: event.correlation.qualifiedCandidate.candidateCommit,
+                  targetHead: event.correlation.qualifiedCandidate.run.session.expectedTargetHead,
+                  observation: event.observation._tag
+                }
+              case "IntegratorCandidateCleanupAuthorized":
+                return {
+                  ...common,
+                  disposition: event.authorization.disposition._tag,
+                  locator: event.authorization.locator,
+                  writerQuiescent: event.authorization.writerQuiescent
+                }
+              case "IntegratorCandidateCleanupSettled":
+                return {
+                  ...common,
+                  result: event.result._tag,
+                  locator: event.result.locator,
+                  sessionId: event.result.sessionId
+                }
+              case "CompletionTaskAcknowledged":
+              case "IntegrationFinalitySettled":
+              case "WorktreeCleanupSettled":
+              case "BranchCleanupSettled":
+              case "WorkflowRunTerminated":
+                return common
+            }
+          })
+        const candidateObservations = stalledRecords.flatMap(({ event }) =>
+          event._tag === "IntegratorRunCandidateGitObserved" && event.observation._tag === "Commit"
+            ? [{ candidate: event.observation.commit, directParents: event.observation.directParents }]
+            : []
+        )
+        const originalCandidate = candidateObservations.find(({ directParents }) => directParents[0] === baseSha)
+        const s2Candidate =
+          originalCandidate === undefined
+            ? undefined
+            : candidateObservations.find(
+                ({ directParents }) =>
+                  directParents[0] === competingHead && directParents[1] === originalCandidate.directParents[1]
+              )
+        const hasPublication =
+          s2Candidate !== undefined &&
+          stalledRecords.some(
+            ({ event }) =>
+              event._tag === "RemotePublicationSucceeded" &&
+              event.correlation.qualifiedCandidate.candidateCommit === s2Candidate.candidate
+          )
+        const hasPromotion =
+          s2Candidate !== undefined &&
+          stalledRecords.some(
+            ({ event }) =>
+              event._tag === "TargetPromotionObservedSuccess" &&
+              event.correlation.qualifiedCandidate.candidateCommit === s2Candidate.candidate
+          )
+        const firstMissingMilestone =
+          s2Candidate === undefined
+            ? "S2 candidate qualification [H2,C]"
+            : !hasPublication
+              ? "publication proof for the S2 candidate"
+              : !hasPromotion
+                ? "local target promotion for the S2 candidate"
+                : !stalledRecords.some(({ event }) => event._tag === "CompletionTaskAcknowledged")
+                  ? "fresh tracker completion acknowledgement"
+                  : !stalledRecords.some(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")
+                    ? "predecessor candidate cleanup settlement"
+                    : !stalledRecords.some(({ event }) => event._tag === "WorkflowRunTerminated")
+                      ? "Run termination"
+                      : "none"
+        const latestGraph = stalledRecords.findLast(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "CompleteTaskTrackerFacts" &&
+            event.observation.target === target
+        )
+        const latestLineage = stalledRecords.findLast(
+          ({ event }) =>
+            event._tag === "TargetLineageObserved" && event.plannedAttempt.attemptId === plannedAttempt.attemptId
+        )
+        const refreshRequired =
+          latestGraph !== undefined && (latestLineage === undefined || latestGraph.position > latestLineage.position)
+        const runtimeFrames = yield* Ref.get(runtimeTrace)
+        const lastDecision = yield* Ref.get(lastWorkflowDecision)
         return yield* Effect.die(
-          `hermetic MVP did not converge; latest records: ${stalledRecords
+          `hermetic MVP did not converge; first missing milestone: ${firstMissingMilestone}; targetLineageRefreshRequired=${refreshRequired} graphAt=${latestGraph?.position ?? "none"} lineageAt=${latestLineage?.position ?? "none"}; runtime proposals/owners=${JSON.stringify(runtimeFrames.slice(-12))}; engineEntered=${stalledRecords.some(({ event }) => event._tag === "RemotePublicationIntended")}; last runWorkflow decision: ${Option.getOrElse(lastDecision, () => "<none>")}; ordered S2 milestones: ${JSON.stringify(s2Milestones)}; latest records: ${stalledRecords
             .slice(-12)
             .map(({ event }) => event._tag)
             .join(",")}`
@@ -552,7 +1233,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         JSON.parse(new TextDecoder().decode(evidenceBytes))
       )
       const eventTags = records.map(({ event }) => event._tag)
-      const qualificationAt = eventTags.indexOf("IntegratorRunCandidateGitObserved")
+      const qualificationAt = eventTags.lastIndexOf("IntegratorRunCandidateGitObserved")
       const promotionAttemptAt = eventTags.indexOf("TargetPromotionAttemptIntended")
       const promotionSucceededAt = eventTags.indexOf("TargetPromotionObservedSuccess")
       const completionAttemptAt = eventTags.indexOf("CompletionTaskAttemptIntended")
@@ -570,14 +1251,91 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const runBeginningRecords = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
       const runTerminationRecords = records.filter(({ event }) => event._tag === "WorkflowRunTerminated")
 
-      expect(targetParents).toEqual([baseSha, decodedEvidence.commit])
+      const expectedTargetHead = competingHeadRace ? Option.getOrThrow(Option.fromUndefinedOr(competingHead)) : baseSha
+      expect(targetParents).toEqual([expectedTargetHead, decodedEvidence.commit])
+      if (competingHeadRace) {
+        const localPromotedHead = GitCommitSha.make(
+          yield* runInWorktree(git, repository, ["rev-parse", integrationRef], "read locally promoted target")
+        )
+        expect(localPromotedHead).toBe(targetHead)
+        const retained = records.find(({ event }) => event._tag === "RemotePublicationRetained")
+        expect(retained?.event).toMatchObject({
+          _tag: "RemotePublicationRetained",
+          cause: { _tag: "CompatibleCompetingHead", remoteHead: competingHead }
+        })
+        const automaticAuthorization = records.find(hasEventTag("IntegratorCompetingHeadSuccessorAuthorized"))
+        const automaticSessionFixation = records.find(hasEventTag("IntegratorAutomaticSuccessorSessionFixed"))
+        if (
+          retained?.event._tag !== "RemotePublicationRetained" ||
+          automaticAuthorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+          automaticSessionFixation?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed"
+        ) {
+          return yield* Effect.die("automatic S2 must retain, authorize, and fix its exact successor")
+        }
+        expect(automaticAuthorization.event).toMatchObject({
+          _tag: "IntegratorCompetingHeadSuccessorAuthorized",
+          correlation: retained.event.correlation,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          mergeBase: baseSha,
+          remoteHead: competingHead,
+          remotePublicationRetainedAt: retained.position
+        })
+        expect(automaticAuthorization.event.correlation.qualifiedCandidate.run.session).toMatchObject({
+          expectedTargetHead: baseSha,
+          acceptedResult: { commit: decodedEvidence.commit },
+          plannedAttempt
+        })
+        expect(automaticSessionFixation.event.authorizationAt).toBe(automaticAuthorization.position)
+        expect(automaticSessionFixation.event.predecessor).toMatchObject({
+          acceptedResult: { commit: decodedEvidence.commit },
+          expectedTargetHead: baseSha,
+          plannedAttempt
+        })
+        expect(automaticSessionFixation.event.successor).toMatchObject({
+          acceptedResult: { commit: decodedEvidence.commit },
+          expectedTargetHead: competingHead,
+          plannedAttempt,
+          queuedAt: automaticSessionFixation.event.predecessor.queuedAt,
+          startedAt: automaticSessionFixation.event.predecessor.startedAt
+        })
+        const publicationAttemptIntents = records.filter(hasEventTag("RemotePublicationAttemptIntended"))
+        expect(publicationAttemptIntents).toHaveLength(competingHeadBeforeDiscovery ? 1 : 2)
+        const rejectedNonFastForwardAttempts = records.filter(
+          hasEventTag("RemotePublicationAttemptRejectedNonFastForward")
+        )
+        expect(rejectedNonFastForwardAttempts).toHaveLength(competingHeadBetweenDiscoveryAndPush ? 1 : 0)
+        if (competingHeadBetweenDiscoveryAndPush) {
+          const qualifiedCandidateCommits = qualificationRecords.flatMap(({ event }) =>
+            event._tag === "IntegratorRunCandidateGitObserved" && event.observation._tag === "Commit"
+              ? [event.observation.commit]
+              : []
+          )
+          expect(
+            publicationAttemptIntents.flatMap(({ event }) => [event.correlation.qualifiedCandidate.candidateCommit])
+          ).toEqual(qualifiedCandidateCommits)
+          expect(rejectedNonFastForwardAttempts[0]?.event).toMatchObject({
+            _tag: "RemotePublicationAttemptRejectedNonFastForward",
+            correlation: { qualifiedCandidate: { candidateCommit: qualifiedCandidateCommits[0] } }
+          })
+        }
+        expect(eventTags.filter((tag) => tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(1)
+        expect(qualificationRecords).toHaveLength(2)
+        const qualifiedParents = qualificationRecords.map((record) =>
+          record.event._tag === "IntegratorRunCandidateGitObserved" && record.event.observation._tag === "Commit"
+            ? record.event.observation.directParents
+            : []
+        )
+        expect(qualifiedParents).toContainEqual([baseSha, decodedEvidence.commit])
+        expect(qualifiedParents).toContainEqual([expectedTargetHead, decodedEvidence.commit])
+      } else {
+        expect(qualificationRecords).toHaveLength(1)
+      }
       expect(promotedResult).toMatchObject({ exitCode: 0, stdout: "implemented by hermetic child\n" })
       expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
       expect(yield* Ref.get(trackerClaim)).toEqual(UnclaimedTask.make({ taskId }))
-      expect(qualificationRecords).toHaveLength(1)
-      expect(qualificationRecords[0]?.event).toMatchObject({
+      expect(qualificationRecords.at(-1)?.event).toMatchObject({
         _tag: "IntegratorRunCandidateGitObserved",
-        observation: { _tag: "Commit", directParents: [baseSha, decodedEvidence.commit] }
+        observation: { _tag: "Commit", directParents: [expectedTargetHead, decodedEvidence.commit] }
       })
       expect(qualificationAt).toBeGreaterThanOrEqual(0)
       expect(promotionAttemptAt).toBeGreaterThan(qualificationAt)
@@ -588,14 +1346,24 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const promotionSuccess = Option.getOrThrow(Option.fromUndefinedOr(promotionSuccessRecords[0]))
       const qualifiedCandidate = promotionSuccess.event.correlation.qualifiedCandidate
       expect(yield* Ref.get(targetPromotionCompareAndSetCalls)).toBe(1)
+      if (competingHeadAfterLostPushResponse) {
+        expect(yield* Ref.get(lostPushResponseCount)).toBe(1)
+        expect(yield* Ref.get(lostPushResponseReturned)).toBe(true)
+        expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
+        expect(yield* Ref.get(actualCompetingPushCalls)).toBe(1)
+        expect(yield* Ref.get(suppressedNonFastForwardResponses)).toBe(1)
+      }
+      if (competingHeadBetweenDiscoveryAndPush) {
+        expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
+      }
       expect(yield* Ref.get(executorStarts)).toBe(1)
-      expect(yield* Ref.get(integratorCalls)).toBe(1)
+      expect(yield* Ref.get(integratorCalls)).toBe(competingHeadRace ? 2 : 1)
       expect(eventTags.filter((tag) => tag === "TaskAttemptPlanned")).toHaveLength(1)
       expect(eventTags.filter((tag) => tag === "TaskWorktreeReady")).toHaveLength(1)
       expect(eventTags.filter((tag) => tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
       expect(eventTags.filter((tag) => tag === "IntegratorSessionFixed")).toHaveLength(1)
-      expect(eventTags.filter((tag) => tag === "IntegratorRunStarted")).toHaveLength(1)
-      expect(eventTags.filter((tag) => tag === "IntegratorRunResultRecorded")).toHaveLength(1)
+      expect(eventTags.filter((tag) => tag === "IntegratorRunStarted")).toHaveLength(competingHeadRace ? 2 : 1)
+      expect(eventTags.filter((tag) => tag === "IntegratorRunResultRecorded")).toHaveLength(competingHeadRace ? 2 : 1)
       if (crashAfterPromotion) {
         expect(promotionSuccessRecords[0]?.event).toMatchObject({
           _tag: "TargetPromotionObservedSuccess",
@@ -618,14 +1386,58 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       expect(worktreeCleanupSettled).toHaveLength(1)
       expect(branchCleanupAuthorized).toHaveLength(1)
       expect(branchCleanupSettled).toHaveLength(1)
-      expect(candidateCleanupAuthorized).toHaveLength(1)
-      expect(candidateCleanupSettled).toHaveLength(1)
+      expect(candidateCleanupAuthorized).toHaveLength(competingHeadRace ? 2 : 1)
+      expect(candidateCleanupSettled).toHaveLength(competingHeadRace ? 2 : 1)
       const worktreeAuthorization = Option.getOrThrow(Option.fromUndefinedOr(worktreeCleanupAuthorized[0]))
       const worktreeSettlement = Option.getOrThrow(Option.fromUndefinedOr(worktreeCleanupSettled[0]))
       const branchAuthorization = Option.getOrThrow(Option.fromUndefinedOr(branchCleanupAuthorized[0]))
       const branchSettlement = Option.getOrThrow(Option.fromUndefinedOr(branchCleanupSettled[0]))
-      const candidateAuthorization = Option.getOrThrow(Option.fromUndefinedOr(candidateCleanupAuthorized[0]))
-      const candidateSettlement = Option.getOrThrow(Option.fromUndefinedOr(candidateCleanupSettled[0]))
+      const candidateAuthorization = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          candidateCleanupAuthorized.find(({ event }) => event.authorization.disposition._tag === "Settled")
+        )
+      )
+      const candidateSettlement = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          candidateCleanupSettled.find(({ event }) => event.authorization.disposition._tag === "Settled")
+        )
+      )
+      if (competingHeadRace) {
+        const predecessorAuthorization = Option.getOrThrow(
+          Option.fromUndefinedOr(
+            candidateCleanupAuthorized.find(
+              ({ event }) => event.authorization.disposition._tag === "AutomaticSuccessorSuperseded"
+            )
+          )
+        )
+        const predecessorSettlement = Option.getOrThrow(
+          Option.fromUndefinedOr(
+            candidateCleanupSettled.find(
+              ({ event }) => event.authorization.disposition._tag === "AutomaticSuccessorSuperseded"
+            )
+          )
+        )
+        const originalQualification = qualificationRecords[0]?.event
+        if (originalQualification?._tag !== "IntegratorRunCandidateGitObserved") {
+          return yield* Effect.die("automatic S2 cleanup requires the exact S1 candidate session")
+        }
+        const originalSession = originalQualification.run.session
+        expect(predecessorAuthorization.event.authorization).toMatchObject({
+          disposition: {
+            _tag: "AutomaticSuccessorSuperseded",
+            predecessor: originalSession,
+            successor: qualifiedCandidate.run.session
+          },
+          locator: originalSession.candidateResource,
+          owner: { sessionId: originalSession.sessionId }
+        })
+        expect(predecessorSettlement.event.authorization).toEqual(predecessorAuthorization.event.authorization)
+        expect(predecessorSettlement.event.result).toMatchObject({
+          _tag: "AlreadyAbsent",
+          locator: originalSession.candidateResource,
+          sessionId: originalSession.sessionId
+        })
+      }
       expect(worktreeAuthorization.event).toMatchObject({
         authorization: { disposition: { _tag: "Settled", plannedAttempt }, locator: plannedAttempt.worktree }
       })
@@ -674,7 +1486,9 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const plannedBranchStatus = yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])
       expect(plannedBranchStatus.exitCode).not.toBe(0)
       expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", "refs/heads/unrelated"])).exitCode).toBe(0)
-      expect((yield* git.run(bareRemote, ["show-ref", "--verify", "refs/dalph/transfer-A"])).exitCode).not.toBe(0)
+      expect(
+        (yield* git.run(bareRemote, ["show-ref", "--verify", `refs/dalph/transfer-${taskLabel}`])).exitCode
+      ).not.toBe(0)
       expect(yield* Option.getOrThrow(yield* Ref.get(childHandle)).isRunning).toBe(false)
 
       yield* Effect.scoped(
@@ -700,4 +1514,45 @@ it.effect(
   "restarts after Git promotes A without returning and does not repeat A integration or promotion",
   () => runHermeticMvpJourney(true),
   120_000
+)
+
+it.effect(
+  "recovers a competing remote head found before publication discovery through the automatic S2 full suffix",
+  () => runHermeticMvpJourney(false, true),
+  120_000
+)
+
+it.effect(
+  "recovers a competing remote head advanced between publication discovery and update through the automatic S2 full suffix",
+  () => runHermeticMvpJourney(false, false, true),
+  120_000
+)
+
+it.effect(
+  "recovers a competing remote head advanced after a lost publication response through the automatic S2 full suffix",
+  () => runHermeticMvpJourney(false, false, false, true),
+  120_000
+)
+
+it.effect(
+  "retains the exact third competing head without an ungranted fourth automatic session or push",
+  () => runHermeticMvpJourney(false, false, false, false, true),
+  // The real-Git journey took about 143s with V8 coverage; retain headroom
+  // under the full suite's two-worker load while keeping a finite bound.
+  240_000
+)
+
+it.effect(
+  "fixes a same-commit fourth successor only after the exact third-session exhaustion grant",
+  () => runHermeticMvpJourney(false, false, false, false, true, true),
+  240_000
+)
+
+it.effect(
+  "continues one exhausted publication responsibility through exactly one granted batch while an unrelated target progresses",
+  () =>
+    runHermeticMvpJourney(false, false, false, false, true, true, () =>
+      runHermeticMvpJourney(false, false, false, false, false, false, undefined, "B")
+    ),
+  240_000
 )

@@ -1,3 +1,4 @@
+import { completeFormalChangedPaths } from "./changed-files.mjs"
 import { execFileSync } from "node:child_process"
 import { classifyFormalChangeBetween } from "./classify-docs-only-change.mjs"
 import { executeResumableQualityGate } from "./gate-quality-run.mjs"
@@ -8,7 +9,6 @@ import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-ou
 import {
   boundedQualityGateCommand,
   localQualificationConcurrency,
-  preflightQualityGates,
   qualityGateTestEnvironment,
   fullQualityGateManifest
 } from "./quality-gate-stage-policy.mjs"
@@ -90,6 +90,7 @@ if (resumable) {
 const stageManifest = fullQualityGateManifest(qualityBaseSha, {
   nodeExecutable: process.execPath,
   pnpmEntryPoint,
+  changedPaths: completeFormalChangedPaths(qualityBaseSha).changedFiles,
   candidateHeadSha,
   worktree: context?.run.worktree ?? process.cwd()
 })
@@ -126,7 +127,7 @@ if (resumable) {
   )
 } else {
   const preflight = await runPreflightCensus({
-    gates: preflightQualityGates(qualityBaseSha),
+    gates: stageManifest.filter((stage) => stage.boundary === "preflight"),
     runStage: (gate) =>
       runBoundedCommand(boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint }))
   })

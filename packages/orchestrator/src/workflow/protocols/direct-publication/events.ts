@@ -2,12 +2,63 @@ import { GitCommitSha, RemotePublicationTarget, RunId, type RemotePublicationBra
 import { Context, type Effect, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import { WorkflowActor } from "../../registry/actor.js"
+import { IntegrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 
 /** Stable identity for publication of one exact Integrator-qualified candidate. */
 export const RemotePublicationRequestId = Schema.NonEmptyString.pipe(Schema.brand("RemotePublicationRequestId"))
 export type RemotePublicationRequestId = typeof RemotePublicationRequestId.Type
+
+/** Caller identity for one explicit request to resume the exact retained responsibility. */
+export const RemotePublicationResumeRequestId = Schema.NonEmptyString.pipe(
+  Schema.brand("RemotePublicationResumeRequestId")
+)
+export type RemotePublicationResumeRequestId = typeof RemotePublicationResumeRequestId.Type
+
+export const remotePublicationResumeRequestSchemaVersion = 1 as const
+export const RemotePublicationResumeRequestSchemaVersion = Schema.Literal(remotePublicationResumeRequestSchemaVersion)
+export type RemotePublicationResumeRequestSchemaVersion = typeof RemotePublicationResumeRequestSchemaVersion.Type
+
+/** Exact transport-neutral subject and durable deduplication identity supplied by the resume caller. */
+export const RemotePublicationResumeRequest = Schema.Struct({
+  requestId: RemotePublicationResumeRequestId,
+  responsibility: IntegrationResponsibilityIdentity,
+  runId: RunId,
+  schemaVersion: RemotePublicationResumeRequestSchemaVersion
+})
+export type RemotePublicationResumeRequest = typeof RemotePublicationResumeRequest.Type
+
+/** Durable identity for one Operator request to authorize a later publication batch. */
+export const RemotePublicationBatchGrantRequestId = Schema.NonEmptyString.pipe(
+  Schema.brand("RemotePublicationBatchGrantRequestId")
+)
+export type RemotePublicationBatchGrantRequestId = typeof RemotePublicationBatchGrantRequestId.Type
+
+export const remotePublicationBatchGrantRequestSchemaVersion = 1 as const
+export const RemotePublicationBatchGrantRequestSchemaVersion = Schema.Literal(
+  remotePublicationBatchGrantRequestSchemaVersion
+)
+export type RemotePublicationBatchGrantRequestSchemaVersion =
+  typeof RemotePublicationBatchGrantRequestSchemaVersion.Type
+
+/** Exact Run, integration responsibility, and retained exhaustion occurrence selected by the Operator. */
+export const RemotePublicationBatchGrantRequest = Schema.Struct({
+  exhaustionAt: JournalPosition,
+  requestId: RemotePublicationBatchGrantRequestId,
+  responsibility: IntegrationResponsibilityIdentity,
+  runId: RunId,
+  schemaVersion: RemotePublicationBatchGrantRequestSchemaVersion
+})
+export type RemotePublicationBatchGrantRequest = typeof RemotePublicationBatchGrantRequest.Type
+
+/** Distinguishes ordinary publication from a retry authorized by one exact retained-delivery receipt. */
+export const RemotePublicationAttemptAuthorization = Schema.TaggedUnion({
+  InitialAttempt: {},
+  ResumeRequest: { requestId: RemotePublicationResumeRequestId }
+})
+export type RemotePublicationAttemptAuthorization = typeof RemotePublicationAttemptAuthorization.Type
 
 /** Exact ordinary non-force push refspec derived from the candidate and pinned branch. */
 export const RemotePublicationRefspec = Schema.NonEmptyString.pipe(Schema.brand("RemotePublicationRefspec"))
@@ -218,6 +269,8 @@ export type RemotePublicationIntendedEvent = typeof RemotePublicationIntendedEve
 /** Durable numbered intent is appended before an exact push may cross Git. */
 export const RemotePublicationAttemptIntendedEvent = Schema.TaggedStruct("RemotePublicationAttemptIntended", {
   attemptOrdinal: RemotePublicationAttemptOrdinal,
+  /** Exact accepted grant that opens this intent's later publication batch. */
+  batchGrantAt: Schema.optionalKey(JournalPosition),
   correlation: RemotePublicationCorrelation,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
@@ -281,12 +334,36 @@ export type RemotePublicationRetainedCause = typeof RemotePublicationRetainedCau
 
 /** Durable wait after a conclusive read or push result; no retry follows without a later owner event. */
 export const RemotePublicationRetainedEvent = Schema.TaggedStruct("RemotePublicationRetained", {
+  /** Exact accepted grant whose batch produced this retained outcome, when granted. */
+  batchGrantAt: Schema.optionalKey(JournalPosition),
   cause: RemotePublicationRetainedCause,
   correlation: RemotePublicationCorrelation,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  /** Identifies the ordinary initial attempt or the exact receipt-authorized retry. */
+  authorization: RemotePublicationAttemptAuthorization,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 export type RemotePublicationRetainedEvent = typeof RemotePublicationRetainedEvent.Type
+
+/** Durable exact Run receipt either resumes a retained publication or continues its proved finality. */
+export const RemotePublicationResumeRequestedEvent = Schema.TaggedStruct("RemotePublicationResumeRequested", {
+  correlation: RemotePublicationCorrelation,
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  request: RemotePublicationResumeRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type RemotePublicationResumeRequestedEvent = typeof RemotePublicationResumeRequestedEvent.Type
+
+/** A distinct Operator Full rerun receipt; it records one batch grant, never a quarantine direction. */
+export const RemotePublicationBatchGrantAppliedEvent = Schema.TaggedStruct("RemotePublicationBatchGrantApplied", {
+  direction: Schema.Literal("FullRerun"),
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  request: RemotePublicationBatchGrantRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type RemotePublicationBatchGrantAppliedEvent = typeof RemotePublicationBatchGrantAppliedEvent.Type
 
 /** Exact qualified candidate paired with its durable receiving-branch proof. */
 export const PublishedIntegratorRunQualifiedCandidate = Schema.Struct({
@@ -312,7 +389,9 @@ export const RemotePublicationJournalEvent = Schema.Union([
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationSucceededEvent,
-  RemotePublicationRetainedEvent
+  RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequestedEvent,
+  RemotePublicationBatchGrantAppliedEvent
 ])
 export type RemotePublicationJournalEvent = typeof RemotePublicationJournalEvent.Type
 

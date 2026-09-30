@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
+import { acceptedAutomaticSuccessorQuintGateCommandKeys } from "./quint-gate-automatic-successor-command-oracle.mjs"
+import { publicationBatchGrantQuintGateCommandKeys } from "./quint-gate-publication-batch-grant-command-oracle.mjs"
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 import { type QuintManifestCommand, quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import {
@@ -24,14 +26,14 @@ const freshTaskBlockStart = 47
 const freshTaskBlockEnd = 60
 
 describe("Quint gate command contract", () => {
-  it("accepts the independent 105-command phase contract", () => {
+  it("accepts the independent 127-command contract", () => {
     assertQuintGateCommandContract({ manifest: quintGateCommandManifest, executed: quintGateExpectedCommandCounts })
     expect(quintGateExpectedCommandCounts).toEqual({
-      total: 105,
-      typecheck: 15,
-      test: 46,
-      "sampled-run": 23,
-      verify: 21
+      total: 127,
+      typecheck: 19,
+      test: 56,
+      "sampled-run": 28,
+      verify: 24
     })
   })
 
@@ -75,6 +77,49 @@ describe("Quint gate command contract", () => {
       kind: "typecheck",
       name: "Run cancellation model typecheck"
     })
+    expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
+  })
+
+  it("accepts the independent ten-command #385 automatic-successor inventory", () => {
+    expect(acceptedAutomaticSuccessorQuintGateCommandKeys).toEqual([
+      "typecheck\u0000accepted-result automatic successor proof typecheck",
+      "test\u0000accepted-result automatic successor proof deterministic tests",
+      "test\u0000accepted-result automatic successor proof negative mutation profile",
+      "sampled-run\u0000accepted-result automatic successor proof sampled model",
+      "verify\u0000accepted-result automatic successor proof exhaustive model",
+      "typecheck\u0000accepted-result automatic successor counter proof typecheck",
+      "test\u0000accepted-result automatic successor counter proof deterministic tests",
+      "test\u0000accepted-result automatic successor counter proof negative mutation profile",
+      "sampled-run\u0000accepted-result automatic successor counter proof sampled model",
+      "verify\u0000accepted-result automatic successor counter proof exhaustive model"
+    ])
+    const blockStart = quintGateCommandManifest.findIndex(
+      ({ name }) => name === "accepted-result automatic successor proof typecheck"
+    )
+    expect(
+      quintGateCommandManifest.slice(blockStart, blockStart + 10).map(({ kind, name }) => `${kind}\u0000${name}`)
+    ).toEqual(acceptedAutomaticSuccessorQuintGateCommandKeys)
+    expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
+  })
+
+  it("accepts the independent twelve-command #386 publication-grant inventory", () => {
+    expect(publicationBatchGrantQuintGateCommandKeys).toEqual([
+      "typecheck\u0000publication exhaustion batch grant model typecheck",
+      "test\u0000publication exhaustion batch grant deterministic tests",
+      "test\u0000publication exhaustion batch grant negative mutation profile",
+      "sampled-run\u0000publication exhaustion batch grant sampled model",
+      "typecheck\u0000publication exhaustion batch grant proof projection typecheck",
+      "test\u0000publication exhaustion batch grant control projection deterministic tests",
+      "test\u0000publication exhaustion batch grant control projection negative mutation profile",
+      "sampled-run\u0000publication exhaustion batch grant control projection sampled model",
+      "verify\u0000publication exhaustion batch grant control projection exhaustive model",
+      "test\u0000publication exhaustion batch grant batch/finality projection deterministic tests",
+      "test\u0000publication exhaustion batch grant batch/finality projection negative mutation profile",
+      "sampled-run\u0000publication exhaustion batch grant batch/finality projection sampled model"
+    ])
+    expect(quintGateCommandManifest.slice(-12).map(({ kind, name }) => `${kind}\u0000${name}`)).toEqual(
+      publicationBatchGrantQuintGateCommandKeys
+    )
     expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
   })
 
@@ -166,7 +211,7 @@ describe("Quint gate command contract", () => {
     const omittedManifest = quintGateCommandManifest.filter(
       (command) => command.name !== "fresh-task admission ambiguity proof exhaustive model"
     )
-    const omittedExecution = { ...quintGateExpectedCommandCounts, total: 104, verify: 20 }
+    const omittedExecution = { ...quintGateExpectedCommandCounts, total: 126, verify: 23 }
 
     expect(() => assertQuintGateCommandContract({ manifest: omittedManifest, executed: omittedExecution })).toThrow(
       "accepted Quint command"

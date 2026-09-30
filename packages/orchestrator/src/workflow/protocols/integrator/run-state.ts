@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Run result and exact-session lineage reconstruction share one audited state boundary. */
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import { integratorCandidateHasExactParents, integratorRunCorrelationsEqual, IntegratorRunState } from "./events.js"
@@ -185,14 +186,20 @@ const exactSessionRecordForRun = (
 ): JournalRecord | undefined => {
   let match: JournalRecord | undefined
   let count = 0
-  for (const tag of ["IntegratorSessionFixed", "IntegratorSuccessorSessionFixed"] as const) {
+  for (const tag of [
+    "IntegratorSessionFixed",
+    "IntegratorSuccessorSessionFixed",
+    "IntegratorAutomaticSuccessorSessionFixed"
+  ] as const) {
     for (const record of journalRecordsOfKind(records, tag)) {
       const { event } = record
       const matches =
         event._tag === "IntegratorSessionFixed"
           ? dependencies.correlationsEqual(event.correlation, run.session)
-          : event._tag === "IntegratorSuccessorSessionFixed" &&
-            dependencies.correlationsEqual(event.successor, run.session)
+          : (event._tag === "IntegratorSuccessorSessionFixed" &&
+              dependencies.correlationsEqual(event.successor, run.session)) ||
+            (event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+              dependencies.correlationsEqual(event.successor, run.session))
       if (matches) {
         count += 1
         match ??= record
@@ -209,7 +216,10 @@ const runStateWithoutStarted = (
   dependencies: IntegratorRunStateDependencies
 ): IntegratorRunState => {
   const session = exactSessionRecordForRun(records, run, dependencies)
-  if (session?.event._tag === "IntegratorSuccessorSessionFixed") {
+  if (
+    session?.event._tag === "IntegratorSuccessorSessionFixed" ||
+    session?.event._tag === "IntegratorAutomaticSuccessorSessionFixed"
+  ) {
     return isEmpty(runRelated)
       ? IntegratorRunState.cases.RunUnfinished.make({ run })
       : runContradictionState("run result or Git record exists without IntegratorRunStarted")
@@ -228,6 +238,8 @@ const runStartHasExactSession = (
   (session?.event._tag === "IntegratorSessionFixed" &&
     dependencies.correlationsEqual(session.event.correlation, run.session)) ||
   (session?.event._tag === "IntegratorSuccessorSessionFixed" &&
+    dependencies.correlationsEqual(session.event.successor, run.session)) ||
+  (session?.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
     dependencies.correlationsEqual(session.event.successor, run.session))
 
 const runStartFollowsSession = (started: JournalRecord, session: JournalRecord | undefined): boolean =>
@@ -253,20 +265,30 @@ const expectedBaseSessionFor = (
   run: IntegratorRunCorrelation,
   dependencies: IntegratorRunStateDependencies
 ): IntegratorRunCorrelation["session"] => {
-  let activeRelation: JournalRecord | undefined
-  for (const record of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-    const { event } = record
+  let root = run.session
+  const visited = new Set<string>()
+  while (!visited.has(root.sessionId)) {
+    visited.add(root.sessionId)
+    const incoming = [
+      ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
+      ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")
+    ].filter(
+      ({ event }) =>
+        (event._tag === "IntegratorSuccessorSessionFixed" ||
+          event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
+        dependencies.correlationsEqual(event.successor, root)
+    )
+    if (incoming.length !== 1) return root
+    const relation = incoming[0]
     if (
-      event._tag === "IntegratorSuccessorSessionFixed" &&
-      (dependencies.correlationsEqual(event.successor, run.session) ||
-        dependencies.correlationsEqual(event.predecessor, run.session))
+      relation?.event._tag !== "IntegratorSuccessorSessionFixed" &&
+      relation?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed"
     ) {
-      if (dependencies.correlationsEqual(event.successor, run.session)) activeRelation ??= record
+      return root
     }
+    root = relation.event.predecessor
   }
-  return activeRelation?.event._tag === "IntegratorSuccessorSessionFixed"
-    ? activeRelation.event.predecessor
-    : run.session
+  return root
 }
 
 const hasUniqueBaseSession = (
@@ -299,15 +321,42 @@ const hasForeignSuccessorRelation = (
   expectedBase: IntegratorRunCorrelation["session"],
   dependencies: IntegratorRunStateDependencies
 ): boolean => {
-  for (const { event } of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
+  const relations = [
+    ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
+    ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")
+  ]
+  let current = run.session
+  const allowedPredecessors = new Set<string>()
+  const visited = new Set<string>()
+  while (!dependencies.correlationsEqual(current, expectedBase)) {
+    if (visited.has(current.sessionId)) return true
+    visited.add(current.sessionId)
+    const incoming = relations.filter(
+      ({ event }) =>
+        (event._tag === "IntegratorSuccessorSessionFixed" ||
+          event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
+        dependencies.correlationsEqual(event.successor, current)
+    )
+    if (incoming.length !== 1) return true
+    const relation = incoming[0]
     if (
-      event._tag === "IntegratorSuccessorSessionFixed" &&
+      relation?.event._tag !== "IntegratorSuccessorSessionFixed" &&
+      relation?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed"
+    ) {
+      return true
+    }
+    allowedPredecessors.add(relation.event.predecessor.sessionId)
+    current = relation.event.predecessor
+  }
+  for (const { event } of relations) {
+    if (event._tag !== "IntegratorSuccessorSessionFixed" && event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+      continue
+    }
+    if (
       (dependencies.correlationsEqual(event.successor, run.session) ||
         dependencies.correlationsEqual(event.predecessor, run.session)) &&
-      /* v8 ignore next -- @preserve an exact run start rejects a second successor relation for the requested successor session before this foreign-relation guard. */
-      !dependencies.correlationsEqual(event.predecessor, expectedBase) &&
-      /* v8 ignore next -- @preserve an exact run start admits one successor relation for this session; a distinct predecessor would make that exact session ambiguous before this check. */
-      !dependencies.correlationsEqual(event.predecessor, run.session)
+      event.predecessor.sessionId !== run.session.sessionId &&
+      !allowedPredecessors.has(event.predecessor.sessionId)
     ) {
       return true
     }

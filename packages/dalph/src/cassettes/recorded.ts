@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-redundant-type-constituents, typescript/no-duplicate-type-constituents -- Oxlint cannot resolve workspace-barrel types in this exhaustive mapper; TypeScript typecheck verifies them. */
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Match, Schema, SchemaParser } from "effect"
 import {
@@ -15,6 +16,8 @@ import {
   RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationIntendedEvent,
   RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequestedEvent,
+  RemotePublicationBatchGrantAppliedEvent,
   RemotePublicationSucceededEvent,
   LocalTargetCatchUpIntendedEvent,
   LocalTargetCatchUpObservedEvent,
@@ -24,6 +27,7 @@ import {
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantinedEvent,
   IntegratorJournalEvent,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
   JournalPosition,
   PlannedAttemptContinuationAuthorizedEvent,
   PlannedAttemptReplacedEvent,
@@ -98,18 +102,15 @@ import {
 import {
   eventForGitObservationEntry,
   isRecordedGitObservationCassetteEntry,
-  isRecordedGitObservationEntry,
   lyricForGitObservationEntry,
-  recordGitObservationEntry,
-  type RecordedGitObservationEntry
+  recordGitObservationEntry
 } from "./recorded-git-observation-mapping.js"
 import {
   eventForRunEntry,
   isJournalRunEntry,
   isRecordedRunEntry,
   lyricForRunEntry,
-  recordedRunEntryFor,
-  type RecordedRunEntry
+  recordedRunEntryFor
 } from "./recorded-run-mapping.js"
 import {
   eventForClaimReleaseEntry,
@@ -260,6 +261,8 @@ type RemotePublicationEvent = Extract<
       | "RemotePublicationAttemptRejectedNonFastForward"
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
+      | "RemotePublicationResumeRequested"
+      | "RemotePublicationBatchGrantApplied"
   }
 >
 type RecordedRemotePublicationEntry = Extract<
@@ -273,6 +276,8 @@ type RecordedRemotePublicationEntry = Extract<
       | "RemotePublicationAttemptRejectedNonFastForward"
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
+      | "RemotePublicationResumeRequested"
+      | "RemotePublicationBatchGrantApplied"
   }
 >
 
@@ -283,7 +288,9 @@ const isRemotePublicationEvent = (event: WorkflowJournalEvent): event is RemoteP
   event._tag === "RemotePublicationAttemptIntended" ||
   event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   event._tag === "RemotePublicationSucceeded" ||
-  event._tag === "RemotePublicationRetained"
+  event._tag === "RemotePublicationRetained" ||
+  event._tag === "RemotePublicationResumeRequested" ||
+  event._tag === "RemotePublicationBatchGrantApplied"
 
 const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry is RecordedRemotePublicationEntry =>
   entry._tag === "RemotePublicationAdmissionReadIntended" ||
@@ -292,7 +299,9 @@ const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry i
   entry._tag === "RemotePublicationAttemptIntended" ||
   entry._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   entry._tag === "RemotePublicationSucceeded" ||
-  entry._tag === "RemotePublicationRetained"
+  entry._tag === "RemotePublicationRetained" ||
+  entry._tag === "RemotePublicationResumeRequested" ||
+  entry._tag === "RemotePublicationBatchGrantApplied"
 
 /** Direct publication facts retain their complete correlation, provenance, and exact proof. */
 const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRemotePublicationEntry =>
@@ -322,6 +331,7 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
     RemotePublicationAttemptIntended: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationAttemptIntended",
       attemptOrdinal: value.attemptOrdinal,
+      ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
       correlation: value.correlation,
       initiatedBy: value.initiatedBy,
       occurrenceClassification: value.occurrenceClassification,
@@ -341,9 +351,25 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
     }),
     RemotePublicationRetained: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationRetained",
+      authorization: value.authorization,
+      ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
       cause: value.cause,
       correlation: value.correlation,
       occurrenceClassification: value.occurrenceClassification
+    }),
+    RemotePublicationResumeRequested: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationResumeRequested",
+      correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      request: value.request
+    }),
+    RemotePublicationBatchGrantApplied: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationBatchGrantApplied",
+      direction: value.direction,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      request: value.request
     })
   })
 
@@ -500,7 +526,7 @@ const integrationFinalityTags = [
   "PostPromotionBlockerCandidateAncestryObserved",
   "CompletionTaskRequestLookupIntended",
   "CompletionTaskRequestLookupObserved"
-] as const satisfies ReadonlyArray<WorkflowJournalEvent["_tag"] & RecordedCassetteEntry["_tag"]>
+] as const satisfies ReadonlyArray<Extract<WorkflowJournalEvent["_tag"], RecordedCassetteEntry["_tag"]>>
 
 type IntegrationFinalityTag = (typeof integrationFinalityTags)[number]
 type IntegrationFinalityEvent = Extract<WorkflowJournalEvent, { readonly _tag: IntegrationFinalityTag }>
@@ -919,6 +945,8 @@ type OuterIntegratorEvent = Extract<
   WorkflowJournalEvent,
   {
     readonly _tag:
+      | "IntegratorCompetingHeadSuccessorAuthorized"
+      | "IntegratorAutomaticSuccessorSessionFixed"
       | "IntegratorRunCandidateGitObserved"
       | "IntegratorRunCandidateGitReadIntended"
       | "IntegratorRunResultRecorded"
@@ -944,6 +972,8 @@ const isIntegrationQuarantineEvent = (event: WorkflowJournalEvent): event is Int
   event._tag === "IntegrationQuarantined"
 
 const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterIntegratorEvent =>
+  event._tag === "IntegratorCompetingHeadSuccessorAuthorized" ||
+  event._tag === "IntegratorAutomaticSuccessorSessionFixed" ||
   event._tag === "IntegratorRunCandidateGitObserved" ||
   event._tag === "IntegratorRunCandidateGitReadIntended" ||
   event._tag === "IntegratorRunResultRecorded" ||
@@ -954,6 +984,8 @@ const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterInte
 type RecordedOuterIntegratorEntry = Extract<RecordedCassetteEntry, { readonly _tag: OuterIntegratorEvent["_tag"] }>
 
 const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is RecordedOuterIntegratorEntry =>
+  entry._tag === "IntegratorCompetingHeadSuccessorAuthorized" ||
+  entry._tag === "IntegratorAutomaticSuccessorSessionFixed" ||
   entry._tag === "IntegratorRunCandidateGitObserved" ||
   entry._tag === "IntegratorRunCandidateGitReadIntended" ||
   entry._tag === "IntegratorRunResultRecorded" ||
@@ -963,6 +995,16 @@ const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is 
 
 const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterIntegratorEntry =>
   Match.valueTags(event, {
+    IntegratorCompetingHeadSuccessorAuthorized: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      authorizationId: value.authorizationId,
+      correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      mergeBase: value.mergeBase,
+      occurrenceClassification: value.occurrenceClassification,
+      remoteHead: value.remoteHead,
+      remotePublicationRetainedAt: value.remotePublicationRetainedAt
+    }),
     IntegratorSessionFixed: (value): RecordedOuterIntegratorEntry => ({
       _tag: value._tag,
       correlation: value.correlation
@@ -973,6 +1015,13 @@ const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterI
       directionAppliedAt: value.directionAppliedAt,
       predecessor: value.predecessor,
       quarantineAt: value.quarantineAt,
+      successor: value.successor,
+      successorGeneration: value.successorGeneration
+    }),
+    IntegratorAutomaticSuccessorSessionFixed: (value): RecordedOuterIntegratorEntry => ({
+      _tag: value._tag,
+      authorizationAt: value.authorizationAt,
+      predecessor: value.predecessor,
       successor: value.successor,
       successorGeneration: value.successorGeneration
     }),
@@ -1169,24 +1218,29 @@ export const projectRecordedCassette = Effect.fn("ScenarioCassette.projectRecord
   })
 })
 
+type RecordedTaskBoundaryEntry = Extract<
+  RecordedCassetteEntry,
+  {
+    readonly _tag:
+      | "TaskAttemptPlanned"
+      | "TaskClaimAcquired"
+      | "TaskClaimAcquisitionIntended"
+      | "TaskClaimAcquisitionRejected"
+      | "TaskClaimReleaseIntended"
+      | "TaskClaimReleased"
+      | "IntegrationResponsibilityBegan"
+      | "IntegrationStarted"
+      | "PlannedAttemptReplaced"
+      | "TaskWorktreeReady"
+      | "TaskWorktreeReconciliationIntended"
+  }
+>
+
+const isRecordedTaskBoundaryEntry = (entry: RecordedCassetteEntry): entry is RecordedTaskBoundaryEntry =>
+  Object.hasOwn(taskBoundaryEventTags, entry._tag)
+
 const eventForTaskBoundaryEntry = (
-  entry: Extract<
-    RecordedCassetteEntry,
-    {
-      readonly _tag:
-        | "TaskAttemptPlanned"
-        | "TaskClaimAcquired"
-        | "TaskClaimAcquisitionIntended"
-        | "TaskClaimAcquisitionRejected"
-        | "TaskClaimReleaseIntended"
-        | "TaskClaimReleased"
-        | "IntegrationResponsibilityBegan"
-        | "IntegrationStarted"
-        | "PlannedAttemptReplaced"
-        | "TaskWorktreeReady"
-        | "TaskWorktreeReconciliationIntended"
-    }
-  >,
+  entry: RecordedTaskBoundaryEntry,
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number
 ): WorkflowJournalEvent => {
@@ -1320,7 +1374,9 @@ const eventForTrackerEntry = (entry: RecordedTrackerEntry): WorkflowJournalEvent
     : taskTrackerReadIntent(entry.operation)
 
 const eventForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): WorkflowJournalEvent =>
-  Schema.decodeUnknownSync(IntegratorJournalEvent)({ ...entry, version: workflowJournalEventVersion })
+  entry._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+    ? IntegratorCompetingHeadSuccessorAuthorizedEvent.make({ ...entry, version: workflowJournalEventVersion })
+    : Schema.decodeUnknownSync(IntegratorJournalEvent)({ ...entry, version: workflowJournalEventVersion })
 
 const eventForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantineEntry): WorkflowJournalEvent =>
   Match.valueTags(entry, {
@@ -1411,6 +1467,7 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
     RemotePublicationAttemptIntended: (value) =>
       RemotePublicationAttemptIntendedEvent.make({
         attemptOrdinal: value.attemptOrdinal,
+        ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
         correlation: value.correlation,
         initiatedBy: value.initiatedBy,
         occurrenceClassification: value.occurrenceClassification,
@@ -1433,9 +1490,27 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
       }),
     RemotePublicationRetained: (value) =>
       RemotePublicationRetainedEvent.make({
+        authorization: value.authorization,
+        ...(value.batchGrantAt === undefined ? {} : { batchGrantAt: value.batchGrantAt }),
         cause: value.cause,
         correlation: value.correlation,
         occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationResumeRequested: (value) =>
+      RemotePublicationResumeRequestedEvent.make({
+        correlation: value.correlation,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        request: value.request,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationBatchGrantApplied: (value) =>
+      RemotePublicationBatchGrantAppliedEvent.make({
+        direction: value.direction,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        request: value.request,
         version: workflowJournalEventVersion
       })
   })
@@ -1991,10 +2066,14 @@ const lyricForTrackerEntry = (entry: RecordedTrackerEntry): string =>
 
 const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): string =>
   Match.valueTags(entry, {
+    IntegratorCompetingHeadSuccessorAuthorized: (value) =>
+      `Dalph coordinator authorized one automatic successor after compatible remote head ${value.remoteHead}; no Operator direction was applied.`,
     IntegratorSessionFixed: (value) =>
       `Dalph coordinator fixed Integrator session ${value.correlation.sessionId} for target head ${value.correlation.expectedTargetHead}.`,
     IntegratorSuccessorSessionFixed: (value) =>
       `Dalph coordinator fixed FullRerun successor session ${value.successor.sessionId} after quarantining predecessor ${value.predecessor.sessionId}.`,
+    IntegratorAutomaticSuccessorSessionFixed: (value) =>
+      `Dalph coordinator fixed automatic successor session ${value.successor.sessionId} at target head ${value.successor.expectedTargetHead} after authorization ${value.authorizationAt}; predecessor ${value.predecessor.sessionId} remains distinct for custody.`,
     IntegratorRunStarted: (value) =>
       `Dalph coordinator intended Integrator run ${value.run.ordinal} in session ${value.run.session.sessionId}.`,
     IntegratorRunResultRecorded: (value) =>
@@ -2086,7 +2165,11 @@ const lyricForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
     RemotePublicationSucceeded: (value) =>
       `The pinned remote destination contains candidate ${value.correlation.qualifiedCandidate.candidateCommit} by ${value.proof._tag}.`,
     RemotePublicationRetained: (value) =>
-      `Dalph retained publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.cause._tag}.`
+      `Dalph retained publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.cause._tag}.`,
+    RemotePublicationResumeRequested: (value) =>
+      `The Operator requested delivery resumption for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+    RemotePublicationBatchGrantApplied: (value) =>
+      `The Operator granted another publication batch for Run ${value.request.runId} at exhaustion ${value.request.exhaustionAt}.`
   })
 
 const lyricForRemoteBaselineEntry = (entry: RecordedRemoteBaselineEntry): string =>
@@ -2166,25 +2249,7 @@ const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): st
       `The task tracker preserved foreign claim ${value.observed.operationId} for task ${value.observed.taskId}.`
   })
 
-const lyricForTaskBoundaryEntry = (
-  entry: Exclude<
-    RecordedCassetteEntry,
-    | RecordedAttemptStopEntry
-    | RecordedExecutorEntry
-    | RecordedGitObservationEntry
-    | RecordedRemoteBaselineEntry
-    | RecordedRemotePublicationEntry
-    | RecordedRunEntry
-    | RecordedTrackerEntry
-    | RecordedTargetPromotionEntry
-    | RecordedIntegrationFinalityEntry
-    | RecordedOuterIntegratorEntry
-    | RecordedIntegrationQuarantineEntry
-    | RecordedCleanupEntry
-    | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
-    | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
-  >
-): string => {
+const lyricForTaskBoundaryEntry = (entry: RecordedTaskBoundaryEntry): string => {
   if (isRecordedClaimAcquisitionEntry(entry)) return lyricForClaimAcquisitionEntry(entry)
   if (isRecordedClaimReleaseEntry(entry)) return lyricForClaimReleaseEntry(entry)
   if (isRecordedIntegrationEntry(entry)) {
@@ -2193,9 +2258,6 @@ const lyricForTaskBoundaryEntry = (
       : `Dalph coordinator started integrating accepted commit ${entry.acceptedResult.commit}.`
   }
   if (isRecordedWorktreeEntry(entry)) return lyricForWorktreeEntry(entry)
-  if (entry._tag === "AttemptRestartAuthorityReadFailed") {
-    return `The ${entry.failure._tag} boundary failed while Dalph checked whether attempt ${entry.subject.plannedAttempt.attemptId} could be replaced.`
-  }
   if (entry._tag === "PlannedAttemptReplaced") {
     return `Dalph atomically replaced attempt ${entry.subject.plannedAttempt.attemptId} with clean attempt ${entry.successorPlan.plannedAttempt.attemptId}.`
   }
@@ -2229,23 +2291,30 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
 type RecordedOtherEntry = Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>
 type RecordedPresentationResidualEntry = Exclude<
   RecordedOtherEntry,
-  | RecordedAttemptStopEntry
   | RecordedCleanupEntry
-  | RecordedIntegrationPreparationEntry
-  | RecordedRemoteBaselineEntry
-  | RecordedRemotePublicationEntry
   | RecordedOperatorDirectionEntry
+  | RecordedAttemptStopEntry
   | RecordedOuterIntegratorEntry
   | RecordedIntegrationQuarantineEntry
+  | RecordedIntegrationPreparationEntry
+  | RecordedRemotePublicationEntry
+  | RecordedRemoteBaselineEntry
 >
 
-const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
-  if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
-  if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
-  if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
-  if (isRecordedRunEntry(entry)) return lyricForRunEntry(entry)
-  return lyricForTaskBoundaryEntry(entry)
-}
+const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string =>
+  Match.value(entry).pipe(
+    Match.when(isRecordedGitObservationCassetteEntry, lyricForGitObservationEntry),
+    Match.when(isRecordedExecutorEntry, lyricForExecutorEntry),
+    Match.when(isRecordedTrackerEntry, lyricForTrackerEntry),
+    Match.when(isRecordedRunEntry, lyricForRunEntry),
+    Match.when(
+      isRecordedAttemptRestartAuthorityReadFailedEntry,
+      (value) =>
+        `The ${value.failure._tag} boundary failed while Dalph checked whether attempt ${value.subject.plannedAttempt.attemptId} could be replaced.`
+    ),
+    Match.when(isRecordedTaskBoundaryEntry, lyricForTaskBoundaryEntry),
+    Match.exhaustive
+  )
 
 const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
   if (isRecordedCleanupEntry(entry)) return lyricForCleanupEntry(entry)

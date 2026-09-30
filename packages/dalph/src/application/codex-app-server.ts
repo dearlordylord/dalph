@@ -49,6 +49,7 @@ import {
   nodeCodexProcessNativeService,
   type CodexProcessNativeService
 } from "./codex-process-native.js"
+import { logCodexCompletionTrace } from "./codex-completion-trace.js"
 
 /** The process-owned status projection returned by one Codex thread read. */
 const CodexThreadStatus = Schema.Literals(["active", "idle", "notLoaded", "systemError"])
@@ -63,6 +64,24 @@ const CodexThreadListCursor = Schema.NonEmptyString.pipe(Schema.brand("CodexThre
 type CodexThreadListCursor = typeof CodexThreadListCursor.Type
 
 const CodexTurnStatus = Schema.Literals(["completed", "interrupted", "failed", "inProgress"])
+
+/** Exact identity carried by one provider-owned turn/completed notification. */
+const CodexTurnCompletedNotificationBoundary = Schema.Struct({
+  threadId: CodexThreadId,
+  turn: Schema.Struct({ id: CodexTurnId })
+})
+
+/** Exact, payload-free identity used to route a completion wake to its owned turn. */
+export interface CodexTurnCompletedHint {
+  readonly threadId: CodexThreadId
+  readonly turnId: CodexTurnId
+}
+
+/** Scoped completion receiver that learns its exact turn ID after turn/start returns. */
+export interface CodexTurnCompletedSubscription {
+  readonly hints: Stream.Stream<CodexTurnCompletedHint>
+  readonly expectTurnId: (turnId: CodexTurnId) => Effect.Effect<void>
+}
 
 const CodexExternalItem = Schema.Record(Schema.String, Schema.Json)
 type CodexExternalItem = typeof CodexExternalItem.Type
@@ -370,9 +389,10 @@ export type CodexOwnedActivityCensusProjection =
  * Selects which process facts one activity observation may own.
  *
  * An Integrator session owns only the exact thread and its reported terminal
- * processes. A planned task attempt additionally owns descendants carrying
- * the app-server's exact launch token, which is required to recover escaped
- * task processes after the app-server leader disappears.
+ * processes. A planned task attempt additionally owns escaped descendants
+ * carrying both the app-server's exact launch token and the exact Codex thread
+ * identity, which recovers task processes after the app-server leader exits
+ * without adopting another thread's helpers.
  */
 type CodexOwnedActivityScope = "IntegratorSession" | "PlannedAttempt"
 
@@ -430,13 +450,25 @@ class CodexProcessOwnership extends Context.Service<CodexProcessOwnership, Codex
 ) {}
 
 /** JSON-RPC transport-neutral app-server capability used by the private executor. */
+/** Exact notification identity is required unless a provider explicitly opts into fresh lifecycle sealing. */
+export type CodexTerminalSealPolicy = "ExactCompletionHintRequired" | "FreshLifecycleMaySeal"
+
 // eslint-disable-next-line functional/no-mixed-types -- The service carries one immutable process-incarnation fact alongside its effectful boundary methods.
 export interface CodexAppServerService {
   readonly incarnation: CodexServerIncarnation
+  /** Missing policy defaults to exact-hint-required; providers without that protocol must opt in explicitly. */
+  readonly terminalSealPolicy?: CodexTerminalSealPolicy
   /** Exact process root used only by the Node execution-substrate activity census. */
   readonly serverPid?: number
-  /** Broadcast provider completion hints; consumers must reread exact thread state. */
+  /** Legacy unqualified provider wake stream; Codex does not publish completion on this channel. */
   readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  /** Exact provider completion identities scoped to one retained thread association. */
+  readonly attachExactTurnCompletedHints?: (
+    threadId: CodexThreadId,
+    expectedTurnId?: CodexTurnId
+  ) => Effect.Effect<CodexTurnCompletedSubscription, never, Scope.Scope>
+  /** Process-level protocol failures wake existing observers without inventing a completion identity. */
+  readonly attachProtocolFailures?: Effect.Effect<Stream.Stream<CodexAppServerFailure>, never, Scope.Scope>
   /** Broadcast owned-activity hints; consumers must reread the exact process/activity census. */
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   /** Present only when this service can prove Dalph's required effective task policy. */
@@ -562,6 +594,7 @@ export const processWasAbsent = (error: unknown): boolean => {
 
 const processIdentitySeparator = "|"
 const codexServerIncarnationEnvironment = "DALPH_CODEX_SERVER_INCARNATION"
+const codexThreadIdentityEnvironment = "CODEX_THREAD_ID"
 const processStatAfterCommandOffset = 2
 const linuxProcessStatStartTimeFieldIndex = 19
 
@@ -905,6 +938,39 @@ const environmentCarriesToken = (
     ? environment.split("\u0000").includes(tokenEntry)
     : environment.split(/\s+/).includes(tokenEntry)
 
+const tokenMemberForThread = (
+  stat: LinuxProcessStat,
+  environment: string,
+  token: CodexServerIncarnation,
+  threadId: CodexThreadId | undefined,
+  platform: CodexProcessNativeService["platform"]
+): TokenMemberObservation => {
+  if (!environmentCarriesToken(environment, `${codexServerIncarnationEnvironment}=${token}`, platform)) {
+    return undefined
+  }
+  if (threadId === undefined) {
+    return {
+      pid: stat.pid,
+      parentPid: stat.parentPid,
+      processGroupId: stat.processGroupId,
+      startIdentity: stat.startIdentity
+    }
+  }
+  const entries = platform === "linux" ? environment.split("\u0000") : environment.split(/\s+/)
+  const threadPrefix = `${codexThreadIdentityEnvironment}=`
+  const threadEntries = entries.filter((entry) => entry.startsWith(threadPrefix))
+  if (threadEntries.length !== 1 || threadEntries[0]?.length === threadPrefix.length) {
+    return { detail: `process ${stat.pid} has no exact Codex thread identity` }
+  }
+  if (threadEntries[0]?.slice(threadPrefix.length) !== threadId) return undefined
+  return {
+    pid: stat.pid,
+    parentPid: stat.parentPid,
+    processGroupId: stat.processGroupId,
+    startIdentity: stat.startIdentity
+  }
+}
+
 type DarwinProcessCommandsObservation =
   | { readonly commands: ReadonlyMap<number, string> }
   | { readonly failure: { readonly detail: string } }
@@ -962,6 +1028,7 @@ const tokenReadFailure = async (
 const readTokenMember = async (
   stat: LinuxProcessStat,
   token: CodexServerIncarnation,
+  threadId: CodexThreadId | undefined,
   native: CodexProcessNativeService
 ): Promise<TokenMemberObservation> => {
   try {
@@ -970,15 +1037,7 @@ const readTokenMember = async (
       native.platform === "linux"
         ? await native.readFile(`/proc/${stat.pid}/environ`)
         : (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(stat.pid)])).stdout
-    if (!environmentCarriesToken(environment, `${codexServerIncarnationEnvironment}=${token}`, native.platform)) {
-      return undefined
-    }
-    return {
-      pid: stat.pid,
-      parentPid: stat.parentPid,
-      processGroupId: stat.processGroupId,
-      startIdentity: stat.startIdentity
-    }
+    return tokenMemberForThread(stat, environment, token, threadId, native.platform)
   } catch (error) {
     return tokenReadFailure(stat.pid, error, native)
   }
@@ -988,23 +1047,16 @@ const readTokenMember = async (
 const readDarwinTokenMembers = async (
   stats: ReadonlyArray<LinuxProcessStat>,
   token: CodexServerIncarnation,
+  threadId: CodexThreadId | undefined,
   native: CodexProcessNativeService
 ): Promise<ReadonlyArray<TokenMemberObservation>> => {
   const observation = await readDarwinProcessCommands(native)
   if ("failure" in observation) return [observation.failure]
-  const tokenEntry = `${codexServerIncarnationEnvironment}=${token}`
   return stats.flatMap((stat) => {
     const command = observation.commands.get(stat.pid)
-    return command !== undefined && environmentCarriesToken(command, tokenEntry, "darwin")
-      ? [
-          {
-            pid: stat.pid,
-            parentPid: stat.parentPid,
-            processGroupId: stat.processGroupId,
-            startIdentity: stat.startIdentity
-          }
-        ]
-      : []
+    if (command === undefined) return []
+    const member = tokenMemberForThread(stat, command, token, threadId, "darwin")
+    return member === undefined ? [] : [member]
   })
 }
 /* v8 ignore stop -- @preserve */
@@ -1074,7 +1126,8 @@ const observeOwnedActivityProcesses = async (
   roots: ReadonlyArray<number>,
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   incarnation?: CodexServerIncarnation,
-  appServerPid?: number
+  appServerPid?: number,
+  threadId?: CodexThreadId
 ): Promise<OwnedActivityProcessProjection> => {
   if (roots.length === 0 && incarnation === undefined) return { _tag: "Absent" }
   if (native.platform !== "linux" && native.platform !== "darwin") {
@@ -1092,12 +1145,17 @@ const observeOwnedActivityProcesses = async (
   const projectedMembers = projection._tag === "ExactLive" ? projection.members : []
   /* v8 ignore start -- @preserve Durable-token and escaped-child branches run in the real Linux/macOS qualification gate. */
   const token = incarnation === undefined ? undefined : durableIncarnationToken(incarnation)
+  const tokenCandidateStats = [...byPid.values()].filter(
+    (stat) =>
+      stat.pid !== appServerPid &&
+      (appServerProcessGroupId === undefined || stat.processGroupId !== appServerProcessGroupId)
+  )
   const tokenMembers =
     token === undefined
       ? []
       : native.platform === "darwin"
-        ? await readDarwinTokenMembers([...byPid.values()], token, native)
-        : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native)))
+        ? await readDarwinTokenMembers(tokenCandidateStats, token, threadId, native)
+        : await Promise.all(tokenCandidateStats.map((stat) => readTokenMember(stat, token, threadId, native)))
   const tokenFailure = tokenMembers.find((member) => member !== undefined && "detail" in member)
   if (tokenFailure !== undefined && "detail" in tokenFailure) return { _tag: "Unreadable", detail: tokenFailure.detail }
   const exactTokenMembers = tokenMembers.filter(
@@ -1229,7 +1287,8 @@ export const makeNodeCodexOwnedActivityCensusService = (
           processRootsForBackgroundTerminals(backgroundTerminals),
           native,
           scope === "PlannedAttempt" ? incarnation : undefined,
-          appServerPid
+          appServerPid,
+          scope === "PlannedAttempt" ? thread.id : undefined
         )
         if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
           return processProjection
@@ -1681,7 +1740,11 @@ const normalizeBackgroundTerminals = (
 
 // eslint-disable-next-line functional/no-mixed-types -- The private JSON-RPC transport closes as an effect value after request methods finish.
 interface JsonRpcClient {
-  readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  readonly attachExactTurnCompletedHints: (
+    threadId: CodexThreadId,
+    expectedTurnId?: CodexTurnId
+  ) => Effect.Effect<CodexTurnCompletedSubscription, never, Scope.Scope>
+  readonly attachProtocolFailures: Effect.Effect<Stream.Stream<CodexAppServerFailure>, never, Scope.Scope>
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly request: (
     operation: CodexAppServerRequestOperation,
@@ -1864,11 +1927,39 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const deadlineClose = yield* Deferred.make<Effect.Effect<void, CodexAppServerFailure>>()
   const sentCount = yield* Ref.make(0)
   const responseCount = yield* Ref.make(0)
-  // Provider notifications are wake hints only; one pending wake is enough
-  // because every consumer rereads the provider-owned state.
-  const turnCompletedHints = yield* PubSub.sliding<void>(1)
+  // Each completion queue is scoped to one retained thread and its active turn
+  // observer. The executor subscribes before turn/start, binds the returned T
+  // as soon as the response is retained, transfers the queue to lifecycle
+  // observation, and closes it when that observer exits. Other thread
+  // notifications never enter this scoped buffer. Before turn/start returns T,
+  // completion notifications are buffered in arrival order up to a fixed bound;
+  // binding T releases every retained exact match and discards unrelated IDs.
+  // After binding, each matching notification is delivered: an exact reread can
+  // still find T active, in which case a later matching notification must wake
+  // another exact reread without creating another turn or session.
+  type TurnCompletionSubscriber = {
+    readonly publish: (hint: CodexTurnCompletedHint) => Effect.Effect<void>
+    readonly expectTurnId: (turnId: CodexTurnId) => Effect.Effect<void>
+    readonly shutdown: Effect.Effect<void>
+  }
+  type TurnCompletionRouting = {
+    readonly expectedTurnId: Option.Option<CodexTurnId>
+    readonly pending: ReadonlyArray<CodexTurnCompletedHint>
+  }
+  // The start request has a response deadline, but notifications can still
+  // arrive at an unbounded rate during that interval. Keep the pre-response
+  // notification buffer finite. At capacity, preserve existing items and
+  // discard later ones; if the matching notification was not retained, no
+  // hint is produced and lifecycle observation remains pending.
+  const maxPendingTurnCompletionNotifications = 64
+  const turnCompletedSubscribers = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<TurnCompletionSubscriber>>>(
+    new Map()
+  )
+  const protocolFailures = yield* PubSub.unbounded<CodexAppServerFailure>()
+  const protocolFailureState = yield* Ref.make<Option.Option<CodexAppServerFailure>>(Option.none())
   const ownedActivityHints = yield* PubSub.sliding<void>(1)
-  yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
+  const turnCompletedNotificationOrdinal = yield* Ref.make(0)
+  yield* Effect.addFinalizer(() => PubSub.shutdown(protocolFailures))
   yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
   const encoder = new TextEncoder()
   const failPendingRequests = (requests: ReadonlyArray<PendingJsonRpcRequest>, failure: CodexAppServerFailure) =>
@@ -1882,12 +1973,26 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   // otherwise an idle malformed line would be forgotten after pending failure.
   const failProtocol = (failure: CodexAppServerFailure) =>
     Ref.modify(protocolState, (current) => {
-      const retained = Option.isSome(current.terminalFailure) ? current.terminalFailure.value : failure
+      const firstFailure = Option.isNone(current.terminalFailure)
+      const retained = firstFailure ? failure : current.terminalFailure.value
       return [
-        { failure: retained, requests: [...current.pending.values()] },
+        { failure: retained, firstFailure, requests: [...current.pending.values()] },
         { terminalFailure: Option.some(retained), pending: new Map() }
       ] as const
-    }).pipe(Effect.flatMap(({ failure: retained, requests }) => failPendingRequests(requests, retained)))
+    }).pipe(
+      Effect.flatMap(({ failure: retained, firstFailure, requests }) =>
+        failPendingRequests(requests, retained).pipe(
+          Effect.andThen(
+            firstFailure
+              ? Ref.set(protocolFailureState, Option.some(retained)).pipe(
+                  Effect.andThen(PubSub.publish(protocolFailures, retained))
+                )
+              : Effect.void
+          ),
+          Effect.asVoid
+        )
+      )
+    )
   const reader = handle.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
@@ -1917,14 +2022,45 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
               "Protocol",
               "unattended Codex task received unexpected approval request " + String(envelope.method)
             )
-            return failProtocol(failure).pipe(
-              Effect.andThen(PubSub.publish(turnCompletedHints, undefined)),
-              Effect.asVoid
-            )
+            return failProtocol(failure)
           }
           if (envelope._tag === "Notification") {
             if (envelope.method === "turn/completed") {
-              return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
+              const notification = Schema.decodeUnknownResult(CodexTurnCompletedNotificationBoundary)(message["params"])
+              if (Result.isFailure(notification)) return Effect.void
+              const hint: CodexTurnCompletedHint = {
+                threadId: notification.success.threadId,
+                turnId: notification.success.turn.id
+              }
+              return Ref.updateAndGet(turnCompletedNotificationOrdinal, (current) => current + 1).pipe(
+                Effect.flatMap((notificationOrdinal) => {
+                  const trace = (phase: "Ingress" | "HintPublished") =>
+                    logCodexCompletionTrace({
+                      _tag: "CodexExecutorCompletionTrace",
+                      appServerIncarnation: incarnation,
+                      method: "turn/completed",
+                      notificationOrdinal,
+                      phase,
+                      threadId: hint.threadId,
+                      turnId: hint.turnId
+                    })
+                  return trace("Ingress").pipe(
+                    Effect.andThen(
+                      Ref.get(turnCompletedSubscribers).pipe(
+                        Effect.flatMap((subscribers) =>
+                          Effect.forEach(
+                            subscribers.get(hint.threadId) ?? [],
+                            (subscriber) => subscriber.publish(hint),
+                            { discard: true }
+                          )
+                        )
+                      )
+                    ),
+                    Effect.andThen(trace("HintPublished")),
+                    Effect.asVoid
+                  )
+                })
+              )
             }
             return envelope.method === "item/completed"
               ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)
@@ -2081,6 +2217,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     /* v8 ignore next -- @preserve The outer scoped close latch invokes the private RPC close exactly once. */
     if (!shouldClose) return
     yield* failPending(operationFailure("close", "Unavailable", `app-server ${incarnation} closed`))
+    const subscribers = yield* Ref.modify(turnCompletedSubscribers, (current) => [
+      [...current.values()].flat(),
+      new Map()
+    ])
+    yield* Effect.forEach(subscribers, (subscriber) => subscriber.shutdown, { discard: true })
   })
   return {
     attachOwnedActivityHints: PubSub.subscribe(ownedActivityHints).pipe(
@@ -2088,11 +2229,78 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
       )
     ),
-    attachTurnCompletedHints: PubSub.subscribe(turnCompletedHints).pipe(
-      Effect.map((subscription) =>
-        Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
+    attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
+      Effect.gen(function* () {
+        // Keep the bound after T is known too. A burst can queue at most 64
+        // exact wakes; sliding overflow retains the newest wake so a later
+        // terminal provider state can still be reread.
+        const hints = yield* PubSub.sliding<CodexTurnCompletedHint>(maxPendingTurnCompletionNotifications)
+        const routing = yield* Ref.make<TurnCompletionRouting>({
+          expectedTurnId: expectedTurnId === undefined ? Option.none() : Option.some(expectedTurnId),
+          pending: []
+        })
+        const stream = yield* PubSub.subscribe(hints).pipe(
+          Effect.map((queue) =>
+            Stream.unfold(undefined, () => PubSub.take(queue).pipe(Effect.map((hint) => [hint, undefined] as const)))
+          )
+        )
+        const subscriber: TurnCompletionSubscriber = {
+          publish: (hint) =>
+            Ref.modify(routing, (current) => {
+              if (Option.isSome(current.expectedTurnId)) {
+                if (current.expectedTurnId.value !== hint.turnId) {
+                  return [Option.none<CodexTurnCompletedHint>(), current] as const
+                }
+                return [Option.some(hint), current] as const
+              }
+              if (current.pending.length >= maxPendingTurnCompletionNotifications) {
+                return [Option.none<CodexTurnCompletedHint>(), current] as const
+              }
+              return [
+                Option.none<CodexTurnCompletedHint>(),
+                { ...current, pending: [...current.pending, hint] }
+              ] as const
+            }).pipe(
+              Effect.flatMap((selected) =>
+                Option.isSome(selected) ? PubSub.publish(hints, selected.value).pipe(Effect.asVoid) : Effect.void
+              )
+            ),
+          expectTurnId: (turnId) =>
+            Ref.modify(routing, (current) => {
+              const retained = current.pending.filter((hint) => hint.turnId === turnId)
+              return [retained, { expectedTurnId: Option.some(turnId), pending: [] }] as const
+            }).pipe(
+              Effect.flatMap((retained) =>
+                Effect.forEach(retained, (hint) => PubSub.publish(hints, hint), { discard: true })
+              )
+            ),
+          shutdown: PubSub.shutdown(hints)
+        }
+        const key = threadId
+        yield* Ref.update(turnCompletedSubscribers, (current) =>
+          new Map(current).set(key, [...(current.get(key) ?? []), subscriber])
+        )
+        yield* Effect.addFinalizer(() =>
+          Ref.update(turnCompletedSubscribers, (current) => {
+            const retained = (current.get(key) ?? []).filter((entry) => entry !== subscriber)
+            const next = new Map(current)
+            if (retained.length === 0) next.delete(key)
+            else next.set(key, retained)
+            return next
+          }).pipe(Effect.andThen(subscriber.shutdown))
+        )
+        return { hints: stream, expectTurnId: subscriber.expectTurnId }
+      }),
+    attachProtocolFailures: Effect.gen(function* () {
+      // Subscribe before reading the sticky state so a failure concurrent with
+      // attachment is either observed here or queued on the subscription.
+      const subscription = yield* PubSub.subscribe(protocolFailures)
+      const current = yield* Ref.get(protocolFailureState)
+      if (Option.isSome(current)) return Stream.fromIterable([current.value])
+      return Stream.unfold(undefined, () =>
+        PubSub.take(subscription).pipe(Effect.map((failure) => [failure, undefined] as const))
       )
-    ),
+    }),
     request,
     requestBounded,
     installDeadlineClose: (deadline) => Deferred.succeed(deadlineClose, deadline).pipe(Effect.asVoid),
@@ -2227,6 +2435,8 @@ const unavailableAppServer = (
   return {
     incarnation,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
+    attachExactTurnCompletedHints: () => Effect.succeed({ hints: Stream.empty, expectTurnId: () => Effect.void }),
+    attachProtocolFailures: Effect.succeed(Stream.empty),
     attachOwnedActivityHints: Effect.succeed(Stream.empty),
     unattendedPolicyAdmission: fail("config/read"),
     startThread: () => fail("thread/start"),
@@ -3437,7 +3647,10 @@ export const codexAppServerLayer = (
         return response["terminated"]
       })
       return {
-        attachTurnCompletedHints: rpc.attachTurnCompletedHints,
+        terminalSealPolicy: "ExactCompletionHintRequired",
+        attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachExactTurnCompletedHints: rpc.attachExactTurnCompletedHints,
+        attachProtocolFailures: rpc.attachProtocolFailures,
         attachOwnedActivityHints: rpc.attachOwnedActivityHints,
         incarnation: liveIncarnation,
         serverPid: childPid,

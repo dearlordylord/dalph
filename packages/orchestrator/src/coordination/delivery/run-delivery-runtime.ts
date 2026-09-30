@@ -69,6 +69,22 @@ export { DeliveryRuntimeAdmissionProgressContradiction } from "./delivery-runtim
 export * from "./delivery-runtime-phase.js"
 export type { DeliveryRuntimeQuiescence } from "./delivery-runtime-quiescence.js"
 
+/** The ordinary activation retains one failed establishment read through its accepted prefix. */
+const retainedWorkflowEstablishmentGraphRead = (
+  phase: DeliveryRuntimePhaseType,
+  evaluation: DeliveryRuntimeEvaluation
+): { readonly acceptedAt: JournalPosition; readonly failedReadAt: JournalPosition } | undefined => {
+  const acceptedAt = evaluation.acceptedAt
+  const failedReadAt = evaluation.failedWorkflowEstablishmentGraphReadAt
+  return phase._tag === "OrdinaryDeliveryRuntimePhase" &&
+    evaluation.current.trackerGraph._tag === "GraphNotEstablished" &&
+    acceptedAt !== null &&
+    failedReadAt !== undefined &&
+    failedReadAt <= acceptedAt
+    ? { acceptedAt, failedReadAt }
+    : undefined
+}
+
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
 export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
   "DeliveryRuntimeReconfirmationStateInvalid",
@@ -120,6 +136,35 @@ type RuntimeEvent<E> =
  */
 export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvaluation, E>
 
+/** Exact Effect result consumed by one runtime phase. */
+export type RunDeliveryRuntimePhaseEffect<E> = Effect.Effect<
+  DeliveryRuntimeQuiescence,
+  | E
+  | JournalError
+  | ApplicationExiting
+  | DeliveryActionCompletionPublicationMismatch
+  | DeliveryActionExecutionError
+  | DeliveryRuntimeAdmissionProgressContradiction
+  | DeliveryRuntimeProposalOwnershipConflict
+  | DeliveryRuntimeReconfirmationStateInvalid
+  | DeliveryRuntimeRunMismatch
+  | PlannedTaskAttemptError,
+  | DeliveryActionExecutor
+  | DeliveryAcceptedFactPublication
+  | RuntimeObservation.DeliveryRuntimeObservationPublication
+  | DeliveryRuntimeResources
+  | OperationIdAllocator
+  | PlannedAttemptProtocolController
+  | PlannedTaskAttemptPlanner
+>
+
+/** Public callable surface keeps the traced Effect.fn wrapper metadata out of declarations. */
+export type RunDeliveryRuntimePhase = <E>(
+  expectedRunId: RunId,
+  relation: DeliveryRuntimeInput<E>,
+  phase?: DeliveryRuntimePhaseType
+) => RunDeliveryRuntimePhaseEffect<E>
+
 const runtimeEvaluationRunIds = (evaluation: DeliveryRuntimeEvaluation): ReadonlyArray<RunId> => {
   const frontierRunIds =
     evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
@@ -159,7 +204,7 @@ const validateRuntimeEvaluationRun = (
  * ownership, and the complete live-owner lifecycle — remain governed by their
  * focused models and production tests rather than one whole-loop model.
  */
-export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
+export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
   expectedRunId: RunId,
   relation: DeliveryRuntimeInput<E>,
   phase: DeliveryRuntimePhaseType = DeliveryRuntimePhase.Ordinary
@@ -666,6 +711,17 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               return Option.some(quiescence)
             }
             const graph = current.current.trackerGraph
+            const retainedFailedGraphRead = retainedWorkflowEstablishmentGraphRead(phase, current)
+            if (retainedFailedGraphRead !== undefined) {
+              return Option.some<DeliveryRuntimeQuiescence>({
+                _tag: "TrackerGraphReadRetainedWaitQuiescence",
+                acceptedAt: retainedFailedGraphRead.acceptedAt,
+                failedReadAt: retainedFailedGraphRead.failedReadAt,
+                current: current.current,
+                disposition: current.quiescence,
+                proposedActions: empty
+              })
+            }
             if (graph._tag !== "GraphEstablished" || current.acceptedAt === null) {
               return yield* new DeliveryRuntimeReconfirmationStateInvalid({
                 acceptedAt: current.acceptedAt,
@@ -716,7 +772,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
-        if (!activeRefreshG2Pending && !(yield* cleanupPending)) {
+        const failedEstablishmentReadIsRetainedWait =
+          retainedWorkflowEstablishmentGraphRead(phase, current) !== undefined
+        if (!activeRefreshG2Pending && !failedEstablishmentReadIsRetainedWait && !(yield* cleanupPending)) {
           yield* runDeliveryRuntimeAdmissionSweep(current.proposedActions, admissionLoop.admitPass)
         }
 
@@ -736,7 +794,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 })
 
 /** Runs one standalone runtime phase and releases its process-local resources at the phase boundary. */
-export const runDeliveryRuntime = <E>(expectedRunId: RunId, relation: DeliveryRuntimeInput<E>) =>
+export type RunDeliveryRuntime = <E>(
+  expectedRunId: RunId,
+  relation: DeliveryRuntimeInput<E>
+) => RunDeliveryRuntimePhaseEffect<E>
+
+export const runDeliveryRuntime: RunDeliveryRuntime = <E>(expectedRunId: RunId, relation: DeliveryRuntimeInput<E>) =>
   runDeliveryRuntimePhase(expectedRunId, relation).pipe(
     Effect.ensuring(
       Effect.gen(function* () {

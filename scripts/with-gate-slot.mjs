@@ -36,11 +36,16 @@ if (
     "run-formal-gate.mjs",
     "run-hosted-quality-stage.mjs",
     "run-preflight.mjs",
-    "run-quality-gate.mjs"
+    "run-quality-gate.mjs",
+    "run-candidate-checks.mjs"
   ].includes(entryName)
 )
   throw new Error("A focused gate recovery action cannot launch a broad admitted command")
-const requiredExecutables = ["run-hosted-quality-stage.mjs", "run-quality-gate.mjs"].includes(entryName)
+const requiredExecutables = [
+  "run-hosted-quality-stage.mjs",
+  "run-quality-gate.mjs",
+  "run-candidate-checks.mjs"
+].includes(entryName)
   ? qualityVerificationExecutables(process.env, commandArguments[0])
   : entryName === "run-formal-gate.mjs"
     ? formalVerificationExecutables(process.env, commandArguments[0])

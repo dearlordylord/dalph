@@ -56,6 +56,16 @@ export const IntegratorSuccessorPreparationInput = Schema.Struct({
 })
 export type IntegratorSuccessorPreparationInput = typeof IntegratorSuccessorPreparationInput.Type
 
+/** Inputs proving one journaled authorization and the fresh Git lineage for an automatic successor. */
+export const IntegratorAutomaticSuccessorPreparationInput = Schema.Struct({
+  authorizationAt: JournalPosition,
+  predecessor: IntegratorSessionCorrelation,
+  targetLineage: TargetLineageObservation,
+  /** Position of the durable TargetLineageObserved fact supplying targetLineage. */
+  targetLineageObservedAt: JournalPosition
+})
+export type IntegratorAutomaticSuccessorPreparationInput = typeof IntegratorAutomaticSuccessorPreparationInput.Type
+
 /** Explicit input for a requested outer run, including its required ordinal. */
 export const IntegratorRunPreparationInput = Schema.Struct({
   preparation: IntegratorPreparationInput,

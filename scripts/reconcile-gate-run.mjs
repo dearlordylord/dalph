@@ -20,6 +20,7 @@ import {
 import { closeAndDigestPreviousBootInventoryLocked, closeAndProveCustodyStopped } from "./gate-registration.mjs"
 import { reconcileGateRecovery } from "./gate-recovery.mjs"
 
+
 const reconcileRecovery = ({ run, runDirectory, runId }) =>
   reconcileGateRecovery({
     identity: existsSync(join(runDirectory, "identity.json"))
@@ -29,7 +30,6 @@ const reconcileRecovery = ({ run, runDirectory, runId }) =>
     run,
     runId
   })
-
 export const reconcileGateRun = ({ runDirectory, runId }) => {
   const run = validateRun(runDirectory, runId)
   return withFileLock(run.worktreeLock, () =>

@@ -166,8 +166,21 @@ the exact responsibility with a typed safe detail. An ambiguous result is
 separate from a conclusive denial. No automatic denied or throttled retry is
 allowed; #387 owns the later retained-delivery request.
 
+The #387 resume request is transport-neutral and identifies the exact Run,
+integration responsibility, and request identity. Schema and subject mismatches
+stop before a journal append or provider call; exact redelivery returns the
+recorded result. After a conclusive recoverable denial, the ordinary publication
+owner reuses the same candidate and remaining allowance after the required
+intent and custody reconciliation. It does not create another task Begin or
+Integrator call. A compatible competing head wakes the ordinary Run selector,
+which routes the retained occurrence through #385's same-commit successor path
+under the remaining cycle allowance; resume does not add another recovery
+engine.
+Throttling, Pause, Exit, and exhausted allowance remain blocking states, and a
+settled Run returns its recorded status without work.
+
 See [direct remote publication](../scenarios/direct-remote-publication.md) and
-[D28a–D28e](../DELIVERY-INVARIANTS.md#integration-and-promotion) for the
+[D28a–D28f](../DELIVERY-INVARIANTS.md#integration-and-promotion) for the
 chronology, bounds, and deferred issue boundaries.
 
 ## Integrator session and candidate
@@ -251,6 +264,51 @@ denial is conclusive, Dalph retains the responsibility and releases its
 process-local position. It starts no fourth action without the later issue-owned
 authorization. #385 owns competing-head successors and catch-up, #386 owns
 additional-batch grants, and #387 owns retained-delivery resumption.
+
+### Automatic competing-head successor and local catch-up
+
+When Git proves the pinned remote branch advanced compatibly beyond exact M
+without containing M, the Journal first retains that publication result. A
+separate Dalph-coordinator action then records automatic successor
+authorization for the exact integration responsibility, predecessor session
+and candidate, immutable attempt and Base, accepted C, pinned endpoint/ref, and
+existing FIFO position. It cannot be represented by an Operator Full rerun
+direction. Conclusive Integrator failure, denied or throttled publication,
+incompatible history, and unproven writer custody do not authorize this action.
+
+After current tracker, claim, and control facts permit progress, the successor
+path records a fresh remote/local-baseline read for that authorization. It may
+advance the local target only after Git proves the exact local head is an
+ancestor of the advertised remote head and rechecks that the direct target ref
+is unoccupied. The coordinator journals the exact local-to-remote
+compare-and-set before calling Git. Git reports the applied, already-current,
+rejected, or unavailable result; no reset, worktree repair, or cleanup is
+implied. A following target-lineage read verifies the original planned Base is
+an ancestor before Dalph fixes one deterministic successor session and
+distinct candidate resource with parents `[Hn, C]`, where Hn is the head from
+the latest completed baseline round.
+
+The authorization continues to name the original competing head H2. If the
+first baseline was Ready before a later activation begins, recovery records one
+fresh baseline round under that same authorization before fixation, including
+when the remote remains at H2. If a round is incomplete, recovery resumes its
+existing read or catch-up intent before considering another round. The initial
+round and this one refresh round are the maximum; a third read is not admitted.
+One activation performs at most one fresh remote read, and a baseline completed
+during that activation is used directly without another reread. Dalph fixes
+against the latest Ready head only after a later target-lineage read confirms
+the unchanged task Base is its ancestor. The original accepted C, Base, and
+FIFO position do not change.
+
+The new session consumes the existing three-session batch when its durable
+fixation is recorded, even if the process stops before contacting the
+Integrator. Each candidate keeps its own three publication-intent limit. At
+either limit, Dalph retains the exact wait and starts no ungranted fourth
+session or push. Predecessor session, candidate, and evidence remain until the
+writer is proved stopped and the exact superseded-resource disposition permits
+cleanup. Recovery reconstructs the pending authorization, exact catch-up, or
+fixed session from Journal history in the same path used by normal activation;
+it does not restart task execution or overlap provider writers.
 
 Tracker completion is a separate boundary after publication proof and exact
 local promotion. It requires fresh task, claim, revision, dependency, and

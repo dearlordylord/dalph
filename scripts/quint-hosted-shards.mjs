@@ -14,7 +14,10 @@ export const quintHostedModelFamilies = Object.freeze([
   { name: "task-fact reconciliation", first: 65, last: 85, shard: 1 },
   { name: "Git reconciliation", first: 86, last: 90, shard: 0 },
   { name: "accepted-result integration", first: 91, last: 99, shard: 1 },
-  { name: "integration finality", first: 100, last: 104, shard: 0 }
+  { name: "accepted-result automatic successor", first: 100, last: 104, shard: 1 },
+  { name: "accepted-result automatic successor counter proof", first: 105, last: 109, shard: 1 },
+  { name: "integration finality", first: 110, last: 114, shard: 0 },
+  { name: "publication exhaustion batch grant", first: 115, last: 126, shard: 1 }
 ])
 
 const shardForPosition = (position) =>
@@ -23,14 +26,30 @@ const shardForPosition = (position) =>
 export const quintHostedProfileDigest = (profile) => createHash("sha256").update(JSON.stringify(profile)).digest("hex")
 
 /** Keep every scheduling step inside the model family assigned to one shard. */
-export const createQuintHostedShard = (profile, shard) => {
+export const createQuintHostedShard = (profile, shard, familyNames) => {
   if (!Number.isInteger(shard) || shard < 0 || shard >= quintHostedShardCount) {
     throw new Error(`Hosted Quint shard must be an integer from 0 to ${quintHostedShardCount - 1}`)
   }
+  if (
+    familyNames !== undefined &&
+    (!Array.isArray(familyNames) ||
+      familyNames.length === 0 ||
+      new Set(familyNames).size !== familyNames.length ||
+      familyNames.some((name) => !quintHostedModelFamilies.some((family) => family.name === name)))
+  )
+    throw new Error("Hosted Quint selection requires distinct known model families")
+  const families = quintHostedModelFamilies.filter(
+    ({ name }) => familyNames === undefined || familyNames.includes(name)
+  )
   const positions = profile.commands
-    .filter(({ position }) => shardForPosition(position) === shard)
+    .filter(
+      ({ position }) =>
+        shardForPosition(position) === shard &&
+        families.some(({ first, last }) => position >= first && position <= last)
+    )
     .map(({ position }) => position)
-  if (positions.length === 0) throw new Error(`Hosted Quint shard ${shard} has no commands`)
+  if (positions.length === 0 && familyNames === undefined)
+    throw new Error(`Hosted Quint shard ${shard} has no commands`)
   const selected = new Set(positions)
   const steps = []
   let provenancePlaced = false
@@ -50,12 +69,14 @@ export const createQuintHostedShard = (profile, shard) => {
       provenancePlaced = true
     }
   }
-  if (!provenancePlaced) throw new Error(`Hosted Quint shard ${shard} has no evaluator preparation family`)
+  if (!provenancePlaced && positions.length > 0)
+    throw new Error(`Hosted Quint shard ${shard} has no evaluator preparation family`)
   return Object.freeze({
     version: 1,
     shard,
     shardCount: quintHostedShardCount,
     profileDigest: quintHostedProfileDigest(profile),
+    ...(familyNames === undefined ? {} : { families: Object.freeze(families.map(({ name }) => name)) }),
     positions: Object.freeze(positions),
     steps: Object.freeze(steps.map((step) => Object.freeze(step)))
   })
@@ -84,7 +105,10 @@ export const readQuintHostedShardBinding = (environment = process.env, runtimeNo
     runId: environment.GITHUB_RUN_ID,
     runAttempt: environment.GITHUB_RUN_ATTEMPT,
     commitSha: environment.DALPH_FORMAL_COMMIT_SHA,
-    nodeVersion: runtimeNodeVersion
+    nodeVersion: runtimeNodeVersion,
+    ...(environment.DALPH_FORMAL_BASE_SHA === undefined || environment.DALPH_FORMAL_BASE_SHA === ""
+      ? {}
+      : { baseSha: environment.DALPH_FORMAL_BASE_SHA })
   }
   if (!/^[1-9]\d*$/u.test(binding.runId ?? "") || !/^[1-9]\d*$/u.test(binding.runAttempt ?? "")) {
     throw new Error("Hosted Quint shard requires positive decimal runId and runAttempt")
@@ -92,6 +116,8 @@ export const readQuintHostedShardBinding = (environment = process.env, runtimeNo
   if (!/^[0-9a-f]{40}$/u.test(binding.commitSha ?? "") || binding.commitSha !== environment.GITHUB_SHA) {
     throw new Error("Hosted Quint shard requires the exact checked-out GitHub commit SHA")
   }
+  if (binding.baseSha !== undefined && !/^[0-9a-f]{40}$/u.test(binding.baseSha))
+    throw new Error("Hosted Quint Base SHA must be exact")
   if (environment.DALPH_FORMAL_NODE_VERSION !== runtimeNodeVersion) {
     throw new Error("Hosted Quint shard requires the exact selected Node runtime")
   }
@@ -100,6 +126,7 @@ export const readQuintHostedShardBinding = (environment = process.env, runtimeNo
 
 /** Require each hosted checker result to retain its admitted gate custody. */
 export const assertQuintHostedCommandCustody = (report) => {
+  if (Array.isArray(report?.commands) && report.commands.length === 0 && report.shard?.positions.length === 0) return []
   if (!Array.isArray(report?.commands) || report.commands.length === 0) {
     throw new Error("Hosted Quint shard requires command custody evidence")
   }
