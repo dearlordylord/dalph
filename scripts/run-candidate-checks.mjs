@@ -30,12 +30,17 @@ export const materializeCandidateManifest = (stages, pnpmEntryPoint, worktree) =
     }
   }))
 
-/** Put any explicitly selected formal stage after application qualification. */
-export const orderedCandidateStages = (stages, formalStages) => [
+/** Local candidate qualification executes only its application stages. */
+export const localCandidateStages = (stages) => [
   ...stages.filter((stage) => stage.boundary === "preflight"),
-  ...stages.filter((stage) => stage.boundary === "qualification"),
-  ...formalStages
+  ...stages.filter((stage) => stage.boundary === "qualification")
 ]
+
+/** Preserve the exact relevance classification while leaving proof opt-in. */
+export const localCandidateCheckPlan = (formal, stages) => ({
+  identity: { formal, formalDisposition: "not-requested" },
+  stages: localCandidateStages(stages)
+})
 
 /** This same input contract is used for every fresh candidate; it never grants reuse credit. */
 export const candidateInputContract = (identity) => ({
@@ -105,11 +110,10 @@ const main = async () => {
     pnpmEntryPoint,
     worktree: process.cwd()
   })
-  // Local candidate qualification records formal relevance but leaves proof
-  // to an explicit check:quint request or the independent CI formal workflow.
-  const formalStages = []
+  // Local qualification records relevance without running the formal proof.
+  const plan = localCandidateCheckPlan(formal, stages)
   const manifest = materializeCandidateManifest(
-    orderedCandidateStages(stages, formalStages),
+    plan.stages,
     pnpmEntryPoint,
     process.cwd()
   )
@@ -118,8 +122,7 @@ const main = async () => {
     worktree: process.cwd(),
     baseSha,
     candidateHeadSha,
-    formal,
-    formalDisposition: "not-requested",
+    ...plan.identity,
     gitIndexObservation: "semantic",
     changedPaths,
     preparation

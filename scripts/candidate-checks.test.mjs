@@ -9,8 +9,8 @@ import test from "node:test"
 import {
   candidateInputContract,
   executeCandidateChecks,
-  materializeCandidateManifest,
-  orderedCandidateStages
+  localCandidateCheckPlan,
+  materializeCandidateManifest
 } from "./run-candidate-checks.mjs"
 
 const unchanged = { assertUnchanged: async () => {}, finish: async () => {} }
@@ -20,22 +20,54 @@ const manifest = [
   { id: "application", args: ["test"] }
 ]
 
-void test("fresh candidate retains every selected stage and runs coverage before affected formal proof", () => {
+void test("local candidate policy preserves formal relevance and never schedules a formal stage", async () => {
   const stages = [
-    { id: "preflight", boundary: "preflight" },
-    { id: "delivery-repeatability", boundary: "qualification" },
-    { id: "recorded-catalog", boundary: "qualification" },
-    { id: "coverage", boundary: "qualification" }
+    { id: "preflight", name: "preflight", boundary: "preflight", args: ["check:preflight"], timeout: 30_000 },
+    { id: "application", name: "application", boundary: "qualification", args: ["test"], timeout: 30_000 },
+    { id: "formal-proof", name: "formal proof", boundary: "formal", args: ["check:quint"], timeout: 30_000 }
   ]
-  const formal = [{ id: "affected-formal" }]
-  assert.deepEqual(
-    orderedCandidateStages(stages, formal).map(({ id }) => id),
-    ["preflight", "delivery-repeatability", "recorded-catalog", "coverage", "affected-formal"]
-  )
-  assert.deepEqual(
-    orderedCandidateStages(stages, []).map(({ id }) => id),
-    ["preflight", "delivery-repeatability", "recorded-catalog", "coverage"]
-  )
+  const classifications = [
+    {
+      version: 1,
+      status: "affected",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      changedPaths: ["specs/model.qnt"],
+      affectedPaths: ["specs/model.qnt"]
+    },
+    {
+      version: 1,
+      status: "unaffected",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      changedPaths: ["docs/note.md"],
+      affectedPaths: []
+    }
+  ]
+
+  for (const classification of classifications) {
+    const plan = localCandidateCheckPlan(classification, stages)
+    assert.strictEqual(plan.identity.formal, classification)
+    assert.equal(plan.identity.formalDisposition, "not-requested")
+    assert.deepEqual(plan.stages.map(({ id }) => id), ["preflight", "application"])
+
+    const manifest = materializeCandidateManifest(plan.stages, "/pnpm.cjs", "/candidate")
+    assert.ok(
+      manifest.every(({ id, execution }) => id !== "formal-proof" && !execution.args.includes("check:quint"))
+    )
+
+    const executed = []
+    await executeCandidateChecks({
+      guard: unchanged,
+      manifest,
+      record: () => undefined,
+      runStage: async (stage) => {
+        executed.push(stage.id)
+        return { exitCode: 0 }
+      }
+    })
+    assert.deepEqual(executed, ["preflight", "application"])
+  }
 })
 
 void test("candidate runner records and executes the same chosen manifest without reader substitution", async () => {
