@@ -48,11 +48,13 @@ export const selectQualityStages = (stages, changedPaths) => {
         path
       )
     )
+  const lab = shared || changedPaths.some((path) => /^prototypes\/reducer-lab\//u.test(path))
   return stages
     .filter((stage) => {
       if (advisory.has(stage.id)) return false
       if (controls.has(stage.id)) return shared
-      if (stage.id === "reducer-lab" || stage.id === "recorded-catalog") return catalog
+      if (stage.id === "reducer-lab") return lab
+      if (stage.id === "recorded-catalog") return catalog
       return true
     })
     .map((stage) =>

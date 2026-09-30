@@ -54,13 +54,16 @@ void test("tooling, shared configuration, and unknown changes retain infrastruct
   }
 })
 
-void test("cassette and projection changes retain their unique catalog and Lab assertions", () => {
+void test("cassette and projection changes retain catalog assertions without Lab UI evaluation", () => {
   for (const path of [
     "packages/dalph/src/cassettes/schema.ts",
-    "packages/contracts/src/journal/projection.ts",
-    "prototypes/reducer-lab/src/main.ts"
-  ])
-    for (const id of ["recorded-catalog", "reducer-lab"]) assert.ok(ids([path]).includes(id), `${path}: ${id}`)
+    "packages/contracts/src/journal/projection.ts"
+  ]) {
+    assert.ok(ids([path]).includes("recorded-catalog"), path)
+    assert.ok(!ids([path]).includes("reducer-lab"), path)
+  }
+  const labPaths = ids(["prototypes/reducer-lab/src/main.ts"])
+  for (const id of ["recorded-catalog", "reducer-lab"]) assert.ok(labPaths.includes(id), id)
 })
 
 void test("deep sampling routes through the same fresh-process runner as smoke evidence", () => {

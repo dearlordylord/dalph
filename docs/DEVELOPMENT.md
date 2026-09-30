@@ -76,20 +76,30 @@ Choose checks by affected behavior, not by commit or handoff alone:
   references. Explain why runtime behavior is unchanged; no local full gate.
 - **Tooling-only changes:** run affected tool tests, consumer/path checks, and
   relevant lint/typechecks. Moving a script alone does not require the full gate.
-- **Runtime/model behavior changes:** use focused acceptance tests and `pnpm check:fast`
-  during development; run the full gate before integration. Model or conformance
-  changes also require adequacy review and a negative control.
+- **Runtime/model behavior changes:** use focused tests mapped to every changed
+  accepted scenario and `pnpm check:fast` before integration. A full local
+  `check:all` is an explicit maintainer/release diagnostic, not a prerequisite
+  for each implementation attempt. Hosted CI retains its selected quality and
+  formal cells. Model or conformance changes also require adequacy review and
+  a negative control. A required fresh live-provider scenario remains separate
+  from both local and hosted broad gates.
 - **Baseline:** no separate baseline is mandatory. The final preflight owns
   its lint pass; run the maintained Lab only when its boundary is affected.
   `check:baseline` remains an explicit diagnostic convenience, not a prerequisite.
-- **Shared qualification changes:** run the full gate before integration when
-  changing shared build/dependency configuration, gate orchestration, or validity of
-  qualification evidence. Uncertain impact requires investigation, not exemption.
+- **Shared qualification changes:** run affected tool tests and inspect the
+  generated local and hosted plans before integration. Run the full local gate
+  only when its end-to-end custody or evidence validity is the changed boundary;
+  selection-only changes receive hosted CI validation after integration.
+  Uncertain impact requires investigation, not exemption.
 
 Gate infrastructure controls run for tooling and shared configuration changes;
 ordinary product edits omit them. Missing change evidence retains the controls.
-Lab and catalog checks run for cassette, schema, projection, Lab, and shared
-configuration changes. Selection retains deleted and renamed source paths.
+Recorded-catalog checks run for cassette, schema, projection, Lab, and shared
+configuration changes. The Reducer Lab check runs for Lab and shared
+configuration changes; a change to an authored cassette does not also require
+its UI/trace projection in the blocking preflight. Run `pnpm check:lab`
+explicitly when changing that projection or investigating it. Selection
+retains deleted and renamed source paths.
 Complexity, duplication, and unused-export checks are optional trend diagnostics,
 not delivery blockers; `lint` owns formatter and code-lint correctness only.
 This reduces heuristic and sampling assurance without changing application tests.
