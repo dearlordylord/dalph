@@ -212,7 +212,7 @@ All commands below use `pnpm`. Script definitions live in
 | `bootstrap:worktree` | Initialize repository submodules, install the frozen dependency graph, clean-build and validate production artifacts, then relink and verify generated workspace bins. |
 | `check:artifacts` | Clean-build production packages in dependency order, then validate normal exports, declarations, bins, package boundaries, and packed contents. |
 | `vitest run <test-file>` | Focused development check. `test` runs the covered core suite. |
-| `typecheck` | Strict TypeScript-Go plus Effect errors/warnings; suggestions remain nonfatal. |
+| `typecheck` | Strict TypeScript-Go plus Effect errors/warnings; suggestions remain nonfatal. Each invocation uses disposable build-info so ignored incremental state cannot change the verdict for the same source candidate. |
 | `typecheck:effect` | Optional standalone Effect diagnostics; errors/warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
 | `lint:code` | Type-aware Oxlint and dprint over repository files; warnings fail. |
