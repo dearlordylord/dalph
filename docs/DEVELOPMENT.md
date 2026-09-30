@@ -54,9 +54,11 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   fence for explicit reconciliation; a timeout never qualifies the candidate.
   This tooling policy does not change Dalph runtime behavior or accepted task
   execution deadlines.
-- A failed `check:all` retains its actual logs and failed-stage results. Run the
-  failing test directly, repair its cause, and observe it passing before another
-  full qualification. The ordinary candidate runner does not consult historical
+- A failed `check:all` retains the failed stage's log and a top-level failure
+  message identifying that stage. Run the focused reproducer or diagnostic for
+  that stage; when the failure is a test, run that test directly. Repair its
+  cause and observe the focused check passing before another full qualification.
+  The ordinary candidate runner does not consult historical
   recovery records for admission. Incomplete writers retain custody fences until
   stopped-process proof. This tooling policy does not change Dalph runtime behavior.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
@@ -239,7 +241,7 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id> [--previous-boot=<recorded boot UUID>]` | Ordinary form closes registration and proves every recorded writer group absent before clearing exact worktree/slot fences. The explicit previous-boot form accepts only a structurally complete no-child/observed inventory from the supplied recorded boot, durably records `UNPROVEN` stopped custody, and clears exact fences without probing or signalling old process groups. |
 | `gate:recovery`, `gate:diagnose`, `gate:verify-repair` | Historical recovery commands; ordinary candidate-runner admission does not consult their records. |
-| `check:all --candidate=<base sha>` | Invoke `scripts/run-candidate-checks.mjs` on the clean, frozen checkout using its exact Base. It records the selected preflight/application manifest and each stage result. Formal relevance is `not-requested`; run `pnpm check:quint` explicitly for local proof, and retain CI's separate formal verification. Revision-10 selects Reducer Lab only for a `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Interrupted attempts restart after stopped-writer reconciliation. |
+| `check:all --candidate=<base sha>` | Invoke `scripts/run-candidate-checks.mjs` on the clean, frozen checkout using its exact Base. It records the selected preflight/application manifest and successful stage results. A top-level failure message and the retained stage log identify the failed stage. Formal relevance is `not-requested`; run `pnpm check:quint` explicitly for local proof, and retain CI's separate formal verification. Revision-10 selects Reducer Lab only for a `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Interrupted attempts restart after stopped-writer reconciliation. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
