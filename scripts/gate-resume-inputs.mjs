@@ -213,6 +213,9 @@ const candidateHistory = (worktree, logicalInvocation, environment) => {
 }
 
 const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, commonDirectory) => {
+  const semanticIndexObservation = logicalInvocation.gitIndexObservation === "semantic"
+  if (logicalInvocation.gitIndexObservation !== undefined && !semanticIndexObservation)
+    throw new Error("Unsupported Git index observation policy")
   for (const key of [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -237,10 +240,13 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   // created or removed. The lock inode is coordination state; the packed-ref
   // authority file itself remains observed below.
   const transientCoordinationRoots = [indexLock, join(commonDirectory, "packed-refs.lock")]
+  // The ordinary local candidate is bound to exact HEAD and source bytes.
+  // Git status may replace the index to refresh stat metadata without changing
+  // staged entries; its staged identities are compared at every boundary.
   const paths = [
     join(gitDirectory, "HEAD"),
     join(gitDirectory, "HEAD.lock"),
-    join(gitDirectory, "index"),
+    ...(semanticIndexObservation ? [] : [join(gitDirectory, "index")]),
     indexLock,
     path("config.worktree"),
     path("packed-refs"),
@@ -272,7 +278,10 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
     throw new Error("Unsupported Git partial-clone history")
   const storage = optionalGit(root, ["config", "--get", "extensions.refstorage"], environment)
   if (storage !== undefined && storage !== "files") throw new Error("Unsupported Git reference storage")
-  if (!candidateHistory(root, logicalInvocation, environment)) paths.push(path("refs"))
+  const selectedCandidateHistory = candidateHistory(root, logicalInvocation, environment)
+  if (semanticIndexObservation && (!selectedCandidateHistory || logicalInvocation.formalDisposition !== "not-requested"))
+    throw new Error("Semantic Git index observation is limited to local candidate qualification")
+  if (!selectedCandidateHistory) paths.push(path("refs"))
   else {
     let target = optionalGit(root, ["symbolic-ref", "--quiet", "--no-recurse", "HEAD"], environment)
     const seen = new Set()
@@ -360,10 +369,15 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
   }
 }
 
-const snapshot = ({ effectiveEnvironment, layout, logicalInvocation }) => {
-  const index = git(layout.root, ["ls-files", "--stage", "-z"], effectiveEnvironment).split("\0").filter(Boolean)
+const stagedIndexEntries = (root, environment) => {
+  const index = git(root, ["ls-files", "--stage", "-z"], environment).split("\0").filter(Boolean)
   if (index.some((entry) => !/^\d+ [0-9a-f]+ 0\t/u.test(entry)))
-    throw new Error("Unresolved Git index conflicts forbid resume")
+    throw new Error("Unresolved Git index conflicts forbid qualification")
+  return index
+}
+
+const snapshot = ({ effectiveEnvironment, layout, logicalInvocation }) => {
+  const index = stagedIndexEntries(layout.root, effectiveEnvironment)
   const head = git(layout.root, ["rev-parse", "HEAD"], effectiveEnvironment).trim()
   const source = manifest([layout.root], layout.sourceExclusions)
   const gitConfiguration = candidateGitConfiguration(layout.root, effectiveEnvironment)
@@ -427,6 +441,11 @@ export const startInputGuard = async ({
   let invalidation
   const assertUnchanged = async () => {
     await observer.assertUnchanged()
+    if (
+      logicalInvocation.gitIndexObservation === "semantic" &&
+      JSON.stringify(stagedIndexEntries(layout.root, effectiveEnvironment)) !== JSON.stringify(identity.manifests.index)
+    )
+      invalidation ??= "Candidate staged Git index entries changed during execution"
     if (
       JSON.stringify(environmentDigests(effectiveEnvironment)) !== originalEnvironment ||
       JSON.stringify(logicalInvocation) !== originalInvocation

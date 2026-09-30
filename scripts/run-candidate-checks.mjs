@@ -120,6 +120,7 @@ const main = async () => {
     candidateHeadSha,
     formal,
     formalDisposition: "not-requested",
+    gitIndexObservation: "semantic",
     changedPaths,
     preparation
   }

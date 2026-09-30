@@ -411,19 +411,29 @@ process group. No observer receipt grants resume or cross-worktree reuse credit.
 Transient memory-mapped mutation is outside the cooperative filesystem guarantee.
 Metadata-only events on a path that is only a strict ancestor of an input do not
 invalidate the run by themselves. Membership, rename, and replacement events on
-the same path still invalidate, and the final comparison rejects any lasting
-change that alters resolved identity.
+the same path still invalidate except for the local candidate index policy
+below, and the final comparison rejects any lasting change that alters resolved
+identity.
 
 Guarded full-gate children use `GIT_OPTIONAL_LOCKS=0`, so read-only status checks
-leave index stat-cache metadata untouched. Required Git writes still acquire
-their locks, and actual index changes invalidate the observer. Only explicitly
-constructed internal Git coordination lock paths—the candidate's `index.lock`,
+leave index stat-cache metadata untouched. The ordinary local `check:all`
+candidate additionally observes staged index entries at each stage boundary
+instead of watching raw index-file replacement: an outside `git status` that
+refreshes only stat metadata does not invalidate a long run. A persistent
+staged-entry change fails the next boundary comparison, and the final complete
+snapshot also checks staged entries. Source bytes, HEAD, selected refs, and
+other Git authority remain observed. A staged-only change followed by a reset
+between two stage boundaries can escape this semantic index check; local
+qualification is tied to the frozen HEAD and watched source bytes rather than
+transient index metadata. The standalone formal guard remains strict about
+index replacement. Only explicitly constructed internal Git coordination lock
+paths—the candidate's `index.lock`,
 the shared `packed-refs.lock`, and the lock paths for its exact symbolic
 selected-ref chain—may be treated as transient coordination when their
 create/remove pair is observed. No `HEAD.lock` or arbitrary `*.lock` path is
-exempt. A real
-same-batch index/ref event remains dirty even when a lock is created and
-removed; a persistent internal lock fails the final authoritative snapshot.
+exempt. A real same-batch ref event remains dirty even when a lock is created
+and removed; strict guards also invalidate raw index events. A persistent
+internal lock fails the final authoritative snapshot.
 User-configured authority files named `*.lock` remain observed, so editing and
 restoring one rejects reuse. External Git observation during a run must use the
 same optional-lock setting.
@@ -435,7 +445,9 @@ boundary; foreign `branch.*` sections do not invalidate qualification, while a
 candidate-branch or repository-wide setting change does. A setting changed and
 restored before a boundary is intentionally ignored because the candidate's
 effective Git authority is unchanged. Worktree-local `config.worktree`, refs,
-the index, and other Git authority files remain observed.
+and other Git authority files remain observed. The local candidate compares
+semantic index entries; standalone formal and CI guards retain raw index-file
+observation.
 This is qualification-tool behavior only and changes no Dalph runtime command,
 provider boundary, journal fact, retry, or cleanup behavior.
 
