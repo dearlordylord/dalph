@@ -53,6 +53,24 @@ const fixture = () => {
   return { root, outer, git, environment, invocation, guard }
 }
 
+const semanticCandidateFixture = () => {
+  const f = fixture()
+  const headSha = f.git("rev-parse", "HEAD")
+  const secretArgs = ["check:secrets", `--log-opts=--full-history --diff-filter=tuxdb ${headSha} --`]
+  f.invocation.gitHistory = { mode: "candidate-ancestry", headSha }
+  f.invocation.formalDisposition = "not-requested"
+  f.invocation.gitIndexObservation = "semantic"
+  f.invocation.stageManifest = [
+    {
+      id: "secrets",
+      args: secretArgs,
+      execution: { args: ["/fixture/pnpm.cjs", "--silent", ...secretArgs] }
+    }
+  ]
+  f.environment.DALPH_GATE_GIT_HISTORY = "candidate-ancestry"
+  return f
+}
+
 void test("unchanged complete inputs produce identical identity and drained final guard proof", async () => {
   const f = fixture()
   const guard = await f.guard()
@@ -506,6 +524,68 @@ void test("unresolved semantic index stages and unsupported module configuration
     input: `0 ${"0".repeat(40)}\tsource.ts\n100644 ${sha} 1\tsource.ts\n100644 ${sha} 2\tsource.ts\n`
   })
   await assert.rejects(f.guard(), /conflicts/u)
+})
+
+void test("semantic candidate identity tolerates a normal status stat refresh", async () => {
+  const f = semanticCandidateFixture()
+  f.environment.GIT_OPTIONAL_LOCKS = "1"
+  const source = join(f.root, "source.ts")
+  writeFileSync(source, "initial\n")
+  const refreshedStat = new Date(Date.now() + 5_000)
+  utimesSync(source, refreshedStat, refreshedStat)
+  const index = join(f.root, ".git", "index")
+  const before = readFileSync(index)
+  const guard = await f.guard()
+  try {
+    const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+      cwd: f.root,
+      env: f.environment,
+      encoding: "utf8"
+    }).trim()
+    assert.equal(status, "")
+    assert.notDeepEqual(readFileSync(index), before)
+    assert.equal((await guard.finish()).unchanged, true)
+  } finally {
+    await guard.close()
+  }
+})
+
+void test("semantic candidate identity rejects a persistent staged entry change at the boundary and final check", async () => {
+  const f = semanticCandidateFixture()
+  const source = join(f.root, "source.ts")
+  const sourceBytes = readFileSync(source)
+  const head = f.git("rev-parse", "HEAD")
+  const guard = await f.guard()
+  try {
+    f.git("update-index", "--chmod=+x", "source.ts")
+    assert.deepEqual(readFileSync(source), sourceBytes)
+    assert.equal(f.git("rev-parse", "HEAD"), head)
+    assert.match(f.git("ls-files", "--stage", "-v", "source.ts"), /^H 100755 /u)
+    await assert.rejects(guard.assertUnchanged(), /Candidate staged Git index entries changed during execution/u)
+    await assert.rejects(guard.finish(), /Candidate staged Git index entries changed during execution/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+void test("semantic candidate identity rejects persistent skip-worktree and assume-unchanged flags", async () => {
+  for (const [flag, tag] of [
+    ["--skip-worktree", /^S /u],
+    ["--assume-unchanged", /^h /u]
+  ]) {
+    const f = semanticCandidateFixture()
+    const guard = await f.guard()
+    try {
+      const before = f.git("ls-files", "--stage", "-v", "source.ts")
+      f.git("update-index", flag, "source.ts")
+      const after = f.git("ls-files", "--stage", "-v", "source.ts")
+      assert.notEqual(after, before)
+      assert.match(after, tag)
+      await assert.rejects(guard.assertUnchanged(), /Candidate staged Git index entries changed during execution/u)
+    } finally {
+      await guard.close()
+    }
+  }
 })
 
 void test("missing executable and broken external links cannot establish complete input identity", async () => {

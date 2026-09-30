@@ -242,7 +242,8 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   const transientCoordinationRoots = [indexLock, join(commonDirectory, "packed-refs.lock")]
   // The ordinary local candidate is bound to exact HEAD and source bytes.
   // Git status may replace the index to refresh stat metadata without changing
-  // staged entries; its staged identities are compared at every boundary.
+  // staged entries; persistent entry identities and flags are compared at
+  // every boundary in semantic mode.
   const paths = [
     join(gitDirectory, "HEAD"),
     join(gitDirectory, "HEAD.lock"),
@@ -369,9 +370,11 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
   }
 }
 
+// `-v` includes assume-unchanged casing and skip-worktree tags without stat
+// cache fields. Changes restored between observation boundaries can escape.
 const stagedIndexEntries = (root, environment) => {
-  const index = git(root, ["ls-files", "--stage", "-z"], environment).split("\0").filter(Boolean)
-  if (index.some((entry) => !/^\d+ [0-9a-f]+ 0\t/u.test(entry)))
+  const index = git(root, ["ls-files", "--stage", "-v", "-z"], environment).split("\0").filter(Boolean)
+  if (index.some((entry) => !/^[A-Za-z] \d+ [0-9a-f]+ 0\t/u.test(entry)))
     throw new Error("Unresolved Git index conflicts forbid qualification")
   return index
 }
