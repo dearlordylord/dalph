@@ -20,8 +20,9 @@ authorize omitting checks. Hosted CI policy remains unchanged.
   new effective profile. Git records the candidate and base. GitHub is only
   the task tracker; Dalph execution sessions and journal do not participate
   because this is repository tooling.
-- **Trigger:** the maintainer invokes `pnpm check:quint`, or local handoff
-  requests the same complete formal requirement after preflight.
+- **Trigger:** the maintainer explicitly invokes `pnpm check:quint`. Ordinary
+  local `check:all` records formal proof as not requested and runs no Quint
+  commands; CI keeps its independent formal requirement.
 - **Boundary calls:** acquire existing admission, identify and observe all
   inputs, record intent, start the identified owned server, and run all 105
   commands with the existing 42 scheduling/provenance steps. Server readiness

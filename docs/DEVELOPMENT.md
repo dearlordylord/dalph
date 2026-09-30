@@ -106,16 +106,15 @@ supervisor retains worktree locking, clone capacity, logs, source-change checks,
 and stopped-process fences. There is no second checkout's profile reader, repair
 permit, stage resume, or cross-worktree formal reuse on this ordinary path.
 Interruption costs a rerun after reconciliation; this is an explicit simplicity
-tradeoff. Formal inputs still select exhaustive proof, executed fresh.
+tradeoff. Formal relevance is recorded, while proof runs by explicit local
+request or in CI.
 
-After structural preflight, the local gate runs its existing delivery,
-recorded-catalog, and coverage suffix before affected formal proof. Both remain
-required when selected. These are independent post-preflight obligations: moving
-the suffix first exposes a coverage failure before the long formal stage, while
-a formal failure now incurs the suffix cost. The recorded candidate manifest
-binds this order to the exact candidate. Hosted formal and quality cells remain
-independent. This qualification-tooling order cannot change Dalph runtime
-behavior or the assertions within either gate.
+After structural preflight, the local gate runs its delivery,
+recorded-catalog, and coverage suffix. Its recorded manifest contains no Quint
+stage and its report says `formalDisposition: not-requested`. A maintainer can
+run `pnpm check:quint` separately; hosted formal and quality cells remain
+independent. This qualification-tooling selection changes no Dalph runtime
+behavior or assertions inside the formal command.
 
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
@@ -162,10 +161,10 @@ remains a governed formal input.
 
 When required, freeze the candidate and run
 `pnpm check:all --candidate=<base-sha>`. No prior stages are credited. The runner
-uses the candidate's formal-input projection to select fresh formal execution;
-unaffected changes start no formal checkers. Missing Git or projection evidence
-fails before application qualification. Explicit standalone `check:quint`
-remains available for formal diagnostics and historical reuse experiments.
+records formal relevance from the candidate's formal-input projection but does
+not execute Quint. Missing Git or projection evidence still fails before
+application qualification. Explicit standalone `pnpm check:quint` runs the
+local formal profile when requested; CI keeps its own formal proof.
 
 The optional unused-file/export graph and the project-wide Effect pass build the
 entire program; use repository commands, not per-file substitutes.
@@ -231,7 +230,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:secrets` | Scan Git history with gitleaks. |
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id> [--previous-boot=<recorded boot UUID>]` | Ordinary form closes registration and proves every recorded writer group absent before clearing exact worktree/slot fences. The explicit previous-boot form accepts only a structurally complete no-child/observed inventory from the supplied recorded boot, durably records `UNPROVEN` stopped custody, and clears exact fences without probing or signalling old process groups. |
-| `check:all` | Run the clean frozen candidate’s own selected manifest with its exact Base SHA, fresh affected formal proof, bounded children, and actual exit results. No resume or certification permit. |
+| `check:all` | Run the clean frozen candidate’s selected application manifest with its exact Base SHA, bounded children, and actual exit results. Record formal relevance and an explicit not-requested disposition; no Quint proof runs locally. No resume or certification permit. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
@@ -540,16 +539,14 @@ production artifacts before source checks so a fresh checkout does not lint
 unresolved distributable declarations. Artifact validation stops at failed
 prerequisites rather than interpreting absent build output. Preflight control
 tests cover this ordering; it changes no Dalph runtime behavior. `check:all` runs
-the same census once. After successful preflight, an affected candidate executes
-or reuses the complete formal profile before expensive qualification, keeps the
-external-tool observation through the final application stage, and performs
-final no-checker applicability validation before handoff success. An unaffected
-candidate records its exact classification and starts no formal process. It starts application
-qualification only when its prerequisites pass.
+the same census once. After successful preflight, it runs selected application
+qualification and records formal proof as not requested. Standalone
+`pnpm check:quint` owns the local guarded formal profile; hosted CI owns its
+separate formal proof.
 Standalone preflight is evidence for repairs before freezing; the final full
 gate repeats the census on its frozen candidate. The shared census includes the
 maintained Reducer Lab immediately after the clone-wide lint census, so a Lab
-failure prevents formal and application qualification. Use `check:fast` during
+failure prevents local application qualification. Use `check:fast` during
 edits, then `check:baseline` for an early task-attempt baseline before freezing.
 
 In a fresh worktree run:
@@ -1279,8 +1276,12 @@ the production 95% and maintained-evaluation 75% goals are advisory.
 
 ### Formal reuse and handoff
 
-The explicit standalone formal command uses one complete profile and one guarded
-applicability boundary. Ordinary `check:all` does not consume this reuse contract.
+The explicit standalone `pnpm check:quint` command uses one complete profile and
+one guarded applicability boundary. Ordinary local `check:all` records the
+candidate's formal relevance and `not-requested` disposition without starting
+Quint proof. A maintainer runs `pnpm check:quint` manually when formal proof is
+wanted; CI retains its independent formal job. A passing local `check:all` is
+not evidence of formal proof. It does not consume the standalone reuse contract.
 The formal command runs missing or stale work, or reuses
 an applicable local success record while naming that record. A complete changed
 path inventory includes committed, staged, unstaged, deleted, rename-source,
@@ -1362,13 +1363,11 @@ drains; it is not the withdrawn 60-second final estimate. Final qualification me
 560.085 seconds fresh, a 4.329-second median across ten warm commands, and
 2.629 seconds for final no-checker validation.
 
-The local stage inventory is 30 minutes of preflight plus 51 minutes of
-application qualification, now plus 35 minutes of formal acquisition and
-0.5 minutes of final validation: 116.5 minutes before existing
-quality setup and termination overhead. A run that needs that entire ceiling
-must explicitly choose an absolute gate deadline beyond 116.5 minutes plus
-admission/setup/termination overhead; the default one-hour budget does not cover
-it. These are ceilings, not measured duration or claimed savings.
+The optional standalone local formal command retains its 35-minute acquisition
+and 0.5-minute final-validation bounds. Those bounds are outside the ordinary
+local `check:all` budget. Choose a separate absolute deadline when invoking
+`pnpm check:quint` manually. These are ceilings, not measured duration or
+claimed savings from the opt-in policy.
 Hosted formal verification has a 16-minute job deadline and reserves
 210 seconds for checkout, setup, network, and final reporting.
 

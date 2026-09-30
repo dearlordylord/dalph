@@ -1,6 +1,4 @@
 import { ensureEffectTsgoPlatformBinaryExecutable } from "./effect-tsgo-platform-binary.mjs"
-import { selectAffectedQuintFamilies } from "./quint-affected-selection.mjs"
-import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { existsSync, lstatSync, rmSync } from "node:fs"
 import { startInputGuard } from "./gate-resume-inputs.mjs"
 import { execFileSync } from "node:child_process"
@@ -32,7 +30,7 @@ export const materializeCandidateManifest = (stages, pnpmEntryPoint, worktree) =
     }
   }))
 
-/** Preserve both post-preflight obligations while exposing application failures before costly formal proof. */
+/** Put any explicitly selected formal stage after application qualification. */
 export const orderedCandidateStages = (stages, formalStages) => [
   ...stages.filter((stage) => stage.boundary === "preflight"),
   ...stages.filter((stage) => stage.boundary === "qualification"),
@@ -107,31 +105,24 @@ const main = async () => {
     pnpmEntryPoint,
     worktree: process.cwd()
   })
-  const affectedFamilies =
-    formal.status === "affected"
-      ? await selectAffectedQuintFamilies({
-          profile: createQuintEffectiveProfile(),
-          changedPaths: formal.affectedPaths,
-          worktree: process.cwd()
-        })
-      : undefined
-  const formalStages =
-    formal.status === "affected"
-      ? [
-          {
-            id: "affected-formal",
-            name: "affected formal proof",
-            args: ["check:ci:formal", "--local-guarded", ...(affectedFamilies ?? []).map((name) => `--family=${name}`)],
-            timeout: 35 * 60_000
-          }
-        ]
-      : []
+  // Local candidate qualification records formal relevance but leaves proof
+  // to an explicit check:quint request or the independent CI formal workflow.
+  const formalStages = []
   const manifest = materializeCandidateManifest(
     orderedCandidateStages(stages, formalStages),
     pnpmEntryPoint,
     process.cwd()
   )
-  const identity = { version: 1, worktree: process.cwd(), baseSha, candidateHeadSha, formal, changedPaths, preparation }
+  const identity = {
+    version: 1,
+    worktree: process.cwd(),
+    baseSha,
+    candidateHeadSha,
+    formal,
+    formalDisposition: "not-requested",
+    changedPaths,
+    preparation
+  }
   const report = join(context.run.reportDirectory, "candidate-checks.json")
   const environment = {
     ...qualityGateTestEnvironment(baseSha),
@@ -153,6 +144,7 @@ const main = async () => {
     rmSync(root, { recursive: true, force: true })
   }
   atomicRecord(report, { ...identity, manifest, results: [], status: "preparing" })
+  console.error("Local formal proof not requested; run pnpm check:quint explicitly or use CI formal verification.")
   const guard = await startInputGuard({
     worktree: process.cwd(),
     logicalInvocation: candidateInputContract({ ...identity, manifest }),
