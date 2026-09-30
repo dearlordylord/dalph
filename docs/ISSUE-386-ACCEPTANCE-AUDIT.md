@@ -2752,3 +2752,26 @@ then passed once: exit 0, `Test Files 1 passed (1)`,
 `/tmp/issue386-route-service-repair-r2.log`. This closes the focused route
 fixture proof. No production behavior changed; this result gives no S1 or full
 gate credit.
+
+## Five-task dependency-diamond Lab result report — 2026-09-30
+
+**Pinned candidate and classification.** This result-reporting diagnostic ran
+on branch `integration/issue-385-386-387-r1` at HEAD
+`75768e891b24919499db3196fc42afd3ad631adf`. It is inconclusive and is not
+acceptance evidence. Between `2026-09-30T09:54:17Z` and
+`2026-09-30T09:54:22Z`, one direct Vite SSR call to
+`runMaintainedCassette('authored:productionShapedFiveTaskDiamond')` returned
+`_tag: Failed` for story `five-task dependency diamond settles every accepted
+result before releasing D`. The detail was
+`AuthoredCassetteInteractionMismatch` during
+`IntegratorProtocol.prepareIntegrationCandidateRun` at
+`authored-cursor.ts:993`; location was `Unknown`, no story position was
+reported, and expected/actual tags were unavailable. The command exited 0
+because it reported the cassette result, not because the cassette passed.
+
+**Retained evidence and next discriminator.** The result report is
+`/tmp/issue386-five-task-diamond-result-report.log`; the prior failed assertion
+log is `/tmp/issue386-five-task-diamond-reordered-cassette.log`. The next exact
+discriminator is a safe projection of `mismatch.expected`, `mismatch.actual`,
+and `storyPosition` at the Integrator candidate-preparation boundary. This
+record authorizes no new test or edit loop.
