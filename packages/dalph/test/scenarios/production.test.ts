@@ -5148,6 +5148,9 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         const currentGraphObservation = currentGraphBoundary.event.observation
         expect(currentGraphBoundary.position).toBeGreaterThan(promotion.position)
         expect(currentGraphBoundary.event.operationId).toBe(currentGraphObservation.operationId)
+        if (premise === "dependency") {
+          expect(currentGraphObservation._tag).toBe("CompleteTaskTrackerFacts")
+        }
         expect(currentGraphObservation).toMatchObject({
           operationId: currentGraphObservation.operationId,
           rootTaskId: taskId,
@@ -5208,6 +5211,12 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         expect(
           lifecycles.lifecycles.find(({ taskId: observedTaskId }) => observedTaskId === taskId)?.lifecycle
         ).toEqual({ _tag: "Open" })
+        if (premise === "dependency") {
+          expect(lifecycles.lifecycles).toContainEqual({
+            lifecycle: { _tag: "Open" },
+            taskId: unfinishedPrerequisiteTaskId
+          })
+        }
         expect(
           prerequisites.prerequisites.find(({ taskId: observedTaskId }) => observedTaskId === taskId)
         ).toMatchObject({ prerequisiteTaskIds: premise === "dependency" ? [unfinishedPrerequisiteTaskId] : [], taskId })
@@ -5256,9 +5265,20 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
           return yield* Effect.die("changed premise lacks exact focused work-specification facts")
         }
         const specificationOperationId = currentWorkSpecification.event.operationId
+        expect(currentWorkSpecification.event.operationId).toBe(currentWorkSpecification.event.observation.operationId)
+        expect(currentWorkSpecification.event.observation).toMatchObject({
+          operationId: specificationOperationId,
+          target
+        })
+        const expectedTaskRevision =
+          premise === "revision" ? changedSpecification.fingerprint : specification.fingerprint
         expect(currentWorkSpecification.event.observation.factFamily).toMatchObject({
-          contentIdentity: premise === "revision" ? changedSpecification.fingerprint : specification.fingerprint,
-          fingerprint: premise === "revision" ? changedSpecification.fingerprint : specification.fingerprint,
+          completeness: "Complete",
+          consistency: "PotentiallyMixedTime",
+          contentIdentity: expectedTaskRevision,
+          coverage: { taskId },
+          fingerprint: expectedTaskRevision,
+          freshness: { _tag: "ObservedDuringLogicalRead", operationId: specificationOperationId },
           taskId
         })
         const specificationIntent = after.find(
@@ -5296,6 +5316,16 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
           return yield* Effect.die("changed premise lacks exact focused claim facts")
         }
         const claimOperationId = currentClaim.event.operationId
+        expect(currentClaim.event.operationId).toBe(currentClaim.event.observation.operationId)
+        expect(currentClaim.event.observation).toMatchObject({
+          _tag: "FocusedTaskClaimFacts",
+          completeness: "Complete",
+          consistency: "Atomic",
+          coverage: { taskId },
+          freshness: { _tag: "ObservedDuringLogicalRead", operationId: claimOperationId },
+          operationId: claimOperationId,
+          target
+        })
         expect(currentClaim.event.observation.observation).toEqual(premise === "claim" ? foreignClaim : claim)
         const claimIntent = after.find(
           ({ event }) =>
