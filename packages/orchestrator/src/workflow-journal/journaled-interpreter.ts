@@ -2,8 +2,8 @@
 import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
-import { InRunJournal, type JournalAppendError } from "./store.js"
-import { AcceptedJournalReader } from "./accepted-reader.js"
+import { InRunJournal, type InRunJournalService, type JournalAppendError } from "./store.js"
+import { AcceptedJournalReader, type AcceptedJournalReaderService } from "./accepted-reader.js"
 import { journalEvidenceBefore, journalRecordByKey, journalRecordsForTask } from "./record-evidence.js"
 import {
   TaskAttemptPlannedEvent,
@@ -43,7 +43,8 @@ import {
   runInterruptibleBoundary,
   WorkflowInterpreter,
   type TaskClaimAcquisitionResult,
-  type InterruptibleWorkflowBoundaryExecution
+  type InterruptibleWorkflowBoundaryExecution,
+  type WorkflowInterpreterService
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { runJournaledTaskClaimRelease } from "../workflow/protocols/task-claim-release/journaled.js"
@@ -57,6 +58,130 @@ const requireTaskWorkSpecification = <A>(
   Option.match(knowledge, {
     onNone: () => Effect.fail(new TaskTrackerKnowledgeUnavailable({ knowledge: "TaskWorkSpecification", operationId })),
     onSome: Effect.succeed
+  })
+
+/** Journal one exact focused task-claim read through the existing interpreter protocol. */
+export const journaledTaskClaimRead = (
+  runId: RunId,
+  interpreter: WorkflowInterpreterService,
+  journal: InRunJournalService,
+  accepted: AcceptedJournalReaderService
+) =>
+  Effect.fn("WorkflowInterpreter.Journaled.readTaskClaim")(function* (
+    operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type,
+    onIntentRecorded: Effect.Effect<void> = Effect.void,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
+  ) {
+    yield* Effect.uninterruptible(
+      journal
+        .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        .pipe(Effect.andThen(onIntentRecorded))
+    )
+    const existing = journalRecordByKey(
+      yield* accepted.readAccepted(runId),
+      outcomeRecordKey(operation.operationId)
+    )?.event
+    if (existing?._tag === "TaskTrackerFactsObserved") {
+      return existing.observation._tag === "FocusedTaskClaimFacts"
+        ? { _tag: "AuthoritativeTaskClaimObserved" as const, observation: existing.observation.observation }
+        : /* v8 ignore next -- @preserve Exhausted replay is covered by the composed unreadable cassette. */
+          {
+            _tag: "TaskClaimObservationUnreadable" as const,
+            attempts: taskClaimObservationAttemptBound,
+            taskId: operation.taskId
+          }
+    }
+    return yield* runInterruptibleBoundary(
+      interruptibleBoundary,
+      InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+        family: "TaskTracker",
+        operationId: operation.operationId
+      }),
+      interpreter.readTaskClaim(operation),
+      (result) => {
+        const observation =
+          result._tag === "AuthoritativeTaskClaimObserved"
+            ? makeFocusedTaskClaimFactsObserved(operation, result.observation)
+            : makeFocusedTaskClaimFactsUnreadable(operation)
+        return journal
+          .append(
+            runId,
+            outcomeRecordKey(operation.operationId),
+            taskTrackerFactsObservedEvent(operation.operationId, observation)
+          )
+          .pipe(Effect.as(result))
+      }
+    )
+  })
+
+/** Journal one exact focused task-work-specification read through the existing interpreter protocol. */
+export const journaledTaskWorkSpecificationRead = (
+  runId: RunId,
+  interpreter: WorkflowInterpreterService,
+  journal: InRunJournalService,
+  accepted: AcceptedJournalReaderService
+) =>
+  Effect.fn("WorkflowInterpreter.Journaled.readTaskWorkSpecification")(function* (
+    operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type,
+    onIntentRecorded: Effect.Effect<void> = Effect.void,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
+  ) {
+    yield* Effect.uninterruptible(
+      journal
+        .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        .pipe(Effect.andThen(onIntentRecorded))
+    )
+    const existingRecords = yield* accepted.readAccepted(runId)
+    const existingObservation = journalRecordByKey(existingRecords, outcomeRecordKey(operation.operationId))
+    if (existingObservation?.event._tag === "TaskTrackerFactsObserved") {
+      return yield* requireTaskWorkSpecification(
+        reconstructedTaskWorkSpecificationFor(
+          {
+            taskTrackerFacts: Array.from(
+              journalRecordsForTask(
+                journalEvidenceBefore(existingRecords, Number(existingObservation.position) + 1),
+                operation.taskId
+              )
+            ).flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
+          },
+          operation.taskId,
+          operation.target
+        ),
+        operation.operationId
+      )
+    }
+    return yield* runInterruptibleBoundary(
+      interruptibleBoundary,
+      InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
+        family: "TaskTracker",
+        operationId: operation.operationId
+      }),
+      interpreter.readTaskWorkSpecification(operation),
+      (specification) =>
+        Effect.gen(function* () {
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.operationId),
+            taskTrackerFactsObservedEvent(
+              operation.operationId,
+              makeFocusedTaskWorkSpecificationFactsObserved(operation, specification)
+            )
+          )
+          const records = yield* accepted.readAccepted(runId)
+          return yield* requireTaskWorkSpecification(
+            reconstructedTaskWorkSpecificationFor(
+              {
+                taskTrackerFacts: Array.from(journalRecordsForTask(records, operation.taskId)).flatMap(({ event }) =>
+                  event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
+                )
+              },
+              operation.taskId,
+              operation.target
+            ),
+            operation.operationId
+          )
+        })
+    )
   })
 
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
@@ -130,52 +255,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
       })
 
-      const readTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.readTaskClaim")(function* (
-        operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type,
-        onIntentRecorded: Effect.Effect<void> = Effect.void,
-        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
-      ) {
-        yield* Effect.uninterruptible(
-          journal
-            .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-            .pipe(Effect.andThen(onIntentRecorded))
-        )
-        const existing = journalRecordByKey(
-          yield* accepted.readAccepted(runId),
-          outcomeRecordKey(operation.operationId)
-        )?.event
-        if (existing?._tag === "TaskTrackerFactsObserved") {
-          return existing.observation._tag === "FocusedTaskClaimFacts"
-            ? { _tag: "AuthoritativeTaskClaimObserved" as const, observation: existing.observation.observation }
-            : /* v8 ignore next -- @preserve Exhausted replay is covered by the composed unreadable cassette. */
-              {
-                _tag: "TaskClaimObservationUnreadable" as const,
-                attempts: taskClaimObservationAttemptBound,
-                taskId: operation.taskId
-              }
-        }
-        return yield* runInterruptibleBoundary(
-          interruptibleBoundary,
-          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
-            family: "TaskTracker",
-            operationId: operation.operationId
-          }),
-          interpreter.readTaskClaim(operation),
-          (result) => {
-            const observation =
-              result._tag === "AuthoritativeTaskClaimObserved"
-                ? makeFocusedTaskClaimFactsObserved(operation, result.observation)
-                : makeFocusedTaskClaimFactsUnreadable(operation)
-            return journal
-              .append(
-                runId,
-                outcomeRecordKey(operation.operationId),
-                taskTrackerFactsObservedEvent(operation.operationId, observation)
-              )
-              .pipe(Effect.as(result))
-          }
-        )
-      })
+      const readTaskClaim = journaledTaskClaimRead(runId, interpreter, journal, accepted)
 
       const readTaskWorktree = Effect.fn("WorkflowInterpreter.Journaled.readTaskWorktree")(function* (
         operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type,
@@ -270,68 +350,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
       })
 
-      const readTaskWorkSpecification = Effect.fn("WorkflowInterpreter.Journaled.readTaskWorkSpecification")(function* (
-        operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type,
-        onIntentRecorded: Effect.Effect<void> = Effect.void,
-        interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
-      ) {
-        yield* Effect.uninterruptible(
-          journal
-            .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-            .pipe(Effect.andThen(onIntentRecorded))
-        )
-        const existingRecords = yield* accepted.readAccepted(runId)
-        const existingObservation = journalRecordByKey(existingRecords, outcomeRecordKey(operation.operationId))
-        if (existingObservation?.event._tag === "TaskTrackerFactsObserved") {
-          return yield* requireTaskWorkSpecification(
-            reconstructedTaskWorkSpecificationFor(
-              {
-                taskTrackerFacts: Array.from(
-                  journalRecordsForTask(
-                    journalEvidenceBefore(existingRecords, Number(existingObservation.position) + 1),
-                    operation.taskId
-                  )
-                ).flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
-              },
-              operation.taskId,
-              operation.target
-            ),
-            operation.operationId
-          )
-        }
-        return yield* runInterruptibleBoundary(
-          interruptibleBoundary,
-          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({
-            family: "TaskTracker",
-            operationId: operation.operationId
-          }),
-          interpreter.readTaskWorkSpecification(operation),
-          (specification) =>
-            Effect.gen(function* () {
-              yield* journal.append(
-                runId,
-                outcomeRecordKey(operation.operationId),
-                taskTrackerFactsObservedEvent(
-                  operation.operationId,
-                  makeFocusedTaskWorkSpecificationFactsObserved(operation, specification)
-                )
-              )
-              const records = yield* accepted.readAccepted(runId)
-              return yield* requireTaskWorkSpecification(
-                reconstructedTaskWorkSpecificationFor(
-                  {
-                    taskTrackerFacts: Array.from(journalRecordsForTask(records, operation.taskId)).flatMap(
-                      ({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : [])
-                    )
-                  },
-                  operation.taskId,
-                  operation.target
-                ),
-                operation.operationId
-              )
-            })
-        )
-      })
+      const readTaskWorkSpecification = journaledTaskWorkSpecificationRead(runId, interpreter, journal, accepted)
 
       const releaseTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.releaseTaskClaim")(function* (
         operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type,

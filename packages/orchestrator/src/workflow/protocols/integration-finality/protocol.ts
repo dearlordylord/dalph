@@ -367,52 +367,72 @@ const replacementFailureResult = Effect.fn("IntegrationFinality.replacementFailu
   return undefined
 })
 
-const runReplacementAttempt = Effect.fn("IntegrationFinality.runReplacementAttempt")(function* (
+const runReplacementAttempt = <E, R>(
   tracker: CompletionClaimBoundaryService,
   request: CompletionClaimReplacementRequest,
-  attemptOrdinal: CompletionClaimRequestOrdinal
-) {
-  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
-  const priorOutcome = yield* existingReplacementOutcome(request, records)
-  /* v8 ignore next -- @preserve The serialized action owner cannot publish an outcome concurrently with its own attempt; restart returns before entering this helper. */
-  if (priorOutcome !== undefined) return priorOutcome
-  const observed = yield* tracker.readTaskClaim(completionClaimReadRequestFor(request.claim))
-  if (observed._tag === "CompletionTaskClaim") {
-    if (!completionTaskClaimEquals(observed, request.claim)) {
+  attemptOrdinal: CompletionClaimRequestOrdinal,
+  checkFreshPremises: () => Effect.Effect<void, E, R>
+) =>
+  Effect.gen(function* () {
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
+    const priorOutcome = yield* existingReplacementOutcome(request, records)
+    /* v8 ignore next -- @preserve The serialized action owner cannot publish an outcome concurrently with its own attempt; restart returns before entering this helper. */
+    if (priorOutcome !== undefined) return priorOutcome
+    const observed = yield* tracker.readTaskClaim(completionClaimReadRequestFor(request.claim))
+    if (observed._tag === "CompletionTaskClaim") {
+      if (!completionTaskClaimEquals(observed, request.claim)) {
+        return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
+      }
+      const priorIntent = replacementIntent(records, request.operationId)
+      if (priorIntent === undefined) {
+        // A completion claim already present on the first read is an external effect,
+        // not evidence that this workflow authorized it. Never retroactively append
+        // the intent after observing that effect.
+        return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
+      }
+      if (!completionTaskClaimEquals(priorIntent.claim, request.claim)) {
+        return yield* new CompletionClaimPremiseContradiction({
+          claim: request.claim,
+          detail: "replacement operation was already bound to a different completion claim"
+        })
+      }
+      yield* append(
+        request.claim.plannedAttempt.runId,
+        completionClaimReplacedRecordKey(request.operationId),
+        CompletionClaimReplacedEvent.make({
+          claim: request.claim,
+          operationId: request.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+      return CompletionClaimReplacementResult.make({
+        claim: request.claim,
+        operationId: request.operationId,
+        version: workflowJournalEventVersion
+      })
+    }
+    if (observed._tag !== "ActiveTaskClaim" || !isExactClaimForReplacement(observed, request.claim)) {
+      // Preserve the post-promotion current graph/spec/claim evidence for S8
+      // conflicts before deciding that no replacement attempt is authorized.
+      yield* checkFreshPremises()
       return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
     }
+    yield* checkFreshPremises()
+    yield* ensureReplacementIntent(request, records)
     yield* append(
       request.claim.plannedAttempt.runId,
-      completionClaimReplacedRecordKey(request.operationId),
-      CompletionClaimReplacedEvent.make({
+      completionClaimReplacementAttemptIntentRecordKey(request.operationId, attemptOrdinal),
+      CompletionClaimReplacementAttemptIntendedEvent.make({
+        attemptOrdinal,
         claim: request.claim,
         operationId: request.operationId,
         version: workflowJournalEventVersion
       })
     )
-    return CompletionClaimReplacementResult.make({
-      claim: request.claim,
-      operationId: request.operationId,
-      version: workflowJournalEventVersion
-    })
-  }
-  if (observed._tag !== "ActiveTaskClaim" || !isExactClaimForReplacement(observed, request.claim)) {
-    return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
-  }
-  yield* append(
-    request.claim.plannedAttempt.runId,
-    completionClaimReplacementAttemptIntentRecordKey(request.operationId, attemptOrdinal),
-    CompletionClaimReplacementAttemptIntendedEvent.make({
-      attemptOrdinal,
-      claim: request.claim,
-      operationId: request.operationId,
-      version: workflowJournalEventVersion
-    })
-  )
-  const result = yield* tracker.replaceTaskClaim(request).pipe(Effect.result)
-  if (result._tag === "Success") return yield* appendReplacementOutcome(request, result.success)
-  return yield* replacementFailureResult(result.failure)
-})
+    const result = yield* tracker.replaceTaskClaim(request).pipe(Effect.result)
+    if (result._tag === "Success") return yield* appendReplacementOutcome(request, result.success)
+    return yield* replacementFailureResult(result.failure)
+  })
 
 const reconcileExhaustedReplacement = Effect.fn("IntegrationFinality.reconcileExhaustedReplacement")(function* (
   tracker: CompletionClaimBoundaryService,
@@ -436,27 +456,37 @@ const reconcileExhaustedReplacement = Effect.fn("IntegrationFinality.reconcileEx
   })
 })
 
-/** Replaces one exact active claim with its promotion-bound completion claim. */
+/** Replaces one exact active claim after route-specific current premises are proved. */
+export const runCompletionClaimReplacementProtocolWithFreshPremises = <E, R>(
+  tracker: CompletionClaimBoundaryService,
+  request: CompletionClaimReplacementRequest,
+  checkFreshPremises: () => Effect.Effect<void, E, R>
+) =>
+  Effect.gen(function* () {
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
+    if (!exactPromotionWasObserved(records, request.claim)) {
+      return yield* new CompletionClaimPromotionRequired({ claim: request.claim })
+    }
+    if (!exactPublicationWasObserved(records, request.claim)) {
+      return yield* new CompletionClaimPublicationRequired({ claim: request.claim })
+    }
+    const knownOutcome = yield* existingReplacementOutcome(request, records)
+    /* v8 ignore next -- @preserve Frontier reconstruction suppresses an already-settled replacement action; direct idempotent replay remains supported. */
+    if (knownOutcome !== undefined) return knownOutcome
+    let nextOrdinal =
+      latestAttemptOrdinal(records, request.operationId, "CompletionClaimReplacementAttemptIntended") + 1
+    for (; nextOrdinal <= completionClaimRequestLimit; nextOrdinal += 1) {
+      const result = yield* runReplacementAttempt(tracker, request, ordinalFor(nextOrdinal), checkFreshPremises)
+      if (result !== undefined) return result
+    }
+    return yield* reconcileExhaustedReplacement(tracker, request)
+  })
+
+/** Lower-level protocol tests exercise claim replacement without the production S8 premise route. */
 export const runCompletionClaimReplacementProtocol = Effect.fn(
   "IntegrationFinality.runCompletionClaimReplacementProtocol"
 )(function* (tracker: CompletionClaimBoundaryService, request: CompletionClaimReplacementRequest) {
-  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
-  if (!exactPromotionWasObserved(records, request.claim)) {
-    return yield* new CompletionClaimPromotionRequired({ claim: request.claim })
-  }
-  if (!exactPublicationWasObserved(records, request.claim)) {
-    return yield* new CompletionClaimPublicationRequired({ claim: request.claim })
-  }
-  const knownOutcome = yield* existingReplacementOutcome(request, records)
-  /* v8 ignore next -- @preserve Frontier reconstruction suppresses an already-settled replacement action; direct idempotent replay remains supported. */
-  if (knownOutcome !== undefined) return knownOutcome
-  yield* ensureReplacementIntent(request, records)
-  let nextOrdinal = latestAttemptOrdinal(records, request.operationId, "CompletionClaimReplacementAttemptIntended") + 1
-  for (; nextOrdinal <= completionClaimRequestLimit; nextOrdinal += 1) {
-    const result = yield* runReplacementAttempt(tracker, request, ordinalFor(nextOrdinal))
-    if (result !== undefined) return result
-  }
-  return yield* reconcileExhaustedReplacement(tracker, request)
+  return yield* runCompletionClaimReplacementProtocolWithFreshPremises(tracker, request, () => Effect.void)
 })
 
 const ensureDeletionIntent = Effect.fn("IntegrationFinality.ensureDeletionIntent")(function* (

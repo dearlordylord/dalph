@@ -4725,8 +4725,10 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
                   }
                   const currentLifecycle = yield* Ref.get(lifecycle)
                   const prerequisites = yield* Ref.get(currentPrerequisites)
+                  const prerequisiteRevision =
+                    prerequisites.length === 0 ? "" : `:prerequisites:${prerequisites.toSorted().join(",")}`
                   const graph = projectTrackerSnapshot({
-                    revision: `resumed-finality:${currentLifecycle}`,
+                    revision: `resumed-finality:${currentLifecycle}${prerequisiteRevision}`,
                     rootTaskId: taskId,
                     tasks: [
                       {
@@ -5065,17 +5067,12 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
       const lostResponses = after.filter(({ event }) => event._tag === "CompletionTaskResponseLost")
       const requestLookups = after.filter(({ event }) => event._tag === "CompletionTaskRequestLookupObserved")
       const cleanupSettlements = after.filter(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")
-      const focusedCompletionFacts = after.flatMap(({ event }) =>
+      const focusedCompletionObservations = after.flatMap(({ event, position }) =>
         event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts"
-          ? [event.observation.facts]
+          ? [{ observation: event.observation, position }]
           : []
       )
       const finalitySettlements = after.filter(({ event }) => event._tag === "IntegrationFinalitySettled")
-      const completeGraphObservations = after.flatMap(({ event }) =>
-        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
-          ? [event.observation]
-          : []
-      )
       expect(promotions).toHaveLength(1)
       expect(promotions[0]?.event).toMatchObject({ correlation: { qualifiedCandidate: { candidateCommit } } })
       if (premise === "unchanged") {
@@ -5122,14 +5119,334 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
               event._tag === "IntegratorCandidateCleanupSettled"
           )
         ).toEqual([])
-        expect(focusedCompletionFacts).toEqual([])
-        expect(completeGraphObservations).toEqual([])
         expect(finalitySettlements).toEqual([])
+
+        const promotion = promotions[0]
+        if (promotion === undefined) return yield* Effect.die("changed-premise finality requires exact promotion")
+        const currentGraphBoundary = after.findLast(
+          ({ event, position }) =>
+            position > promotion.position &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            (event.observation._tag === "CompleteTaskTrackerFacts" ||
+              event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+            event.observation.rootTaskId === taskId
+        )
+        expect(currentGraphBoundary, `${premise} finality requires fresh graph evidence after promotion`).toBeDefined()
+        if (
+          currentGraphBoundary === undefined ||
+          currentGraphBoundary.event._tag !== "TaskTrackerFactsObserved" ||
+          (currentGraphBoundary.event.observation._tag !== "CompleteTaskTrackerFacts" &&
+            currentGraphBoundary.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed")
+        ) {
+          return yield* Effect.die("changed-premise finality lacks exact post-promotion graph evidence")
+        }
+        const currentGraphObservation = currentGraphBoundary.event.observation
+        expect(currentGraphBoundary.position).toBeGreaterThan(promotion.position)
+        expect(currentGraphBoundary.event.operationId).toBe(currentGraphObservation.operationId)
+        expect(currentGraphObservation).toMatchObject({
+          operationId: currentGraphObservation.operationId,
+          rootTaskId: taskId,
+          target
+        })
+        expect(currentGraphObservation.factFamilies.map(({ freshness }) => freshness.operationId)).toEqual(
+          Array(5).fill(currentGraphObservation.operationId)
+        )
+        let completeGraphBasis = currentGraphBoundary
+        if (currentGraphObservation._tag === "UnchangedTaskTrackerFactsReconfirmed") {
+          const priorFullObservation = after.find(
+            ({ event, position }) =>
+              position < currentGraphBoundary.position &&
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.observation._tag === "CompleteTaskTrackerFacts" &&
+              event.operationId === currentGraphObservation.priorFullObservationOperationId
+          )
+          expect(
+            priorFullObservation,
+            "successful compact reconfirmation must resolve its exact prior full graph"
+          ).toBeDefined()
+          if (
+            priorFullObservation === undefined ||
+            priorFullObservation.event._tag !== "TaskTrackerFactsObserved" ||
+            priorFullObservation.event.observation._tag !== "CompleteTaskTrackerFacts"
+          ) {
+            return yield* Effect.die("compact post-promotion graph evidence lacks its matching prior full graph")
+          }
+          completeGraphBasis = priorFullObservation
+          expect(currentGraphObservation.priorFullObservationOperationId).toBe(
+            priorFullObservation.event.observation.operationId
+          )
+          expect(currentGraphObservation.factFamilies.map(({ contentIdentity }) => contentIdentity)).toEqual(
+            priorFullObservation.event.observation.factFamilies.map(({ contentIdentity }) => contentIdentity)
+          )
+        }
+        if (
+          completeGraphBasis.event._tag !== "TaskTrackerFactsObserved" ||
+          completeGraphBasis.event.observation._tag !== "CompleteTaskTrackerFacts"
+        ) {
+          return yield* Effect.die("S8 graph basis is not a complete tracker graph")
+        }
+        const completeGraphObservation = completeGraphBasis.event.observation
+        expect(completeGraphObservation).toMatchObject({ _tag: "CompleteTaskTrackerFacts", rootTaskId: taskId, target })
+        const [identities, lifecycles, prerequisites, groupings, membership] = completeGraphObservation.factFamilies
+        const expectedGraphRevision =
+          premise === "dependency"
+            ? `resumed-finality:Open:prerequisites:${unfinishedPrerequisiteTaskId}`
+            : "resumed-finality:Open"
+        expect(identities.contentIdentity).toBe(expectedGraphRevision)
+        expect(completeGraphObservation.factFamilies.map(({ contentIdentity }) => contentIdentity)).toEqual(
+          Array(5).fill(expectedGraphRevision)
+        )
+        expect(identities.taskIds).toEqual(
+          premise === "dependency" ? [taskId, unfinishedPrerequisiteTaskId].sort() : [taskId]
+        )
+        expect(membership.memberTaskIds).toEqual(identities.taskIds)
+        expect(
+          lifecycles.lifecycles.find(({ taskId: observedTaskId }) => observedTaskId === taskId)?.lifecycle
+        ).toEqual({ _tag: "Open" })
+        expect(
+          prerequisites.prerequisites.find(({ taskId: observedTaskId }) => observedTaskId === taskId)
+        ).toMatchObject({ prerequisiteTaskIds: premise === "dependency" ? [unfinishedPrerequisiteTaskId] : [], taskId })
+        expect(groupings.groupings.find(({ taskId: observedTaskId }) => observedTaskId === taskId)).toMatchObject({
+          parentTaskId: null,
+          taskId
+        })
+        const graphIntent = after.find(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph" &&
+            event.operation.operationId === currentGraphObservation.operationId
+        )
+        expect(graphIntent).toBeDefined()
+        if (graphIntent === undefined || graphIntent.event._tag !== "TaskTrackerReadIntentRecorded") {
+          return yield* Effect.die("fresh S8 graph facts lack their exact read intent")
+        }
+        expect(graphIntent.position).toBeGreaterThan(promotion.position)
+        expect(graphIntent.position).toBeLessThan(currentGraphBoundary.position)
+        expect(graphIntent.event.operation).toMatchObject({
+          _tag: "ReadTrackerGraph",
+          cause: {
+            _tag: "PostPromotionFinalityCheck",
+            promotionRequestId:
+              promotion.event._tag === "TargetPromotionObservedSuccess"
+                ? promotion.event.correlation.requestId
+                : undefined
+          },
+          readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [taskId] },
+          target
+        })
+
+        const currentWorkSpecification = after.find(
+          ({ event, position }) =>
+            position > currentGraphBoundary.position &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+            event.observation.factFamily.taskId === taskId
+        )
+        expect(currentWorkSpecification, `${premise} premise requires a post-graph specification read`).toBeDefined()
+        if (
+          currentWorkSpecification === undefined ||
+          currentWorkSpecification.event._tag !== "TaskTrackerFactsObserved" ||
+          currentWorkSpecification.event.observation._tag !== "FocusedTaskWorkSpecificationFacts"
+        ) {
+          return yield* Effect.die("changed premise lacks exact focused work-specification facts")
+        }
+        const specificationOperationId = currentWorkSpecification.event.operationId
+        expect(currentWorkSpecification.event.observation.factFamily).toMatchObject({
+          contentIdentity: premise === "revision" ? changedSpecification.fingerprint : specification.fingerprint,
+          fingerprint: premise === "revision" ? changedSpecification.fingerprint : specification.fingerprint,
+          taskId
+        })
+        const specificationIntent = after.find(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTaskWorkSpecification" &&
+            event.operation.operationId === specificationOperationId
+        )
+        expect(specificationIntent).toBeDefined()
+        if (specificationIntent === undefined || specificationIntent.event._tag !== "TaskTrackerReadIntentRecorded") {
+          return yield* Effect.die("current S8 task specification facts lack their exact read intent")
+        }
+        expect(specificationIntent.position).toBeGreaterThan(currentGraphBoundary.position)
+        expect(specificationIntent.position).toBeLessThan(currentWorkSpecification.position)
+        expect(specificationIntent.event.operation).toMatchObject({
+          _tag: "ReadTaskWorkSpecification",
+          predecessorOperationIds: expect.arrayContaining([currentGraphObservation.operationId]),
+          target,
+          taskId
+        })
+
+        const currentClaim = after.find(
+          ({ event, position }) =>
+            position > currentGraphBoundary.position &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskClaimFacts" &&
+            event.observation.observation.taskId === taskId
+        )
+        expect(currentClaim, `${premise} premise requires a post-graph exact claim read`).toBeDefined()
+        if (
+          currentClaim === undefined ||
+          currentClaim.event._tag !== "TaskTrackerFactsObserved" ||
+          currentClaim.event.observation._tag !== "FocusedTaskClaimFacts"
+        ) {
+          return yield* Effect.die("changed premise lacks exact focused claim facts")
+        }
+        const claimOperationId = currentClaim.event.operationId
+        expect(currentClaim.event.observation.observation).toEqual(premise === "claim" ? foreignClaim : claim)
+        const claimIntent = after.find(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTaskClaim" &&
+            event.operation.operationId === claimOperationId
+        )
+        expect(claimIntent).toBeDefined()
+        if (claimIntent === undefined || claimIntent.event._tag !== "TaskTrackerReadIntentRecorded") {
+          return yield* Effect.die("current S8 claim facts lack their exact read intent")
+        }
+        expect(claimIntent.position).toBeGreaterThan(currentGraphBoundary.position)
+        expect(claimIntent.position).toBeLessThan(currentClaim.position)
+        expect(claimIntent.event.operation).toMatchObject({
+          _tag: "ReadTaskClaim",
+          predecessorOperationIds: expect.arrayContaining([currentGraphObservation.operationId]),
+          target,
+          taskId
+        })
+
+        const replacementIntents = after.filter(({ event }) => event._tag === "CompletionClaimReplacementIntended")
+        const claimReplacementAttempts = after.filter(
+          ({ event }) => event._tag === "CompletionClaimReplacementAttemptIntended"
+        )
+        const replacedClaims = after.filter(({ event }) => event._tag === "CompletionClaimReplaced")
+        expect(replacementIntents).toEqual([])
+        expect(claimReplacementAttempts).toEqual([])
+        expect(replacedClaims).toEqual([])
+        // A changed graph, specification, or claim is decisive before claim
+        // replacement, so no promotion-bound completion read is valid here.
+        expect(focusedCompletionObservations).toEqual([])
+        expect(
+          after.filter(({ event }) =>
+            ["CompletionTaskIntended", "CompletionTaskAttemptIntended", "CompletionTaskAcknowledged"].includes(
+              event._tag
+            )
+          )
+        ).toEqual([])
       }
       if (premise === "unchanged") {
         expect(yield* Ref.get(completionAppliedCalls)).toBe(1)
         expect(yield* Ref.get(completionLookups)).toEqual(["NotApplied"])
-        expect(yield* Ref.get(completionClaimReads)).toHaveLength(1)
+        const completionClaimsRead = yield* Ref.get(completionClaimReads)
+        expect(completionClaimsRead).toHaveLength(4)
+        expect(completionClaimsRead).toEqual(Array(4).fill(completionRequest.claim))
+        const appendedRecords = after.slice(resumedRecords.length)
+        const completionReadIntents = appendedRecords.flatMap(({ event, position }) => {
+          if (event._tag !== "TaskTrackerReadIntentRecorded") return []
+          const operation = event.operation
+          return operation._tag === "ReadCompletionTaskFacts" ? [{ operation, position }] : []
+        })
+        const completionReadObservations = appendedRecords.flatMap(({ event, position }) => {
+          if (event._tag !== "TaskTrackerFactsObserved") return []
+          const observation = event.observation
+          return observation._tag === "FocusedTaskCompletionFacts" ? [{ observation, position }] : []
+        })
+        const purposeLabel = (purpose: (typeof completionReadIntents)[number]["operation"]["purpose"]) =>
+          purpose._tag === "Authorization"
+            ? `authorization:${purpose.attemptOrdinal}:${purpose.authorizationOrdinal}`
+            : `confirmation:${purpose.attemptOrdinal}:${purpose.confirmationOrdinal}`
+        expect(completionReadIntents).toHaveLength(4)
+        expect(completionReadObservations).toHaveLength(4)
+        const completionReadOperationIds = completionReadIntents.map(({ operation }) => operation.operationId)
+        expect(new Set(completionReadOperationIds).size).toBe(4)
+        expect(completionReadIntents.map(({ operation }) => purposeLabel(operation.purpose))).toEqual([
+          "authorization:1:1",
+          "confirmation:1:1",
+          "authorization:2:1",
+          "confirmation:2:1"
+        ])
+        expect(completionReadObservations.map(({ observation }) => observation.operationId)).toEqual(
+          completionReadOperationIds
+        )
+        expect(completionReadObservations.map(({ observation }) => purposeLabel(observation.purpose))).toEqual([
+          "authorization:1:1",
+          "confirmation:1:1",
+          "authorization:2:1",
+          "confirmation:2:1"
+        ])
+        expect(completionReadObservations.map(({ observation }) => observation.request)).toEqual(
+          Array(4).fill(completionRequest)
+        )
+        for (const [index, intent] of completionReadIntents.entries()) {
+          const observation = completionReadObservations[index]
+          expect(observation).toBeDefined()
+          if (observation === undefined)
+            return yield* Effect.die("completion read intent lacks its durable facts result")
+          expect(observation.position).toBeGreaterThan(intent.position)
+          expect(observation.observation.operationId).toBe(intent.operation.operationId)
+        }
+        const promotionIntents = appendedRecords.filter(({ event }) => event._tag === "TargetPromotionIntended")
+        const promotionAttemptIntents = appendedRecords.filter(
+          ({ event }) => event._tag === "TargetPromotionAttemptIntended"
+        )
+        const promotionSuccesses = appendedRecords.filter(
+          ({ event }) => event._tag === "TargetPromotionObservedSuccess"
+        )
+        expect(promotionIntents).toHaveLength(1)
+        expect(promotionAttemptIntents).toHaveLength(1)
+        expect(promotionSuccesses).toHaveLength(1)
+        const promotionIntent = promotionIntents[0]
+        const promotionAttemptIntent = promotionAttemptIntents[0]
+        const promotionSuccess = promotionSuccesses[0]
+        if (
+          promotionIntent?.event._tag !== "TargetPromotionIntended" ||
+          promotionAttemptIntent?.event._tag !== "TargetPromotionAttemptIntended" ||
+          promotionSuccess?.event._tag !== "TargetPromotionObservedSuccess"
+        ) {
+          return yield* Effect.die("initial promotion read and its one compare-and-set require exact journal evidence")
+        }
+        expect(promotionIntent.position).toBeLessThan(promotionAttemptIntent.position)
+        expect(promotionAttemptIntent.position).toBeLessThan(promotionSuccess.position)
+        expect(promotionAttemptIntent.event).toMatchObject({
+          attemptOrdinal: 1,
+          reason: { _tag: "Initial", observedHeadSha: published.qualifiedCandidate.run.session.expectedTargetHead }
+        })
+        expect(promotionSuccess.event).toMatchObject({
+          basis: { _tag: "AfterAttempt", attemptOrdinal: promotionAttemptIntent.event.attemptOrdinal },
+          observation: { _tag: "CompareAndSetApplied" }
+        })
+        const completionCandidateAncestryIntents = appendedRecords.filter(
+          ({ event }) => event._tag === "CompletionTaskCandidateAncestryReadIntended"
+        )
+        const completionCandidateAncestryObservations = appendedRecords.filter(
+          ({ event }) => event._tag === "CompletionTaskCandidateAncestryObserved"
+        )
+        expect(completionCandidateAncestryIntents).toHaveLength(2)
+        expect(completionCandidateAncestryObservations).toHaveLength(2)
+        expect(
+          completionCandidateAncestryIntents.map(({ event }) =>
+            event._tag === "CompletionTaskCandidateAncestryReadIntended" ? event.attemptOrdinal : undefined
+          )
+        ).toEqual([1, 2])
+        const ancestryIntentEvents = completionCandidateAncestryIntents.flatMap(({ event }) =>
+          event._tag === "CompletionTaskCandidateAncestryReadIntended" ? [event] : []
+        )
+        const ancestryObservationEvents = completionCandidateAncestryObservations.flatMap(({ event }) =>
+          event._tag === "CompletionTaskCandidateAncestryObserved" ? [event] : []
+        )
+        const ancestryOperationIds = ancestryIntentEvents.map(({ operationId }) => operationId)
+        expect(new Set(ancestryOperationIds).size).toBe(2)
+        expect(ancestryObservationEvents.map(({ operationId }) => operationId)).toEqual(ancestryOperationIds)
+        expect(ancestryObservationEvents.map(({ attemptOrdinal }) => attemptOrdinal)).toEqual([1, 2])
+        for (const [index, intent] of completionCandidateAncestryIntents.entries()) {
+          const observation = completionCandidateAncestryObservations[index]
+          if (
+            intent.event._tag !== "CompletionTaskCandidateAncestryReadIntended" ||
+            observation?.event._tag !== "CompletionTaskCandidateAncestryObserved"
+          ) {
+            return yield* Effect.die("completion candidate ancestry intent lacks its durable observation")
+          }
+          expect(observation.position).toBeGreaterThan(intent.position)
+          expect(observation.event.operationId).toBe(intent.event.operationId)
+          expect(observation.event.request).toEqual(completionRequest)
+          expect(observation.event.attemptOrdinal).toBe(intent.event.attemptOrdinal)
+        }
         expect(yield* Ref.get(candidateEvidenceReads)).toBe(1)
         expect(yield* Ref.get(candidateObservations)).toBe(2)
         expect(yield* Ref.get(candidateRemovals)).toBe(1)
@@ -5137,14 +5454,15 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
         expect(yield* Ref.get(trackerClaim)).toEqual(UnclaimedTask.make({ taskId }))
         expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
-        expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 1, read: 0 })
+        expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 1, read: 3 })
         expect(yield* Ref.get(remoteCalls)).toEqual([])
       } else {
         expect(yield* Ref.get(completionAppliedCalls)).toBe(0)
         expect(yield* Ref.get(completionLookups)).toEqual([])
-        expect(yield* Ref.get(completionClaimReads)).toEqual([])
+        expect(yield* Ref.get(completionCalls)).toEqual([])
         expect(yield* Ref.get(lifecycle)).toBe("Open")
         expect(yield* Ref.get(trackerClaim)).toEqual(premise === "claim" ? foreignClaim : claim)
+        expect(yield* Ref.get(completionClaimReads)).toEqual([])
         expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
         expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 1, read: 1 })
         expect(yield* Ref.get(remoteCalls)).toEqual([])
@@ -5202,12 +5520,9 @@ it.effect.each([
     name: "ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination",
     premise: "unchanged"
   },
-  {
-    name: "ordinary production Run retains resumed finality when a dependency becomes unfinished",
-    premise: "dependency"
-  },
-  { name: "ordinary production Run retains resumed finality when the task revision changes", premise: "revision" },
-  { name: "ordinary production Run retains resumed finality when its claim is replaced", premise: "claim" }
+  { name: "S8 dependency blocks finality", premise: "dependency" },
+  { name: "S8 changed revision blocks finality", premise: "revision" },
+  { name: "S8 foreign claim blocks finality", premise: "claim" }
 ] as const)("$name", ({ premise }) => exerciseResumedFinality(premise))
 
 it.effect("terminates once only after G2 proves the target complete and responsibilities settled", () =>

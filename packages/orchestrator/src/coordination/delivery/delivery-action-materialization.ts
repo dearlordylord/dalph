@@ -67,6 +67,9 @@ export const materializeDeliveryAction = Effect.fn("DeliveryRuntime.materializeA
 export const materializedOperationId = (action: MaterializedDeliveryAction): OperationId | null =>
   action._tag === "AcceptedOperationAction"
     ? acceptedWorkflowTransitionOperationId(action.proposal.route.transition)
-    : action._tag === "FreshOperationAction" || action._tag === "FreshAttemptAction"
-      ? action.operationId
-      : null
+    : action._tag === "IdentityFreeAction"
+      ? action.proposal.route._tag === "IdentityFreeWorkflowRoute" &&
+        action.proposal.route.transition._tag === "ReplacePromotedTaskClaim"
+        ? action.proposal.route.transition.request.operationId
+        : null
+      : action.operationId

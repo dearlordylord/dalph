@@ -1939,6 +1939,55 @@ describe("qualification original source boundary", () => {
     expect(rejected).not.toHaveProperty("registration")
   })
 
+  it("accepts only the exact claim-derived replacement identity for its materialized action", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { context, routes } = routeFixtures(originalContext)
+    const route = routes.find(
+      (candidate) =>
+        candidate._tag === "IdentityFreeWorkflowRoute" && candidate.transition._tag === "ReplacePromotedTaskClaim"
+    )
+    if (route?._tag !== "IdentityFreeWorkflowRoute" || route.transition._tag !== "ReplacePromotedTaskClaim")
+      return expect.fail("replacement route fixture must exist")
+    const proposal = proposalForRoute(route, context)
+    const expectedOperationId = completionClaimReplacementRequestFor(route.transition.request.claim).operationId
+    expect(originalContext.derivedOperationIds).not.toContain(expectedOperationId)
+    expect(route.transition.request.operationId).toBe(expectedOperationId)
+    const state = readyFor(context, [proposal])
+    if (state._tag !== "Ready") return expect.fail("replacement source fixture must be ready")
+    const ownerFor = (operationId: OperationId) =>
+      ticketOwnerSnapshotForTest(proposal, {
+        _tag: "MaterializedDeliveryAction",
+        intent: "IntentRecorded",
+        operationId
+      })
+    const accepted = await Effect.runPromise(
+      validateHermeticQualificationStatus(
+        manifest,
+        configuration,
+        { ...state, liveOwners: [ownerFor(expectedOperationId)] },
+        runId
+      )
+    )
+    expect(accepted).toHaveProperty("registration")
+
+    const foreignOperationId = OperationId.make(`${expectedOperationId}:foreign`)
+    const rejected = await Effect.runPromise(
+      validateHermeticQualificationStatus(
+        manifest,
+        configuration,
+        { ...state, liveOwners: [ownerFor(foreignOperationId)] },
+        runId
+      ).pipe(Effect.flip)
+    )
+    expect(rejected).toMatchObject({
+      _tag: "HermeticQualificationSourceRejected",
+      code: "InvalidOperationIdentity",
+      operation: "ReplacePromotedTaskClaim"
+    })
+    expect(rejected).not.toHaveProperty("registration")
+  })
+
   it("checks all six measured route families and twenty-nine direct roots without accepting added opaque source fields", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
