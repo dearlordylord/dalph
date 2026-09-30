@@ -33,7 +33,10 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   before one bounded run. If a required field is absent, stop and repair the
   observation route; do not edit a cursor position or append a story response
   based on a partial trace. Prefer event identity and correlation over numeric
-  cursor positions when carrying evidence across fixture revisions. This is
+  cursor positions when carrying evidence across fixture revisions. For an
+  attempt-choice story, distinguish the immutable planned task revision from
+  the current tracker revision observed to authorize Continue; check the
+  accepted finality rule before expecting that attempt to complete. This is
   diagnostic procedure for test adapters and changes no Dalph runtime behavior.
 - Apply the [#307 churn controls](postmortems/issue-307-qualification-churn.md#prevention-plan-and-validation)
   after two non-advancing attempts or 30 minutes of active repair without a new
