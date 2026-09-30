@@ -69,6 +69,22 @@ export { DeliveryRuntimeAdmissionProgressContradiction } from "./delivery-runtim
 export * from "./delivery-runtime-phase.js"
 export type { DeliveryRuntimeQuiescence } from "./delivery-runtime-quiescence.js"
 
+/** The ordinary activation retains one failed establishment read through its accepted prefix. */
+const retainedWorkflowEstablishmentGraphRead = (
+  phase: DeliveryRuntimePhaseType,
+  evaluation: DeliveryRuntimeEvaluation
+): { readonly acceptedAt: JournalPosition; readonly failedReadAt: JournalPosition } | undefined => {
+  const acceptedAt = evaluation.acceptedAt
+  const failedReadAt = evaluation.failedWorkflowEstablishmentGraphReadAt
+  return phase._tag === "OrdinaryDeliveryRuntimePhase" &&
+    evaluation.current.trackerGraph._tag === "GraphNotEstablished" &&
+    acceptedAt !== null &&
+    failedReadAt !== undefined &&
+    failedReadAt <= acceptedAt
+    ? { acceptedAt, failedReadAt }
+    : undefined
+}
+
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
 export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
   "DeliveryRuntimeReconfirmationStateInvalid",
@@ -695,18 +711,12 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
               return Option.some(quiescence)
             }
             const graph = current.current.trackerGraph
-            const failedGraphReadAt = current.failedWorkflowEstablishmentGraphReadAt
-            if (
-              phase._tag === "OrdinaryDeliveryRuntimePhase" &&
-              graph._tag === "GraphNotEstablished" &&
-              current.acceptedAt !== null &&
-              failedGraphReadAt !== undefined &&
-              failedGraphReadAt <= current.acceptedAt
-            ) {
+            const retainedFailedGraphRead = retainedWorkflowEstablishmentGraphRead(phase, current)
+            if (retainedFailedGraphRead !== undefined) {
               return Option.some<DeliveryRuntimeQuiescence>({
                 _tag: "TrackerGraphReadRetainedWaitQuiescence",
-                acceptedAt: current.acceptedAt,
-                failedReadAt: failedGraphReadAt,
+                acceptedAt: retainedFailedGraphRead.acceptedAt,
+                failedReadAt: retainedFailedGraphRead.failedReadAt,
                 current: current.current,
                 disposition: current.quiescence,
                 proposedActions: empty
@@ -763,11 +773,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
         const failedEstablishmentReadIsRetainedWait =
-          phase._tag === "OrdinaryDeliveryRuntimePhase" &&
-          current.current.trackerGraph._tag === "GraphNotEstablished" &&
-          current.acceptedAt !== null &&
-          current.failedWorkflowEstablishmentGraphReadAt !== undefined &&
-          current.failedWorkflowEstablishmentGraphReadAt <= current.acceptedAt
+          retainedWorkflowEstablishmentGraphRead(phase, current) !== undefined
         if (!activeRefreshG2Pending && !failedEstablishmentReadIsRetainedWait && !(yield* cleanupPending)) {
           yield* runDeliveryRuntimeAdmissionSweep(current.proposedActions, admissionLoop.admitPass)
         }
