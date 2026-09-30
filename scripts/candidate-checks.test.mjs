@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
@@ -10,7 +10,8 @@ import {
   candidateInputContract,
   executeCandidateChecks,
   localCandidateCheckPlan,
-  materializeCandidateManifest
+  materializeCandidateManifest,
+  writeCandidateCheckReport
 } from "./run-candidate-checks.mjs"
 
 const unchanged = { assertUnchanged: async () => {}, finish: async () => {} }
@@ -20,7 +21,8 @@ const manifest = [
   { id: "application", args: ["test"] }
 ]
 
-void test("local candidate policy preserves formal relevance and never schedules a formal stage", async () => {
+void test("local candidate report preserves exact formal relevance and not-requested without a formal stage", async () => {
+  const reportDirectory = mkdtempSync(join(tmpdir(), "dalph-candidate-report-"))
   const stages = [
     { id: "preflight", name: "preflight", boundary: "preflight", args: ["check:preflight"], timeout: 30_000 },
     { id: "application", name: "application", boundary: "qualification", args: ["test"], timeout: 30_000 },
@@ -45,28 +47,52 @@ void test("local candidate policy preserves formal relevance and never schedules
     }
   ]
 
-  for (const classification of classifications) {
-    const plan = localCandidateCheckPlan(classification, stages)
-    assert.strictEqual(plan.identity.formal, classification)
-    assert.equal(plan.identity.formalDisposition, "not-requested")
-    assert.deepEqual(plan.stages.map(({ id }) => id), ["preflight", "application"])
+  try {
+    for (const classification of classifications) {
+      const plan = localCandidateCheckPlan(classification, stages)
+      assert.strictEqual(plan.identity.formal, classification)
+      assert.equal(plan.identity.formalDisposition, "not-requested")
+      assert.deepEqual(
+        plan.stages.map(({ id }) => id),
+        ["preflight", "application"]
+      )
 
-    const manifest = materializeCandidateManifest(plan.stages, "/pnpm.cjs", "/candidate")
-    assert.ok(
-      manifest.every(({ id, execution }) => id !== "formal-proof" && !execution.args.includes("check:quint"))
-    )
+      const manifest = materializeCandidateManifest(plan.stages, "/pnpm.cjs", "/candidate")
+      assert.ok(manifest.every(({ execution, id }) => id !== "formal-proof" && !execution.args.includes("check:quint")))
 
-    const executed = []
-    await executeCandidateChecks({
-      guard: unchanged,
-      manifest,
-      record: () => undefined,
-      runStage: async (stage) => {
-        executed.push(stage.id)
-        return { exitCode: 0 }
+      const identity = {
+        version: 1,
+        worktree: "/candidate",
+        baseSha: classification.baseSha,
+        candidateHeadSha: classification.headSha,
+        ...plan.identity,
+        gitIndexObservation: "semantic",
+        changedPaths: classification.changedPaths
       }
-    })
-    assert.deepEqual(executed, ["preflight", "application"])
+      const reportPath = join(reportDirectory, `${classification.status}.json`)
+      const executed = []
+      await executeCandidateChecks({
+        guard: unchanged,
+        manifest,
+        record: (state) => writeCandidateCheckReport(reportPath, identity, state),
+        runStage: async (stage) => {
+          executed.push(stage.id)
+          return { exitCode: 0 }
+        }
+      })
+      const report = JSON.parse(readFileSync(reportPath, "utf8"))
+      assert.deepEqual(report.formal, classification)
+      assert.equal(report.formalDisposition, "not-requested")
+      assert.deepEqual(report.manifest, JSON.parse(JSON.stringify(manifest)))
+      assert.deepEqual(
+        report.results,
+        manifest.map(({ id }) => ({ id, status: "passed" }))
+      )
+      assert.equal(report.status, "passed")
+      assert.deepEqual(executed, ["preflight", "application"])
+    }
+  } finally {
+    rmSync(reportDirectory, { recursive: true, force: true })
   }
 })
 

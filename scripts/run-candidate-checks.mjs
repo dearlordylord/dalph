@@ -42,6 +42,10 @@ export const localCandidateCheckPlan = (formal, stages) => ({
   stages: localCandidateStages(stages)
 })
 
+/** Persist every report state with the same immutable candidate identity. */
+export const writeCandidateCheckReport = (reportPath, identity, state) =>
+  atomicRecord(reportPath, { ...identity, ...state })
+
 /** This same input contract is used for every fresh candidate; it never grants reuse credit. */
 export const candidateInputContract = (identity) => ({
   ...identity,
@@ -112,11 +116,7 @@ const main = async () => {
   })
   // Local qualification records relevance without running the formal proof.
   const plan = localCandidateCheckPlan(formal, stages)
-  const manifest = materializeCandidateManifest(
-    plan.stages,
-    pnpmEntryPoint,
-    process.cwd()
-  )
+  const manifest = materializeCandidateManifest(plan.stages, pnpmEntryPoint, process.cwd())
   const identity = {
     version: 1,
     worktree: process.cwd(),
@@ -147,7 +147,7 @@ const main = async () => {
     if (existsSync(root) && !lstatSync(root).isDirectory()) throw new Error(`Unsupported disposable cache: ${root}`)
     rmSync(root, { recursive: true, force: true })
   }
-  atomicRecord(report, { ...identity, manifest, results: [], status: "preparing" })
+  writeCandidateCheckReport(report, identity, { manifest, results: [], status: "preparing" })
   console.error("Local formal proof not requested; run pnpm check:quint explicitly or use CI formal verification.")
   const guard = await startInputGuard({
     worktree: process.cwd(),
@@ -175,7 +175,7 @@ const main = async () => {
     await executeCandidateChecks({
       guard,
       manifest,
-      record: (result) => atomicRecord(report, { ...identity, ...result }),
+      record: (result) => writeCandidateCheckReport(report, identity, result),
       runStage: (stage) => runBoundedCommand({ ...stage.execution, environment })
     })
   } finally {
