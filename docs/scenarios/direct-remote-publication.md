@@ -1206,13 +1206,14 @@ acceptance evidence must preserve the #384 facts and order. Automatic successors
 need an explicit cleanup disposition; no issue may fabricate Full rerun to reuse
 that code. Public control exposure retains the qualification limit stated above.
 
-Use focused scenario tests and `pnpm check:fast`, then the required frozen full
-gate for the implementation candidate. Finally run one fresh supervised
-disposable S1 dogfood journey after the #390 retained-run closure; do not repair
-the retained failed candidate. Record expected
-duration and wall-clock stop time before long operations; reconcile retained
-Runs before retry, preserve failed evidence and unexecuted suffixes, and never
-retry throttled mutations.
+Use focused tests mapped to each changed accepted scenario and
+`pnpm check:fast` for integration readiness. The local `check:all` is an
+optional maintainer/release diagnostic, not a prerequisite for each
+implementation attempt. Finally run one fresh supervised disposable S1 dogfood
+journey only after the #390 retained-run closure; do not repair the retained
+failed candidate. Record expected duration and wall-clock stop time before
+long operations; reconcile retained Runs before retry, preserve failed evidence
+and unexecuted suffixes, and never retry throttled mutations.
 
 The Astra review identified public control exposure, temporary-failure
 resumption, mandatory revalidation of conclusive proof, and a prescribed
