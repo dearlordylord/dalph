@@ -425,9 +425,9 @@ snapshot also checks staged entries. Source bytes, HEAD, selected refs, and
 other Git authority remain observed. A staged-only change followed by a reset
 between two stage boundaries can escape this semantic index check; local
 qualification is tied to the frozen HEAD and watched source bytes rather than
-transient index metadata. The standalone formal guard remains strict about
-index replacement. Only explicitly constructed internal Git coordination lock
-paths—the candidate's `index.lock`,
+transient index metadata. Standalone `check:quint` guards formal source and tool
+inputs; it does not bind Git HEAD or the index. Only explicitly constructed
+internal Git coordination lock paths—the candidate's `index.lock`,
 the shared `packed-refs.lock`, and the lock paths for its exact symbolic
 selected-ref chain—may be treated as transient coordination when their
 create/remove pair is observed. No `HEAD.lock` or arbitrary `*.lock` path is
@@ -446,7 +446,7 @@ candidate-branch or repository-wide setting change does. A setting changed and
 restored before a boundary is intentionally ignored because the candidate's
 effective Git authority is unchanged. Worktree-local `config.worktree`, refs,
 and other Git authority files remain observed. The local candidate compares
-semantic index entries; standalone formal and CI guards retain raw index-file
+semantic index entries; the CI quality shared-input guard retains raw index-file
 observation.
 This is qualification-tool behavior only and changes no Dalph runtime command,
 provider boundary, journal fact, retry, or cleanup behavior.
