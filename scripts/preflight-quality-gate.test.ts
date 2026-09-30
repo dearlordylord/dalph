@@ -36,7 +36,7 @@ it("selects the exact narrow inventory for the pinned Base paths and the broad s
     "test"
   ])
   expect(selectedCommands(["scripts/run-quality-gate.mjs"])).toEqual([
-    ...structuralCommands,
+    ...structuralCommands.filter((command) => command !== "check:lab"),
     ...broadQualificationCommands
   ])
 })

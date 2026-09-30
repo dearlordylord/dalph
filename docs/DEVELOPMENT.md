@@ -215,8 +215,8 @@ All commands below use `pnpm`. Script definitions live in
 | `lint:code` | Type-aware Oxlint and dprint over repository files; warnings fail. |
 | `lint:changed` | Oxlint and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback. It does not run the repository graph check. |
 | `check:unused-exports` | Run Knip's repository graph analysis for unused files and value exports. Exact current exceptions are finite and stale exceptions fail. |
-| `check:preflight --candidate=<base sha>` | Pre-freeze census: report typecheck (including Effect), lint/format, maintained Reducer Lab, cycle, affected infrastructure controls, secrets and artifact failures. Runs no coverage, catalog or MBT suites. |
-| `check:ci:quality:preflight --candidate=<base sha>` | Hosted preflight entry point. It runs the same admitted structural census for one declared Node cell before any hosted qualification stage starts. |
+| `check:preflight --candidate=<base sha>` | Pre-freeze census: report typecheck (including Effect), lint/format, cycle, affected infrastructure controls, secrets and artifact failures. Revision-10 change selection includes Reducer Lab only for a Lab-owned `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Runs no coverage, catalog or MBT suites. |
+| `check:ci:quality:preflight --candidate=<base sha>` | Hosted preflight entry point. It runs the same admitted structural census for one declared Node cell before qualification; revision-10 change selection includes Reducer Lab only for a Lab-owned `prototypes/reducer-lab` path or missing/unknown changed-path evidence, and a selected Lab failure blocks hosted qualification. |
 | `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
 | `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, and the Base-scoped quality-stage fixture probe. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. Without that Base, the fixture probe reports that it was skipped. |
@@ -571,9 +571,12 @@ qualification and records formal proof as not requested. Standalone
 `pnpm check:quint` owns the local guarded formal profile; hosted CI owns its
 separate formal proof.
 Standalone preflight is evidence for repairs before freezing; the final full
-gate repeats the census on its frozen candidate. The shared census includes the
-maintained Reducer Lab immediately after the clone-wide lint census, so a Lab
-failure prevents local application qualification. Use `check:fast` during
+gate repeats the census on its frozen candidate. Revision-10 change selection
+includes the maintained Reducer Lab only for a Lab-owned
+`prototypes/reducer-lab` path or missing/unknown changed-path evidence; if
+selected, a Lab failure prevents local application qualification. Known non-Lab
+product, script, cassette, and configuration changes omit Lab while applicable
+recorded-catalog and infrastructure controls remain. Use `check:fast` during
 edits, then `check:baseline` for an early task-attempt baseline before freezing.
 
 In a fresh worktree run:

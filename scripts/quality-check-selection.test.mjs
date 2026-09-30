@@ -56,10 +56,7 @@ void test("tooling, shared configuration, and unknown changes retain infrastruct
 })
 
 void test("cassette and projection changes retain catalog assertions without Lab UI evaluation", () => {
-  for (const path of [
-    "packages/dalph/src/cassettes/schema.ts",
-    "packages/contracts/src/journal/projection.ts"
-  ]) {
+  for (const path of ["packages/dalph/src/cassettes/schema.ts", "packages/contracts/src/journal/projection.ts"]) {
     assert.ok(ids([path]).includes("recorded-catalog"), path)
     assert.ok(!ids([path]).includes("reducer-lab"), path)
   }
