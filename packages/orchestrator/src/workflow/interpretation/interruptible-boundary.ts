@@ -5,7 +5,8 @@ import type { OperationId } from "../identity.js"
 import type {
   CompletionClaimDeletionRequest,
   CompletionClaimCleanupReadOrdinal,
-  CompletionClaimRequestOrdinal
+  CompletionClaimRequestOrdinal,
+  CompletionTaskRequest
 } from "../protocols/integration-finality/events.js"
 
 export type InterruptibleWorkflowBoundaryFamily = "Git" | "TaskTracker"
@@ -80,6 +81,15 @@ export type InterruptibleWorkflowBoundaryIntent =
       readonly _tag: "AuthorityRequest"
       readonly family: InterruptibleWorkflowBoundaryFamily
       readonly operationId: OperationId
+    }
+  | {
+      /** One Exit-owned read section proving the exact premises before S8 claim replacement. */
+      readonly _tag: "PostPromotionFinalityReads"
+      readonly family: "TaskTracker"
+      readonly request: CompletionTaskRequest
+      readonly graphOperationId: OperationId
+      readonly specificationOperationId: OperationId
+      readonly claimOperationId: OperationId
     }
   | {
       readonly _tag: "TaskClaimCleanup"

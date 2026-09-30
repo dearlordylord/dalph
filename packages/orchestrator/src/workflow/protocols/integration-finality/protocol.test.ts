@@ -71,7 +71,8 @@ import {
   CompletionClaimPromotionRequired,
   FocusedTaskCompletionSuccessRequired,
   runCompletionClaimDeletionProtocol,
-  runCompletionClaimReplacementProtocol
+  runCompletionClaimReplacementProtocol,
+  runCompletionClaimReplacementProtocolWithFreshPremises
 } from "./protocol.js"
 import { continuesCompletionClaimCleanup } from "./cleanup-boundary-transition.js"
 import { integrationFinalityFixture as sourceFixture } from "./fixtures.js"
@@ -1303,9 +1304,10 @@ it.effect("later activation discovers replacement success after three ambiguous 
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
+    const premiseChecks = yield* Ref.make(0)
     const request = completionClaimReplacementRequestFor(fixture.claim)
     yield* runWith(
-      runCompletionClaimReplacementProtocol(
+      runCompletionClaimReplacementProtocolWithFreshPremises(
         makeBoundary({
           deletionCalls,
           initial: [fixture.activeClaim],
@@ -1313,19 +1315,34 @@ it.effect("later activation discovers replacement success after three ambiguous 
           replacement: ["Unknown", "Unknown", "Unknown"],
           replacementCalls
         }),
-        request
+        request,
+        () => Ref.update(premiseChecks, (count) => count + 1)
       ).pipe(Effect.flip),
       records
     )
     const result = yield* runWith(
-      runCompletionClaimReplacementProtocol(
+      runCompletionClaimReplacementProtocolWithFreshPremises(
         makeBoundary({ deletionCalls, initial: [fixture.claim], readCalls, replacementCalls }),
-        request
+        request,
+        () => Ref.update(premiseChecks, (count) => count + 1)
       ),
       records
     )
     expect(completionTaskClaimEquals(result.claim, fixture.claim)).toBe(true)
     expect(yield* Ref.get(replacementCalls)).toBe(3)
+    expect(yield* Ref.get(premiseChecks)).toBe(3)
+    const readsBeforeReplay = yield* Ref.get(readCalls)
+    const replay = yield* runWith(
+      runCompletionClaimReplacementProtocolWithFreshPremises(
+        makeBoundary({ deletionCalls, initial: [fixture.activeClaim], readCalls, replacementCalls }),
+        request,
+        () => Ref.update(premiseChecks, (count) => count + 1)
+      ),
+      records
+    )
+    expect(completionTaskClaimEquals(replay.claim, fixture.claim)).toBe(true)
+    expect(yield* Ref.get(premiseChecks)).toBe(3)
+    expect(yield* Ref.get(readCalls)).toBe(readsBeforeReplay)
     expect(tags(yield* Ref.get(records)).at(-1)).toBe("CompletionClaimReplaced")
   })
 )
