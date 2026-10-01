@@ -1224,6 +1224,59 @@ it.effect("allows only B1 safe or terminal observations to consume B1's lifecycl
   })
 )
 
+it.effect("delivers an enabled terminal report while an independent graph remains earlier in the window", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:A:terminal")
+    const report = { _tag: "ExecutorWorkTerminal" as const, attemptId, result: { _tag: "Completed" as const } }
+    const story = [
+      selection("independent-graph", []),
+      AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.make({ report }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "independent-graph", storyIndex: 0, predecessorIds: [] },
+        { id: "A-terminal", storyIndex: 1, predecessorIds: [] }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const change = yield* Stream.runHead(cursor.passiveExecutorLifecycleChangesFor(attemptId))
+    expect(Option.getOrUndefined(change)?.report.attemptId).toBe(attemptId)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("independent-graph-operation", []))
+    expect(yield* cursor.storyPosition).toBe(2)
+  })
+)
+
+it.effect("wakes a passive terminal report only after its causal graph predecessor is consumed", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:A:after-graph")
+    const story = [
+      selection("required-graph", []),
+      AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.make({
+        report: { _tag: "ExecutorWorkTerminal", attemptId, result: { _tag: "Completed" } }
+      }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "required-graph", storyIndex: 0, predecessorIds: [] },
+        { id: "A-terminal", storyIndex: 1, predecessorIds: ["required-graph"] }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const report = yield* Stream.runHead(cursor.passiveExecutorLifecycleChangesFor(attemptId)).pipe(Effect.forkChild)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("required-graph-operation", []))
+    expect(Option.getOrUndefined(yield* Fiber.join(report))?.report.attemptId).toBe(attemptId)
+    expect(yield* cursor.storyPosition).toBe(2)
+  })
+)
+
 it.effect("keeps requested executor projections ordered even in a causal tracker story", () =>
   Effect.gen(function* () {
     const runId = RunId.make("active-work-requested-projection")

@@ -653,6 +653,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     (item) => item._tag === "DalphSelects" && (item.causal !== undefined || item.causalAnchor !== undefined)
   )
   const position = yield* SubscriptionRef.make(0)
+  /** Wakes readers after any consumed occurrence, including one later in an active causal window. */
+  const storyProgress = yield* SubscriptionRef.make(0)
   const transition = yield* Semaphore.make(1)
   interface CausalRegistry {
     readonly byOperationId: ReadonlyMap<string, string>
@@ -1126,6 +1128,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             nextIndex += 1
           }
           if (nextIndex !== index) yield* SubscriptionRef.set(position, nextIndex)
+          yield* SubscriptionRef.update(storyProgress, (version) => version + 1)
           yield* (
             options.onOccurrence?.({
               item: claimedItem,
@@ -1186,6 +1189,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
       if (claimed._tag === "Claimed") {
+        yield* SubscriptionRef.update(storyProgress, (version) => version + 1)
         yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
       }
       yield* announceTerminalAssertions
@@ -1759,22 +1763,45 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     ) {
       return Stream.empty
     }
-    return SubscriptionRef.changes(position).pipe(
-      Stream.map((index) => story[index]),
-      Stream.filter(
-        (item) => item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" && item.report.attemptId === attemptId
-      ),
-      Stream.mapEffect(() =>
-        consumePassiveExecutorLifecycleChangeFor(attemptId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.die(new Error(`authored passive lifecycle change for ${attemptId} disappeared`)),
-              onSome: Effect.succeed
-            })
+    const nextPassive = (): Effect.Effect<
+      typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.Type
+    > =>
+      Effect.gen(function* () {
+        const version = yield* SubscriptionRef.get(storyProgress)
+        const enabled = yield* Effect.gen(function* () {
+          const index = yield* SubscriptionRef.get(position)
+          const window = [...causalWindows.values()].find(
+            ({ endIndex, startIndex }) => startIndex <= index && index < endIndex
           )
+          if (window === undefined) {
+            const item = story[index]
+            return item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" && item.report.attemptId === attemptId
+          }
+          const frontiers = yield* SubscriptionRef.get(causalWindowFrontiers)
+          const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
+          const enabled = window.graph.occurrences.some(({ id, predecessors, value }) => {
+            const item = story[value.storyIndex]
+            return (
+              !consumed.has(id) &&
+              predecessors.every((predecessor) => consumed.has(predecessor)) &&
+              item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
+              item.report.attemptId === attemptId
+            )
+          })
+          return enabled
+        })
+        if (enabled) {
+          const claimed = yield* consumePassiveExecutorLifecycleChangeFor(attemptId)
+          if (Option.isSome(claimed)) return claimed.value
+        }
+        yield* SubscriptionRef.changes(storyProgress).pipe(
+          Stream.filter((changed) => changed > version),
+          Stream.take(1),
+          Stream.runDrain
         )
-      )
-    )
+        return yield* nextPassive()
+      })
+    return Stream.fromEffectRepeat(nextPassive())
   }
   const consumeInitialPolicy = consume("InitialControlPolicy").pipe(
     Effect.flatMap((item) =>
