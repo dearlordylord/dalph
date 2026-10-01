@@ -122,6 +122,14 @@ The seven-task `deliveryInvariantStoryCapstone` is excluded from routine cassett
 execution and the recorded-catalog round trip. Run `pnpm test:integration:capstone`
 explicitly for its separate delivery-capstone proof. Its current fixture chronology
 is under repair, so a passing routine gate does not prove that accepted story.
+During focused capstone fixture repair, use each observed mismatch to name the
+competing causes and inspect the exact boundary evidence before editing. A
+fixture-only correction supported by that evidence may be followed by another
+bounded capstone run without repeating typecheck and lint after every numeric
+correlation edit. Re-run the affected negative controls when causal matching or
+runtime behavior changes, then run `check:fast` on the coherent candidate before
+integration. A failed full qualification still follows its separate recovery
+rule; focused capstone attempts do not consume a full-gate admission.
 The S1–S8 publication mapping uses the focused checks named in the accepted
 direct-publication scenario. This selection changes test policy only; Dalph
 production runtime and its accepted behavior do not change.
