@@ -937,8 +937,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             if (
               pending?.value.waitForSelectedPredecessor === true &&
               unmet.length > 0 &&
-              context !== undefined &&
-              !state.causal.byOperationId.has(String(context.operationId))
+              (context === undefined || !state.causal.byOperationId.has(String(context.operationId)))
             ) {
               return { _tag: "AwaitPredecessors" as const, startIndex: window.startIndex, unmet }
             }

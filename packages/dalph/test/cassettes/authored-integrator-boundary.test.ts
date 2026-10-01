@@ -26,11 +26,12 @@ import {
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorSessionId,
-  JournalPosition
+  JournalPosition,
+  OperationId
 } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
-import { AuthoredCassetteStoryItem } from "../../src/cassettes/authored-domain.js"
+import { AuthoredCassetteStoryItem, AuthoredCausalWindow } from "../../src/cassettes/authored-domain.js"
 import {
   AuthoredCassetteInteractionMismatch,
   AuthoredIntegratorGitObservationFailure,
@@ -131,12 +132,32 @@ it.effect("waits for an actively owned recovery selection before consuming the o
       candidateText,
       observation: gitObservation
     })
-    const cursor = yield* makeStoryCursor([selection, observation])
+    const cursor = yield* makeStoryCursor([selection, observation], {
+      causalWindows: [
+        Schema.decodeUnknownSync(AuthoredCausalWindow)({
+          startIndex: 0,
+          endIndex: 2,
+          occurrences: [
+            { id: "recovery-graph", storyIndex: 0, predecessorIds: [] },
+            {
+              id: "integrator-git-observation",
+              storyIndex: 1,
+              predecessorIds: ["recovery-graph"],
+              waitForSelectedPredecessor: true
+            }
+          ]
+        })
+      ]
+    })
     const git = yield* cursor.consumeIntegratorGitObservation(candidateText).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
 
     expect(git.pollUnsafe()).toBeUndefined()
-    expect(yield* cursor.consumeDalphSelectionFor(selection.operation)).toEqual(selection)
+    expect(
+      yield* cursor.consumeDalphSelectionFor(selection.operation, {
+        operationId: OperationId.make("recovery-graph"),
+        predecessorOperationIds: []
+      })
+    ).toEqual(selection)
     expect((yield* Fiber.join(git)).observation).toEqual(gitObservation)
   })
 )

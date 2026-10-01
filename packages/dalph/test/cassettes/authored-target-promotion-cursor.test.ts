@@ -1,9 +1,9 @@
-import { Cause, Effect, Exit, Fiber } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Schema } from "effect"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { GitCommitSha, GitRepositoryLocator, IntegrationTarget, IntegrationTargetRef } from "@dalph/contracts"
 import { TargetPromotionGitRequest } from "@dalph/orchestrator"
-import { AuthoredCassetteStoryItem } from "../../src/cassettes/authored-domain.js"
+import { AuthoredCassetteStoryItem, AuthoredCausalWindow } from "../../src/cassettes/authored-domain.js"
 import {
   AuthoredCassetteInteractionMismatch,
   AuthoredTargetPromotionCompareAndSetFailure,
@@ -45,13 +45,21 @@ it.effect("consumes reverse-arriving CAS responses by exact request without impo
     const requestB = request("b", "1", "/repositories/a.git")
     const responseA = applied(requestA)
     const responseB = applied(requestB)
-    const cursor = yield* makeStoryCursor([responseA, responseB])
+    const cursor = yield* makeStoryCursor([responseA, responseB], {
+      causalWindows: [
+        Schema.decodeUnknownSync(AuthoredCausalWindow)({
+          startIndex: 0,
+          endIndex: 2,
+          occurrences: [
+            { id: "cas-A", storyIndex: 0, predecessorIds: [] },
+            { id: "cas-B", storyIndex: 1, predecessorIds: [] }
+          ]
+        })
+      ]
+    })
 
-    const b = yield* cursor.consumeTargetPromotionCompareAndSet(requestB).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-
+    expect(yield* cursor.consumeTargetPromotionCompareAndSet(requestB)).toEqual(responseB)
     expect(yield* cursor.consumeTargetPromotionCompareAndSet(requestA)).toEqual(responseA)
-    expect(yield* Fiber.join(b)).toEqual(responseB)
   })
 )
 
@@ -104,16 +112,21 @@ it.effect("allows sequential identical requests after the first response is cons
 it.effect("fails closed when two consumers try the same CAS request concurrently", () =>
   Effect.gen(function* () {
     const recorded = request("a", "1", "/repositories/a:b.git")
-    const other = applied(request("b", "1", "/repositories/a.git"))
-    const cursor = yield* makeStoryCursor([other])
+    const response = applied(recorded)
+    const firstClaimed = yield* Deferred.make<void>()
+    const releaseFirst = yield* Deferred.make<void>()
+    const cursor = yield* makeStoryCursor([response], {
+      onOccurrence: () => Deferred.succeed(firstClaimed, undefined).pipe(Effect.andThen(Deferred.await(releaseFirst)))
+    })
     const first = yield* cursor.consumeTargetPromotionCompareAndSet(recorded).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
+    yield* Deferred.await(firstClaimed)
 
     const duplicate = yield* cursor.consumeTargetPromotionCompareAndSet(recorded).pipe(Effect.exit)
     expect(Exit.isFailure(duplicate)).toBe(true)
     if (Exit.isFailure(duplicate)) {
       expect(Cause.pretty(duplicate.cause)).toContain("already in flight")
     }
-    yield* Fiber.interrupt(first)
+    yield* Deferred.succeed(releaseFirst, undefined)
+    expect(yield* Fiber.join(first)).toEqual(response)
   })
 )
