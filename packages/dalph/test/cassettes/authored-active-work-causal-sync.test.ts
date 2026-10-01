@@ -210,6 +210,20 @@ it.effect("distinguishes independent graph reads by their exact covered tasks", 
     expect(yield* cursor.consumeTrackerGraphFor(target, a)).toMatchObject({
       graph: { revision: TrackerRevision.make("A") }
     })
+
+    const traced = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const trace = controlledTrace(traced)
+    const graphB = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("selected:graph:B"),
+      target,
+      [],
+      [taskB]
+    )
+    yield* trace.emit({ _tag: "OperationSelected", operation: graphB })
+    expect(yield* traced.consumeTrackerGraphFor(target, context("selected:graph:B", taskB))).toMatchObject({
+      graph: { revision: TrackerRevision.make("B") }
+    })
   })
 )
 
