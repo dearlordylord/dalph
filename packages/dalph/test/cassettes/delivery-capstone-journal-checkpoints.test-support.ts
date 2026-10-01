@@ -87,6 +87,23 @@ const ordered = <A extends { readonly taskId: string }>(values: ReadonlyArray<A>
 const expected = (run: AuthoredScenarioCassetteRun, tasks: ReadonlyArray<Task>) =>
   tasks.map((taskId) => ({ attemptId: attempts[taskId], runId: run.runId, taskId }))
 
+/** A durable replacement owns its successor before any executor command admits that attempt. */
+const pendingReplacementSuccessors = (prefix: ReadonlyArray<JournalRecord>): ReadonlyArray<PlannedTaskAttempt> =>
+  prefix
+    .flatMap(({ event }) => (event._tag === "PlannedAttemptReplaced" ? [event.successorPlan.plannedAttempt] : []))
+    .filter(
+      (successor) =>
+        !prefix.some(
+          ({ event }) =>
+            (event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.plannedAttempt.attemptId === successor.attemptId &&
+              event.plannedAttempt.runId === successor.runId) ||
+            (event._tag === "PlannedAttemptReplaced" &&
+              event.subject.plannedAttempt.attemptId === successor.attemptId &&
+              event.subject.plannedAttempt.runId === successor.runId)
+        )
+    )
+
 const assertSuspension = (prefix: ReadonlyArray<JournalRecord>, lower: JournalRecord, task: Task) => {
   if (lower.event._tag !== "PlannedAttemptExecutorCommandIntended")
     return expect.fail("transient suspension has no exact intent")
@@ -203,6 +220,7 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
   expect(capacity).toBe(row.capacity)
   expect(ordered(projection.heldAttempts.map(pair))).toEqual(ordered(expected(run, row.held)))
   const allAttempts = [
+    ...pendingReplacementSuccessors(prefix),
     ...journalRetainedExecutorResponsibilitySubjects(history.prefix, run.runId).map(
       ({ plannedAttempt }) => plannedAttempt
     ),
