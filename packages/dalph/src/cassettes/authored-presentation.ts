@@ -581,10 +581,14 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
         causal?.directGraphRole === undefined
           ? ""
           : `; direct graph operation ${causal.directGraphRole} follows ${causal.directGraphPredecessorRoles?.join(", ") || "no operation predecessor"}`
+      const directFocusedRead =
+        causal?.directFocusedRead === undefined
+          ? ""
+          : `; direct ${causal.directFocusedRead.kind} for task ${causal.directFocusedRead.taskId} binds ${causal.directFocusedRead.role} after ${causal.directFocusedRead.predecessorRoles.join(", ") || "no operation predecessor"}`
       const graphReadCause = causal?.graphReadCause === undefined ? "" : `; graph read cause ${causal.graphReadCause}`
       return causal === undefined
         ? lyric
-        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${graphReadCause}${graphReadCoverage}.`
+        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${directFocusedRead}${graphReadCause}${graphReadCoverage}.`
     })
   ].join("\n")
 }

@@ -2311,7 +2311,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                   readTaskWorkSpecification: (operation) =>
                     consumeControlledTaskWorkSpecification(cursor, operation.taskId, {
                       operationId: operation.operationId,
-                      predecessorOperationIds: operation.predecessorOperationIds
+                      predecessorOperationIds: operation.predecessorOperationIds,
+                      operationKind: operation._tag,
+                      taskId: operation.taskId
                     }),
                   readTaskClaim: (operation) =>
                     observeTaskClaimThrough(
@@ -2320,7 +2322,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                         readTaskClaim: (taskId) =>
                           authoredTaskClaimReader.readFor(taskId, {
                             operationId: operation.operationId,
-                            predecessorOperationIds: operation.predecessorOperationIds
+                            predecessorOperationIds: operation.predecessorOperationIds,
+                            operationKind: operation._tag,
+                            taskId: operation.taskId
                           })
                       }),
                       operation

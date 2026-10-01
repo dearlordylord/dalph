@@ -72,6 +72,8 @@ export class AuthoredCausalSelectionFailure extends Schema.TaggedError<AuthoredC
 export interface AuthoredOperationCausalContext {
   readonly operationId: OperationId
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  readonly operationKind?: WorkflowOperation["_tag"] | undefined
+  readonly taskId?: TaskId | undefined
   readonly graphReadCause?:
     | Extract<WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>["cause"]["_tag"]
     | undefined
@@ -652,6 +654,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       const graph = compileAuthoredOccurrenceGraph(
         window.occurrences.map(
           ({
+            directFocusedRead,
             directGraphPredecessorRoles,
             directGraphRole,
             graphReadCause,
@@ -665,6 +668,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             id,
             predecessors: predecessorIds,
             value: {
+              directFocusedRead,
               storyIndex,
               ownerRole,
               graphReadCause,
@@ -926,6 +930,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             { consumed },
             String(index),
             ({
+              directFocusedRead,
               directGraphPredecessorRoles,
               directGraphRole,
               graphReadCause,
@@ -953,6 +958,23 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                 if (
                   causalSelectionIssue(
                     { occurrenceRole: directGraphRole, predecessorRoles: directGraphPredecessorRoles },
+                    context,
+                    state.causal
+                  ) !== undefined
+                )
+                  return false
+              }
+              if (directFocusedRead !== undefined) {
+                if (
+                  context === undefined ||
+                  context.operationKind !== directFocusedRead.kind ||
+                  context.taskId !== directFocusedRead.taskId ||
+                  state.causal.byOperationId.has(String(context.operationId))
+                )
+                  return false
+                if (
+                  causalSelectionIssue(
+                    { occurrenceRole: directFocusedRead.role, predecessorRoles: directFocusedRead.predecessorRoles },
                     context,
                     state.causal
                   ) !== undefined
@@ -1049,6 +1071,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             if (context === undefined)
               return { _tag: "Failure" as const, detail: `direct graph result ${id} lacks raw identity`, index }
             causal = registerCausalSelection({ occurrenceRole: value.directGraphRole }, context, causal)
+          } else if (value.directFocusedRead !== undefined) {
+            if (context === undefined)
+              return { _tag: "Failure" as const, detail: `direct focused result ${id} lacks raw identity`, index }
+            causal = registerCausalSelection({ occurrenceRole: value.directFocusedRead.role }, context, causal)
           }
           yield* Ref.set(exactCausalState, { ...state, causal })
           const nextConsumed = matched.frontier.consumed

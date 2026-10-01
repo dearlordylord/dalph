@@ -177,6 +177,85 @@ it.effect("binds an accepted replacement plan once for later exact predecessors"
   })
 )
 
+it.effect("binds direct Restart specification and claim only at their exact responses", () =>
+  Effect.gen(function* () {
+    const story = [
+      graphResult("restart"),
+      AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make({ taskId: taskB, title: "B", body: "B" }),
+      AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 3,
+      occurrences: [
+        {
+          id: "graph-result",
+          storyIndex: 0,
+          predecessorIds: [],
+          directGraphRole: "restart-graph",
+          directGraphPredecessorRoles: [],
+          graphReadCause: "AttemptRestartAuthorityCheck",
+          graphReadExplicitTaskIds: ["B"]
+        },
+        {
+          id: "spec-result",
+          storyIndex: 1,
+          predecessorIds: ["graph-result"],
+          directFocusedRead: {
+            role: "restart-spec",
+            kind: "ReadTaskWorkSpecification",
+            taskId: "B",
+            predecessorRoles: ["restart-graph"]
+          }
+        },
+        {
+          id: "claim-result",
+          storyIndex: 2,
+          predecessorIds: ["spec-result"],
+          directFocusedRead: {
+            role: "restart-claim",
+            kind: "ReadTaskClaim",
+            taskId: "B",
+            predecessorRoles: ["restart-graph", "restart-spec"]
+          }
+        }
+      ]
+    })
+    const graphContext = {
+      ...causalContext("operation:G", []),
+      graphReadCause: "AttemptRestartAuthorityCheck" as const,
+      graphReadExplicitTaskIds: [taskB]
+    }
+    const specContext = {
+      ...causalContext("operation:S", ["operation:G"]),
+      operationKind: "ReadTaskWorkSpecification" as const,
+      taskId: taskB
+    }
+    const claimContext = {
+      ...causalContext("operation:C", ["operation:G", "operation:S"]),
+      operationKind: "ReadTaskClaim" as const,
+      taskId: taskB
+    }
+    const premature = yield* makeStoryCursor(story, { causalWindows: [window] })
+    expect(yield* Effect.flip(premature.consumeTaskClaimReadFor(taskB, claimContext))).toBeInstanceOf(
+      AuthoredCausalSelectionFailure
+    )
+    const wrongKind = yield* makeStoryCursor(story, { causalWindows: [window] })
+    yield* wrongKind.consumeTrackerGraphFor(target, graphContext)
+    expect(
+      yield* Effect.flip(
+        wrongKind.consumeTaskWorkSpecificationFor(taskB, { ...specContext, operationKind: "ReadTaskClaim" })
+      )
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    yield* cursor.consumeTrackerGraphFor(target, graphContext)
+    expect(yield* cursor.consumeTaskWorkSpecificationFor(taskB, specContext)).toMatchObject({ taskId: taskB })
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, claimContext)).toMatchObject({ value: { taskId: taskB } })
+    yield* cursor.consumeTerminalAssertions
+  })
+)
+
 const terminal = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
   orchestration: null,
   protocol: null,
