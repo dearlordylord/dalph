@@ -1690,7 +1690,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         Option.Option<{ readonly release: Deferred.Deferred<void>; readonly request: TargetPromotionRequest }>
       >(Option.none())
       const initialPauseObservationConsumed = yield* Deferred.make<void>()
-      const latestDeliveryPublication = yield* Ref.make<AuthoredDeliveryPublication | null>(null)
+      const latestDeliveryPublication = yield* SubscriptionRef.make<AuthoredDeliveryPublication | null>(null)
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
           Effect.gen(function* () {
@@ -1698,7 +1698,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             const storyPosition = yield* cursor.storyPosition
             const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
             yield* appendObservation({ _tag: "DeliveryPublicationCaptured", publication }, publication.storyPosition)
-            yield* Ref.set(latestDeliveryPublication, publication)
+            yield* SubscriptionRef.set(latestDeliveryPublication, publication)
             yield* Queue.offer(deliveryPublicationSignals, publication)
             // A read-only diagnostic observer defect never changes production cassette execution.
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
@@ -2514,7 +2514,6 @@ const runAuthoredScenarioCassetteWith = (request: {
             ) {
               yield* Queue.takeAll(deliveryPublicationSignals)
               yield* Queue.take(deliveryPublicationSignals)
-              yield* Effect.yieldNow
               const journalLengthAtReconnect = (yield* sharedJournal.read(runId)).length
               /* v8 ignore start -- @preserve The authored disconnect/reconnect chronology uses a whole-Run Pause; task-subject reconnect is covered by the public observer acceptance tests. */
               const subject =
@@ -2560,13 +2559,13 @@ const runAuthoredScenarioCassetteWith = (request: {
                       plannedAttempt.taskId === prerequisite.taskId &&
                       plannedAttempt.attemptId === prerequisite.attemptId
                   )
-                const latest = yield* Ref.get(latestDeliveryPublication)
+                const latest = yield* SubscriptionRef.get(latestDeliveryPublication)
                 let observed = latest !== null && matches(latest)
                 yield* Effect.whileLoop({
                   while: () => !observed,
                   body: () =>
                     Queue.take(deliveryPublicationSignals).pipe(
-                      Effect.andThen(Ref.get(latestDeliveryPublication)),
+                      Effect.andThen(SubscriptionRef.get(latestDeliveryPublication)),
                       Effect.map((current) => current !== null && matches(current))
                     ),
                   step: (matching) => {
@@ -2803,7 +2802,6 @@ const runAuthoredScenarioCassetteWith = (request: {
                 JSON.parse(JSON.stringify(authored.value.request).replaceAll("$authored-run", String(runId)))
               ).pipe(Effect.orDie)
               yield* Deferred.await(promotionStaleQuarantineDurable)
-              yield* Effect.yieldNow
               const quarantineRecords = yield* sharedJournal.read(runId)
               const quarantineObserved = quarantineRecords.some(
                 (record) =>
@@ -2816,6 +2814,17 @@ const runAuthoredScenarioCassetteWith = (request: {
                   `authored FullRerun choice reached before quarantine ${request.fingerprint.quarantineAt} was durable; recorded quarantines: ${JSON.stringify(quarantineRecords.filter(({ event }) => event._tag === "IntegrationQuarantined"))}`
                 )
               }
+              // The storage append precedes the process-local accepted prefix read by the control.
+              // Its publication carries the exact accepted position without scheduler-turn guesses.
+              yield* SubscriptionRef.changes(latestDeliveryPublication).pipe(
+                Stream.filter(
+                  (publication) =>
+                    publication !== null &&
+                    publication.bundle.actionInputs.runtimeFacts.acceptedAt !== null &&
+                    publication.bundle.actionInputs.runtimeFacts.acceptedAt >= request.fingerprint.quarantineAt
+                ),
+                Stream.runHead
+              )
               const applied = yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)
               if (
                 applied.application.event.fingerprint.direction !== request.fingerprint.direction ||
