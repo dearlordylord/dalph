@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Schema } from "effect"
-import { AuthoredScenarioCassette } from "../../src/cassettes/authored-domain.js"
+import { AuthoredCausalWindow, AuthoredScenarioCassette } from "../../src/cassettes/authored-domain.js"
 import { activeWorkF2SafelySuspendsAuthoredCassette } from "../../src/cassettes/catalog.js"
 import { runAuthoredScenarioCassette } from "../../src/cassettes/authored-runner.js"
 
@@ -80,7 +80,7 @@ it.effect("consumes each idle-boundary process death once before installing the 
       { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } }
     ]
     const restartReconfirmationItemOffset = 3
-    const cassette = {
+    const recoveredStory = {
       ...explicitLaterNotification,
       causalWindows: explicitLaterNotification.causalWindows.filter(
         (window) =>
@@ -125,6 +125,29 @@ it.effect("consumes each idle-boundary process death once before installing the 
         { _tag: "ExpectedBehavior", orchestration: null, protocol: null, taskWork: { absences: [], results: [] } }
       ]
     }
+    const recovered = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(recoveredStory)
+    const recoveredReadsStart = recovered.story.findLastIndex(
+      (item) =>
+        item._tag === "DalphSelects" &&
+        item.operation._tag === "ReadTaskWorkSpecification" &&
+        item.operation.taskId === startingCassette.startingFacts.taskWorkSpecifications[0]?.taskId
+    )
+    const recoveredReadSteps = ["specification", "specification-result", "claim", "claim-result", "worktree", "lineage"]
+    const recoveredWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: recoveredReadsStart,
+      endIndex:
+        recoveredReadsStart + startingCassette.startingFacts.taskWorkSpecifications.length * recoveredReadSteps.length,
+      occurrences: startingCassette.startingFacts.taskWorkSpecifications.flatMap(({ taskId }, taskIndex) =>
+        recoveredReadSteps.map((step, stepIndex) => ({
+          id: `recovered-${taskId}-${step}`,
+          storyIndex: recoveredReadsStart + taskIndex * recoveredReadSteps.length + stepIndex,
+          predecessorIds: stepIndex === 0 ? [] : [`recovered-${taskId}-${recoveredReadSteps[stepIndex - 1]}`],
+          ...(step === "specification-result" ? { ownerRole: `recovered-${taskId}-specification` } : {}),
+          ...(step === "claim-result" ? { ownerRole: `recovered-${taskId}-claim` } : {})
+        }))
+      )
+    })
+    const cassette = { ...recovered, causalWindows: [...(recovered.causalWindows ?? []), recoveredWindow] }
     const run = yield* runAuthoredScenarioCassette(cassette)
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
     const deaths = run.observationCaptures.filter(

@@ -211,6 +211,7 @@ import {
 import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.js"
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { AuthoredCausalWindow } from "../../src/cassettes/authored-domain.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 import {
   authoredRunInputDigest,
@@ -4334,7 +4335,40 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
       ]
     }
 
-    const run = yield* runAuthoredScenarioCassette(changedMembership)
+    const decoded = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(changedMembership)
+    const completedAAt = decoded.story.findIndex(
+      (item) => item._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === "attempt:A:0"
+    )
+    const refreshAt = decoded.story.findIndex(
+      (item, index) =>
+        index > completedAAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTrackerGraph"
+    )
+    const releaseAt = decoded.story.findIndex(
+      (item) =>
+        item._tag === "DalphSelects" && item.operation._tag === "ReleaseTaskClaim" && item.operation.taskId === "A"
+    )
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: refreshAt,
+      endIndex: releaseAt + 1,
+      occurrences: [
+        ...decoded.story.slice(refreshAt, releaseAt).map((item, offset) => {
+          const storyIndex = refreshAt + offset
+          const previous = decoded.story[storyIndex - 1]
+          return {
+            id: `membership-${storyIndex}`,
+            storyIndex,
+            predecessorIds: storyIndex === refreshAt ? [] : [`membership-${storyIndex - 1}`],
+            ...(item._tag === "TrackerGraphReadReturned" || item._tag === "TaskWorkSpecificationReadReturned"
+              ? previous?._tag === "DalphSelects"
+                ? { ownerRole: `membership-${storyIndex - 1}` }
+                : {}
+              : {})
+          }
+        }),
+        { id: "release-completed-A", storyIndex: releaseAt, predecessorIds: [] }
+      ]
+    })
+    const run = yield* runAuthoredScenarioCassette({ ...decoded, causalWindows: [window] })
     expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A", "D"])
   })
 )

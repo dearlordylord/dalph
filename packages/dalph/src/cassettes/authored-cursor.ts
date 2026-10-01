@@ -141,11 +141,6 @@ const awaitsLaterStoryItem = (position: SubscriptionRef.SubscriptionRef<number>,
     Effect.asVoid
   )
 
-// A reverse-arriving operation gets a deterministic scheduler window to register
-// its exact ownership. A malformed story without that owner fails closed after
-// the window instead of retaining a permanently pending cursor fiber.
-const authoredOwnershipRegistrationTurns = 8
-
 const executorReportRequestMatches = (
   active: ActiveExecutorReportRequest,
   item: AuthoredPlannedAttemptExecutorOutcomeItem
@@ -1092,36 +1087,19 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   )
-  const awaitOwnershipOrAdvance = Effect.fn("AuthoredCassette.awaitOwnershipOrAdvance")(function* (
-    ownership: Stream.Stream<unknown>,
+  const currentOwnershipOrAdvance = Effect.fn("AuthoredCassette.currentOwnershipOrAdvance")(function* (
     index: number,
     isOwned: Effect.Effect<boolean>
   ): Effect.fn.Return<"Owned" | "Advanced" | "Unowned"> {
-    const signal = yield* Effect.raceFirst(
-      Stream.merge(
-        ownership.pipe(Stream.map(() => "Owned" as const)),
-        SubscriptionRef.changes(position).pipe(
-          Stream.filter((current) => current > index),
-          Stream.map(() => "Advanced" as const)
-        )
-      ).pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
-      Effect.forEach(Array.from({ length: authoredOwnershipRegistrationTurns }), () => Effect.yieldNow, {
-        discard: true
-      }).pipe(Effect.as("RegistrationClosed" as const))
-    )
-    if (signal !== "RegistrationClosed") return signal
     if ((yield* SubscriptionRef.get(position)) > index) return "Advanced"
     return (yield* isOwned) ? "Owned" : "Unowned"
   })
   const awaitOwnedIntegratorGitBeforeSelection = Effect.fn("AuthoredCassette.awaitOwnedIntegratorGitBeforeSelection")(
     function* (candidateText: IntegratorCandidateText, index: number) {
-      const ownership = SubscriptionRef.changes(activeIntegratorGitObservations).pipe(
-        Stream.filter((active) => active.includes(candidateText))
-      )
       const isOwned = SubscriptionRef.get(activeIntegratorGitObservations).pipe(
         Effect.map((active) => active.includes(candidateText))
       )
-      const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+      const ownershipOrAdvance = yield* currentOwnershipOrAdvance(index, isOwned)
       if (ownershipOrAdvance === "Unowned") return false
       if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
       return true
@@ -1138,11 +1116,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     const ownsCurrent = (active: ReadonlyArray<TargetPromotionGitRequest>) =>
       active.some((candidate) => targetPromotionGitRequestMatches(candidate, item.request))
-    const ownership = SubscriptionRef.changes(activeTargetPromotionCompareAndSetRequests).pipe(
-      Stream.filter(ownsCurrent)
-    )
     const isOwned = SubscriptionRef.get(activeTargetPromotionCompareAndSetRequests).pipe(Effect.map(ownsCurrent))
-    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    const ownershipOrAdvance = yield* currentOwnershipOrAdvance(index, isOwned)
     if (ownershipOrAdvance === "Unowned") return false
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
@@ -1151,13 +1126,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     "AuthoredCassette.awaitOwnedExecutorRequestPublicationHoldBeforeSelection"
   )(function* (item: StoryItem | undefined, index: number) {
     if (item?._tag !== "DalphHoldsExecutorRequestThroughNextDeliveryPublication") return false
-    const ownership = SubscriptionRef.changes(activeExecutorReportRequests).pipe(
-      Stream.filter((active) => active.some((candidate) => executorRequestPublicationHoldMatches(candidate, item)))
-    )
     const isOwned = SubscriptionRef.get(activeExecutorReportRequests).pipe(
       Effect.map((active) => active.some((candidate) => executorRequestPublicationHoldMatches(candidate, item)))
     )
-    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    const ownershipOrAdvance = yield* currentOwnershipOrAdvance(index, isOwned)
     if (ownershipOrAdvance === "Unowned") return false
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
@@ -1171,16 +1143,12 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       active.some((selection) => cassetteDecisionMatches(selection, item.operation))
     const freshOwnsCurrent = (active: ReadonlyArray<TaskId>) =>
       item.operation._tag === "AcquireTaskClaim" && active.includes(item.operation.taskId)
-    const ownership = Stream.merge(
-      SubscriptionRef.changes(activeDalphSelections).pipe(Stream.filter(ownsCurrent)),
-      SubscriptionRef.changes(activeFreshTaskClaimSelections).pipe(Stream.filter(freshOwnsCurrent))
-    )
     const isOwned = Effect.zipWith(
       SubscriptionRef.get(activeDalphSelections).pipe(Effect.map(ownsCurrent)),
       SubscriptionRef.get(activeFreshTaskClaimSelections).pipe(Effect.map(freshOwnsCurrent)),
       (selectionOwned, freshSelectionOwned) => selectionOwned || freshSelectionOwned
     )
-    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    const ownershipOrAdvance = yield* currentOwnershipOrAdvance(index, isOwned)
     if (ownershipOrAdvance === "Unowned") return false
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
@@ -1200,16 +1168,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (predecessor._tag === "IntegratorGit") {
       return yield* awaitOwnedIntegratorGitBeforeSelection(predecessor.candidateText, index)
     }
-    const ownership =
-      predecessor._tag === "ExecutorReport"
-        ? SubscriptionRef.changes(activeExecutorReportRequests).pipe(
-            Stream.filter((active) => active.some((request) => executorReportRequestMatches(request, predecessor.item)))
-          )
-        : SubscriptionRef.changes(activeDalphSelections).pipe(
-            Stream.filter((active) =>
-              active.some((selection) => cassetteDecisionMatches(selection, predecessor.operation))
-            )
-          )
     const isOwned =
       predecessor._tag === "ExecutorReport"
         ? SubscriptionRef.get(activeExecutorReportRequests).pipe(
@@ -1220,7 +1178,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               active.some((selection) => cassetteDecisionMatches(selection, predecessor.operation))
             )
           )
-    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    const ownershipOrAdvance = yield* currentOwnershipOrAdvance(index, isOwned)
     if (ownershipOrAdvance === "Unowned") return false
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
@@ -1564,13 +1522,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     currentReport: AuthoredPlannedAttemptExecutorOutcomeItem,
     index: number
   ) {
-    const ownership = SubscriptionRef.changes(activeExecutorReportRequests).pipe(
-      Stream.filter((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentReport)))
-    )
     const isOwned = SubscriptionRef.get(activeExecutorReportRequests).pipe(
       Effect.map((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentReport)))
     )
-    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    const ownershipOrAdvance = yield* currentOwnershipOrAdvance(index, isOwned)
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return ownershipOrAdvance !== "Unowned"
   })
@@ -1713,13 +1668,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     index: number
   ) {
     if (item?._tag !== "DalphSelects" || !isIntegratorRecoverySelection(item.operation)) return false
-    const ownership = SubscriptionRef.changes(activeDalphSelections).pipe(
-      Stream.filter((active) => active.some((selection) => cassetteDecisionMatches(selection, item.operation)))
-    )
     const isOwned = SubscriptionRef.get(activeDalphSelections).pipe(
       Effect.map((active) => active.some((selection) => cassetteDecisionMatches(selection, item.operation)))
     )
-    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    const ownershipOrAdvance = yield* currentOwnershipOrAdvance(index, isOwned)
     if (ownershipOrAdvance === "Unowned") return false
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
@@ -2298,10 +2250,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (claimed._tag === "Mismatch") {
       const currentItem = claimed.item
       if (isAuthoredPlannedAttemptExecutorOutcomeItem(currentItem)) {
-        const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(
-          SubscriptionRef.changes(activeExecutorReportRequests).pipe(
-            Stream.filter((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentItem)))
-          ),
+        const ownershipOrAdvance = yield* currentOwnershipOrAdvance(
           claimed.index,
           SubscriptionRef.get(activeExecutorReportRequests).pipe(
             Effect.map((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentItem)))

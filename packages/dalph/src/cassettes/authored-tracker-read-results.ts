@@ -7,7 +7,20 @@ import {
   TrackerAdapterReadFailureReason,
   type TrackerTarget
 } from "@dalph/orchestrator"
-import type { AuthoredOperationCausalContext, StoryCursor } from "./authored-cursor.js"
+import {
+  AuthoredCassetteInteractionMismatch,
+  type AuthoredOperationCausalContext,
+  type StoryCursor
+} from "./authored-cursor.js"
+
+const describeCursorFailure = (
+  failure:
+    | AuthoredCassetteInteractionMismatch
+    | { readonly _tag: string; readonly storyPosition: number; readonly detail: string }
+) =>
+  failure instanceof AuthoredCassetteInteractionMismatch
+    ? `${failure._tag} at story position ${failure.storyPosition}: expected ${failure.expected}, received ${failure.actual}`
+    : `${failure._tag} at story position ${failure.storyPosition}: ${failure.detail}`
 
 export const trackerReadFailure = (
   detail: string,
@@ -29,7 +42,7 @@ export const consumeControlledTrackerGraph = Effect.fn("AuthoredCassette.consume
     .pipe(
       Effect.mapError((failure) =>
         trackerReadFailure(
-          `${failure._tag} at story position ${failure.storyPosition}`,
+          describeCursorFailure(failure),
           TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
         )
       )
@@ -54,7 +67,7 @@ export const consumeControlledTaskWorkSpecification = Effect.fn(
     .pipe(
       Effect.mapError((failure) =>
         trackerReadFailure(
-          `${failure._tag} at story position ${failure.storyPosition}`,
+          describeCursorFailure(failure),
           TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
         )
       )
