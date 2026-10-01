@@ -125,6 +125,16 @@ jobs:
       - name: Run hosted quality preflight
         run: pnpm check:ci:quality:preflight --candidate="${{ needs.change-plan.outputs.base-sha }}"
 
+      - name: Upload hosted preflight logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-preflight-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}
+          path: .scratch/quality-gates/*/logs/*.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 1
+
   quality-suffix:
     name: Hosted quality ${{ matrix.stageId }} (Node ${{ matrix.nodeVersion }})
     needs: [change-plan, quality-preflight]

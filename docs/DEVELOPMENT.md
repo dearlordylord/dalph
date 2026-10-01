@@ -79,6 +79,11 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   historical recovery records for admission. Incomplete writers retain custody
   fences until stopped-process proof. This tooling policy does not change Dalph
   runtime behavior.
+- Hosted preflight repeats each failed stage's name and error in its final
+  summary after independent checks finish. The CI failure step uploads its
+  retained child logs for a bounded follow-up; inspect the named stage before
+  another hosted submission. This reporting change cannot alter Dalph runtime
+  behavior.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
   scenario evidence survives and reproduced accepted-path defects still block
