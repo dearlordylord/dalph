@@ -1741,7 +1741,9 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
-      const exactCausalTrackerReadStory = cassette.story.some((item) => item._tag === "ConcurrentTrackerReadBatch")
+      const exactCausalTrackerReadStory =
+        cassette.story.some((item) => item._tag === "ConcurrentTrackerReadBatch") ||
+        (cassette.causalWindows?.length ?? 0) > 0
       const runReactivationHintStory = cassette.story.some(
         (item) =>
           item._tag === "CassetteOffersRunReactivationHints" ||
@@ -2277,7 +2279,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                   readTrackerGraph: (operation) =>
                     consumeControlledTrackerGraph(cursor, operation.target, {
                       operationId: operation.operationId,
-                      predecessorOperationIds: operation.predecessorOperationIds
+                      predecessorOperationIds: operation.predecessorOperationIds,
+                      graphReadCause: operation.cause._tag
                     }),
                   readTaskWorkSpecification: (operation) =>
                     consumeControlledTaskWorkSpecification(cursor, operation.taskId, {

@@ -23,7 +23,8 @@ import {
   type AuthoredCassetteDecision,
   AuthoredCausalWindow,
   AuthoredCassetteStoryItem,
-  AuthoredCausalSelection
+  AuthoredCausalSelection,
+  AuthoredScenarioCassette
 } from "../../src/cassettes/authored-domain.js"
 import {
   AuthoredCausalSelectionFailure,
@@ -43,7 +44,11 @@ import {
   consumeControlledTaskWorkSpecification,
   consumeControlledTrackerGraph
 } from "../../src/cassettes/authored-tracker-read-results.js"
-import { activeWorkF2SafelySuspendsAuthoredCassette, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import {
+  activeWorkF2SafelySuspendsAuthoredCassette,
+  runAuthoredScenarioCassette,
+  singletonTaskCompletesAuthoredCassette
+} from "../../src/cassettes/index.js"
 
 const taskB = TaskId.make("B")
 const target = FixtureTarget.make("active-work-target")
@@ -267,6 +272,28 @@ it.effect("rejects a claim response from a different selected operation", () =>
     expect(Option.isSome(result) && result.value._tag === "TaskClaimCurrentReadReturned").toBe(true)
     yield* cursor.consumeTerminalAssertions
   })
+)
+
+it.effect("runs a catalog cassette with a causally authored tracker boundary", () =>
+  Effect.gen(function* () {
+    const original = singletonTaskCompletesAuthoredCassette
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 2,
+      endIndex: 4,
+      occurrences: [
+        { id: "initial-graph", storyIndex: 2, predecessorIds: [] },
+        { id: "initial-graph-result", storyIndex: 3, predecessorIds: ["initial-graph"], ownerRole: "initial-graph" }
+      ]
+    })
+    const cassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({ ...original, causalWindows: [window] })
+    const run = yield* runAuthoredScenarioCassette(cassette)
+    expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+    const causalCaptures = run.observationCaptures.flatMap((capture) =>
+      capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrenceId !== undefined ? [capture] : []
+    )
+    expect(causalCaptures.map(({ occurrenceId }) => occurrenceId)).toEqual(["initial-graph", "initial-graph-result"])
+    expect(causalCaptures.map(({ authoredStoryIndex }) => authoredStoryIndex)).toEqual([2, 3])
+  }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("validates concurrent read roles before the first boundary call", () =>
