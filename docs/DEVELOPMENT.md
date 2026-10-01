@@ -105,6 +105,11 @@ Choose checks by affected behavior, not by commit or handoff alone:
   formal cells. Model or conformance changes also require adequacy review and
   a negative control. A required fresh live-provider scenario remains separate
   from both local and hosted broad gates.
+- **Before hosted submission:** run `pnpm check:submit` once on the coherent
+  candidate when source or test code changed. It adds the hosted full lint census
+  to the development-loop checks so a changed-file lint pass cannot hide a
+  repository-wide type-aware lint error until CI. It does not run the full local
+  qualification or repeat after documentation-only edits.
 - **Baseline:** no separate baseline is mandatory. The final preflight owns
   its lint pass; run the maintained Lab only when its boundary is affected.
   `check:baseline` remains an explicit diagnostic convenience, not a prerequisite.
@@ -267,6 +272,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
 | `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, and the Base-scoped quality-stage fixture probe. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. Without that Base, the fixture probe reports that it was skipped. |
+| `check:submit` | One local readiness pass before hosted submission: `check:fast` followed by the same full lint census used by hosted preflight. It does not run a full gate or require Linux inotify. |
 | `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Optional diagnostic only; never a prerequisite to final qualification. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
