@@ -52,6 +52,10 @@ it("validates a causal boundary window against the decoded story before playback
     [{ id: "graph", storyIndex: startIndex, predecessorIds: [] }],
     [
       { id: "graph", storyIndex: startIndex, predecessorIds: [] },
+      { id: "result", storyIndex: startIndex + 1, predecessorIds: ["graph"] }
+    ],
+    [
+      { id: "graph", storyIndex: startIndex, predecessorIds: [] },
       { id: "graph", storyIndex: startIndex + 1, predecessorIds: ["graph"] }
     ],
     [

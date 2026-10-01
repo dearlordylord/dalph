@@ -1234,14 +1234,44 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
       )
         return `causal occurrence ${occurrence.id} assigns a graph cause to a non-graph selection`
-      if (occurrence.ownerRole !== undefined) {
-        const owner = graph.byId.get(occurrence.ownerRole)
+      const owner = occurrence.ownerRole === undefined ? undefined : graph.byId.get(occurrence.ownerRole)
+      const ownerItem = owner === undefined ? undefined : cassette.story[owner.value]
+      if (
+        occurrence.ownerRole !== undefined &&
+        (ownerItem?._tag !== "DalphSelects" || !occurrence.predecessorIds.includes(occurrence.ownerRole))
+      ) {
+        return `causal occurrence ${occurrence.id} must follow its exact selected operation ${occurrence.ownerRole}`
+      }
+      if (
+        item._tag === "TrackerGraphReadFailed" ||
+        item._tag === "TrackerGraphReadReturned" ||
+        item._tag === "RunActivationFinalTrackerGraphReadReturned"
+      ) {
+        if (ownerItem?._tag !== "DalphSelects" || ownerItem.operation._tag !== "ReadTrackerGraph") {
+          return `causal graph result ${occurrence.id} requires its selected graph read owner`
+        }
+      }
+      if (item._tag === "TaskWorkSpecificationReadReturned") {
         if (
-          owner === undefined ||
-          cassette.story[owner.value]?._tag !== "DalphSelects" ||
-          !occurrence.predecessorIds.includes(occurrence.ownerRole)
+          ownerItem?._tag !== "DalphSelects" ||
+          ownerItem.operation._tag !== "ReadTaskWorkSpecification" ||
+          ownerItem.operation.taskId !== item.taskId
         ) {
-          return `causal occurrence ${occurrence.id} must follow its exact selected operation ${occurrence.ownerRole}`
+          return `causal specification result ${occurrence.id} requires its exact selected task read owner`
+        }
+      }
+      if (
+        item._tag === "TaskClaimReadFailed" ||
+        item._tag === "TaskClaimReadReturned" ||
+        item._tag === "TaskClaimCurrentReadReturned"
+      ) {
+        const resultTaskId = item._tag === "TaskClaimReadReturned" ? item.observation.taskId : item.taskId
+        if (
+          ownerItem?._tag !== "DalphSelects" ||
+          ownerItem.operation._tag !== "ReadTaskClaim" ||
+          ownerItem.operation.taskId !== resultTaskId
+        ) {
+          return `causal claim result ${occurrence.id} requires its exact selected task read owner`
         }
       }
     }
