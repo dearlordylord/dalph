@@ -1932,32 +1932,6 @@ const changedAttemptContinueRestartAt = changedAttemptContinuesAuthoredCassette.
   (item) => item._tag === "CoordinatorProcessDies"
 )
 
-/** A later F3 observation invalidates F2's Continue authority and exposes one new F1/F3 choice. */
-export const changedAgainAttemptRequiresNewChoiceAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
-  ...changedAttemptContinuesAuthoredCassette,
-  name: "Alice must choose again when the continued attempt changes from F2 to F3",
-  story: [
-    ...changedAttemptContinuesAuthoredCassette.story.slice(0, changedAttemptContinueRestartAt + 1),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-    { _tag: "TaskWorkSpecificationReadReturned", ...changedAgainAttemptSpecification },
-    {
-      _tag: "OperatorStopsAttempt",
-      attemptId: "attempt:A:0",
-      expected: { _tag: "Applied", status: "AwaitingQuiescence" },
-      observedTaskRevision: changedAgainAttemptRevision,
-      requestNonce: "stop-changed-again-attempt-A",
-      taskId: "A"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { ...attemptChoiceExpectedBehavior, terminalSettlement: "AcceptedHistoryCut" }
-  ]
-})
-
 /** Alice's exact Stop claim disposition is independent of the coordinator's post-quiescence G2. */
 const changedAttemptStopClaimWindow = (startIndex: number, releasesClaim: boolean) =>
   Schema.decodeUnknownSync(AuthoredCausalWindow)({
@@ -2008,6 +1982,40 @@ const changedAttemptStopClaimOffsets = {
   returnedClaim: 3,
   selectedRelease: 4
 } as const
+
+const changedAgainChoiceStoryThroughStop = [
+  ...changedAttemptContinuesAuthoredCassette.story.slice(0, changedAttemptContinueRestartAt + 1),
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+  { _tag: "TaskWorkSpecificationReadReturned", ...changedAgainAttemptSpecification },
+  {
+    _tag: "OperatorStopsAttempt",
+    attemptId: "attempt:A:0",
+    expected: { _tag: "Applied", status: "AwaitingQuiescence" },
+    observedTaskRevision: changedAgainAttemptRevision,
+    requestNonce: "stop-changed-again-attempt-A",
+    taskId: "A"
+  }
+] as const
+
+/** A later F3 observation invalidates F2's Continue authority and exposes one new F1/F3 choice. */
+export const changedAgainAttemptRequiresNewChoiceAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptContinuesAuthoredCassette,
+  name: "Alice must choose again when the continued attempt changes from F2 to F3",
+  causalWindows: [changedAttemptStopClaimWindow(changedAgainChoiceStoryThroughStop.length, true)],
+  story: [
+    ...changedAgainChoiceStoryThroughStop,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+    { ...attemptChoiceExpectedBehavior, terminalSettlement: "AcceptedHistoryCut" }
+  ]
+})
 
 /** Alice stops P after its exact safe report and Dalph releases only the freshly reread exact claim. */
 const changedAttemptStopsAndReleasesUnwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({

@@ -55,9 +55,9 @@ export const runTaskClaimAcquisitionProtocol = Effect.fn("TrackerMutation.runTas
       operationId: acquisition.operationId,
       readOrdinal: TaskClaimAcquisitionReadOrdinal.make(previous + 1)
     }
-    return yield* (tracker.readTaskClaimForAcquisition === undefined
+    return yield* tracker.readTaskClaimForAcquisition === undefined
       ? tracker.readTaskClaim(acquisition.taskId)
-      : tracker.readTaskClaimForAcquisition(acquisition.taskId, acquisitionRead))
+      : tracker.readTaskClaimForAcquisition(acquisition.taskId, acquisitionRead)
   })
   const pass = Effect.gen(function* () {
     const observation = yield* readCurrentClaim
