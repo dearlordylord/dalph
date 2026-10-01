@@ -1208,7 +1208,8 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
     ...authoredCassetteStoryItemOwners.IntegratorCandidateCleanup,
     ...authoredCassetteStoryItemOwners.TargetPromotion,
     ...authoredCassetteStoryItemOwners.PlannedAttemptExecutor,
-    ...authoredCassetteStoryItemOwners.TaskTracker
+    ...authoredCassetteStoryItemOwners.TaskTracker,
+    ...authoredCassetteStoryItemOwners.DeliverySynchronization
   ])
   for (const window of cassette.causalWindows ?? []) {
     const { endIndex, occurrences, startIndex } = window

@@ -5605,6 +5605,70 @@ const diamondBAndCReadWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>)
     ]
   })
 }
+const doubleDiamondClaimRefreshWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
+  const afterInitialReads = diamondBAndCReadWindow(story).endIndex
+  const bClaimIndex = story.findIndex(
+    (item, index) =>
+      index > afterInitialReads &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTaskClaim" &&
+      item.operation.taskId === "B"
+  )
+  const graphReadPairLength = 2
+  const graphIndex = bClaimIndex - graphReadPairLength
+  const graphResponseIndex = graphIndex + 1
+  const bResponseIndex = bClaimIndex + 1
+  const cClaimIndex = bResponseIndex + 1
+  const cResponseIndex = cClaimIndex + 1
+  Schema.decodeUnknownSync(Schema.Literal(true))(
+    graphIndex >= afterInitialReads &&
+      story[graphIndex]?._tag === "DalphSelects" &&
+      story[graphIndex].operation._tag === "ReadTrackerGraph" &&
+      story[graphResponseIndex]?._tag === "TrackerGraphReadReturned" &&
+      story[bResponseIndex]?._tag === "TaskClaimCurrentReadReturned" &&
+      story[cClaimIndex]?._tag === "DalphSelects" &&
+      story[cClaimIndex].operation._tag === "ReadTaskClaim" &&
+      story[cClaimIndex].operation.taskId === "C" &&
+      story[cResponseIndex]?._tag === "TaskClaimCurrentReadReturned"
+  )
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex: graphIndex,
+    endIndex: cResponseIndex + 1,
+    occurrences: [
+      { id: "diamond-claim-refresh-graph", storyIndex: graphIndex, predecessorIds: [] },
+      {
+        id: "diamond-claim-refresh-graph-result",
+        storyIndex: graphResponseIndex,
+        predecessorIds: ["diamond-claim-refresh-graph"],
+        ownerRole: "diamond-claim-refresh-graph"
+      },
+      {
+        id: "diamond-B-claim-refresh",
+        storyIndex: bClaimIndex,
+        predecessorIds: ["diamond-claim-refresh-graph", "diamond-claim-refresh-graph-result"],
+        waitForSelectedPredecessor: true
+      },
+      {
+        id: "diamond-B-claim-refresh-result",
+        storyIndex: bResponseIndex,
+        predecessorIds: ["diamond-B-claim-refresh"],
+        ownerRole: "diamond-B-claim-refresh"
+      },
+      {
+        id: "diamond-C-claim-refresh",
+        storyIndex: cClaimIndex,
+        predecessorIds: ["diamond-claim-refresh-graph", "diamond-claim-refresh-graph-result"],
+        waitForSelectedPredecessor: true
+      },
+      {
+        id: "diamond-C-claim-refresh-result",
+        storyIndex: cResponseIndex,
+        predecessorIds: ["diamond-C-claim-refresh"],
+        ownerRole: "diamond-C-claim-refresh"
+      }
+    ]
+  })
+}
 export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
@@ -5612,7 +5676,8 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
   causalWindows: [
     initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "B"),
     initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "C"),
-    diamondBAndCReadWindow(deliveryInvariantStoryUnwindowed.story)
+    diamondBAndCReadWindow(deliveryInvariantStoryUnwindowed.story),
+    doubleDiamondClaimRefreshWindow(deliveryInvariantStoryUnwindowed.story)
   ]
 })
 
@@ -5824,6 +5889,38 @@ const productionShapedFiveTaskDiamondUnwindowed: ScenarioCassette = Schema.decod
   ]
 })
 
+const fiveTaskDiamondPromotionPredecessorWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
+  const planIndex = story.findIndex(
+    (item) =>
+      item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan" && item.operation.taskId === "E"
+  )
+  const worktreeHoldIndex = planIndex + 1
+  const completionHoldIndex = worktreeHoldIndex + 1
+  const bLineageIndex = completionHoldIndex + 1
+  Schema.decodeUnknownSync(Schema.Literal(true))(
+    planIndex >= 0 &&
+      story[worktreeHoldIndex]?._tag === "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion" &&
+      story[completionHoldIndex]?._tag === "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins" &&
+      story[bLineageIndex]?._tag === "DalphSelects" &&
+      story[bLineageIndex].operation._tag === "ReadTargetLineage" &&
+      story[bLineageIndex].operation.taskId === "B"
+  )
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex: planIndex,
+    endIndex: bLineageIndex + 1,
+    occurrences: [
+      { id: "diamond-E-plan", storyIndex: planIndex, predecessorIds: [] },
+      { id: "diamond-E-worktree-hold", storyIndex: worktreeHoldIndex, predecessorIds: ["diamond-E-plan"] },
+      { id: "diamond-B-completion-hold", storyIndex: completionHoldIndex, predecessorIds: ["diamond-E-worktree-hold"] },
+      {
+        id: "diamond-B-lineage",
+        storyIndex: bLineageIndex,
+        predecessorIds: ["diamond-E-plan", "diamond-B-completion-hold"],
+        waitForSelectedPredecessor: true
+      }
+    ]
+  })
+}
 export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
@@ -5831,7 +5928,8 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
   causalWindows: [
     initialDiamondClaimGraphWindow(productionShapedFiveTaskDiamondUnwindowed.story, "B"),
     initialDiamondClaimGraphWindow(productionShapedFiveTaskDiamondUnwindowed.story, "C"),
-    diamondBAndCReadWindow(productionShapedFiveTaskDiamondUnwindowed.story)
+    diamondBAndCReadWindow(productionShapedFiveTaskDiamondUnwindowed.story),
+    fiveTaskDiamondPromotionPredecessorWindow(productionShapedFiveTaskDiamondUnwindowed.story)
   ]
 })
 
