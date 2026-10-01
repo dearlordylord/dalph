@@ -40,7 +40,11 @@ import {
   TrackerRevision,
   TrackerTarget,
   JournalPosition,
-  OperationId
+  CompletionClaimCleanupReadOrdinal,
+  CompletionClaimRequestOrdinal,
+  TaskClaimReleaseReadOrdinal,
+  OperationId,
+  PlannedAttemptWorktreeObservation
 } from "@dalph/orchestrator"
 import {
   AuthoredContinueAttemptResult,
@@ -820,6 +824,17 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** Harness input: publish one current tracker notification while the real Run reactivation owner attaches. */
   CassettePublishesCurrentTrackerNotification: {},
+  /** Harness synchronization: await an actual selected-task publication at full Run capacity. */
+  CassetteAwaitsSelectedTaskCapacityPublication: {
+    capacity: TaskWorkCapacity,
+    graphRevision: TrackerRevision,
+    heldPassiveAttemptId: AttemptId,
+    priorAttemptId: AttemptId,
+    successorAttemptId: AttemptId,
+    taskId: TaskId
+  },
+  /** Harness synchronization: defer one accepted-result queue until another attempt's Begin is durable. */
+  CassetteHoldsAcceptedResultQueueUntilAttemptBegin: { queuedAttemptId: AttemptId, releasedByAttemptId: AttemptId },
   /** Harness synchronization: keep this exact executor request in flight while the next ordinary delivery fact publishes. */
   DalphHoldsExecutorRequestThroughNextDeliveryPublication: {
     attemptId: AttemptId,
@@ -836,6 +851,14 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   GitWorktreeObservationChanged: {
     observation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   },
+  /** Exact result from a direct planned-worktree read during Restart. */
+  DirectGitWorktreeReadReturned: {
+    taskId: TaskId,
+    attemptId: AttemptId,
+    observation: PlannedAttemptWorktreeObservation
+  },
+  /** Exact result from a direct target-lineage read during Restart. */
+  DirectGitTargetLineageReadReturned: { taskId: TaskId, attemptId: AttemptId, observation: TargetLineageObservation },
   /** Git applies the planned-worktree create, but Dalph loses the response before the ordinary reread. */
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
   /** The fake outer Integrator receives this exact session and run ordinal. */
@@ -1056,6 +1079,8 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   ],
   CassetteObservation: ["PauseProgressObserved", "PauseProgressObservedCancelledAndReconnected"],
   DeliverySynchronization: [
+    "CassetteAwaitsSelectedTaskCapacityPublication",
+    "CassetteHoldsAcceptedResultQueueUntilAttemptBegin",
     "CassetteAwaitsSafeContinuationRevalidationPublication",
     "DalphHoldsAdmittedContinuationBeforeExecutorIntent",
     "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
@@ -1075,7 +1100,12 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
   ],
   DalphOperationTrace: ["DalphSelects"],
-  Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
+  Git: [
+    "GitPlannedWorktreeCreateResponseLost",
+    "GitWorktreeObservationChanged",
+    "DirectGitWorktreeReadReturned",
+    "DirectGitTargetLineageReadReturned"
+  ],
   OuterIntegrator: [
     "IntegratorRequestReceived",
     "IntegratorResultReturned",
@@ -1178,7 +1208,50 @@ export const AuthoredCausalWindow = Schema.Struct({
       /** Exact task subjects covered by a complete tracker graph read. */
       graphReadExplicitTaskIds: Schema.optionalKey(Schema.Array(TaskId).check(Schema.isUnique())),
       /** Exact selected operation whose boundary result this node returns, when applicable. */
-      ownerRole: Schema.optionalKey(AuthoredOccurrenceId)
+      ownerRole: Schema.optionalKey(AuthoredOccurrenceId),
+      /** Accepted replacement plans that must be durable before this boundary may occur. */
+      acceptedPlanPredecessorRoles: Schema.optionalKey(Schema.Array(AuthoredCausalRole).check(Schema.isUnique())),
+      /** A direct interpreter graph read has no selection trace; bind its raw operation at this result. */
+      directGraphRole: Schema.optionalKey(AuthoredCausalRole),
+      directGraphPredecessorRoles: Schema.optionalKey(Schema.Array(AuthoredCausalRole).check(Schema.isUnique())),
+      /** A direct focused tracker read binds its raw operation at the actual response. */
+      directFocusedRead: Schema.optionalKey(
+        Schema.Struct({
+          role: AuthoredCausalRole,
+          kind: Schema.Literals(["ReadTaskWorkSpecification", "ReadTaskClaim"]),
+          taskId: TaskId,
+          predecessorRoles: Schema.Array(AuthoredCausalRole).check(Schema.isUnique())
+        })
+      ),
+      /** A cleanup read is initiated by its journaled call, without a selected workflow read. */
+      directCleanupClaimRead: Schema.optionalKey(
+        Schema.Union([
+          Schema.Struct({
+            taskId: TaskId,
+            deletionOperationId: OperationId,
+            call: Schema.Literals(["ConfirmOriginalClaimReleased", "ConfirmNoActiveClaimAfterMarkerAbsent"]),
+            attemptOrdinal: CompletionClaimRequestOrdinal,
+            readOrdinal: CompletionClaimCleanupReadOrdinal
+          }),
+          Schema.Struct({
+            taskId: TaskId,
+            deletionOperationId: OperationId,
+            call: Schema.Literal("ReleaseOriginalClaimRead"),
+            releaseOperationId: OperationId,
+            readOrdinal: TaskClaimReleaseReadOrdinal
+          })
+        ])
+      ),
+      /** A direct Git operation binds only after its exact result is observed. */
+      directGitRead: Schema.optionalKey(
+        Schema.Struct({
+          role: AuthoredCausalRole,
+          kind: Schema.Literals(["ReadTaskWorktree", "ReadTargetLineage"]),
+          taskId: TaskId,
+          attemptId: AttemptId,
+          predecessorRoles: Schema.Array(AuthoredCausalRole).check(Schema.isUnique())
+        })
+      )
     })
   )
 })
@@ -1195,16 +1268,27 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
     targetLineageObservation: Schema.optionalKey(TargetLineageObservation),
     /** Ordered Git target-lineage facts returned by successive production reads. */
     targetLineageObservations: Schema.optionalKey(Schema.Array(TargetLineageObservation)),
+    /** Exact attempt owns its lineage responses; independent attempts may read in either order. */
+    targetLineageByAttempt: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({ attemptId: AttemptId, observations: Schema.NonEmptyArray(TargetLineageObservation) })
+      )
+    ),
     trackerGraph: AuthoredTrackerGraph,
     worktreeObservation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   }),
   story: Schema.Array(AuthoredCassetteStoryItem),
-  causalWindows: Schema.optionalKey(Schema.Array(AuthoredCausalWindow))
+  causalWindows: Schema.optionalKey(Schema.Array(AuthoredCausalWindow)),
+  /** The accepted replacement event owns this exact successor plan operation. */
+  acceptedReplacementPlanRoles: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ occurrenceRole: AuthoredCausalRole, taskId: TaskId, successorAttemptId: AttemptId }))
+  )
 })
 
 const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
   const firstBoundaryStoryIndex = 2
   let previousEnd = firstBoundaryStoryIndex
+  const cleanupReads = new Set<string>()
   const allowedTags = new Set<AuthoredCassetteStoryItem["_tag"]>([
     ...authoredCassetteStoryItemOwners.DalphOperationTrace,
     ...authoredCassetteStoryItemOwners.Git,
@@ -1233,22 +1317,95 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
     if (graph instanceof AuthoredOccurrenceGraphFailure) return graph.detail
     for (const occurrence of occurrences) {
       const item = cassette.story[occurrence.storyIndex]
+      if (occurrence.directCleanupClaimRead !== undefined) {
+        const read = occurrence.directCleanupClaimRead
+        const key = JSON.stringify(
+          read.call === "ReleaseOriginalClaimRead"
+            ? [read.taskId, read.deletionOperationId, read.call, read.releaseOperationId, read.readOrdinal]
+            : [read.taskId, read.deletionOperationId, read.call, read.attemptOrdinal, read.readOrdinal]
+        )
+        if (cleanupReads.has(key)) return `direct cleanup claim read ${occurrence.id} repeats one exact call`
+        cleanupReads.add(key)
+      }
       if (item === undefined || !allowedTags.has(item._tag)) {
         return `causal occurrence ${occurrence.id} must name a controlled boundary item`
       }
       if (occurrence.waitForPredecessors === true && occurrence.predecessorIds.length === 0) {
         return `causal occurrence ${occurrence.id} can await only a named predecessor`
       }
-      if (
-        occurrence.graphReadCause !== undefined &&
-        (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
-      )
+      const selectedGraph = item._tag === "DalphSelects" && item.operation._tag === "ReadTrackerGraph"
+      const returnedGraph =
+        item._tag === "TrackerGraphReadReturned" ||
+        item._tag === "TrackerGraphReadFailed" ||
+        item._tag === "RunActivationFinalTrackerGraphReadReturned"
+      const directGraph =
+        returnedGraph &&
+        occurrence.directGraphRole !== undefined &&
+        occurrence.directGraphPredecessorRoles !== undefined
+      if (occurrence.graphReadCause !== undefined && !selectedGraph && !directGraph)
         return `causal occurrence ${occurrence.id} assigns a graph cause to a non-graph selection`
-      if (
-        occurrence.graphReadExplicitTaskIds !== undefined &&
-        (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
-      )
+      if (occurrence.graphReadExplicitTaskIds !== undefined && !selectedGraph && !directGraph)
         return `causal occurrence ${occurrence.id} assigns graph task coverage to a non-graph selection`
+      if (
+        directGraph &&
+        (occurrence.ownerRole !== undefined ||
+          occurrence.graphReadCause === undefined ||
+          occurrence.graphReadExplicitTaskIds === undefined)
+      )
+        return `direct graph result ${occurrence.id} requires cause, coverage, and no selected owner`
+      if (
+        (occurrence.directGraphRole === undefined) !== (occurrence.directGraphPredecessorRoles === undefined) ||
+        (occurrence.directGraphRole !== undefined && !returnedGraph)
+      )
+        return `causal occurrence ${occurrence.id} binds a direct operation to a non-graph result`
+      if (occurrence.directFocusedRead !== undefined) {
+        const direct = occurrence.directFocusedRead
+        const exactResult =
+          direct.kind === "ReadTaskWorkSpecification"
+            ? item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === direct.taskId
+            : (item._tag === "TaskClaimCurrentReadReturned" ||
+                item._tag === "TaskClaimReadFailed" ||
+                item._tag === "TaskClaimReadReturned") &&
+              (item._tag === "TaskClaimReadReturned" ? item.observation.taskId : item.taskId) === direct.taskId
+        if (!exactResult || occurrence.ownerRole !== undefined)
+          return `direct focused read ${occurrence.id} requires its exact kind, task, and no selected owner`
+      }
+      if (occurrence.directGitRead !== undefined) {
+        const direct = occurrence.directGitRead
+        const exactResult =
+          direct.kind === "ReadTaskWorktree"
+            ? item._tag === "DirectGitWorktreeReadReturned" &&
+              item.taskId === direct.taskId &&
+              item.attemptId === direct.attemptId
+            : item._tag === "DirectGitTargetLineageReadReturned" &&
+              item.taskId === direct.taskId &&
+              item.attemptId === direct.attemptId
+        if (!exactResult || occurrence.ownerRole !== undefined)
+          return `direct Git read ${occurrence.id} requires its exact kind, task, attempt, and no selected owner`
+      }
+      if (occurrence.directCleanupClaimRead !== undefined) {
+        const direct = occurrence.directCleanupClaimRead
+        if (
+          item._tag !== "TaskClaimCurrentReadReturned" ||
+          item.taskId !== direct.taskId ||
+          occurrence.ownerRole !== undefined
+        )
+          return `direct cleanup claim result ${occurrence.id} requires its exact task and no selected owner`
+      }
+      if (
+        (item._tag === "DirectGitWorktreeReadReturned" || item._tag === "DirectGitTargetLineageReadReturned") &&
+        occurrence.directGitRead === undefined
+      )
+        return `direct Git result ${occurrence.id} requires its exact operation binding`
+      if (
+        [
+          occurrence.directGraphRole,
+          occurrence.directFocusedRead,
+          occurrence.directGitRead,
+          occurrence.directCleanupClaimRead
+        ].filter((value) => value !== undefined).length > 1
+      )
+        return `causal occurrence ${occurrence.id} names more than one direct operation`
       const owner = occurrence.ownerRole === undefined ? undefined : graph.byId.get(occurrence.ownerRole)
       const ownerItem = owner === undefined ? undefined : cassette.story[owner.value]
       if (
@@ -1262,11 +1419,11 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         item._tag === "TrackerGraphReadReturned" ||
         item._tag === "RunActivationFinalTrackerGraphReadReturned"
       ) {
-        if (ownerItem?._tag !== "DalphSelects" || ownerItem.operation._tag !== "ReadTrackerGraph") {
+        if (!directGraph && (ownerItem?._tag !== "DalphSelects" || ownerItem.operation._tag !== "ReadTrackerGraph")) {
           return `causal graph result ${occurrence.id} requires its selected graph read owner`
         }
       }
-      if (item._tag === "TaskWorkSpecificationReadReturned") {
+      if (item._tag === "TaskWorkSpecificationReadReturned" && occurrence.directFocusedRead === undefined) {
         if (
           ownerItem?._tag !== "DalphSelects" ||
           ownerItem.operation._tag !== "ReadTaskWorkSpecification" ||
@@ -1276,9 +1433,11 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         }
       }
       if (
-        item._tag === "TaskClaimReadFailed" ||
-        item._tag === "TaskClaimReadReturned" ||
-        item._tag === "TaskClaimCurrentReadReturned"
+        occurrence.directFocusedRead === undefined &&
+        occurrence.directCleanupClaimRead === undefined &&
+        (item._tag === "TaskClaimReadFailed" ||
+          item._tag === "TaskClaimReadReturned" ||
+          item._tag === "TaskClaimCurrentReadReturned")
       ) {
         const resultTaskId = item._tag === "TaskClaimReadReturned" ? item.observation.taskId : item.taskId
         if (
@@ -1292,6 +1451,37 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
     }
     previousEnd = endIndex
   }
+  const replacementRoles = cassette.acceptedReplacementPlanRoles ?? []
+  if (new Set(replacementRoles.map(({ occurrenceRole }) => occurrenceRole)).size !== replacementRoles.length)
+    return "accepted replacement plan roles must be unique"
+  if (new Set(replacementRoles.map(({ successorAttemptId }) => successorAttemptId)).size !== replacementRoles.length)
+    return "accepted replacement successor attempts must be unique"
+  const acceptedPlanRoles = new Set(replacementRoles.map(({ occurrenceRole }) => occurrenceRole))
+  for (const window of cassette.causalWindows ?? []) {
+    for (const occurrence of window.occurrences) {
+      if (occurrence.acceptedPlanPredecessorRoles?.some((role) => !acceptedPlanRoles.has(role)))
+        return `causal occurrence ${occurrence.id} requires a declared accepted replacement plan role`
+    }
+  }
+  const selectedRoles = cassette.story.flatMap((item) =>
+    item._tag === "DalphSelects" ? [item.causal?.occurrenceRole ?? item.causalAnchor?.occurrenceRole] : []
+  )
+  const directRoles = (cassette.causalWindows ?? []).flatMap(({ occurrences }) =>
+    occurrences.flatMap(({ directFocusedRead, directGitRead, directGraphRole }) => [
+      ...(directGraphRole === undefined ? [] : [directGraphRole]),
+      ...(directFocusedRead === undefined ? [] : [directFocusedRead.role]),
+      ...(directGitRead === undefined ? [] : [directGitRead.role])
+    ])
+  )
+  if (new Set(directRoles).size !== directRoles.length) return "direct operation roles must be unique"
+  if (
+    replacementRoles.some(
+      ({ occurrenceRole }) => selectedRoles.includes(occurrenceRole) || directRoles.includes(occurrenceRole)
+    )
+  )
+    return "accepted replacement plan role cannot also name a selected or direct operation"
+  if (directRoles.some((role) => selectedRoles.includes(role)))
+    return "direct operation role cannot also name a selected operation"
   return undefined
 })
 

@@ -11,6 +11,9 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
+import type { CompletionClaimCleanupReadOrdinal, CompletionClaimRequestOrdinal } from "./events.js"
+import type { TaskClaimReleaseReadOrdinal } from "../task-claim-release/protocol.js"
+import type { WorkflowTaskClaimReleaseOperation } from "../../registry/operation.js"
 import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import {
   TargetPromotionCorrelation,
@@ -69,6 +72,21 @@ export const CompletionClaimReadRequest = Schema.Struct({ expectedClaim: Complet
   )
 )
 export type CompletionClaimReadRequest = typeof CompletionClaimReadRequest.Type
+
+/** Identifies one journaled cleanup read that has no WorkflowTrace selection. */
+export type CompletionOriginalClaimCleanupRead =
+  | {
+      readonly deletionOperationId: OperationId
+      readonly call: "ConfirmOriginalClaimReleased" | "ConfirmNoActiveClaimAfterMarkerAbsent"
+      readonly attemptOrdinal: CompletionClaimRequestOrdinal
+      readonly readOrdinal: CompletionClaimCleanupReadOrdinal
+    }
+  | {
+      readonly deletionOperationId: OperationId
+      readonly call: "ReleaseOriginalClaimRead"
+      readonly releaseOperationId: OperationId
+      readonly readOrdinal: TaskClaimReleaseReadOrdinal
+    }
 
 /** Derives the one exact read request used before create, after ambiguity, and during cleanup. */
 export const completionClaimReadRequestFor = (expectedClaim: CompletionTaskClaim): CompletionClaimReadRequest =>
@@ -182,7 +200,10 @@ export class CompletionClaimOwnershipConflict extends Schema.TaggedError<Complet
 /** Provider-neutral tracker boundary used by replacement and cleanup protocols. */
 export interface CompletionClaimBoundaryService {
   /** Reads the original active record independently of the coexisting completion marker. */
-  readonly readOriginalTaskClaim: TrackerMutationService["readTaskClaim"]
+  readonly readOriginalTaskClaim: (
+    taskId: TaskId,
+    cleanupRead?: CompletionOriginalClaimCleanupRead
+  ) => ReturnType<TrackerMutationService["readTaskClaim"]>
   readonly readTaskClaim: (
     request: CompletionClaimReadRequest
   ) => Effect.Effect<CompletionClaimObservation, CompletionClaimReadFailure>
@@ -197,7 +218,10 @@ export interface CompletionClaimBoundaryService {
     request: CompletionClaimDeletionRequest
   ) => Effect.Effect<void, CompletionClaimDeletionFailure | TaskTrackerMutationThrottled>
   /** Deletes only the exact original active record through the generic claim-release boundary. */
-  readonly releaseOriginalTaskClaim: TrackerMutationService["releaseTaskClaim"]
+  readonly releaseOriginalTaskClaim: (
+    release: TaskClaimRelease,
+    operation?: WorkflowTaskClaimReleaseOperation
+  ) => ReturnType<TrackerMutationService["releaseTaskClaim"]>
 }
 
 /** The ordinary Effect service for the task-tracker completion-claim boundary. */

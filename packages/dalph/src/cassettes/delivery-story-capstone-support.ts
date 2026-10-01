@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Exact capstone boundary facts stay together for chronology and correlation review. */
 import { Schema } from "effect"
 import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import {
@@ -19,22 +20,21 @@ const shaLength = 40
 const digestLength = 64
 const acceptedCommitOffset = 3
 const candidateCommitPatternWidth = 2
-const secondRetryAttemptOrdinal = 2
 const admissionClaimGraphEnd = 3
 const admissionSpecificationEnd = 5
-const predecessorPositions = { queuedAt: 136, startedAt: 137, targetLineageObservedAt: 141 }
-const cPositions = { queuedAt: 345, startedAt: 348, targetLineageObservedAt: 354 }
-const dPositions = { queuedAt: 415, startedAt: 418, targetLineageObservedAt: 424 }
-const ePositions = { queuedAt: 483, startedAt: 484, targetLineageObservedAt: 490 }
-const fPositions = { queuedAt: 538, startedAt: 539, targetLineageObservedAt: 543 }
-const gPositions = { queuedAt: 591, startedAt: 592, targetLineageObservedAt: 596 }
-const bIntegrationPositions = { queuedAt: 279, startedAt: 282, targetLineageObservedAt: 287 }
-const rerunPositions = { quarantineAt: 153, directionAppliedAt: 154, targetLineageObservedAt: 156 }
+const predecessorPositions = { queuedAt: 141, startedAt: 142, targetLineageObservedAt: 146 }
+const cPositions = { queuedAt: 362, startedAt: 365, targetLineageObservedAt: 373 }
+const dPositions = { queuedAt: 438, startedAt: 441, targetLineageObservedAt: 449 }
+const ePositions = { queuedAt: 512, startedAt: 513, targetLineageObservedAt: 519 }
+const fPositions = { queuedAt: 573, startedAt: 574, targetLineageObservedAt: 578 }
+const gPositions = { queuedAt: 632, startedAt: 633, targetLineageObservedAt: 637 }
+const bIntegrationPositions = { queuedAt: 290, startedAt: 293, targetLineageObservedAt: 298 }
+const rerunPositions = { quarantineAt: 158, directionAppliedAt: 159, targetLineageObservedAt: 161 }
 const initialHead = "1".repeat(shaLength)
 const changedHead = "2".repeat(shaLength)
 const successorCommit = "d".repeat(shaLength)
-const attempt = (taskId: string) =>
-  `attempt:${taskId}:${taskId === "D" || taskId === "E" ? 0 : taskId === "F" ? 1 : taskId === "G" ? secondRetryAttemptOrdinal : ["A", "C", "B"].indexOf(taskId)}`
+const attempt = (taskId: string, explicitOrdinal?: number) => `attempt:${taskId}:${explicitOrdinal ?? 0}`
+const bSuccessorAttempt = "attempt:B:replacement:1"
 const specification = (taskId: string) => ({
   taskId: TaskId.make(taskId),
   title: `Implement ${taskId}`,
@@ -88,11 +88,11 @@ const report = (taskId: string, request: "Begin" | "Resume" | "Suspend") => ({
 const acceptedCommit = (taskId: string) => `${orderedNames.indexOf(taskId) + acceptedCommitOffset}`.repeat(shaLength)
 const candidateCommit = (taskId: string) =>
   `a${orderedNames.indexOf(taskId)}`.repeat(shaLength / candidateCommitPatternWidth)
-const terminal = (taskId: string) => ({
+const terminal = (taskId: string, attemptId = attempt(taskId)) => ({
   _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
   report: {
     _tag: "ExecutorWorkTerminal",
-    attemptId: attempt(taskId),
+    attemptId,
     result: { _tag: "Accepted", acceptedResult: { commit: acceptedCommit(taskId) } }
   }
 })
@@ -118,7 +118,7 @@ const gitRead = (candidateCommit: string, head: string) => ({
 })
 const completion = (taskId: string, candidateCommit: string) => [
   { _tag: "CompletionClaimReadReturned", claim: "Active", taskId },
-  ...(taskId === "B"
+  ...(taskId !== "A"
     ? [
         ...readGraph(graphs.G5),
         ...readSpecification(taskId),
@@ -127,7 +127,6 @@ const completion = (taskId: string, candidateCommit: string) => [
       ]
     : []),
   { _tag: "CompletionClaimReplacementApplied", taskId },
-  ...(taskId === "B" ? readGraph(graphs.G5) : []),
   { _tag: "CompletionTaskFocusedReadReturned", lifecycle: "Open", taskId, unfinishedPrerequisiteTaskIds: [] },
   gitRead(candidateCommit, candidateCommit),
   { _tag: "CompletionTaskRequestReturned", outcome: "Acknowledged", taskId },
@@ -148,32 +147,42 @@ const completion = (taskId: string, candidateCommit: string) => [
   { _tag: "TaskClaimCurrentReadReturned", taskId }
 ]
 
+// Original task-local attempt IDs produce a 285-byte sealed accepted manifest; only the attempt ID length differs for replacement.
+const originalAcceptedManifestByteLength = 285
+
 // Boundary expectations are exact correlations; the diagnostic must reject a mismatched position.
 const session = (
   taskId: string,
   head: string,
   queuedAt: number,
   startedAt: number,
-  targetLineageObservedAt: number
+  targetLineageObservedAt: number,
+  replacement?: { readonly attemptId: string; readonly baseSha: string; readonly taskRevision: string }
 ) => {
-  const suffix = `$authored-run:${attempt(taskId)}:${startedAt}:${targetLineageObservedAt}:${head}:${acceptedCommit(taskId)}:${repository}:refs/heads/master`
+  const attemptId = replacement?.attemptId ?? attempt(taskId)
+  const baseSha = replacement?.baseSha ?? initialHead
+  const taskRevision = replacement?.taskRevision ?? makeTaskWorkSpecification(specification(taskId)).fingerprint
+  const suffix = `$authored-run:${attemptId}:${startedAt}:${targetLineageObservedAt}:${head}:${acceptedCommit(taskId)}:${repository}:refs/heads/master`
   return {
     acceptedResult: {
       commit: acceptedCommit(taskId),
-      evidenceManifest: { byteLength: 285, digest: "1".repeat(digestLength) }
+      evidenceManifest: {
+        byteLength: originalAcceptedManifestByteLength + attemptId.length - attempt(taskId).length,
+        digest: "1".repeat(digestLength)
+      }
     },
     candidateResource: `integrator-resource:${suffix}`,
     expectedTargetHead: head,
     integrationTarget,
     plannedAttempt: {
-      attemptId: attempt(taskId),
-      baseSha: initialHead,
-      branch: `refs/heads/dalph/${attempt(taskId).replaceAll(":", "-")}`,
+      attemptId,
+      baseSha,
+      branch: `refs/heads/dalph/${attemptId.replaceAll(":", "-")}`,
       executor,
       runId: "$authored-run",
       taskId,
-      taskRevision: makeTaskWorkSpecification(specification(taskId)).fingerprint,
-      worktree: `${worktreeRoot}/${attempt(taskId).replaceAll(":", "-")}`
+      taskRevision,
+      worktree: `${worktreeRoot}/${attemptId.replaceAll(":", "-")}`
     },
     queuedAt,
     sessionId: `integrator-session:${suffix}`,
@@ -185,14 +194,22 @@ const prepareIntegration = (
   taskId: string,
   head: string,
   candidateCommit: string,
-  positions: typeof predecessorPositions
+  positions: typeof predecessorPositions,
+  replacement?: { readonly attemptId: string; readonly baseSha: string; readonly taskRevision: string }
 ) => [
-  select({ _tag: "ReadTargetLineage", taskId, attemptId: attempt(taskId) }),
+  select({ _tag: "ReadTargetLineage", taskId, attemptId: replacement?.attemptId ?? attempt(taskId) }),
   {
     _tag: "IntegratorRequestReceived",
     correlation: {
       ordinal: 1,
-      session: session(taskId, head, positions.queuedAt, positions.startedAt, positions.targetLineageObservedAt)
+      session: session(
+        taskId,
+        head,
+        positions.queuedAt,
+        positions.startedAt,
+        positions.targetLineageObservedAt,
+        replacement
+      )
     }
   },
   {
@@ -244,7 +261,7 @@ const bIntegrationReleasingE = promoteAndComplete("B", successorCommit, candidat
           {
             _tag: "CassetteReleasesHeldPromotedTaskCompletionClaimRead",
             promotedTaskId: "B",
-            promotedAttemptId: attempt("B"),
+            promotedAttemptId: bSuccessorAttempt,
             releasedByTaskId: "E",
             releasedByAttemptId: attempt("E")
           }
@@ -278,9 +295,14 @@ const predecessorCleanupRevision = {
   revision: 1,
   subject: { locator: predecessor.candidateResource, predecessor }
 }
-const cleanupFor = (taskId: string, head: string, positions: typeof predecessorPositions) => {
+const cleanupFor = (
+  taskId: string,
+  head: string,
+  positions: typeof predecessorPositions,
+  replacement?: { readonly attemptId: string; readonly baseSha: string; readonly taskRevision: string }
+) => {
   const integration = Schema.decodeUnknownSync(IntegratorSessionCorrelation)(
-    session(taskId, head, positions.queuedAt, positions.startedAt, positions.targetLineageObservedAt)
+    session(taskId, head, positions.queuedAt, positions.startedAt, positions.targetLineageObservedAt, replacement)
   )
   return {
     revision: {
@@ -378,6 +400,7 @@ export {
   changedHead,
   successorCommit,
   attempt,
+  bSuccessorAttempt,
   specification,
   graphs,
   select,

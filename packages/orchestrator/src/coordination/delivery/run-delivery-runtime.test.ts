@@ -1069,7 +1069,7 @@ it.effect("keeps admitted outer cleanup while its actual nested release intent i
                     intent.event.operation,
                     runTaskClaimReleaseProtocol(
                       {
-                        readTaskClaim: tracker.readOriginalTaskClaim,
+                        readTaskClaim: (taskId) => tracker.readOriginalTaskClaim(taskId),
                         releaseTaskClaim: tracker.releaseOriginalTaskClaim
                       },
                       intent.event.operation.release

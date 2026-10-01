@@ -3688,3 +3688,664 @@ remains `Completed` with the recorded `WorkflowRunTerminated` event. This
 resolves the local lease reconciliation item without changing hosted workflow
 acceptance. Earlier pending statements are historical snapshots before this
 reconciliation. No issue closure or GitHub mutation is claimed.
+
+
+### Manual capstone #309-baseline carry-forward — 2026-10-01
+
+Owner requests complete-story fixture repair only; #309 matcher implementation
+is outside this lane. Attempt started 09:16:45 UTC, stop 09:46 UTC. Planned
+Base/current HEAD 58b04ace42eb981ad84ee442f8edc82b745e69ae. The old ten-path
+patch is preserved in stash `Preserve capstone dirty fixture before #309 baseline
+58b04ace4` and /tmp/issue386-capstone-before-309-rebase-20261001.patch.
+Worktree advanced by fast-forward; source runner conflicts resolved to exact
+master to avoid modifying #309. Fixture/scenario/assertion work remains dirty.
+Audit conflict uses current integrated audit; old diagnostic entries remain in
+the preserved stash/patch. Test conflict preserves master's authored-index
+sorting while retaining the old 405-item complete-story fixture requirement.
+
+Precise blockers before a justified further cassette invocation:
+1. Owner's retained production admission reads for A/B/C have same target,
+   WorkflowEstablishment cause and empty predecessors but closures [A]/[B]/[C].
+   AuthoredCassetteDecision ReadTrackerGraph carries only target, and the causal
+   window discriminator carries graphReadCause, not explicitlyCoveredTaskIds.
+   Exact per-task ready reads cannot currently be distinguished in one unordered
+   window without new matcher evidence. Invented ordering would lose identity.
+2. Owner observed initial B RecordTaskAttemptPlan as attempt:B:1. The retained
+   fixture expects B:2 and successor B:3. Restart counts recorded B plans and
+   replacements (one before first Restart), passes ExactReplacement ordinal 1,
+   and deterministic planner returns attempt:B:1. successorIsExact rejects equal
+   predecessor/successor attempt/branch/worktree. This is a source-established
+   prospective collision given the observed initial B identity; no retained
+   complete-story run has yet reached and observed that contradiction.
+
+No new cassette, typecheck, gate, hosted S1, matcher or production changes were
+made in this bounded read/merge-resolution pass. #386/#388 remain closed; this
+is separate manual story proof. Next distinguishing action belongs with matcher
+owner: supply task-closure discrimination or an existing identity-preserving
+fixture mechanism for the initial graph reads. Independently decide how the
+controlled ExactReplacement planner supplies a distinct B successor without
+rewriting accepted immutable attempt identities. Do not replace these gaps with
+cursor-row edits. Candidate is preserved but not clean/reviewed or qualified.
+
+### Separate manual capstone entry diagnostic — 2026-10-01
+
+This follow-up does not reopen #386/#388 acceptance. Worktree HEAD is
+`1659df968c65f789e6875e59e1f587aa35a062bb`; dirty fixture preserved.
+Contracts and orchestrator documented package builds both exited 0. Base-pinned
+`lint:changed` exited 0 after those declarations were generated and the genuine
+optional-parameter warning was fixed. All nineteen runner resolution warnings
+vanished without suppression; the missing generated declarations explanation is
+supported.
+
+One focused `capstone.execution.test.ts` title was run with
+`DALPH_RUN_INTEGRATION_CAPSTONE=1`, one worker, expected under two minutes and
+absolute stop 09:50 UTC. Prediction: missing B/C establishment graph occurrences
+cause a mismatch near story index 6. Actual exit 1 in 2.027s, literal
+`AuthoredCassetteInteractionMismatch at story position 6: expected DalphSelects`
+while receiving/emitting `ReadTrackerGraph`. The prediction matched the exit and
+boundary output. No owned process group remained. Evidence:
+`/tmp/issue386-capstone-entry-diagnostic.log` and corresponding `.json` receipt.
+Next scoped action is composing the A/B/C entry causal window with exact
+`graphReadExplicitTaskIds`, including the observed empty-task closure activation;
+no ordinal swapping, broad gate or hosted replay is justified by this result.
+
+### Manual capstone generalized continuation slice — 2026-10-01
+
+At HEAD 1659df968, one authoring loop maps analogous continuation read epochs:
+G1 A/B/C before B Suspend; G2 A/D before C Suspend; G4 C before C Resume.
+Each task retains exact plan/graph/specification/claim/worktree predecessors;
+response owners are explicit. Target lineage names only its exact worktree read.
+Promotion/finality reads are excluded. G4 B/D and G5 B/C/D remain unbound because
+the Restart replacement plan operation has no proved authored role; the original
+B plan is never substituted for it.
+
+Focused opposite-order, missing-authority and epoch-barrier controls passed 4/4.
+One bounded capstone run, expected under two minutes, stop 10:13 UTC, exited 1 in
+2.412s. It passed positions 44 and 81 and next failed at position 97 with
+ReadTrackerGraph, during the separate Restart boundary prefix. No further rows
+were edited. Evidence: /tmp/issue386-generalized-capstone.log and .json; patch
+preserved at /tmp/issue386-generalized-continuation-preserved.patch. Process group
+3675943 is absent. This manual regression does not reopen #386/#388 acceptance.
+
+### Manual Restart direct-boundary diagnosis — 2026-10-01
+
+The pos97 pre-mismatch diagnostic captured activation 8 WorkflowEstablishment
+operation 0, with empty predecessors and empty task coverage, against expected
+B specification. Its accepted journal tail revealed earlier Restart graph reads
+(after positions 121, 124 and 129) failing at the graph response boundary: the
+controlled direct interpreter had not consumed the authored graph selection.
+Activation 7 WorkflowEstablishment then consumed that selection. This supports a
+controlled direct-boundary binding defect, not a duplicate Restart identity.
+The production owner hint route captured two TrackerNotification offers; the
+accepted Restart request is journal 121. Full operation IDs and accepted history
+are retained in /tmp/issue386-pos97-boundary.jsonl. Disposable sink removed.
+
+Scoped repair binds the real direct Restart interpreter operations to exact
+causal selections and distinguishes the independent WorkflowEstablishment graph
+from B-covered Restart authority. Production runtime is unchanged. Typecheck
+passed after repairing interpreter error signatures. Four selected positive and
+negative controls passed. One capstone verification exited 1 in 1.836s before
+execution: schema rejects both old causalAnchor and new causal on the Restart
+graph item. No new delivery evidence is claimed. Next distinguishing action is
+removing the superseded anchor when installing the exact constraint, validating
+full cassette composition directly, then obtaining fresh authorized focused
+verification. /tmp/issue386-restart-binding-capstone.log and .json preserve the
+terminal result. Process group 3678461 is absent; no broad gate/hosted S1 ran.
+
+### Toolkit d2d1b598c composed manual capstone checkpoint
+
+Dirty prototype was saved as /tmp/issue386-before-d2d1b598c.patch and a retained
+stash before fast-forward to d2d1b598cbb291942cf6b7ad872e8dd125aa56ab. Incorrect
+direct-read fake selections/binding helper were removed. Restart's direct graph
+result and the independent empty-task WorkflowEstablishment selection/result are
+separate occurrences returning G2. The exact B successor role is registered by
+the toolkit only after the accepted replacement journal append. All five
+continuation epochs now use exact plan roles, with B later reads bound to the
+accepted successor rather than its original plan.
+
+Full cassette schema/epoch control and opposite-order checks passed (4 selected
+checks), then direct Restart pairing, accepted-plan registration and missing graph
+authority checks passed (3 selected checks). Typecheck passed after the toolkit
+mismatch branch was corrected to return yield* Effect.die (TS377006).
+
+One capstone verification exited 1 in 2.382s at story position 98: expected
+TaskWorkSpecificationReadReturned, received ReadTrackerGraph. No subsequent
+fixture row edits or retry. /tmp/issue386-d2-capstone.log and .json preserve
+terminal evidence. Process group 3683448 is absent. No disposable instrumentation
+remains. This local manual regression is still open; #386/#388 stay closed.
+
+### Complete direct Restart chain toolkit checkpoint
+
+710ae7ad was integrated as 31b97b034; 19891764 as b60e6d54d, after saving
+patches/stashes. Direct Restart specification/claim and Git observations now
+have exact response bindings, with no invented selections. The worktree
+observation names original B:0, Base/head H1 and its exact branch/worktree;
+lineage observation names H1 -> H2. The independent WorkflowEstablishment G2
+selection/response remains separate from the direct Restart G2 result.
+
+Full schema/epoch and focused toolkit controls passed 8/8; typecheck exited 0.
+One capstone title exited 1 in 2.803s: at story position 96 production selected
+ReconcileTaskWorktree(B, attempt:B:replacement:1). This is a new successor-resource
+selection crossing the remaining Restart window, not another missing direct
+response. Do not move it across the accepted A-terminal capacity barrier without
+its causal diagnostic. No Git effect is inferred merely from selection.
+Evidence: /tmp/issue386-direct-chain-capstone.log and .json. Process group 3688564
+is absent; no diagnostic instrumentation remains. No broad gate/hosted S1 ran.
+
+### Manual capstone capacity defect — 2026-10-01 scoped repair
+
+Boundary evidence: `/tmp/issue386-pos96-capacity.jsonl` records accepted successor plan at 132 and successor Git reconciliation completing while A/D remain Executing at capacity two, before A terminal. This violates delivery-capstone.md beat 12–13; it is not acceptance reopening or a hosted retry.
+
+Scenario-to-test mapping before runtime edits: extend `fresh-workflow.test.ts` / “continues a valid restarted replacement successor without resurrecting its original fresh commitment”. Starting facts: exact accepted Restart/replacement journal prefix and two exact held A/D attempts at capacity two. Trigger: derive successor reconciliation from that prefix. Forbidden result: admission must defer, so no Git action can execute. Crash/retry: independently reconstructed admission over the same accepted prefix must also defer the same proposal. After exact A-position release: reconciliation becomes admitted; the existing observed-worktree prefix then permits exact successor Begin, preserving its existing blocked/available controls. #269 read-only restart observations remain position-free and its independent-D test is retained. Reconciliation uncertainty remains governed by existing intent-before-effect recovery; this change only gates admission, and does not change reconciliation or retry interpreters.
+
+Root cause: replacement reconciliation is a ContinueFreshWorkflowOperation whose transition-level requirement is NoTaskWorkPosition. Its private ReplacementAuthority proves identity/chronology but previously did not add capacity admission. Scope: only an authenticated replacement ReconcileTaskWorktree proposal requires ReserveOrReuse; ordinary fresh continuations and read-only Restart facts remain unchanged. Hard stop 11:08 UTC.
+
+Scoped repair terminal evidence (10:56 UTC, before 11:08 stop): adverse-order test first exited 1 at fresh-workflow.test.ts admission assertion, receiving Admitted rather than Deferred. After repair, replacement admission and #269 independent-D checks passed 2/2 (`/tmp/issue386-capacity-reviewed-green.log`). Initial and freshly rebuilt controllers both reject at full capacity and admit after exact A position release; this is controller reconstruction, not a SQLite reopen claim. Existing successor-worktree/Begin controls remain in the same test.
+
+`check:fast` exited 1: typecheck completed, but changed-file lint reported 17 no-magic-numbers errors in the preserved delivery-story-capstone.ts fixture (`/tmp/issue386-capacity-check-fast.log`). The scoped runtime/test lint exited 0 (`/tmp/issue386-capacity-scoped-lint.log`); git diff --check passed. One authorized capstone execution exited 124 at its 60-second bound, with only Vitest RUN header and no decisive boundary (`/tmp/issue386-capacity-capstone.log`); no complete-story proof is claimed. No rerun, broad gate, or hosted Run.
+
+Scoped review dispositions: early-capacity defect resolved by position admission only for authenticated replacement reconciliation; #269 read-only behavior retained and regression passed. Nested proposal mutability finding resolved by immutableSnapshot of the complete authorized proposal. Full fixture lint and capstone terminal progress remain blockers to handing off a clean composed candidate; neither is waived. Next bounded discriminator: record current active causal-window members and actual pending action at the capstone timeout, without widening any capacity barrier. Runtime patch remains uncommitted together with preserved fixture work.
+
+### #309 retained-wait diagnostic — 2026-10-01 10:57–11:00 UTC
+
+Predictions: fixture stall leaves A terminal unconsumed and A/D capacity occupied; missed runtime wake requires A terminal and release already observed. One passive onObservationCapture attempt retained `/tmp/issue309-capacity-wait-captures.jsonl` (847 captures), `/tmp/issue309-capacity-wait-summary.json`, and `/tmp/issue309-capacity-wait-diagnostic.log`; safely stopped at the 30-second bound, exit 124. Temporary callback was removed by restoring the exact saved test.
+
+Observed: activation 6, latest story position 96, consumed Restart indices 95/98/99/100/101, unconsumed window indices 96/97 (independent WorkflowEstablishment selection/result). Last accepted position 132; B successor proposal has ReserveOrReuse and waits behind exact A:0/D:0 holders at capacity two; last live owners is empty. A terminal is not consumed. Thus this attempt supports fixture stall before terminal, not a missed wake after release. Raw waiting-call identities are not exposed by these passive hooks; no identity is invented. The precise blocker is the mandatory unconsumed WorkflowEstablishment pair before A terminal without a proved current trigger. Next source-level action is establish that graph's actual reactivation trigger (or classify it as a stale retry-only fixture occurrence) before changing the window. Capacity barrier remains unchanged.
+
+All 17 fixture no-magic-numbers findings now have line-local explanations for exact authored offsets; Base-pinned lint:changed exits 0 (`/tmp/issue309-fixture-lint.log`). Focused exact direct graph/spec/claim/Git, accepted successor plan, post-return authority, replacement capacity, and #269 controls pass 10/10 across four files (`/tmp/issue309-capacity-window-controls.log`). git diff --check passes. These selected controls do not claim the complete-story run or all dirty entry controls passed. No second capstone launched after this diagnosis; dirty work remains preserved.
+
+### #309 A-terminal window prototype — 2026-10-01 11:01–11:04 UTC
+
+Owner-directed discriminator expands only the Restart observation window through exact passive A terminal; successor ReconcileTaskWorktree stays outside after the window. Independent graph selections have no invented scheduler-order predecessors; each graph result belongs to its exact selected occurrence. A terminal is independently enabled, with exact attempt matching and no inferred selected-operation owner.
+
+Direct cursor/schema controls pass 2/2 (`/tmp/issue309-terminal-window-controls.log`): exact A terminal can be consumed before the independent graph reads, and successor reconciliation remains outside the window. One composed attempt, passively captured through onObservationCapture, stops at its 30-second bound with exit 124 (`/tmp/issue309-terminal-window-capstone.log`). Its 847 captures (`/tmp/issue309-terminal-window-captures.jsonl`) still end at position 96/activation 6; A terminal is not consumed. Thus widening the observation window alone does not wake A's lifecycle subscription.
+
+Exact #309 toolkit blocker: authored-cursor.ts passiveExecutorLifecycleChangesFor builds SubscriptionRef.changes(position), maps to story[index], and filters for the exact passive lifecycle item before invoking consumePassiveExecutorLifecycleChangeFor. That consumer uses causal claimNext and can consume the enabled A terminal, but the subscription never invokes it while an earlier independent graph is physical-current. Needed contract: passive lifecycle subscription observes enabled exact lifecycle occurrences in the active causal window, preserving attempt identity, predecessor enablement, single consumption, and negative missing-authority controls. This implementation belongs to owner #309; no cursor/matcher source was edited in this slice. The causal fixture prototype and direct control are preserved for composition after that contract is verified. No complete-story success claimed. Temporary capture instrumentation restored exactly.
+
+Prototype verification: the new local-window control initially failed TS2322 at capstone-post-return-causality.test.ts:124 because manually rebased indices lost schema brands. An initial scripted edit missed the formatted source and repeated that error; both retained logs remain. Fixed by Effectful AuthoredCausalWindow decoding. Final pnpm typecheck exits 0 (`/tmp/issue309-terminal-window-typecheck-final.log`); Base-pinned lint:changed exits 0 (`/tmp/issue309-terminal-window-lint-final.log`); exact terminal/schema controls pass 2/2 (`/tmp/issue309-terminal-window-controls-final.log`); git diff --check passes. No new composed attempt after the toolkit blocker. The prototype also deliberately does not invent order between identical independent graph selections; their exact future identities/trigger must be verified before calling those occurrences composed proof.
+
+### #309 toolkit composition at 5951be6c5 — 2026-10-01 11:14–11:16 UTC
+
+Preserved dirty patch `/tmp/issue309-before-76ee57d44.patch`, then cherry-picked exact owner commit 76ee57d44b6ed9fa801261444e9dcc0c400b5eb1 as 5951be6c5. One capstone, expected 1–2m / absolute stop 11:17 UTC, exited 1 in 2.48s (`/tmp/issue309-after-76ee-capstone.log`) at position 96: graph selection matches none of restart-establishment/restart-independent-102/restart-independent-104. No timeout or complete-story proof.
+
+A subsequent single bounded call-site diagnostic captured the missing identity before any fixture edit, exited 1 in 2.36s (`/tmp/issue309-after-76ee-graph-diagnostic.log`): ReadTrackerGraph, cause WorkflowEstablishment, explicitlyCoveredTaskIds [E], operation suffix activation:6:operation:11, predecessorOperationIds []. Current authored roles all require empty coverage; this is a concrete fixture closure mismatch. Do not infer an A-terminal operation predecessor from observed arrival: actual predecessors are empty. Scope of next fixture edit is one exact E closure occurrence, preserving independent graph-response ownership and the post-A-terminal successor Git/Begin barrier; other graph identities still need evidence before relabeling. Temporary authored-adapters diagnostic restored exactly from `/tmp/issue309-after-76ee-adapters-original.ts`. Dirty fixture/runtime repair remains preserved and no broad gate or hosted Run occurred.
+
+### Priority discriminator correction — 2026-10-01 11:19–11:22 UTC
+
+Before shared-policy changes, predicted competing causes: exact successor B ready/deferred but fresh admitted (misclassification), versus E admitted against a frame lacking ready successor B (relation/chronology). One temporary runtime admission diagnostic plus passive occurrence capture exited 1, reproducing exact E graph mismatch. Retained `/tmp/issue309-priority-diagnostic.log`, `/tmp/issue309-priority-captures.jsonl`, `/tmp/issue309-E-reservation.json`, and `/tmp/issue309-priority-diagnostic-summary.json`. Both temporary runtime/test files restored exactly.
+
+Actual occurrence order: A terminal at authored index 106 precedes direct Restart graph index 95. At E reservation, acceptedAt=123; positions are exact D plus FreshEntryRuntimePosition E. The exact available B proposal is RecoveredWorkflowOrder AdvanceAttemptRestart, responsibilityBeganAt=43, original attempt B:0; successor reconciliation is absent. No B successor reservation/defer log exists because that proposal has not yet been produced. Thus this run does NOT prove replacement FreshWorkflowOrder priority misclassification. Prior evidence at 132 predates the passive lifecycle toolkit fix and must not be spliced into this run. No E spec/claim/Git/Begin is observed before the graph-selection failure.
+
+Accepted chronology/test mapping required before any priority repair: commit exact PlannedAttemptReplaced.successorPlan while A/D occupy two positions; assert successor B capacity-deferred; only then deliver exact A terminal, and assert B reserves/reconciles/Begins before fresh E's position reservation, including adverse scheduling and reconstructed-controller prefix. Read-only #269 observations stay position-free; exact B replacement cannot reuse original B's released position. Current expanded window incorrectly enabled A terminal before the replacement cut. Shared admission-policy repair is withheld because its diagnostic premise is not met.
+
+Precise #309 fixture/toolkit blocker: causal occurrence predecessors currently reference other story occurrence IDs; accepted successor role is registered in the exact operation registry after journal append but generic passive lifecycle occurrences cannot require that accepted role. Need a typed accepted-role prerequisite for exact A terminal, with registration waking the enabled-occurrence subscription, or a scoped harness gate on that accepted journal event. It must not depend only on the preceding direct lineage response (which can return before replacement append), fabricate a DalphSelects plan, or block independent #269 read-only work. This contract belongs to #309 owner. No shared priority rule or E fixture occurrence changed from inconclusive priority evidence.
+
+### Accepted successor-plan terminal prerequisite — 2026-10-01 11:28–11:30 UTC
+
+Saved dirty patch `/tmp/issue309-before-22df8d365.patch`, then cherry-picked exact 22df8d36524c34cdd879daf7a21cb2be3b92a7bb as c8a35b60e. Exact A terminal occurrence now requires acceptedPlanPredecessorRoles [B-accepted-successor-plan] and no graph occurrence predecessor. Updated direct terminal control registers the exact test accepted role; owner negative/unmet-plan control and fixture terminal control pass 2/2 (`/tmp/issue309-accepted-plan-terminal-controls.log`).
+
+One bounded capstone, expected under 2m / absolute stop 11:32 UTC, exits 1 in 1.96s (`/tmp/issue309-after-22df-capstone.log`). First boundary: AuthoredCassetteInteractionMismatch at position 96 for ReconcileTaskWorktree(B, attempt:B:replacement:1). This exact selection remains authored outside the widened window while independent graph members are still unconsumed. No complete-story success. The accepted-plan gate and scoped capacity admission remain in force; no scheduler hold or E closure was added. Next fixture operation is an exact successor reconciliation selection occurrence causally after A terminal and accepted successor plan, independent of unrelated graph reads; its actual Git effect must still remain after A terminal. Preserve raw operation binding to accepted successor plan rather than task-ID or old B-plan authority.
+
+### Successor reconciliation/Begin inside the causal window — 2026-10-01 11:30–11:34 UTC
+
+Exact B successor reconciliation selection is now a window occurrence, statically after exact A terminal and requiring accepted B successor-plan role. Its raw operation causal predecessor remains only the exact accepted successor plan; no A operation predecessor is invented. The exact Begin/Executing report is another window member after that selection, with no selected-operation owner inferred. Independent graph reads stay unordered. New negative control rejects successor reconciliation before A terminal even with its accepted plan registered, then accepts exact reconciliation and Begin before graph drain. Alongside existing accepted-plan negative/schema control, 3/3 pass (`/tmp/issue309-successor-window-controls.log`).
+
+One capstone exits 1 in 2.09s (`/tmp/issue309-successor-window-capstone.log`), first DIFFERENT boundary ReadTargetLineage(A, attempt:A:0) at physical position 96. A bounded pre-mismatch diagnostic exits 1 in 2.26s (`/tmp/issue309-A-lineage-diagnostic.log`), with captures `/tmp/issue309-A-lineage-captures.jsonl` and `/tmp/issue309-A-lineage-last-status.json`. It proves occurrences 106 A terminal, 107 exact B successor reconciliation, 108 exact B successor Begin, in that order after direct Restart response chain. Last acceptedAt=144; exact B/D hold positions; A integration queuedAt=135, startedAt=138. The failing A lineage operation is activation:6:operation:12 with predecessorOperationIds []; B reconciliation is operation11 with only accepted successor operation10 as predecessor. Thus the capacity/terminal/Begin slice is now observed, not just a synthetic cursor control. No E reservation precedes B in this run.
+
+Next fixture boundary is independently authorized A integration lineage, outside the window while mandatory graph reads remain unconsumed. Before expanding through an entire integration chain, retain the accepted A queue/start authority and classify the graph triggers; do not invent raw predecessor IDs or force A behind scheduler-only graph order. Diagnostic adapter and test restored exactly. Final pnpm typecheck and Base c8a35b60e lint:changed both exit 0 (`/tmp/issue309-successor-window-{typecheck,lint}.log`); git diff --check passes. Complete-story proof still open; no broad gate/hosted Run. Dirty work preserved.
+
+### Remove unsupported Restart-prefix graph pairs — 2026-10-01 11:39–11:45 UTC
+
+Owner-authorized coherent fixture change removes only the three empty-coverage G2 selection/result pairs: former 96–97, 102–103, 104–105. Direct Restart graph/spec/claim/worktree/lineage remain exact, followed by accepted B-plan → A terminal → exact B reconciliation/Begin. Later A post-promotion finality reads remain. Restart window now has named A-terminal role rather than graph-dependent scheduler edges. Source projection is 411 authored occurrences (prior dirty source 417); public length expectation was stale 405 and is corrected to exact 411. Checkpoint fences already derive from event identities; no blanket journal/capture offset edits.
+
+Focused schema/negative controls pass 3/3 (`/tmp/issue309-obsolete-graphs-controls.log`), initial removal candidate typecheck/lint exit 0 (`/tmp/issue309-obsolete-graphs-{typecheck,lint}.log`). One predeclared capstone (expected under 2m, stop 11:45 UTC) exits 1 in 2.48s (`/tmp/issue309-removed-graphs-capstone.log`). Passive capture `/tmp/issue309-removed-graphs-captures.jsonl` proves the exact direct chain 95–99, A terminal100, B reconciliation101, Begin102. No graph selection at or beyond the removed prefix reappeared before failure (zero ISSUE309_GRAPH_IDENTITY lines). A integration lineage progressed to its first Integrator request at position104.
+
+Decisive next assertion: actual A first-session queuedAt/start/lineage =135/138/146, authored141/142/146. Corrected only the observed predecessorPositions to135/138/146; candidateResource/session IDs derive from those exact values. B–G/rerun/quarantine positions remain unchanged pending their own evidence; a uniform subtraction would be false because lineage position stayed146. The repaired schema/negative controls pass3/3 and pinned lint exits0 (`/tmp/issue309-obsolete-graphs-repaired-{controls,lint}.log`). No second capstone after this correction; complete-story still unproved. Temporary graph identity and passive-capture hooks restored exactly. Dirty patch preserved in `/tmp/issue309-obsolete-graphs-preserved.patch`.
+
+Final repaired-candidate pnpm typecheck exits0 (`/tmp/issue309-obsolete-graphs-repaired-typecheck.log`); git diff --check passes. No complete-story rerun or clean-candidate handoff credit is claimed.
+
+### Continued manual #309 proof — 2026-10-01 11:49–12:18 UTC
+
+Manual focused capstone runs are not full qualification admissions. Each repair below follows its own distinguishing observation and passing focused verification; no broad gate or hosted Run was invoked. #386/#388 remain closed; this is separate manual complete-story evidence.
+
+A correlation repair passed its request, then exposed GitTargetLineageReadFailure (`/tmp/issue309-correlation-repaired-capstone.log`, exit1,2.82s). Exact lineage/occurrence diagnostic `/tmp/issue309-lineage-boundary-diagnostic.log` proves A's FullRerun read after the rejected promotion and applied direction, requesting immutable H1. The fixture skipped that H1→H2 observation and supplied B's later H2→successor fact. Added the missing A rerun fact, retaining the exact quarantine/direction161 chronology.
+
+Next diagnostic `/tmp/issue309-after-rerun-lineage-diagnostic.log` proves independent G4 D/H1 and B-successor/H2 reads arriving D-first. The global FIFO facts supplied B's Base to D and D's Base to B. Introduced explicit test-only `ConcurrentReadsAtSameTargetHead`: it consumes one matching Base only within the current contiguous head group, cannot skip a head transition, and preserves ordinary FIFO by default. New `authored-target-lineage.test.ts` proves opposite orders, exact single consumption, missing/future-Base rejection, and default FIFO. No production Git service or workflow selection changes. Controls4/4, typecheck/lint exit0; retained `/tmp/issue309-same-head-lineage-{controls,typecheck,lint,capstone}.log`.
+
+Next boundary168 is a fixture authority error, not missing production authority: exact comparison `/tmp/issue309-pos168-exact-predecessors.log` shows fixture requires C plan activation1/op15 plus activation10/op1, while actual C specification requires the same plan plus activation10/op0. Graph diagnostic `/tmp/issue309-pos168-graph-authority.log` identifies op0 as AttemptContinuation[C] before the safe-revalidation marker, and op1 as independent WorkflowEstablishment[] after capacity change. Fixture authoring now retains the marker's exact task continuation authority across capacity change. Positive/negative control rejects substituting the later graph. Typecheck/lint pass.
+
+One capstone stopped safely after120s, exit124, without assertion output. A console-based capture attempt also stopped exit124 but yielded no retained captures, so it was inconclusive. Changed transport to direct temporary sidecar append; `/tmp/issue309-retained-C-direct-captures.jsonl` (10,846 captures) locates the stall at212, acceptedAt296, B queued290/started293, E deliberately held before B promotion. Temporary instrumentation removed. Focused baseline diagnostic `/tmp/issue309-B-baseline-failure.jsonl` proves B replacement's correct H2 Base is rejected by the shared H1-only Git test observation. Controlled RemoteBaseline needs the local ref head, so `observeAuthoredRemoteBaseline` queries the fixture's pinned observation Base without rewriting B's immutable Base. Controls prove differing replacement Base works and failed pinned read remains TargetUnreadable. Combined controls12/12, typecheck0; lint type-only import finding repaired, final lint0.
+
+Repaired baseline reaches B Integrator request213 (`/tmp/issue309-controlled-baseline-capstone.log`, exit1,5.42s). Exact actual session290/293/298 versus fixture291/294/299; task/attempt/F2/H2/commit/target match. Accepted manifest has297 bytes, not285: exact replacement attempt ID adds12 bytes in the sealed manifest. Corrected B positions and derive manifest size from attempt ID length relative to original task-local identity. Controls12/12 and final lint0.
+
+Next failure230 (`/tmp/issue309-B-correlation-capstone.log`) diagnosed in `/tmp/issue309-pos230-finality-diagnostic.log`: B's post-promotion graph/specification/claim authority occurs223–228, claim replacement229, then production requests focused completion. Removed unsupported post-replacement graph pair230–231; required pre-replacement authority remains. Exact story length409. New boundary control plus other focused controls13/13; lint/diff check0. One capstone `/tmp/issue309-B-finality-capstone.log` exits1 in4.32s, new boundary255 ReadTaskWorkSpecification(F). Complete-story proof remains open; next bounded action captures exact F admission authority and expected operation before extending a causal window. No clean candidate/review closure claimed.
+
+### Integration/admission concurrency prerequisite — 2026-10-01 12:18–12:28 UTC
+
+Retained `/tmp/issue309-pos255-admission-diagnostic.log` supports independent interleaving: F post-claim graph activation12/op14 (predecessor its claim op13, explicit coverage[F]) authorizes F specification op15; C integration lineage op16 has no predecessors. Fixture255 demands C lineage before F spec256. No production authority defect is established. Mapped analogous C/F and D/G integration/admission cuts as separate task lanes through the next passive lifecycle barrier. Also authored missing unconditional post-promotion graph/spec/claim prefixes for C–G from production integration-delivery-action-adapter.ts:203–245; A's existing successor prefix and B's proved prefix remain. Story length439. This coherent future-prefix change remains unverified by a complete Run.
+
+Prototype fails closed at schema admission, before another capstone: `/tmp/issue309-integration-admission-schema.log` rejects stale inferred owner on C claim verification279, and `/tmp/issue309-integration-admission-schema-final.log` rejects absent owner after correcting that inference. Required domain rule at authored-domain.ts:1377–1385 requires every TaskClaimCurrentReadReturned in a window to own an exact selected ReadTaskClaim. C's post-ReleaseTaskClaim verification has no such selection; authored-tracker-authority.ts readTaskClaimFor receives no causal context for ordinary TrackerMutation calls, while direct WorkflowInterpreter ReadTaskClaim passes exact context through authored-runner.ts:2315–2327. Therefore existing directFocusedRead cannot truthfully bind this ordinary verification: it has no raw ReadTaskClaim operation identity. A fake selection, previous read owner, or inferred last-selection predecessor would violate the accepted ownership contract.
+
+Exact toolkit prerequisite (owner #309): represent an ordinary protocol claim-verification response inside a causal lane using its real enclosing protocol/operation identity and exact task/verification phase, or a typed unselected-response contract with precise lane prerequisites and controls; preserve exact selected-read ownership and duplicate rejection. Add controls for wrong task, wrong enclosing owner/phase, premature response, and opposite integration/admission orders. Do not narrow the window to assert F Begin precedes C finality without a proved causal barrier. Prototype preserved at `/tmp/issue309-integration-admission-window-prototype.ts`, full tracked diff `/tmp/issue309-continued-manual-proof.patch`. Removed only the inadmissible prototype from active source; good first-admission/continuation/Restart windows and all proven capacity/correlation repairs stay. No broad gate, hosted Run, clean candidate, or manual complete-story acceptance claim.
+
+Independent control repair: the entry negative test expected exact empty predecessors but authored its graph without an exact causal constraint. Added explicit empty predecessor constraint to that test story; this strengthens the control and changes no matcher or runtime behavior. Final focused verification below records the restored valid-schema candidate, not completion of the blocked integration/admission cut.
+
+Final restored-schema verification at12:30 UTC: controls18/18 in three files (`/tmp/issue309-continued-proof-final-controls.log`); exact final pnpm typecheck0 (`/tmp/issue309-continued-proof-exact-final-typecheck.log`); Base c8a35b60e lint:changed0 (`/tmp/issue309-continued-proof-exact-final-lint.log`); git diff --check0. The entry negative-control brand-construction error TS2379 and subsequent missing _tag decode error are retained in earlier logs and repaired through full schema decoding with explicit tag; neither failed attempt gets passing credit.
+
+Scoped review disposition: same-head Git fact selection is opt-in, single-consumption and head-fenced (resolved with controls); pinned controlled baseline head read changes no attempt identity or production adapter (resolved with controls); exact C retained graph authority and A/B correlations are grounded in retained operations/journal-derived positions (resolved for observed prefix); unsupported post-B replacement graph removed while observed pre-replacement finality authority stays (resolved); C–G finality prefixes have production/scenario mapping but lack composed terminal proof (open); unselected claim verification in integration/admission windows is an exact owner/toolkit contract blocker for #309, not deferred acceptance proof. Complete-story run, exact later C–G session/cleanup correlations and full scoped-review closure remain unproved. Dirty source is preserved at HEAD c8a35b60e; no clean candidate commit or issue completion is claimed. All disposable diagnostic hooks removed.
+
+### Exact seventh lineage read and bounded-group ambiguity — 2026-10-01 12:32–12:39 UTC
+
+Owner independently observed six H1 reads followed by the seventh H1 request facing an H2 FIFO fact. Did not reorder startingFacts observations. Retained prior occurrence capture identifies the seventh as A FullRerun, story110/activation6, following applied quarantine direction; the fixture required a missing H1→H2 fact, not a scheduler-order swap. New exact raw-operation diagnostic `/tmp/issue309-exact-lineage-identity-diagnostic.log` reaches the known255 failure and records seventh operation `integration-quarantine-direction:capstone-full-rerun-A:attempt:A:0:q:158:d:159:g:123:target-lineage`, immutable attempt:A:0/H1, predecessor exact initial A lineage activation6/op12. Fifth is original B Restart lineage `attempt-restart:restart-original-B:target-lineage:after:129`, predecessor worktree after127. Later independent D activation9/op7 depends on its worktree op5; B-successor activation9/op8 depends on its worktree op6. No inferred cross-task predecessor.
+
+Strengthened explicit concurrent current-head grouping: typed Selected versus ConflictingSameBaseFacts, current contiguous exact target-head group only, matching immutable Base, no head-stage skip. Identical same-Base/head/ancestry observations consume one fact; differing ancestry for that same immutable Base/head rejects both arrival orders and leaves Ref state unchanged. Added two controls alongside opposite Base orders, missing/future-head rejection and default FIFO. The first scripted adaptation stopped before updating consumers and produced retained failing helper tests; repaired the adapter/consumer together. Final focused `/tmp/issue309-lineage-ambiguity-controls-repaired.log` passes8/8. Disposable exact-operation trace removed.
+
+Per owner efficiency instruction, next composed capstone ran directly, without another typecheck/lint cycle: `/tmp/issue309-lineage-bound-group-capstone.log` exits1 in5.43s, passing the lineage boundaries and reaching the same precise independent F-spec/C-lineage mismatch255. No GitTargetLineageReadFailure and no ambiguity failure. The broader integration/admission claim-verification toolkit prerequisite remains unchanged. Final typecheck/lint must run once on the eventual coherent integration candidate; previous checks are not credited to this new ambiguity change. Evidence/dirty source preserved; no full gate or hosted Run.
+
+
+### #309 manual capstone — exact-attempt lineage handoff, 2026-10-01 12:50 UTC
+
+This is separate manual evidence; #386/#388 remain closed. Preserved tracked patch
+and untracked archive before toolkit integration are
+`/tmp/issue309-before-cleanup-toolkit.patch` and
+`/tmp/issue309-before-cleanup-toolkit-untracked.tar.gz`. The later reconciliation
+stash remains available as `issue309-before-keyed-lineage`.
+
+Applied owner cleanup-call commit 1dc802752 as 1604b4f12, then owner exact-attempt
+lineage commits e65c2e09a / 9ff5ae487 / 9127951c3 as bf926cf5e /
+7a93849a6 / 2c22bd2fb. Manually resolved the overlapping domain schema to keep
+`targetLineageByAttempt` and `directCleanupClaimRead`. Removed the interim
+same-target-head option: it did not establish exact initiating-attempt ownership.
+The independently verified pinned-provider-Base remote-baseline helper remains.
+No production Git contract changes.
+
+Queue stages below are ordered only within the named immutable attempt; no
+cross-attempt arrival edge is asserted. H1 is initialHead, H2 changedHead, S the
+accepted A successorCommit; candidate(X) is the authored accepted target head.
+
+| Exact attempt | Ordered stages / expected Base -> head | Evidence |
+| --- | --- | --- |
+| A:0 | activation 4 continuation H1->H1; activation 6 continuation H1->H1; initial Integrator H1->H1; exact FullRerun H1->H2 | retained raw lineage operations 1,3,6,7 |
+| B:0 | direct Restart H1->H2 | raw operation 5, predecessor exact Restart worktree |
+| B:replacement:1 | activation 9 H2->S; activation 11 H2->S; activation 12 Integrator H2->S | raw operations 9,13,14; accepted successor identity |
+| C:0 | activation 4 H1->H1; activation 10 capacity return H1->S; activation 11 H1->S; activation 12 Integrator H1->candidate(B) | raw operations 2,10,11,15 |
+| D:0 | activation 6 H1->H1; activation 9 H1->S; activation 11 H1->S; later Integrator H1->candidate(C) | raw operations 4,8,12; final stage authored, not yet executed |
+| E:0 | Integrator H1->candidate(D) | accepted serial promotion chronology; not yet executed |
+| F:0 | Integrator H1->candidate(E) | accepted serial promotion chronology; not yet executed |
+| G:0 | Integrator H1->candidate(F) | accepted serial promotion chronology; not yet executed |
+
+Focused ownership/capstone-causality controls: exit 0, 3 files / 18 tests passed,
+2.10s; `/tmp/issue309-keyed-lineage-controls.log`. One manual capstone:
+exit 1, 5.90s, `/tmp/issue309-keyed-lineage-capstone.log`; literal
+`AuthoredCassetteInteractionMismatch at story position 255` with
+`ReadTaskWorkSpecification(F)`. Prediction matched: exact queues survive the
+known lineage prefix; complete-story acceptance is NOT proved. Full exhaustion
+of later queues cannot be credited because the Run stops at 255.
+
+Remaining generalized-window contract: 1dc802752 identifies journaled
+ConfirmOriginalClaimReleased / ConfirmNoActiveClaimAfterMarkerAbsent reads.
+However IntegrationFinality.releaseOriginalClaimBeforeCompletionMarkerDeletion
+passes `tracker.readOriginalTaskClaim` directly as TaskClaimReleaseBoundary at
+protocol.ts:828. runTaskClaimReleaseProtocol invokes readTaskClaim(taskId) at
+its protocol.ts:50 before release and on the confirmation iteration, with no
+cleanup-call context. Thus those two TaskClaimCurrentReadReturned occurrences
+still have neither exact selected ReadTaskClaim ownership nor a valid
+`directCleanupClaimRead`. Assigning the previous selected read or ReleaseTaskClaim
+as owner would fabricate authority. Owner #309 toolkit follow-up needs exact
+journaled ReleaseOriginalClaim call plus per-read phase/ordinal for these calls,
+with missing/wrong call, task, phase and duplicate controls. The generalized
+prototype remains `/tmp/issue309-integration-admission-window-prototype.ts`;
+it is not restored as an invalid schema.
+
+Suffix graph audit disposition: preserve proven continuation windows, A/B
+post-promotion graph/spec/claim reads, and admission post-claim graph reads.
+The previously unsupported B post-replacement pair is already removed. C–G
+post-promotion triples are justified by production's unconditional
+PostPromotionFinalityReads. Later bare G5 pairs around terminal/cleanup and Gfinal
+termination are still provisional authored expectations, not exact activation
+proof. Do not delete or reinsert them merely from a scheduler mismatch. Their
+exact activation/cause/coverage must be captured once the 255 concurrency cut
+is expressible. No suffix graph deletion or complete audit closure is claimed.
+
+Final compilation/lint remains deferred until the coherent fixture is complete,
+per owner instruction. Entry control decode now uses the full story-item schema
+so its explicit `_tag` is checked at the boundary. Dirty work preserved; no
+broad gate, hosted Run, or acceptance reopening.
+
+
+### #309 release-read toolkit composed slice — 2026-10-01 12:58 UTC
+
+Safeguarded dirty patch at `/tmp/issue309-before-release-read-toolkit.patch`;
+applied b3ac9d20a as 220a01484 and restored all dirty work. Restored generalized
+C/F and D/G integration/admission causal lanes. The two release-protocol claim
+reads use ReleaseOriginalClaimRead ordinals 1 and 2 with exact deletion/release
+operation IDs derived from each authored promotion request. Subsequent cleanup
+confirmation reads use their own journaled call identities. No false selected
+ReadTaskClaim or ReleaseTaskClaim ownership is assigned.
+
+Schema/entry/post-return controls and the wider causal file: 40/41 passed in
+2.58s, `/tmp/issue309-release-window-controls.log`. The retained failure is the
+older #268 replay control expecting B-worktree/B-plan role names which the
+current first-admission window does not contain; that test was not edited or
+credited. Exact owner cleanup-call control separately passed 1/1 in 1.27s,
+`/tmp/issue309-exact-release-ownership-control.log`.
+
+One capstone exited 1 in 4.10s, `/tmp/issue309-release-window-capstone.log`.
+Position 255 independent F-specification/C-lineage interleaving passed. First
+new mismatch is IntegratorRequestReceived at 258: C:0, ordinal 1, immutable
+Base/revision/accepted result and target head match. Expected queued/start/lineage
+357/360/366; actual 362/365/373. This is exact fixture correlation drift,
+not evidence of changed attempt authority. New cleanup metadata is schema-valid
+but has not yet been reached in the composed Run. No full-story proof claimed.
+
+Next bounded action: ground C's queue/start/lineage journal facts, update its
+correlation and dependent cleanup identities coherently, then one focused
+capstone. Also review normalization of `$authored-run` in expected cleanup
+operation IDs against raw metadata before claiming those bindings execute.
+The old entry-role replay test needs reconciliation with the accepted new entry
+window before final closure. No broad gate or hosted Run; #386/#388 remain closed.
+
+
+### #309 C correlation correction and control reconciliation — 2026-10-01 13:02 UTC
+
+Applied only evidenced C positions 362/365/373. One direct capstone verification
+exit 1 in 4.91s: `/tmp/issue309-C-position-repair-capstone.log`. It passed C's
+request and reached 279. Literal `no unconsumed occurrence matches; enabled:
+integration-admission-C-279`, in runTaskClaimReleaseProtocol. This is the first
+ReleaseOriginalClaimRead, not a graph/lineage or capacity failure. No more capstone
+attempts in this slice.
+
+The actual metadata is not printed by the failure. Source-local competing causes:
+raw runtime operation IDs versus `$authored-run` fixture templates (tracker
+passes cleanup metadata directly; cursor compares IDs with strict equality), or
+a wrong release identity/ordinal authored at 279. Expected identity is derived
+from exact C promotion session and ordinal, with ReleaseOriginalClaimRead read
+ordinal 1. Next single discriminator must retain actual task, deletion/release
+IDs, call and read ordinal alongside this expected node before changing matching.
+No normalization repair or source behavior inference is credited as proved.
+
+Reconciled the stale #268 replay test against the real first-admission window.
+It discovers exact current occurrences instead of old B-worktree/B-plan labels
+or Run-wide attempt ordinals; preserves rejection of B reconciliation before its
+plan and replays A Begin both before and after B/C worktree reconciliations.
+These entry effects genuinely have selected ReconcileTaskWorktree boundaries;
+they are not the unselected direct Restart Git reads. Existing direct-Git result
+identity/negative controls remain intact. Full same focused suite now exit 0,
+3 files / 41 tests passed, 2.49s: `/tmp/issue309-current-entry-controls.log`.
+This supersedes the earlier 40/41 result but does not prove complete-story
+acceptance or final compilation/lint. Dirty fixture and logs retained.
+
+
+### #309 exact cleanup metadata discriminator — 2026-10-01 13:06 UTC
+
+Applied c0e5d0ae3 as d81f809c0 after safeguarding dirty work. One bounded
+capstone predicted exit 1 at 279 with only run-ID normalization differing.
+Actual exit 1, 5.19s, retained `/tmp/issue309-cleanup-identity-discriminator.log`.
+Literal cleanup claim read identity mismatch: call ReleaseOriginalClaimRead,
+readOrdinal 1; expected deletion/release IDs contain $authored-run, actual IDs
+contain the concrete r1 Run ID. Replacing that concrete Run ID in both actual
+IDs makes every metadata field exactly equal (expected taskId is the separately
+matched task subject C). The exact attempt:C:0, session positions 365/373,
+ordinal, promotion candidate/head, deletion prefix and release prefix match.
+This proves the normalization explanation; no fixture identity/ordinal repair
+is justified. Owner owns normalization in tracker/runner adapter files; these
+files were not edited during this diagnostic. No retry or broad gate.
+
+
+### #309 exact release-operation context verification — 2026-10-01 13:15 UTC
+
+Safeguarded dirty patch at `/tmp/issue309-before-release-operation-context.patch`;
+applied 650d2215f as c5f2856c9 and restored dirty work. One capstone, exit 1
+in 4.74s, `/tmp/issue309-release-operation-context-capstone.log`. Position 280
+release selection now passes, as do release-read ordinal 2 and the subsequent
+ConfirmOriginalClaimReleased read. First new mismatch at 286:
+ConfirmNoActiveClaimAfterMarkerAbsent expected attemptOrdinal 1 / readOrdinal 1;
+actual attemptOrdinal 2 / readOrdinal 1. Exact normalized deletion operation ID
+and call match. This proves a fixture cleanup-attempt ordinal mismatch, not an
+operation identity or release mutation defect. Next smallest correction is to
+author the absent-marker confirmation at its observed second cleanup attempt
+in both generalized integration lanes, then one bounded capstone. No retry in
+this instruction. Dirty fixture and exact metadata retained; no broad gate.
+
+
+### #309 ordinal/session correction slice — 2026-10-01 13:24 UTC
+
+Bounded slice stop 13:25 UTC; no typecheck/lint repeated for numeric edits.
+Changed absent-marker cleanup confirmation to attemptOrdinal 2, readOrdinal 1.
+Each following mismatch retained exact immutable attempt/revision/Base/head and
+accepted-result identity; only positions and derived session/resource IDs differed:
+D 438/441/449, E 512/513/519, F 573/574/578, G 632/633/637.
+
+| Log under /tmp | Exit | Duration | First result |
+| --- | --- | --- | --- |
+| issue309-cleanup-ordinal-correction-capstone.log | 1 | 5.20s | D correlation at 302 |
+| issue309-D-position-correction-capstone.log | 1 | 5.89s | E correlation at 341 |
+| issue309-E-position-correction-capstone.log | 1 | 9.89s | F correlation at 373 |
+| issue309-F-position-correction-capstone.log | 1 | 7.84s | G correlation at 405 |
+| issue309-G-position-correction-capstone.log | 1 | 9.27s | execution completed; stale Changed B checkpoint title |
+| issue309-checkpoint-fence-discriminator.log | 1 | 8.84s | DS2 selected publication before all initial Begin |
+| issue309-initial-begin-barrier-capstone.log | 1 | 9.94s | DS2 barrier accidentally defaulted to B successor |
+| issue309-original-begin-barrier-capstone.log | 1 | 11.43s | DS12 retained-attempt reconstruction omits accepted B successor |
+
+Added occurrenceFence diagnostics containing ordinal and predicate. Changed-B
+anchor now requires exact authored F2 title and body. Initial-started checkpoint
+lower barrier is latest accepted Begin of exact original A:0/B:0/C:0 rather
+than assuming B is last. No holder expectation reduced.
+
+Remaining checkpoint semantic blocker is DS12: expected retained B successor
+and C, actual helper yields only C. allAttempts in journal-checkpoints helper
+collects journalRetainedExecutorResponsibilitySubjects, unqueued accepted results
+and integration responsibilities; it does not explicitly include accepted
+PlannedAttemptReplaced.successorPlan before successor Begin. Exact accepted-plan
+prefix must be inspected and canonical pending-plan evidence included with
+negative pre-acceptance control; do not remove B's retained responsibility.
+Execution reached the checkpoint assertions with valid journal history, but
+22-beat acceptance assertions do not pass. No full-story green credit, broad gate
+or hosted Run. Final compilation/lint/review still pending on coherent candidate.
+
+
+### #309 pending successor checkpoint verification — 2026-10-01 13:29 UTC
+
+Applied 3b1b57ed2 as 5ade5a41a after stashing dirty work. Resolved helper
+merge by preserving pendingReplacementSuccessors and the dirty exact-attempt
+assertSuspension signature; no assertion removed. Safety patch:
+`/tmp/issue309-before-pending-successor-checkpoint.patch`; stash retained.
+One capstone exit 1 in 9.46s, log
+`/tmp/issue309-pending-successor-checkpoint-capstone.log`.
+DS12 journal retained-attempt accounting passes and then its independent
+assertRestartCapacityWait fails: `DS12: no coherent capacity publication between
+P1 replacement and A terminal`. This failure concerns the transient publication
+interval, not the exact durable successor-plan projection. Next discriminator
+is whether a publication is absent or present but rejected by coherence/interval
+selection; retain exact accepted-plan/A-terminal boundaries and do not weaken
+the capacity barrier. No retry, broad gate, or full-story acceptance credit.
+
+
+### #309 DS12 publication absence discriminator — 2026-10-01 13:32 UTC
+
+One diagnostic capstone exit 1 in 8.73s; retained
+`/tmp/issue309-DS12-publication-discriminator.log`. Exact replacement fence
+journal 132; exact A-terminal fence capture 841, storyPosition 101. Strict
+interval publication count 0; coherent subset count 0; first frame null.
+No frame, B2 standing or status exists to inspect. This supports absence,
+not rejection by coherence. Temporary failure-only diagnostic helper preserved
+at `/tmp/issue309-DS12-publication-diagnostic-helper.ts` and removed from source.
+Original capacity assertion remains unchanged. Accepted delivery-capstone.md
+46–48 explicitly requires actual pre-A-terminal publication/owner view. The
+blocking edge remains open. Smallest next fixture/toolkit action: let exact A
+terminal depend on observed B2 capacity-wait publication (capacity two, A/D
+holders), rather than only accepted replacement plan; keep it independent of
+unrelated graph responses. Do not weaken or synthesize the visible-wait witness.
+No rerun or broad gate.
+
+
+### #309 actual-publication barrier prototype — 2026-10-01 13:42 UTC
+
+Safeguarded dirty patch `/tmp/issue309-before-capacity-publication-barrier.patch`;
+applied exact four-file c5dd0f52c patch with git apply after apply --check passed.
+Inserted B successor G2 capacity-two await immediately before A terminal.
+Added window occurrence requiring accepted B successor plan; A terminal depends
+on that await occurrence, independently of graph reads. One capstone exit 1
+in 9.04s, `/tmp/issue309-capacity-publication-barrier-capstone.log`. Execution
+completed but DS12 still reports no coherent pre-A-terminal capacity publication.
+No count discriminator rerun, so this run alone does not distinguish zero from
+rejected publications.
+
+Source-local barrier lifecycle gap: driveFreshAttemptCapacityPublication calls
+cursor.consumeFreshAttemptCapacityPublication before subscribing/waiting for
+the matching publication. Causal occurrence consumption releases A-terminal
+predecessor immediately, before wait completion. The fixture edge therefore
+represents await entry, not completed witness. Owner toolkit action needs barrier
+consumption/fulfilment only after actual publication, retaining pending-control
+ownership so independent reads can continue; no weakening of DS12 or capacity.
+Exact patch and dirty fixture retained. No second run or broad gate.
+
+
+### #309 pre-armed passive-publication hold — 2026-10-01 13:45 UTC
+
+Safeguarded dirty patch `/tmp/issue309-before-passive-publication-hold.patch`;
+applied b7d1883bb with git apply after apply --check. Added exact
+heldPassiveAttemptId A:0 to B successor G2 capacity-two publication barrier.
+DS12 assertion unchanged. One manual capstone with 25s timeout exited 124;
+log `/tmp/issue309-passive-publication-hold-capstone.log` contains Vitest start
+only, no terminal test summary or first mismatch. Actual matching publication
+is not demonstrated; timeout is inconclusive about which producer is blocked.
+No remaining focused node/pnpm/vitest processes in exact worktree after stop.
+Next bounded discriminator must retain latest story position, active occurrence
+members and latest publication activation/graph/capacity/held/B successor
+standing to distinguish no publication from barrier rejection. No retry or
+broad gate. Dirty fixture preserved.
+
+
+### #309 minimal held-barrier observer — 2026-10-01 13:50 UTC
+
+One observer-only diagnostic using onObservationCapture and one timer after
+barrier capture; no capstone assertions. Hard 13s shell stop, exit 124.
+Sidecar `/tmp/issue309-barrier-observer-sidecar.json`, log
+`/tmp/issue309-barrier-observer-diagnostic.log`. Existing capture hook cannot
+provide lastJournalEventAndPosition or pendingSelectedOperation: explicit
+MissingFields outcome; no additional hook built or retry. Scoped relation did
+publish after barrier: 70 total publications, one after barrier; latest activation
+6, story101, acceptedAt132, G2, capacity2, exact A:0/D:0 holders. B standing
+is ProposedDelivery, not ResponsibilitySituation/PlannedAttemptExecutorFreshFacts
+required by the barrier. Thus evidence supports neither no-reevaluation nor
+publication blocked on A terminal; actual relation publication is live but the
+barrier predicate excludes this pending-successor representation. Last consumed
+return activation2/story37, hints activation3/story38 and activation5/story77.
+No full journal/pending identity inference. Temporary observer file preserved
+under /tmp and removed from source. No remaining focused processes. DS12 and
+capacity edges unchanged. Owner can inspect exact B ProposedDelivery from sidecar
+before changing barrier or accepted visible-wait assertion.
+
+
+### #309 selected-task capacity-publication verification — 2026-10-01 13:59 UTC
+
+Owner applied 80e0089ad and exact fixture/checkpoint correction. Kept B successor
+reconciliation after A terminal. Updated cursor-only control to consume actual
+direct Restart graph/spec/claim/worktree/lineage responses, exact barrier and
+complete its A:0 hold before A terminal. Preserved rejection of reconciliation
+before terminal. No synthetic publication. Control old partial-position assertion
+now expects entire local window consumed. Focused file 7/7, 2.00s, exit0;
+`/tmp/issue309-barrier-index-control-final.log`. Prior partial control failures
+retained; no green credit assigned to them.
+
+One capstone exit1 in 9.80s: `/tmp/issue309-selected-capacity-publication-capstone.log`.
+Barrier passes and execution completes, but DS12 still reports no coherent
+capacity publication between replacement and terminal. Predicate/DS12 untouched.
+Source correction: afterFence uses acceptedAt >= replacement position, not >;
+the exact committed cut is admitted. Next discriminator must compare the actual
+barrier-matching publication with checkpoint capture ordering/coherentFor.
+Barrier passing proves a matching publication was seen, not that the checkpoint
+admits that same capture. No interval weakening or witness relaxation justified.
+No rerun/broad gate.
+
+
+### #309 failure-only fence/coherence diagnostic — 2026-10-01 14:02 UTC
+
+One diagnostic with temporary exact barrier-match trace and failure-only counts
+for afterFence/beforeFence/coherentFor. Exit124 after25s before either marker
+or completed checkpoint failure appeared. No field values captured; explicit
+InconclusiveMissingFields sidecar `/tmp/issue309-DS12-fence-coherence-sidecar.json`.
+Log `/tmp/issue309-DS12-fence-coherence-diagnostic.log`. No conclusion about
+capture order/coherence or producer blockage. Temporary instrumentation saved
+as /tmp/issue309-fence-diagnostic-{runner,helper}.ts and removed from source.
+Interval comparison/predicate/assertion unchanged. No remaining focused
+processes, no retry. Next diagnostic needs a barrier-entry timer capture because
+a failure-only terminal hook cannot report this stall; missing data remains
+blocking and must not justify assertion relaxation.
+
+
+### #309 completed-run capture discriminator — 2026-10-01 14:05 UTC
+
+Failure-only diagnostic exclusively in assertRestartCapacityWait, after completed
+run returns. No runner or observer changes. One run exit1,13.54s;
+`/tmp/issue309-post-return-capture-diagnostic.log` and exact JSON sidecar
+`/tmp/issue309-post-return-capture-sidecar.json`. Replacement journal132; A
+terminal capture843/story102. Publication total330; afterFence261; beforeFence69;
+coherentFor313; after+before0; after+before+coherent0. Four G2/capacity2/A,D
+publications exist, all before replacement: first capture818/story92/accepted118/
+graph recorded99; last capture838/story98/accepted126/graph recorded123. Both
+coherent, before A terminal, but fail replacement lower fence. This supports
+interval exclusion, not coherence rejection. No valid post-replacement/pre-A
+witness in this completed run. The actual barrier-match object is not recorded
+by this route; do not claim which of the four it selected. Inspect whether
+selected-task barrier admits old original-B wait lacking successor-plan journal
+cut, rather than weakening DS12. Failure-only helper saved under /tmp then
+removed; comparison/predicate/assertion unchanged. No retry or broad gate.
+
+
+### #309 exact replacement-cut barrier verification — 2026-10-01 14:09 UTC
+
+Owner applied 21021ce88 and barrier exact prior B1/successor B2 identities.
+Focused post-return control exit0,7/7,1.67s;
+`/tmp/issue309-exact-cut-index-control.log`. One capstone exit1 in8.87s,
+`/tmp/issue309-exact-replacement-cut-capstone.log`. DS12 actual capacity-wait
+publication assertion passes. No timeout or acceptedAt fallback inference needed.
+First next failure is journal checkpoint DS13 reversed interval: exact B2 Begin
+accepted lifecycle lower fence142, A IntegrationResponsibilityBegan upper fence135;
+literal expected142 to be less than135. Held/retained projection assertions
+before this interval assertion passed. Current rowsFor assumes B2 Begin precedes
+A queue, but this run queues A first. Preserve chronology requirements; determine
+accepted causal relationship before revising DS13 fences. No row weakening or
+source changes; no retry/broad gate.
+
+## Manual #309 complete-story closure — 2026-10-01 14:39 UTC
+
+Pinned comparison Base: c8a35b60e0c9729c14a955c62abbf92837cc6c73.
+Candidate parent: 5ade5a41a79167654af84eca9dec1cfe65171ae6; the following
+commit contains the reviewed dirty fixture and admission repair. #386/#388
+remain closed; these receipts concern the separate manual capstone.
+
+The maintained 22-beat title passed 1/1 (9.25s), including DS12 actual B2
+capacity wait, DS13 accepted B2 Begin before A queue, exact occurrence inventory,
+seven settlements and Completed termination. Cleanup/finality passed independently;
+exact fresh replay passed 1/1 (14.70s) after removing only redundant fixed item
+counts. Full per-item, manifest, record and disposition comparisons remain.
+Receipts: /tmp/issue309-exact-B-command-capstone.log,
+/tmp/issue309-remaining-execution-tests.log (cleanup pass, stale replay-count failure),
+and /tmp/issue309-inventory-replay.log (repaired replay pass).
+
+Final verification: nine explicitly reported files formatted; pinned changed lint
+passed; pinned check:fast passed typecheck, changed lint and 14/14 policy fixtures.
+Targeted admission/planner/entry/post-return/lineage controls passed 52/52 across
+five files (2.22s). Receipts: /tmp/issue309-final-format-lint.log,
+/tmp/issue309-final-clean-fast.log and
+/tmp/issue309-final-admission-planner-controls.log. No formatting-only capstone
+rerun, hosted Run or broad gate was performed.
+
+Scoped review under CODE_REVIEW.md: resolved runtime-versus-tooling exemption by
+mapping replacement ReserveOrReuse admission to the accepted A/D-full-capacity
+chronology, focused admission reconstruction/release control and DS12/DS13.
+Resolved deterministic identity arrival-order coupling with task-local controlled
+Fresh and separate replacement namespace plus opposite-order tests; production
+defaults remain unchanged. Resolved independent Git response ownership through
+exact-attempt queues with wrong-Base/exhaustion controls. Resolved direct Restart
+and cleanup ownership through exact raw initiating identities, no synthetic
+selected operations. Resolved DS12 stale-publication acceptance using the exact
+accepted replacement cut and selected-task wait; resolved A queue race through
+cassette-only exact successor execution-report hold. Resolved redundant fixed
+item/activation totals while retaining one-Run, full inventory and settlement
+assertions. Resolved explicit-throw/optional-value/type/lint findings with
+fail-fast schema decoding, explicit guards and named exact ordinals. No accepted
+chronology or capacity barrier is deferred. Symbolic correlation positions remain
+an owner-scoped follow-up; the witnessed exact positions are preserved here.

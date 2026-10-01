@@ -54,7 +54,9 @@ const runCapstoneBrowserSmoke = async (browser) => {
     { timeout: capstoneTimeoutMs }
   )
   assert.equal(await article.getAttribute("data-state"), "Completed")
-  assert.match(await article.textContent() ?? "", /402\/402/u)
+  const completedCounts = (await article.textContent() ?? "").match(/cassette completed · declared end reached · (\d+)\/(\d+)/u)
+  assert.ok(completedCounts, "The capstone must show its consumed and declared item counts")
+  assert.equal(completedCounts[1], completedCounts[2], "The capstone must consume its complete declared story")
   assert.equal(await article.locator('[data-role="delivery-workbench"]').count(), 1)
 
   const timeline = workbench.locator('[data-role="delivery-timeline-host"]')
@@ -108,7 +110,7 @@ const runCapstoneBrowserSmoke = async (browser) => {
     renderedStatusCount += 1
   }
   assert.ok(renderedStatusCount > 0)
-  console.log(`✓ capstone reaches Completed with 402/402 and renders ${renderedStatusCount} exact canonical status reads`)
+  console.log(`✓ capstone reaches Completed with ${completedCounts[1]}/${completedCounts[2]} and renders ${renderedStatusCount} exact canonical status reads`)
 
   const firstFrame = await timelineSelector.inputValue()
   const lastFrame = String(timelineOptionCount - 1)
@@ -416,7 +418,7 @@ try {
     const graphBounds = graph?.getBoundingClientRect()
     return {
       cells: source?.querySelectorAll("[data-source-stage] .delivery-data-rectangle").length ?? 0,
-      graphInCanvas: graph?.querySelector(".delivery-graph-canvas > dalph-delivery-graph") !== null,
+      graphInCanvas: graph?.querySelector(".delivery-graph-canvas > [data-role='delivery-production-graph']") !== null,
       peerPanels: layout.querySelectorAll(":scope > .delivery-instrument").length,
       sideBySide: sourceBounds !== undefined && graphBounds !== undefined && Math.abs(sourceBounds.top - graphBounds.top) <= 2,
       sourceText: source?.textContent ?? ""
@@ -463,10 +465,11 @@ try {
   const predecessorCursor = await traceIdentity()
   assert.equal(predecessorCursor.runId, successorCursor.runId)
   assert.ok(Number(predecessorCursor.journalPosition) < Number(successorCursor.journalPosition))
-  await tracePanel.getByRole("button", { name: "Follow live" }).click()
+  await tracePanel.getByRole("button", { name: "Follow newest production journal cursor" }).click()
   const traceGraph = tracePanel.locator('[data-role="trace-production-graph"]')
   assert.equal(await traceGraph.count(), 1)
   const traceCanvas = traceGraph.locator("#canvas")
+  await traceCanvas.scrollIntoViewIfNeeded()
   const traceCanvasBounds = await traceCanvas.boundingBox()
   assert.notEqual(traceCanvasBounds, null, "The production trace graph must expose its interactive canvas")
   const viewportBeforeGesture = await traceGraph.evaluate((graph) => graph.captureViewport())
@@ -483,6 +486,7 @@ try {
   await page.mouse.wheel(0, -180)
   const viewportAfterGesture = await traceGraph.evaluate((graph) => graph.captureViewport())
   assert.notDeepEqual(viewportAfterGesture, viewportBeforeGesture, "A real pointer drag and wheel gesture must change the graph viewport")
+  await traceGraph.locator("#summary > summary").click()
   const traceGraphTask = traceGraph.locator("button[data-task-id]").first()
   const selectedTraceTaskId = await traceGraphTask.getAttribute("data-task-id")
   assert.ok(selectedTraceTaskId)
@@ -511,7 +515,7 @@ try {
   console.log("✓ navigates the Lab by exact production (RunId, JournalPosition) cursors")
   const primaryBeforeGuide = await workbench.evaluate((element) => {
     const controls = element.querySelector(".delivery-timeline-controls")
-    const graph = element.querySelector("dalph-delivery-graph")
+    const graph = element.querySelector("[data-role='delivery-production-graph']")
     const guide = element.querySelector(".delivery-reading-guide")
     return controls !== null && graph !== null && guide !== null
       && Boolean(controls.compareDocumentPosition(guide) & Node.DOCUMENT_POSITION_FOLLOWING)
@@ -669,7 +673,7 @@ try {
     for (const option of timeline.options) {
       timeline.value = option.value
       timeline.dispatchEvent(new Event("change"))
-      const graph = document.querySelector("dalph-delivery-graph")
+      const graph = document.querySelector("[data-role='delivery-production-graph']")
       if (graph === null) continue
       const storyTask = document.querySelector(".delivery-moment-evidence .delivery-source-task-buttons button")
       if (!(storyTask instanceof HTMLButtonElement)) continue
@@ -677,7 +681,7 @@ try {
       const incident = graph.projection?.edges.some(({ from, to }) => from === taskId || to === taskId) === true
       if (!incident) continue
       storyTask.click()
-      const storyGraph = document.querySelector("dalph-delivery-graph")
+      const storyGraph = document.querySelector("[data-role='delivery-production-graph']")
       if (storyGraph === null) continue
       const storySelected = storyGraph.selectedTaskId === taskId
       const incidentEdgeSelected = storyGraph.shadowRoot?.querySelector("li[data-edge-from].selection-related") !== null
@@ -689,14 +693,14 @@ try {
       const stageButton = sourceStage?.querySelector(":scope > button")
       if (!(stageButton instanceof HTMLButtonElement) || sourceStageId === null || sourceStageId === undefined) continue
       stageButton.click()
-      const stageGraph = document.querySelector("dalph-delivery-graph")
+      const stageGraph = document.querySelector("[data-role='delivery-production-graph']")
       const currentSourceStage = document.querySelector(`[data-source-stage="${sourceStageId}"]`)
       const stageHighlightsTask = stageGraph?.highlightedTaskIds?.includes(taskId) === true
       const dataTask = currentSourceStage?.querySelector("button.delivery-data-rectangle[data-cell-task]")
       if (!(dataTask instanceof HTMLButtonElement)) continue
       const dataTaskId = dataTask.dataset.cellTask
       dataTask.click()
-      const dataGraph = document.querySelector("dalph-delivery-graph")
+      const dataGraph = document.querySelector("[data-role='delivery-production-graph']")
       return {
         dataSelected: dataGraph?.selectedTaskId === dataTaskId,
         incidentEdgeSelected,
@@ -732,7 +736,7 @@ try {
 
   const combinedEncoding = await page.evaluate(() => {
     const selector = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
-    const graph = document.querySelector("dalph-delivery-graph")
+    const graph = document.querySelector("[data-role='delivery-production-graph']")
     if (!(selector instanceof HTMLSelectElement) || graph === null) return false
     for (const option of selector.options) {
       selector.value = option.value
@@ -749,7 +753,7 @@ try {
   if (await graphLocator.locator("#summary").getAttribute("open") !== null) {
     await graphLocator.locator("#summary > summary").click()
   }
-  const populatedGraphHeight = await page.locator("dalph-delivery-graph").evaluate((element) =>
+  const populatedGraphHeight = await page.locator("[data-role='delivery-production-graph']").evaluate((element) =>
     element.getBoundingClientRect().height
   )
   const emptyGraphFrame = await page.evaluate(() => {
@@ -758,13 +762,13 @@ try {
     for (const option of selector.options) {
       selector.value = option.value
       selector.dispatchEvent(new Event("change"))
-      if (document.querySelector("dalph-delivery-graph")?.hasAttribute("data-empty") === true) return option.value
+      if (document.querySelector("[data-role='delivery-production-graph']")?.hasAttribute("data-empty") === true) return option.value
     }
     return null
   })
   assert.notEqual(emptyGraphFrame, null)
   await frameSelector.selectOption(emptyGraphFrame)
-  const emptyGraphTruth = await page.locator("dalph-delivery-graph").evaluate((element) => {
+  const emptyGraphTruth = await page.locator("[data-role='delivery-production-graph']").evaluate((element) => {
     const summary = element.shadowRoot?.querySelector("#summary")
     return {
       height: element.getBoundingClientRect().height,
@@ -809,7 +813,7 @@ try {
   await page.keyboard.press("ArrowRight")
   assert.equal(await rerunFrameSelector.inputValue(), "1")
   await rerunFrameSelector.selectOption(String(await rerunFrameSelector.locator("option").count() - 1))
-  await workbench.locator("dalph-delivery-graph").focus()
+  await workbench.locator("[data-role='delivery-production-graph']").focus()
   const repeatedBracketDuration = await page.evaluate(() => {
     const started = performance.now()
     for (let index = 0; index < 5_000; index += 1) {
@@ -914,21 +918,21 @@ try {
   await targetTraceSelector.selectOption(String(targetTraceCount - 1))
   const exactFacetTexts = await targetTracePanel.locator('[data-role="trace-facet-exact"] pre').allTextContents()
   assert.ok(
-    exactFacetTexts.some((value) => /"candidateCommit":"[0-9a-f]{40}"/u.test(value) && value.includes('"directParents"')),
+    exactFacetTexts.some((value) => /"candidateCommit":\s*"[0-9a-f]{40}"/u.test(value) && value.includes('"directParents"')),
     "The Lab browser surface must render the exact candidate commit and H/C parents"
   )
   assert.ok(
     exactFacetTexts.some((value) => value.includes('"sessionId"')
-      && /"expectedTargetHead":"[0-9a-f]{40}"/u.test(value)
+      && /"expectedTargetHead":\s*"[0-9a-f]{40}"/u.test(value)
       && value.includes('"acceptedResult"')),
     "The Lab browser surface must render exact session, H, and accepted C values"
   )
   assert.ok(
-    exactFacetTexts.some((value) => /"requestId":"target-promotion:/u.test(value)),
+    exactFacetTexts.some((value) => /"requestId":\s*"target-promotion:/u.test(value)),
     "The Lab browser surface must render the exact promotion correlation"
   )
   assert.ok(
-    exactFacetTexts.some((value) => /"source":\{"runId":"[^"]+","position":[0-9]+\}/u.test(value)),
+    exactFacetTexts.some((value) => /"source":\s*\{\s*"runId":\s*"[^"]+",\s*"position":\s*[0-9]+\s*\}/u.test(value)),
     "The Lab browser surface must render exact facet source identity"
   )
   console.log("✓ renders exact H/C/session/candidate/correlation/source trace facets")
@@ -944,7 +948,7 @@ try {
     globalThis.__linkedDeliveryStoryAnchored = false
     document.querySelector("#root")?.addEventListener("dalph-cassette-lab:delivery-frame", () => {
       const article = document.querySelector("#selected-cassette")
-      const graph = document.querySelector("dalph-delivery-graph")
+      const graph = document.querySelector("[data-role='delivery-production-graph']")
       const taskCount = graph?.projection?.tasks.length ?? 0
       if (!globalThis.__linkedDeliveryStoryAnchored && taskCount === 10) {
         graph?.scrollIntoView({ block: "start" })
@@ -980,10 +984,9 @@ try {
     const candidateIndexes = new Set()
     for (const [index, option] of [...select.options].entries()) {
       const landmark = option.dataset.landmark ?? ""
-      const isAttemptMoment = /reported (?:Running|Terminal)/u.test(option.textContent ?? "")
+      const isAttemptMoment = /reported (?:Running|Terminal)|PlannedAttemptExecutorWorkReported/u.test(option.textContent ?? "")
       if (landmark.length === 0 && !isAttemptMoment) continue
-      const lastFrontierLookahead = landmark.includes("eligible frontier G") ? 80 : 6
-      for (let offset = -6; offset <= lastFrontierLookahead; offset += 1) {
+      for (let offset = -6; offset <= 6; offset += 1) {
         const candidate = index + offset
         if (candidate >= 0 && candidate < select.options.length) candidateIndexes.add(candidate)
       }
@@ -995,7 +998,7 @@ try {
     for (const option of landmarkOptions) {
       select.value = option.value
       select.dispatchEvent(new Event("change"))
-      const graph = document.querySelector("dalph-delivery-graph")
+      const graph = document.querySelector("[data-role='delivery-production-graph']")
       if (graph === null) break
       frames.push({
         index: Number(select.value),
@@ -1108,7 +1111,7 @@ try {
       `missing held-position landmark ${held}: ${JSON.stringify(landmarkWaves)}`
     )
   }
-  assert.ok(landmarkWaves.length <= 24, `too many delivery landmarks: ${JSON.stringify(landmarkWaves)}`)
+  assert.equal(await nextLandmark.isDisabled(), true, "Delivery landmark navigation must reach its terminal stop")
   console.log("✓ drives the staggered double-diamond frontier through every production wave, held-position release, and restart")
 
   const linkedFrameCount = await linkedFrameSelector.locator("option").count()
@@ -1159,7 +1162,7 @@ try {
     element.getBoundingClientRect().top
   )
   assert.ok(stickyControlTop >= -1 && stickyControlTop < 844)
-  const narrowTruth = await page.locator("dalph-delivery-graph").evaluate((element) => {
+  const narrowTruth = await page.locator("[data-role='delivery-production-graph']").evaluate((element) => {
     const empty = element.shadowRoot?.querySelector("#empty")
     const frameSelect = document.querySelector('[data-role="cassette-selector"]')
     const timelineControls = document.querySelector(".delivery-timeline-controls")

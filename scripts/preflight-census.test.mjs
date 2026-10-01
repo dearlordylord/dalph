@@ -21,6 +21,10 @@ void test("reports independent failures together", async () => {
   assert.equal(result.succeeded, false)
   for (const command of ["format", "artifacts", "unused-export"])
     assert.ok(diagnostics.some((line) => line.includes(`pnpm ${command}: controlled exit 23`)))
+  assert.deepEqual(
+    diagnostics.filter((line) => line.startsWith("Preflight failure summary:")),
+    ["format", "artifacts", "unused-export"].map((name) => `Preflight failure summary: ${name}: controlled exit 23`)
+  )
   assert.ok(diagnostics.some((line) => line.includes("3 failed stages")))
 })
 

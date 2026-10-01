@@ -1,10 +1,6 @@
 import { expect } from "vitest"
 import { Chunk, Effect } from "effect"
-import {
-  deliveryStatusOf,
-  evaluateDeliveryRelationAndRuntimeInputBundle,
-  type JournalRecord
-} from "@dalph/orchestrator"
+import { evaluateDeliveryRelationAndRuntimeInputBundle, type JournalRecord } from "@dalph/orchestrator"
 import {
   type AuthoredObservationCapture,
   type AuthoredScenarioCassetteRun
@@ -12,8 +8,10 @@ import {
 import {
   afterFence,
   assertReopenedCapacityWait,
+  assertRestartCapacityWait,
   assertSettledActionReleased,
   attempts,
+  attemptForBeat,
   beforeFence,
   changedHead,
   coherentFor,
@@ -22,7 +20,6 @@ import {
   expectedPairs,
   executorStanding,
   frameFor,
-  loweredCapacity,
   occurrenceFence,
   pair,
   predecessorHead,
@@ -153,6 +150,7 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
       previousJournalPosition = checkpoint.cursor.position
       checkpoints = Chunk.append(checkpoints, checkpoint)
       if (row.beat === DS.reopenedC) assertReopenedCapacityWait(run, checkpoint.cursor)
+      if (row.beat === DS.restartedB) assertRestartCapacityWait(run)
       if (row.beat === DS.lowered) {
         const unavailable = unavailableCheckpoint(run, checkpoint)
         expect(unavailable.death.captureOrder).toBeGreaterThan(previousOrder)
@@ -176,7 +174,10 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
     previousJournalPosition = frame.acceptedAt
     expect(frame.graph).toMatchObject({ _tag: "Established", revision: row.graph })
     expect(frame.capacity).toBe(row.capacity)
-    expect(sortPairs(frame.heldPositions)).toEqual(sortPairs(expectedPairs(run, row.held)))
+    expect(
+      sortPairs(frame.heldPositions),
+      `DS${row.beat}: held positions at accepted journal ${frame.acceptedAt}`
+    ).toEqual(sortPairs(expectedPairs(run, row.held, row.beat)))
     if (frame.graph._tag !== "Established") return expect.fail(`DS${row.beat}: graph not established`)
     const graph = frame.graph
     const graphRecord = requireValue(
@@ -194,7 +195,7 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
           (record) =>
             Number(record.position) <= Number(frame.acceptedAt) &&
             record.event._tag === "PlannedAttemptExecutorWorkReported" &&
-            record.event.report.correlation.attemptId === attempts[task] &&
+            record.event.report.correlation.attemptId === attemptForBeat(task, row.beat) &&
             record.event.report.correlation.runId === run.runId
         ),
         `DS${row.beat}: missing accepted ${task} executor lifecycle`
@@ -209,7 +210,7 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
             : "ExecutorWorkSafelySuspended"
       )
     }
-    const { consequences, runtime } = yield* evaluateDeliveryRelationAndRuntimeInputBundle(capture.publication.bundle)
+    const { consequences } = yield* evaluateDeliveryRelationAndRuntimeInputBundle(capture.publication.bundle)
     const exactAttempts = consequences.ticketDeliveries.deliveries.flatMap(({ obligations }) =>
       obligations.flatMap((obligation) => {
         if (obligation._tag === "AcceptedAwaitingIntegration") return [obligation.accepted.plannedAttempt]
@@ -229,13 +230,15 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
           .map((attempt) => [attempt.attemptId, pair(attempt)])
       ).values()
     ]
-    expect(sortPairs(retained), `DS${row.beat}: retained attempts`).toEqual(sortPairs(expectedPairs(run, row.retained)))
+    expect(sortPairs(retained), `DS${row.beat}: retained attempts`).toEqual(
+      sortPairs(expectedPairs(run, row.retained, row.beat))
+    )
     for (const task of row.alice) {
       const delivery = requireValue(
         consequences.ticketDeliveries.deliveries.find(({ taskId }) => taskId === task),
         `DS${row.beat}: missing ${task} delivery`
       )
-      const disposition = executorStanding(delivery.standings, run, task)
+      const disposition = executorStanding(delivery.standings, run, task, row.beat)
       expect(disposition.facts.disposition._tag).toBe("TaskSpecificationChangeConstraint")
     }
     if (row.closedC !== undefined) {
@@ -246,32 +249,8 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
         consequences.ticketDeliveries.deliveries.find(({ taskId }) => taskId === "C"),
         `DS${row.beat}: missing C delivery`
       )
-      const disposition = executorStanding(delivery.standings, run, "C")
+      const disposition = executorStanding(delivery.standings, run, "C", row.beat)
       expect(disposition.facts.disposition._tag === "TaskLifecycleConstraint").toBe(row.closedC)
-    }
-    if (row.beat === DS.continuedB) {
-      const moment = requireValue(
-        run.observationMoments.find((item) => item.captureOrder === capture.captureOrder),
-        "capacity wait has no captured owner view"
-      )
-      const status = deliveryStatusOf(
-        { _tag: "Run", runId: run.runId },
-        { _tag: "Ready", evaluation: runtime, liveOwners: moment.liveOwners }
-      )
-      if (!("_tag" in status) || status._tag !== "DeliveryStatusAvailable")
-        return expect.fail(`DS${row.beat}: capacity status unavailable`)
-      const wait = requireValue(
-        status.entries.find((entry) => entry._tag === "TaskWorkCapacityWait" && entry.taskId === "B"),
-        `DS${row.beat}: missing exact B capacity wait`
-      )
-      expect(wait).toMatchObject({
-        _tag: "TaskWorkCapacityWait",
-        scope: { runId: run.runId, capacity: loweredCapacity }
-      })
-      if (wait._tag !== "TaskWorkCapacityWait") return expect.fail("capacity wait anchor changed")
-      expect(sortPairs(wait.holders.map(({ correlation, taskId }) => ({ taskId, ...correlation })))).toEqual(
-        sortPairs(expectedPairs(run, row.held))
-      )
     }
     if (row.beat >= DS.queuedA && row.beat <= DS.staleA) {
       const delivery = requireValue(

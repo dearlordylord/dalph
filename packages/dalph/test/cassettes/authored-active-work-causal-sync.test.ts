@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Result, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -14,7 +14,12 @@ import {
 } from "@dalph/contracts"
 import {
   FixtureTarget,
+  CompletionClaimCleanupReadOrdinal,
+  CompletionClaimRequestOrdinal,
+  TaskClaimReleaseReadOrdinal,
   OperationId,
+  PlannedWorktreeReady,
+  TargetLineageObservation,
   TrackerRevision,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
@@ -40,6 +45,7 @@ import {
   sequenceAuthored
 } from "../../src/cassettes/authored-causal-graph.js"
 import { controlledExecutorLayer, controlledTrace } from "../../src/cassettes/authored-adapters.js"
+import { authoredCleanupReadForRun } from "../../src/cassettes/authored-tracker-authority.js"
 import { deliveryStoryCapstoneAuthoredCassette } from "../../src/cassettes/delivery-story-capstone.js"
 import {
   consumeControlledTaskWorkSpecification,
@@ -87,6 +93,339 @@ const anchorSelection = (occurrenceRole: string, operation: AuthoredCassetteDeci
 
 const graphResult = (revision: string) =>
   AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.make({ graph: graph(revision) })
+
+it("normalizes both cleanup operation IDs for an authored Run", () => {
+  const runId = RunId.make("run:actual")
+  const read = {
+    deletionOperationId: OperationId.make("delete:run:actual:C"),
+    call: "ReleaseOriginalClaimRead" as const,
+    releaseOperationId: OperationId.make("release:run:actual:C"),
+    readOrdinal: TaskClaimReleaseReadOrdinal.make(1)
+  }
+  expect(authoredCleanupReadForRun(read, runId)).toEqual({
+    ...read,
+    deletionOperationId: OperationId.make("delete:$authored-run:C"),
+    releaseOperationId: OperationId.make("release:$authored-run:C")
+  })
+})
+
+it.effect("binds unselected cleanup claim reads to their exact journaled calls", () =>
+  Effect.gen(function* () {
+    const deletionOperationId = OperationId.make("delete:B")
+    const cleanup = (readOrdinal: number) => ({
+      taskId: taskB,
+      deletionOperationId,
+      call: "ConfirmOriginalClaimReleased" as const,
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(readOrdinal)
+    })
+    const story = [
+      AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+      AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+      AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+      terminal
+    ]
+    const releaseRead = {
+      taskId: taskB,
+      deletionOperationId,
+      call: "ReleaseOriginalClaimRead" as const,
+      releaseOperationId: OperationId.make("release:B"),
+      readOrdinal: TaskClaimReleaseReadOrdinal.make(2)
+    }
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 3,
+      occurrences: [
+        { id: "first", storyIndex: 0, predecessorIds: [], directCleanupClaimRead: cleanup(1) },
+        { id: "second", storyIndex: 1, predecessorIds: [], directCleanupClaimRead: cleanup(2) },
+        { id: "release", storyIndex: 2, predecessorIds: [], directCleanupClaimRead: releaseRead }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    expect(yield* Effect.flip(cursor.consumeTaskClaimReadFor(taskB))).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    expect(
+      yield* Effect.flip(
+        cursor.consumeTaskClaimReadFor(taskB, undefined, {
+          ...cleanup(2),
+          deletionOperationId: OperationId.make("wrong")
+        })
+      )
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const wrongRelease = yield* Effect.flip(
+      cursor.consumeTaskClaimReadFor(taskB, undefined, {
+        ...releaseRead,
+        releaseOperationId: OperationId.make("wrong-release")
+      })
+    )
+    expect(wrongRelease).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    expect(wrongRelease.detail).toContain('"releaseOperationId":"release:B"')
+    expect(wrongRelease.detail).toContain('"releaseOperationId":"wrong-release"')
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, undefined, releaseRead)).toMatchObject({
+      value: { taskId: taskB }
+    })
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, undefined, cleanup(2))).toMatchObject({
+      value: { taskId: taskB }
+    })
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, undefined, cleanup(1))).toMatchObject({
+      value: { taskId: taskB }
+    })
+    yield* cursor.consumeTerminalAssertions
+  })
+)
+
+it.effect("pairs a direct Restart graph result separately from an independent selected graph read", () =>
+  Effect.gen(function* () {
+    const story = [graphResult("restart"), selection("establishment", []), graphResult("establishment"), terminal]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 3,
+      occurrences: [
+        {
+          id: "restart-result",
+          storyIndex: 0,
+          predecessorIds: [],
+          directGraphRole: "restart-operation",
+          directGraphPredecessorRoles: [],
+          graphReadCause: "AttemptRestartAuthorityCheck",
+          graphReadExplicitTaskIds: ["B"]
+        },
+        {
+          id: "establishment",
+          storyIndex: 1,
+          predecessorIds: [],
+          graphReadCause: "WorkflowEstablishment",
+          graphReadExplicitTaskIds: []
+        },
+        { id: "establishment-result", storyIndex: 2, predecessorIds: ["establishment"], ownerRole: "establishment" }
+      ]
+    })
+    const restart = {
+      ...causalContext("operation:restart", []),
+      graphReadCause: "AttemptRestartAuthorityCheck" as const,
+      graphReadExplicitTaskIds: [taskB]
+    }
+    const establishment = {
+      ...causalContext("operation:establishment", []),
+      graphReadCause: "WorkflowEstablishment" as const,
+      graphReadExplicitTaskIds: []
+    }
+    for (const order of ["restart-first", "establishment-first"] as const) {
+      const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+      if (order === "restart-first") {
+        expect(yield* cursor.consumeTrackerGraphFor(target, restart)).toMatchObject({ graph: { revision: "restart" } })
+        yield* cursor.consumeDalphSelectionFor(readGraph, establishment)
+        expect(yield* cursor.consumeTrackerGraphFor(target, establishment)).toMatchObject({
+          graph: { revision: "establishment" }
+        })
+      } else {
+        yield* cursor.consumeDalphSelectionFor(readGraph, establishment)
+        expect(yield* cursor.consumeTrackerGraphFor(target, establishment)).toMatchObject({
+          graph: { revision: "establishment" }
+        })
+        expect(yield* cursor.consumeTrackerGraphFor(target, restart)).toMatchObject({ graph: { revision: "restart" } })
+      }
+      yield* cursor.consumeTerminalAssertions
+    }
+    const wrong = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const failure = yield* Effect.flip(
+      wrong.consumeTrackerGraphFor(target, { ...restart, graphReadExplicitTaskIds: [] })
+    )
+    expect(failure).toBeInstanceOf(AuthoredCausalSelectionFailure)
+  })
+)
+
+it.effect("binds an accepted replacement plan once for later exact predecessors", () =>
+  Effect.gen(function* () {
+    const successor = causalContext("operation:successor-plan", [])
+    const specification = { _tag: "ReadTaskWorkSpecification" as const, taskId: taskB }
+    const story = [selection("B-later-specification", ["B-successor-plan"], specification), terminal]
+    const early = yield* makeStoryCursor(story)
+    expect(
+      yield* Effect.flip(
+        early.consumeDalphSelectionFor(specification, causalContext("operation:spec", ["operation:successor-plan"]))
+      )
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const cursor = yield* makeStoryCursor(story)
+    yield* cursor.registerAcceptedReplacementPlan(
+      causal({ occurrenceRole: "B-successor-plan", predecessorRoles: [] }).occurrenceRole,
+      successor
+    )
+    yield* cursor.consumeDalphSelectionFor(specification, causalContext("operation:spec", ["operation:successor-plan"]))
+    yield* cursor.consumeTerminalAssertions
+    const contradiction = yield* Effect.flip(
+      cursor.registerAcceptedReplacementPlan(
+        causal({ occurrenceRole: "B-successor-plan", predecessorRoles: [] }).occurrenceRole,
+        causalContext("operation:other-plan", [])
+      )
+    )
+    expect(contradiction).toBeInstanceOf(AuthoredCausalSelectionFailure)
+  })
+)
+
+it.effect("binds direct Restart specification and claim only at their exact responses", () =>
+  Effect.gen(function* () {
+    const story = [
+      graphResult("restart"),
+      AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make({ taskId: taskB, title: "B", body: "B" }),
+      AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 3,
+      occurrences: [
+        {
+          id: "graph-result",
+          storyIndex: 0,
+          predecessorIds: [],
+          directGraphRole: "restart-graph",
+          directGraphPredecessorRoles: [],
+          graphReadCause: "AttemptRestartAuthorityCheck",
+          graphReadExplicitTaskIds: ["B"]
+        },
+        {
+          id: "spec-result",
+          storyIndex: 1,
+          predecessorIds: ["graph-result"],
+          directFocusedRead: {
+            role: "restart-spec",
+            kind: "ReadTaskWorkSpecification",
+            taskId: "B",
+            predecessorRoles: ["restart-graph"]
+          }
+        },
+        {
+          id: "claim-result",
+          storyIndex: 2,
+          predecessorIds: ["spec-result"],
+          directFocusedRead: {
+            role: "restart-claim",
+            kind: "ReadTaskClaim",
+            taskId: "B",
+            predecessorRoles: ["restart-graph", "restart-spec"]
+          }
+        }
+      ]
+    })
+    const graphContext = {
+      ...causalContext("operation:G", []),
+      graphReadCause: "AttemptRestartAuthorityCheck" as const,
+      graphReadExplicitTaskIds: [taskB]
+    }
+    const specContext = {
+      ...causalContext("operation:S", ["operation:G"]),
+      operationKind: "ReadTaskWorkSpecification" as const,
+      taskId: taskB
+    }
+    const claimContext = {
+      ...causalContext("operation:C", ["operation:G", "operation:S"]),
+      operationKind: "ReadTaskClaim" as const,
+      taskId: taskB
+    }
+    const premature = yield* makeStoryCursor(story, { causalWindows: [window] })
+    expect(yield* Effect.flip(premature.consumeTaskClaimReadFor(taskB, claimContext))).toBeInstanceOf(
+      AuthoredCausalSelectionFailure
+    )
+    const wrongKind = yield* makeStoryCursor(story, { causalWindows: [window] })
+    yield* wrongKind.consumeTrackerGraphFor(target, graphContext)
+    expect(
+      yield* Effect.flip(
+        wrongKind.consumeTaskWorkSpecificationFor(taskB, { ...specContext, operationKind: "ReadTaskClaim" })
+      )
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    yield* cursor.consumeTrackerGraphFor(target, graphContext)
+    expect(yield* cursor.consumeTaskWorkSpecificationFor(taskB, specContext)).toMatchObject({ taskId: taskB })
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, claimContext)).toMatchObject({ value: { taskId: taskB } })
+    yield* cursor.consumeTerminalAssertions
+  })
+)
+
+it.effect("binds direct Git reads only after matching their actual results", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:B:0")
+    const worktree = Schema.decodeUnknownSync(PlannedWorktreeReady)({
+      _tag: "PlannedWorktreeReady",
+      baseSha: "1".repeat(40),
+      branch: "refs/heads/dalph/B",
+      headSha: "2".repeat(40),
+      worktree: "/dalph/B"
+    })
+    const lineage = Schema.decodeUnknownSync(TargetLineageObservation)({
+      plannedBaseSha: "1".repeat(40),
+      targetHeadSha: "2".repeat(40),
+      plannedBaseIsAncestorOfTargetHead: true
+    })
+    const story = [
+      AuthoredCassetteStoryItem.cases.DirectGitWorktreeReadReturned.make({
+        taskId: taskB,
+        attemptId,
+        observation: worktree
+      }),
+      AuthoredCassetteStoryItem.cases.DirectGitTargetLineageReadReturned.make({
+        taskId: taskB,
+        attemptId,
+        observation: lineage
+      }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        {
+          id: "worktree",
+          storyIndex: 0,
+          predecessorIds: [],
+          directGitRead: {
+            role: "restart-worktree",
+            kind: "ReadTaskWorktree",
+            taskId: taskB,
+            attemptId,
+            predecessorRoles: []
+          }
+        },
+        {
+          id: "lineage",
+          storyIndex: 1,
+          predecessorIds: ["worktree"],
+          directGitRead: {
+            role: "restart-lineage",
+            kind: "ReadTargetLineage",
+            taskId: taskB,
+            attemptId,
+            predecessorRoles: ["restart-worktree"]
+          }
+        }
+      ]
+    })
+    const worktreeContext = {
+      ...causalContext("operation:worktree", []),
+      operationKind: "ReadTaskWorktree" as const,
+      taskId: taskB,
+      attemptId
+    }
+    const lineageContext = {
+      ...causalContext("operation:lineage", ["operation:worktree"]),
+      operationKind: "ReadTargetLineage" as const,
+      taskId: taskB,
+      attemptId
+    }
+    const premature = yield* makeStoryCursor(story, { causalWindows: [window] })
+    expect(
+      yield* Effect.flip(premature.observeDirectGitTargetLineageResult(taskB, attemptId, lineage, lineageContext))
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const wrongResult = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const different = Schema.decodeUnknownSync(PlannedWorktreeReady)({ ...worktree, worktree: "/dalph/other" })
+    expect(
+      yield* Effect.flip(wrongResult.observeDirectGitWorktreeResult(taskB, attemptId, different, worktreeContext))
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    yield* cursor.observeDirectGitWorktreeResult(taskB, attemptId, worktree, worktreeContext)
+    yield* cursor.observeDirectGitTargetLineageResult(taskB, attemptId, lineage, lineageContext)
+    yield* cursor.consumeTerminalAssertions
+  })
+)
 
 const terminal = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
   orchestration: null,
@@ -168,6 +507,14 @@ it.effect("reports a same-kind attempt identity mismatch inside a causal window"
 it.effect("distinguishes independent graph reads by their exact covered tasks", () =>
   Effect.gen(function* () {
     const taskA = TaskId.make("A")
+    const authored = authorCausalWindow(
+      0,
+      authoredOccurrence(AuthoredOccurrenceId.make("B-covered-graph"), {
+        item: selection("B-covered-graph", []),
+        graphReadExplicitTaskIds: [taskB]
+      })
+    )
+    expect(authored.window.occurrences[0].graphReadExplicitTaskIds).toEqual([taskB])
     const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
       startIndex: 0,
       endIndex: 4,
@@ -516,44 +863,87 @@ it.effect("replays the #268 capstone admission window with A Begin before or aft
         storyIndex: occurrence.storyIndex - window.startIndex
       }))
     })
-    const selected = (role: string) => {
-      const occurrence = window.occurrences.find(({ id }) => id === role)
-      const item =
-        occurrence === undefined ? undefined : deliveryStoryCapstoneAuthoredCassette.story[occurrence.storyIndex]
-      if (item?._tag !== "DalphSelects") throw new Error(`capstone ${role} is not a selected operation`)
-      return item.operation
-    }
+    const itemFor = (node: (typeof window.occurrences)[number]) => story[node.storyIndex - window.startIndex]
+    const bWorktree = window.occurrences.find((node) => {
+      const item = itemFor(node)
+      return (
+        item?._tag === "DalphSelects" &&
+        item.operation._tag === "ReconcileTaskWorktree" &&
+        item.operation.taskId === taskB
+      )
+    })
+    if (bWorktree === undefined) return yield* Effect.die("current B admission reconciliation is missing")
+    const selectedWorktree = itemFor(bWorktree)
+    if (selectedWorktree?._tag !== "DalphSelects") return yield* Effect.die("admission reconciliation is not selected")
     const premature = yield* makeStoryCursor(story, { causalWindows: [shifted] })
     const earlyWorktree = yield* Effect.flip(
-      premature.consumeDalphSelectionFor(selected("B-worktree"), causalContext("B-worktree:early", []))
+      premature.consumeDalphSelectionFor(selectedWorktree.operation, causalContext("B-worktree:early", []))
     )
     expect(earlyWorktree).toBeInstanceOf(AuthoredCausalSelectionFailure)
-    if (earlyWorktree instanceof AuthoredCausalSelectionFailure) {
-      expect(earlyWorktree.detail).toContain("unmet predecessors: B-plan")
+    if (earlyWorktree instanceof AuthoredCausalSelectionFailure)
+      expect(earlyWorktree.detail).toContain(`unmet predecessors: ${bWorktree.predecessorIds.join(", ")}`)
+    const taskFor = (node: (typeof window.occurrences)[number]): string => {
+      const item = itemFor(node)
+      if (item?._tag === "DalphSelects")
+        return "taskId" in item.operation
+          ? String(item.operation.taskId)
+          : String(node.graphReadExplicitTaskIds?.[0] ?? "")
+      if (item?._tag === "PlannedAttemptExecutorWorkReported")
+        return ["A", "B", "C"].find((name) => item.report.attemptId === `attempt:${name}:0`) ?? ""
+      if (node.ownerRole !== undefined) {
+        const owner = window.occurrences.find(({ id }) => id === node.ownerRole)
+        if (owner !== undefined) return taskFor(owner)
+      }
+      return ""
     }
     const play = (order: ReadonlyArray<"A" | "B" | "C">) =>
       Effect.gen(function* () {
         const cursor = yield* makeStoryCursor(story, { causalWindows: [shifted] })
-        for (const name of order) {
-          if (name === "A") {
-            yield* cursor.consumeDalphSelectionFor(selected("A-plan"), causalContext("A-plan", []))
-            yield* cursor.consumeDalphSelectionFor(selected("A-worktree"), causalContext("A-worktree", []))
-            yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make("attempt:A:0"))
-            continue
-          }
-          const claim = causalContext(`${name}-claim`, [])
-          const graph = causalContext(`${name}-graph`, [`${name}-claim`])
-          const specification = causalContext(`${name}-spec`, [`${name}-graph`])
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-claim`), claim)
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-graph`), graph)
-          yield* cursor.consumeTrackerGraphFor(FixtureTarget.make("delivery-capstone-target"), graph)
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-spec`), specification)
-          yield* cursor.consumeTaskWorkSpecificationFor(TaskId.make(name), specification)
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-plan`), causalContext(`${name}-plan`, []))
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-worktree`), causalContext(`${name}-worktree`, []))
-          yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make(name === "B" ? "attempt:B:2" : "attempt:C:1"))
+        const completed = new Set<string>()
+        const contexts = new Map<string, ReturnType<typeof causalContext>>()
+        const arrivals: Array<string> = []
+        while (completed.size < window.occurrences.length) {
+          const enabled = window.occurrences.filter(
+            (node) => !completed.has(node.id) && node.predecessorIds.every((id) => completed.has(id))
+          )
+          enabled.sort(
+            (left, right) =>
+              order.indexOf(taskFor(left) as "A" | "B" | "C") - order.indexOf(taskFor(right) as "A" | "B" | "C")
+          )
+          const node = enabled[0]
+          if (node === undefined) return yield* Effect.die("current entry window has no enabled occurrence")
+          const item = itemFor(node)
+          if (item?._tag === "DalphSelects") {
+            const context = {
+              ...causalContext(node.id, node.graphReadCause === undefined ? [] : node.predecessorIds),
+              ...(node.graphReadCause === undefined ? {} : { graphReadCause: node.graphReadCause }),
+              ...(node.graphReadExplicitTaskIds === undefined
+                ? {}
+                : { graphReadExplicitTaskIds: node.graphReadExplicitTaskIds })
+            }
+            contexts.set(node.id, context)
+            yield* cursor.consumeDalphSelectionFor(item.operation, context)
+            if (item.operation._tag === "ReconcileTaskWorktree") arrivals.push(`${item.operation.taskId}-worktree`)
+          } else if (item?._tag === "TrackerGraphReadReturned" || item?._tag === "TaskWorkSpecificationReadReturned") {
+            const context = node.ownerRole === undefined ? undefined : contexts.get(node.ownerRole)
+            if (context === undefined) return yield* Effect.die("response lacks its exact selected owner")
+            if (item._tag === "TrackerGraphReadReturned") {
+              const owner =
+                node.ownerRole === undefined ? undefined : window.occurrences.find(({ id }) => id === node.ownerRole)
+              const selection = owner === undefined ? undefined : itemFor(owner)
+              if (selection?._tag !== "DalphSelects" || selection.operation._tag !== "ReadTrackerGraph")
+                return yield* Effect.die("graph owner is not a graph selection")
+              yield* cursor.consumeTrackerGraphFor(selection.operation.target, context)
+            } else yield* cursor.consumeTaskWorkSpecificationFor(item.taskId, context)
+          } else if (item?._tag === "PlannedAttemptExecutorWorkReported") {
+            yield* cursor.consumeExecutorReportFor(item.request, item.report.attemptId)
+            if (item.report.attemptId === "attempt:A:0") arrivals.push("A-Begin")
+          } else return yield* Effect.die("unsupported current entry boundary")
+          completed.add(node.id)
         }
         yield* cursor.consumeTerminalAssertions
+        for (const name of ["B", "C"])
+          expect(arrivals.indexOf("A-Begin") < arrivals.indexOf(`${name}-worktree`)).toBe(order[0] === "A")
       })
     yield* play(["A", "C", "B"])
     yield* play(["B", "C", "A"])
@@ -957,6 +1347,98 @@ it.effect("allows only B1 safe or terminal observations to consume B1's lifecycl
       expect(foreignChange.pollUnsafe()).toBeUndefined()
       yield* Fiber.interrupt(foreignChange)
     }
+  })
+)
+
+it.effect("delivers an enabled terminal report while an independent graph remains earlier in the window", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:A:terminal")
+    const report = { _tag: "ExecutorWorkTerminal" as const, attemptId, result: { _tag: "Completed" as const } }
+    const story = [
+      selection("independent-graph", []),
+      AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.make({ report }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "independent-graph", storyIndex: 0, predecessorIds: [] },
+        { id: "A-terminal", storyIndex: 1, predecessorIds: [] }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const change = yield* Stream.runHead(cursor.passiveExecutorLifecycleChangesFor(attemptId))
+    expect(Option.getOrUndefined(change)?.report.attemptId).toBe(attemptId)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("independent-graph-operation", []))
+    expect(yield* cursor.storyPosition).toBe(2)
+  })
+)
+
+it.effect("wakes a passive terminal report only after its causal graph predecessor is consumed", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:A:after-graph")
+    const story = [
+      selection("required-graph", []),
+      AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.make({
+        report: { _tag: "ExecutorWorkTerminal", attemptId, result: { _tag: "Completed" } }
+      }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "required-graph", storyIndex: 0, predecessorIds: [] },
+        { id: "A-terminal", storyIndex: 1, predecessorIds: ["required-graph"] }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const report = yield* Stream.runHead(cursor.passiveExecutorLifecycleChangesFor(attemptId)).pipe(Effect.forkChild)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("required-graph-operation", []))
+    expect(Option.getOrUndefined(yield* Fiber.join(report))?.report.attemptId).toBe(attemptId)
+    expect(yield* cursor.storyPosition).toBe(2)
+  })
+)
+
+it.effect("holds a passive terminal report until the exact successor plan is accepted", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:A:after-B-plan")
+    const story = [
+      selection("independent-graph", []),
+      AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.make({
+        report: { _tag: "ExecutorWorkTerminal", attemptId, result: { _tag: "Completed" } }
+      }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "independent-graph", storyIndex: 0, predecessorIds: [] },
+        { id: "A-terminal", storyIndex: 1, predecessorIds: [], acceptedPlanPredecessorRoles: ["B-successor-plan"] }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const premature = yield* Effect.exit(cursor.consumePassiveExecutorLifecycleChangeFor(attemptId))
+    expect(Exit.isFailure(premature)).toBe(true)
+    if (Exit.isFailure(premature)) {
+      expect(Cause.pretty(premature.cause)).toContain(AuthoredCausalSelectionFailure.name)
+      expect(Result.getOrThrow(Cause.findDefect(premature.cause))).toMatchObject({
+        detail: expect.stringContaining("B-successor-plan")
+      })
+    }
+    const report = yield* Stream.runHead(cursor.passiveExecutorLifecycleChangesFor(attemptId)).pipe(Effect.forkChild)
+    yield* cursor.registerAcceptedReplacementPlan(
+      causal({ occurrenceRole: "B-successor-plan", predecessorRoles: [] }).occurrenceRole,
+      causalContext("accepted-B-plan", [])
+    )
+    expect(Option.getOrUndefined(yield* Fiber.join(report))?.report.attemptId).toBe(attemptId)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("independent-graph-operation", []))
+    expect(yield* cursor.storyPosition).toBe(2)
   })
 )
 

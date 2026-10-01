@@ -22,9 +22,12 @@ export const runPreflightCensus = async ({ gates, report = console.error, runSta
       report(`Preflight failed: pnpm ${gate.args.join(" ")}: ${error.message}`)
     }
   }
-  const succeeded = [...outcomes.values()].every((outcome) => outcome.status === "passed")
-  report(
-    `Preflight ${succeeded ? "passed" : "failed"}: ${[...outcomes.values()].filter((outcome) => outcome.status === "failed").length} failed stages.`
-  )
+  const failures = [...outcomes].filter(([, outcome]) => outcome.status === "failed")
+  // The admitted outer command forwards only a bounded head and tail. Repeat
+  // failure identities at the end so the hosted log remains actionable even
+  // when an independent later check fills the console budget.
+  for (const [name, outcome] of failures) report(`Preflight failure summary: ${name}: ${outcome.detail}`)
+  const succeeded = failures.length === 0
+  report(`Preflight ${succeeded ? "passed" : "failed"}: ${failures.length} failed stages.`)
   return { outcomes, succeeded, successfulOutputLines }
 }

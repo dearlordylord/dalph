@@ -79,6 +79,11 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   historical recovery records for admission. Incomplete writers retain custody
   fences until stopped-process proof. This tooling policy does not change Dalph
   runtime behavior.
+- Hosted preflight repeats each failed stage's name and error in its final
+  summary after independent checks finish. The CI failure step uploads its
+  retained child logs for a bounded follow-up; inspect the named stage before
+  another hosted submission. This reporting change cannot alter Dalph runtime
+  behavior.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
   scenario evidence survives and reproduced accepted-path defects still block
@@ -100,6 +105,13 @@ Choose checks by affected behavior, not by commit or handoff alone:
   formal cells. Model or conformance changes also require adequacy review and
   a negative control. A required fresh live-provider scenario remains separate
   from both local and hosted broad gates.
+- **Before hosted submission:** run `pnpm check:submit` once on the coherent
+  candidate when source or test code changed. It adds the hosted full lint census
+  and the in-memory cassette suite to the development-loop checks. Both address
+  failures first discovered in hosted #309 runs; prior local measurements were
+  about 33 seconds for `check:fast` plus the lint census and 45 seconds for the
+  cassette suite. It does not run the full local qualification or repeat after
+  documentation-only edits.
 - **Baseline:** no separate baseline is mandatory. The final preflight owns
   its lint pass; run the maintained Lab only when its boundary is affected.
   `check:baseline` remains an explicit diagnostic convenience, not a prerequisite.
@@ -117,11 +129,29 @@ changes under `prototypes/reducer-lab` or when changed-path evidence is
 unavailable; an authored cassette or shared configuration change does not
 also require its UI/trace projection in the blocking preflight. Run
 `pnpm check:lab` explicitly when changing that projection or investigating
-it. Selection retains deleted and renamed source paths.
+it. For causal cassette authoring and matcher changes, run the focused
+`pnpm check:lab:browser:causal` browser replay. For the seven-task capstone's
+Lab presentation, run `pnpm check:lab:browser:capstone` explicitly. The
+comprehensive `pnpm check:lab:browser` checks shared Lab navigation and all
+maintained catalog entries; it is a manual diagnostic for shared Lab or browser
+harness changes, not a prerequisite for each cassette edit. Selection retains
+deleted and renamed source paths.
 The seven-task `deliveryInvariantStoryCapstone` is excluded from routine cassette
 execution and the recorded-catalog round trip. Run `pnpm test:integration:capstone`
-explicitly for its separate delivery-capstone proof. Its current fixture chronology
-is under repair, so a passing routine gate does not prove that accepted story.
+explicitly for its separate delivery-capstone proof. A passing routine gate
+does not prove that accepted story.
+During focused capstone fixture repair, use each observed mismatch to name the
+competing causes and inspect the exact boundary evidence before editing. A
+fixture-only correction supported by that evidence may be followed by another
+bounded capstone run without repeating typecheck and lint after every numeric
+correlation edit. Re-run the affected negative controls when causal matching or
+runtime behavior changes, then run `check:fast` on the coherent candidate before
+integration. A failed full qualification still follows its separate recovery
+rule; focused capstone attempts do not consume a full-gate admission.
+When diagnosing a capstone that must be terminated at its wall-clock stop,
+append progress captures to a temporary sidecar and restore the diagnostic
+hook afterward. Vitest may hold intercepted console output until test exit, so
+console logging alone does not retain the last observed boundary on timeout.
 The S1–S8 publication mapping uses the focused checks named in the accepted
 direct-publication scenario. This selection changes test policy only; Dalph
 production runtime and its accepted behavior do not change.
@@ -168,6 +198,11 @@ rerun the structural preflight. Those cells use bounded fail-slow concurrency,
 so one ordinary failure does not cancel independent cells. The quality aggregate
 reports every expected cell, including rows that are missing or unproven, and
 the separate formal aggregate remains independent of the quality suffix.
+On a failed suffix cell, CI also uploads its complete retained child logs as a
+one-day diagnostic artifact. The portable stage envelope still owns the verdict;
+the extra logs supply test assertions and stack traces that its short stage log
+and failed-file inventory cannot show. This changes CI evidence retention only,
+not Dalph runtime behavior or quality outcomes.
 
 When the hosted quality aggregate reports more than one independent defect,
 repair every reported defect before submitting the repaired candidate C2. The
@@ -244,6 +279,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
 | `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, and the Base-scoped quality-stage fixture probe. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. Without that Base, the fixture probe reports that it was skipped. |
+| `check:submit` | One local readiness pass before hosted submission: `check:fast`, the hosted full lint census, and the in-memory cassette suite. It does not run a full gate or require Linux inotify. |
 | `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Optional diagnostic only; never a prerequisite to final qualification. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
@@ -261,6 +297,8 @@ All commands below use `pnpm`. Script definitions live in
 
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. Baseline and full preflight bound the command to seven minutes: a timed successful smoke took 330.592 seconds under shared-host contention, including 165.727 seconds in two capstone DOM scenarios. The command remains mandatory when selected. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
+| `check:lab:browser:causal` | Host an ephemeral Lab and replay the causal cassette with exact occurrence identity in Chromium. Use for causal matcher and authoring changes. |
+| `check:lab:browser:capstone` | Host an ephemeral Lab and run the seven-task capstone presentation in Chromium. Use for capstone Lab behavior; it remains separate from the routine browser catalog. |
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
 | `check:quint` | Obtains the complete required formal profile through guarded local execution or applicable recorded success. It reports which occurred and names the original evidence. `--force` requests fresh execution under the same guards. |
 | `check:secrets` | Scan Git history with gitleaks. |
@@ -665,6 +703,11 @@ The browser runner owns its host; no manual Vite or `REDUCER_LAB_URL` is needed.
 `CODEX_HOME`, serves a deterministic local Responses endpoint, and uses temporary
 Git repositories/worktrees. It is outside `check:all`; the same contract runs
 on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-server-qualification.yml).
+That workflow starts automatically for Codex integration source and scenario
+changes. A shared `package.json` or qualification-workflow edit alone uses
+`workflow_dispatch` when its Codex qualification contract needs checking; it
+does not start real Codex processes for unrelated script changes. This narrows
+gate selection and cannot alter Dalph runtime behavior.
 
 For shared-host gate failures, dispatch [Candidate qualification](../.github/workflows/quint-qualification.yml)
 once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`

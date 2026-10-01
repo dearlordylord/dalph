@@ -48,10 +48,7 @@ try {
     })
   })
   if (exitCode !== 0) {
-    throw new Error(
-      `Reducer Lab browser smoke failed with exit ${exitCode}. `
-        + "If Chromium could not launch, run `pnpm --dir prototypes/reducer-lab browser:install` as a user with system-package privileges."
-    )
+    throw new Error(`Reducer Lab browser smoke failed with exit ${exitCode}; inspect the child error above.`)
   }
 } finally {
   if (httpServer.listening) {

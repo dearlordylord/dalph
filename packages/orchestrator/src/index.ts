@@ -476,7 +476,10 @@ export * from "./workflow/protocols/target-promotion/runtime.js"
 export { TargetPromotionRuntimeUnavailable } from "./coordination/delivery/target-promotion-boundary.js"
 export * from "./workflow/protocols/integration-finality/events.js"
 export * from "./workflow/protocols/integration-finality/completion-task-operation-identity.js"
-export { completionOriginalTaskClaimReleaseFor } from "./workflow/protocols/integration-finality/completion-claim.js"
+export {
+  completionOriginalTaskClaimReleaseFor,
+  type CompletionOriginalClaimCleanupRead
+} from "./workflow/protocols/integration-finality/completion-claim.js"
 export {
   completionTaskCandidateAncestryReadOperationIdFor,
   completionTaskRequestLookupOperationIdFor
@@ -525,6 +528,7 @@ export {
 export {
   AuthoritativeTaskClaimReleased,
   runTaskClaimReleaseProtocol,
+  TaskClaimReleaseReadOrdinal,
   TaskClaimReleaseDidNotConverge
 } from "./workflow/protocols/task-claim-release/protocol.js"
 export {

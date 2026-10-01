@@ -1,11 +1,14 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
-import { Deferred, Effect, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Equal, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
 import {
   IntegratorRunCorrelation,
   type TargetPromotionGitRequest,
   type IntegratorCandidateText,
   type OperationId,
+  type CompletionOriginalClaimCleanupRead,
+  type PlannedAttemptWorktreeObservation,
+  type TargetLineageObservation,
   type TrackerTarget,
   type WorkflowOperation
 } from "@dalph/orchestrator"
@@ -72,6 +75,9 @@ export class AuthoredCausalSelectionFailure extends Schema.TaggedError<AuthoredC
 export interface AuthoredOperationCausalContext {
   readonly operationId: OperationId
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  readonly operationKind?: WorkflowOperation["_tag"] | undefined
+  readonly taskId?: TaskId | undefined
+  readonly attemptId?: AttemptId | undefined
   readonly graphReadCause?:
     | Extract<WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>["cause"]["_tag"]
     | undefined
@@ -358,6 +364,15 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication.Type,
     CursorFailure
   >
+  readonly consumeFreshAttemptCapacityPublication: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSelectedTaskCapacityPublication.Type,
+    CursorFailure
+  >
+  readonly completeFreshAttemptCapacityPublication: (heldPassiveAttemptId: AttemptId) => Effect.Effect<void>
+  readonly consumeAcceptedResultQueueHold: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CassetteHoldsAcceptedResultQueueUntilAttemptBegin.Type,
+    CursorFailure
+  >
   readonly consumeRunReactivationHints: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type>
   >
@@ -531,7 +546,8 @@ export interface StoryCursor {
   /** Correlate a task-claim response to the exact initiating workflow read. */
   readonly consumeTaskClaimReadFor: (
     taskId: TaskId,
-    context?: AuthoredOperationCausalContext
+    context?: AuthoredOperationCausalContext,
+    cleanupRead?: CompletionOriginalClaimCleanupRead
   ) => Effect.Effect<Option.Option<AuthoredTaskClaimReadItem>, AuthoredCausalSelectionFailure>
   readonly consumeTaskClaimAcquisitionConflictReturned: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type>
@@ -553,6 +569,23 @@ export interface StoryCursor {
     target: TrackerTarget,
     context?: AuthoredOperationCausalContext
   ) => Effect.Effect<AuthoredTrackerGraphReadResult, ExactCausalCursorFailure>
+  /** Bind a successor plan only after its exact replacement journal event is accepted. */
+  readonly registerAcceptedReplacementPlan: (
+    role: AuthoredCausalSelection["occurrenceRole"],
+    context: AuthoredOperationCausalContext
+  ) => Effect.Effect<void, AuthoredCausalSelectionFailure>
+  readonly observeDirectGitWorktreeResult: (
+    taskId: TaskId,
+    attemptId: AttemptId,
+    observation: PlannedAttemptWorktreeObservation,
+    context: AuthoredOperationCausalContext
+  ) => Effect.Effect<void, AuthoredCausalSelectionFailure>
+  readonly observeDirectGitTargetLineageResult: (
+    taskId: TaskId,
+    attemptId: AttemptId,
+    observation: TargetLineageObservation,
+    context: AuthoredOperationCausalContext
+  ) => Effect.Effect<void, AuthoredCausalSelectionFailure>
   /** Consume a targeted death only after its required journal event has become durable. */
   readonly pauseAtCoordinatorProcessDeathAfterJournalEvent: Effect.Effect<void>
   readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
@@ -571,6 +604,8 @@ export interface AuthoredStoryOccurrenceObserved {
 
 interface StoryCursorOptions {
   readonly onOccurrence?: (occurrence: AuthoredStoryOccurrenceObserved) => Effect.Effect<void>
+  /** Observes an actual blocked control-boundary caller before its release wait. */
+  readonly onControlBoundaryWait?: Effect.Effect<void>
   readonly causalWindows?: ReadonlyArray<AuthoredCausalWindow>
 }
 
@@ -629,6 +664,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     (item) => item._tag === "DalphSelects" && (item.causal !== undefined || item.causalAnchor !== undefined)
   )
   const position = yield* SubscriptionRef.make(0)
+  /** Wakes readers after any consumed occurrence, including one later in an active causal window. */
+  const storyProgress = yield* SubscriptionRef.make(0)
   const transition = yield* Semaphore.make(1)
   interface CausalRegistry {
     readonly byOperationId: ReadonlyMap<string, string>
@@ -645,6 +682,12 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       const graph = compileAuthoredOccurrenceGraph(
         window.occurrences.map(
           ({
+            acceptedPlanPredecessorRoles,
+            directCleanupClaimRead,
+            directFocusedRead,
+            directGitRead,
+            directGraphPredecessorRoles,
+            directGraphRole,
             graphReadCause,
             graphReadExplicitTaskIds,
             id,
@@ -655,7 +698,19 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           }) => ({
             id,
             predecessors: predecessorIds,
-            value: { storyIndex, ownerRole, graphReadCause, graphReadExplicitTaskIds, waitForPredecessors }
+            value: {
+              acceptedPlanPredecessorRoles,
+              directCleanupClaimRead,
+              directFocusedRead,
+              directGitRead,
+              storyIndex,
+              ownerRole,
+              graphReadCause,
+              graphReadExplicitTaskIds,
+              waitForPredecessors,
+              directGraphRole,
+              directGraphPredecessorRoles
+            }
           })
         )
       )
@@ -681,6 +736,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Option.none()
   )
   const terminalAssertionsReached = yield* Deferred.make<void>()
+  const freshAttemptCapacityPublicationHolds = new Map<AttemptId, Deferred.Deferred<void>>()
+  for (const item of story) {
+    if (item._tag !== "CassetteAwaitsSelectedTaskCapacityPublication") continue
+    if (freshAttemptCapacityPublicationHolds.has(item.heldPassiveAttemptId)) {
+      return yield* Effect.die(`duplicate capacity-publication hold for ${item.heldPassiveAttemptId}`)
+    }
+    freshAttemptCapacityPublicationHolds.set(item.heldPassiveAttemptId, yield* Deferred.make<void>())
+  }
   // The marker is armed at cursor construction so a matching fresh claim
   // cannot cross the trace seam while the sequential harness driver is still
   // scheduling the marker consumer. Its story occurrence is consumed by that
@@ -740,6 +803,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (Option.isNone(activeControl)) return false
     const index = yield* SubscriptionRef.get(position)
     if (isControlBoundaryRead(story[index])) return false
+    yield* options.onControlBoundaryWait ?? Effect.void
     yield* Deferred.await(activeControl.value)
     return true
   })
@@ -885,14 +949,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     predicate: (item: StoryItem | undefined) => item is A,
     context?: AuthoredOperationCausalContext,
     ownerSelectionMatches?: (item: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type) => boolean,
-    selectedOperation?: CassetteDecision
+    selectedOperation?: CassetteDecision,
+    cleanupRead?: CompletionOriginalClaimCleanupRead
   ): Effect.Effect<
     Option.Option<Extract<ClaimedStoryItem<A>, { readonly _tag: "Claimed" }>>,
     AuthoredCausalSelectionFailure
   > =>
     Effect.gen(function* () {
       if (yield* awaitControlBoundary())
-        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches, selectedOperation)
+        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches, selectedOperation, cleanupRead)
       const result = yield* transition.withPermits(1)(
         Effect.gen(function* () {
           const index = yield* SubscriptionRef.get(position)
@@ -907,9 +972,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             window.graph,
             { consumed },
             String(index),
-            ({ graphReadCause, graphReadExplicitTaskIds, ownerRole, storyIndex }) => {
+            ({
+              acceptedPlanPredecessorRoles,
+              directCleanupClaimRead,
+              directFocusedRead,
+              directGitRead,
+              directGraphPredecessorRoles,
+              directGraphRole,
+              graphReadCause,
+              graphReadExplicitTaskIds,
+              ownerRole,
+              storyIndex
+            }) => {
               const item = story[storyIndex]
               if (!predicate(item)) return false
+              if (acceptedPlanPredecessorRoles?.some((role) => !state.causal.byRole.has(String(role)))) return false
               if (graphReadCause !== undefined && graphReadCause !== context?.graphReadCause) return false
               if (
                 graphReadExplicitTaskIds !== undefined &&
@@ -917,12 +994,75 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                   JSON.stringify([...(context?.graphReadExplicitTaskIds ?? [])].sort())
               )
                 return false
-              if (ownerSelectionMatches !== undefined) {
+              if (ownerSelectionMatches !== undefined && directGraphRole === undefined) {
                 const owner = ownerRole === undefined ? undefined : window.graph.byId.get(ownerRole)
                 const ownerItem = owner === undefined ? undefined : story[owner.value.storyIndex]
                 if (ownerItem?._tag !== "DalphSelects" || !ownerSelectionMatches(ownerItem)) return false
               }
               const selected = story[storyIndex]
+              if (directGraphRole !== undefined && directGraphPredecessorRoles !== undefined) {
+                if (context === undefined || state.causal.byOperationId.has(String(context.operationId))) return false
+                if (
+                  causalSelectionIssue(
+                    { occurrenceRole: directGraphRole, predecessorRoles: directGraphPredecessorRoles },
+                    context,
+                    state.causal
+                  ) !== undefined
+                )
+                  return false
+              }
+              if (directFocusedRead !== undefined) {
+                if (
+                  context === undefined ||
+                  context.operationKind !== directFocusedRead.kind ||
+                  context.taskId !== directFocusedRead.taskId ||
+                  state.causal.byOperationId.has(String(context.operationId))
+                )
+                  return false
+                if (
+                  causalSelectionIssue(
+                    { occurrenceRole: directFocusedRead.role, predecessorRoles: directFocusedRead.predecessorRoles },
+                    context,
+                    state.causal
+                  ) !== undefined
+                )
+                  return false
+              }
+              if (directCleanupClaimRead !== undefined) {
+                if (
+                  context !== undefined ||
+                  cleanupRead === undefined ||
+                  cleanupRead.deletionOperationId !== directCleanupClaimRead.deletionOperationId ||
+                  cleanupRead.call !== directCleanupClaimRead.call ||
+                  cleanupRead.readOrdinal !== directCleanupClaimRead.readOrdinal ||
+                  (cleanupRead.call === "ReleaseOriginalClaimRead" &&
+                  directCleanupClaimRead.call === "ReleaseOriginalClaimRead"
+                    ? cleanupRead.releaseOperationId !== directCleanupClaimRead.releaseOperationId
+                    : cleanupRead.call !== "ReleaseOriginalClaimRead" &&
+                        directCleanupClaimRead.call !== "ReleaseOriginalClaimRead"
+                      ? cleanupRead.attemptOrdinal !== directCleanupClaimRead.attemptOrdinal
+                      : true)
+                )
+                  return false
+              }
+              if (directGitRead !== undefined) {
+                if (
+                  context === undefined ||
+                  context.operationKind !== directGitRead.kind ||
+                  context.taskId !== directGitRead.taskId ||
+                  context.attemptId !== directGitRead.attemptId ||
+                  state.causal.byOperationId.has(String(context.operationId))
+                )
+                  return false
+                if (
+                  causalSelectionIssue(
+                    { occurrenceRole: directGitRead.role, predecessorRoles: directGitRead.predecessorRoles },
+                    context,
+                    state.causal
+                  ) !== undefined
+                )
+                  return false
+              }
               if (
                 ownerRole !== undefined &&
                 state.causal.byRole.get(String(ownerRole))?.operationId !== context?.operationId
@@ -982,18 +1122,30 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                 value.ownerRole !== undefined &&
                 state.causal.byRole.get(String(value.ownerRole))?.operationId !== context?.operationId
             )
+            const wrongCleanupRead = relevant.find(
+              ({ value }) => value.directCleanupClaimRead?.call === cleanupRead?.call
+            )
             const wrongBoundaryOwner = relevant.find(({ value }) => {
               if (ownerSelectionMatches === undefined || value.ownerRole === undefined) return false
               const owner = window.graph.byId.get(value.ownerRole)
               const ownerItem = owner === undefined ? undefined : story[owner.value.storyIndex]
               return ownerItem?._tag !== "DalphSelects" || !ownerSelectionMatches(ownerItem)
             })
+            const missingAcceptedPlans = relevant.flatMap(({ id, value }) =>
+              (value.acceptedPlanPredecessorRoles ?? [])
+                .filter((role) => !state.causal.byRole.has(String(role)))
+                .map((role) => `${id}: ${role}`)
+            )
             const detail =
-              wrongOwner !== undefined
-                ? `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
-                : wrongBoundaryOwner !== undefined
-                  ? `occurrence ${wrongBoundaryOwner.id} has a selected owner for a different boundary request`
-                  : matched.detail
+              wrongCleanupRead !== undefined && cleanupRead !== undefined
+                ? `cleanup claim read identity mismatch: expected ${JSON.stringify(wrongCleanupRead.value.directCleanupClaimRead)}, actual ${JSON.stringify(cleanupRead)}`
+                : wrongOwner !== undefined
+                  ? `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
+                  : wrongBoundaryOwner !== undefined
+                    ? `occurrence ${wrongBoundaryOwner.id} has a selected owner for a different boundary request`
+                    : missingAcceptedPlans.length > 0
+                      ? `unmet accepted successor plan predecessors: ${missingAcceptedPlans.join(", ")}`
+                      : matched.detail
             return { _tag: "Failure" as const, detail, index }
           }
           const { id, value } = matched.occurrence
@@ -1009,6 +1161,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               byOperationId: new Map(causal.byOperationId).set(String(context.operationId), String(id)),
               byRole: new Map(causal.byRole).set(String(id), context)
             }
+          } else if (value.directGraphRole !== undefined) {
+            if (context === undefined)
+              return { _tag: "Failure" as const, detail: `direct graph result ${id} lacks raw identity`, index }
+            causal = registerCausalSelection({ occurrenceRole: value.directGraphRole }, context, causal)
+          } else if (value.directFocusedRead !== undefined) {
+            if (context === undefined)
+              return { _tag: "Failure" as const, detail: `direct focused result ${id} lacks raw identity`, index }
+            causal = registerCausalSelection({ occurrenceRole: value.directFocusedRead.role }, context, causal)
+          } else if (value.directGitRead !== undefined) {
+            if (context === undefined)
+              return { _tag: "Failure" as const, detail: `direct Git result ${id} lacks raw identity`, index }
+            causal = registerCausalSelection({ occurrenceRole: value.directGitRead.role }, context, causal)
           }
           yield* Ref.set(exactCausalState, { ...state, causal })
           const nextConsumed = matched.frontier.consumed
@@ -1020,6 +1184,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             nextIndex += 1
           }
           if (nextIndex !== index) yield* SubscriptionRef.set(position, nextIndex)
+          yield* SubscriptionRef.update(storyProgress, (version) => version + 1)
           yield* (
             options.onOccurrence?.({
               item: claimedItem,
@@ -1080,6 +1245,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
       if (claimed._tag === "Claimed") {
+        yield* SubscriptionRef.update(storyProgress, (version) => version + 1)
         yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
       }
       yield* announceTerminalAssertions
@@ -1653,22 +1819,49 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     ) {
       return Stream.empty
     }
-    return SubscriptionRef.changes(position).pipe(
-      Stream.map((index) => story[index]),
-      Stream.filter(
-        (item) => item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" && item.report.attemptId === attemptId
-      ),
-      Stream.mapEffect(() =>
-        consumePassiveExecutorLifecycleChangeFor(attemptId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.die(new Error(`authored passive lifecycle change for ${attemptId} disappeared`)),
-              onSome: Effect.succeed
-            })
+    const nextPassive = (): Effect.Effect<
+      typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.Type
+    > =>
+      Effect.gen(function* () {
+        const version = yield* SubscriptionRef.get(storyProgress)
+        const enabled = yield* Effect.gen(function* () {
+          const index = yield* SubscriptionRef.get(position)
+          const window = [...causalWindows.values()].find(
+            ({ endIndex, startIndex }) => startIndex <= index && index < endIndex
           )
+          if (window === undefined) {
+            const item = story[index]
+            return item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" && item.report.attemptId === attemptId
+          }
+          const frontiers = yield* SubscriptionRef.get(causalWindowFrontiers)
+          const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
+          const causal = (yield* Ref.get(exactCausalState)).causal
+          const enabled = window.graph.occurrences.some(({ id, predecessors, value }) => {
+            const item = story[value.storyIndex]
+            return (
+              !consumed.has(id) &&
+              predecessors.every((predecessor) => consumed.has(predecessor)) &&
+              (value.acceptedPlanPredecessorRoles?.every((role) => causal.byRole.has(String(role))) ?? true) &&
+              item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
+              item.report.attemptId === attemptId
+            )
+          })
+          return enabled
+        })
+        if (enabled) {
+          const publicationHold = freshAttemptCapacityPublicationHolds.get(attemptId)
+          if (publicationHold !== undefined) yield* Deferred.await(publicationHold)
+          const claimed = yield* consumePassiveExecutorLifecycleChangeFor(attemptId)
+          if (Option.isSome(claimed)) return claimed.value
+        }
+        yield* SubscriptionRef.changes(storyProgress).pipe(
+          Stream.filter((changed) => changed > version),
+          Stream.take(1),
+          Stream.runDrain
         )
-      )
-    )
+        return yield* nextPassive()
+      })
+    return Stream.fromEffectRepeat(nextPassive())
   }
   const consumeInitialPolicy = consume("InitialControlPolicy").pipe(
     Effect.flatMap((item) =>
@@ -2178,12 +2371,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   })
   const consumeTaskClaimReadFor: StoryCursor["consumeTaskClaimReadFor"] = Effect.fn(
     "AuthoredCassette.consumeTaskClaimReadFor"
-  )(function* (taskId, context) {
+  )(function* (taskId, context, cleanupRead) {
     const causal = yield* claimCausalWindow(
       (item): item is AuthoredTaskClaimReadItem =>
         isTaskClaimReadItem(item) &&
         (item._tag === "TaskClaimReadReturned" ? item.observation.taskId : item.taskId) === taskId,
-      context
+      context,
+      undefined,
+      undefined,
+      cleanupRead
     )
     if (Option.isSome(causal)) return Option.some(causal.value.item)
     return yield* consumeTaskClaimRead
@@ -2330,7 +2526,66 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (Option.isSome(causal)) return causal.value.item
     return yield* consumeTrackerGraph
   })
+  const observeDirectGitWorktreeResult: StoryCursor["observeDirectGitWorktreeResult"] = Effect.fn(
+    "AuthoredCassette.observeDirectGitWorktreeResult"
+  )(function* (taskId, attemptId, observation, context) {
+    const causal = yield* claimCausalWindow(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.DirectGitWorktreeReadReturned.Type =>
+        item?._tag === "DirectGitWorktreeReadReturned" && item.taskId === taskId && item.attemptId === attemptId,
+      context
+    )
+    if (Option.isSome(causal) && !Equal.equals(causal.value.item.observation, observation))
+      return yield* new AuthoredCausalSelectionFailure({
+        detail: `direct Git worktree result for ${attemptId} differs from the authored observation`,
+        storyPosition: causal.value.index
+      })
+  })
+  const observeDirectGitTargetLineageResult: StoryCursor["observeDirectGitTargetLineageResult"] = Effect.fn(
+    "AuthoredCassette.observeDirectGitTargetLineageResult"
+  )(function* (taskId, attemptId, observation, context) {
+    const causal = yield* claimCausalWindow(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.DirectGitTargetLineageReadReturned.Type =>
+        item?._tag === "DirectGitTargetLineageReadReturned" && item.taskId === taskId && item.attemptId === attemptId,
+      context
+    )
+    if (Option.isSome(causal) && !Equal.equals(causal.value.item.observation, observation))
+      return yield* new AuthoredCausalSelectionFailure({
+        detail: `direct Git target-lineage result for ${attemptId} differs from the authored observation`,
+        storyPosition: causal.value.index
+      })
+  })
+  const registerAcceptedReplacementPlan: StoryCursor["registerAcceptedReplacementPlan"] = Effect.fn(
+    "AuthoredCassette.registerAcceptedReplacementPlan"
+  )(function* (role, context) {
+    const issue = yield* transition.withPermits(1)(
+      Effect.gen(function* () {
+        const state = yield* Ref.get(exactCausalState)
+        const binding = causalBindingIssue({ occurrenceRole: role }, context, state.causal)
+        if (binding !== undefined) return binding
+        const prior = state.causal.byRole.get(String(role))
+        if (
+          prior !== undefined &&
+          JSON.stringify(prior.predecessorOperationIds) !== JSON.stringify(context.predecessorOperationIds)
+        )
+          return `accepted replacement plan ${role} has contradictory predecessors`
+        yield* Ref.set(exactCausalState, {
+          ...state,
+          causal: registerCausalSelection({ occurrenceRole: role }, context, state.causal)
+        })
+        yield* SubscriptionRef.update(storyProgress, (version) => version + 1)
+        return undefined
+      })
+    )
+    if (issue !== undefined)
+      return yield* new AuthoredCausalSelectionFailure({
+        detail: issue,
+        storyPosition: yield* SubscriptionRef.get(position)
+      })
+  })
   return {
+    observeDirectGitTargetLineageResult,
+    observeDirectGitWorktreeResult,
+    registerAcceptedReplacementPlan,
     completeControlDirectionBeforeDeliveryActionAdmission: Effect.gen(function* () {
       const gate = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)
       /* v8 ignore next -- @preserve Closure pairs this completion with the exact earlier before-admission control item. */
@@ -2393,6 +2648,24 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         Schema.decodeUnknownEffect(
           AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication
         )
+      ),
+      Effect.orDie
+    ),
+    consumeFreshAttemptCapacityPublication: consume("CassetteAwaitsSelectedTaskCapacityPublication").pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CassetteAwaitsSelectedTaskCapacityPublication)
+      ),
+      Effect.orDie
+    ),
+    completeFreshAttemptCapacityPublication: (heldPassiveAttemptId) => {
+      const hold = freshAttemptCapacityPublicationHolds.get(heldPassiveAttemptId)
+      return hold === undefined
+        ? Effect.die(`missing capacity-publication hold for ${heldPassiveAttemptId}`)
+        : Deferred.succeed(hold, undefined).pipe(Effect.asVoid)
+    },
+    consumeAcceptedResultQueueHold: consume("CassetteHoldsAcceptedResultQueueUntilAttemptBegin").pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CassetteHoldsAcceptedResultQueueUntilAttemptBegin)
       ),
       Effect.orDie
     ),

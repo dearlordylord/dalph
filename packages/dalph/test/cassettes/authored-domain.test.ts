@@ -60,6 +60,64 @@ it("validates a causal boundary window against the decoded story before playback
     ]
   })
   expect(renderAuthoredCassetteLyrics(withGraphCoverage)).toContain("graph read covers A")
+  const direct = {
+    ...valid,
+    causalWindows: [
+      {
+        startIndex: startIndex + 1,
+        endIndex: startIndex + 2,
+        occurrences: [
+          {
+            id: "direct-restart-result",
+            storyIndex: startIndex + 1,
+            predecessorIds: [],
+            directGraphRole: "restart-graph",
+            directGraphPredecessorRoles: [],
+            graphReadCause: "AttemptRestartAuthorityCheck",
+            graphReadExplicitTaskIds: ["B"]
+          }
+        ]
+      }
+    ]
+  }
+  const decodedDirect = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...direct,
+    acceptedReplacementPlanRoles: [{ occurrenceRole: "B-successor", taskId: "B", successorAttemptId: "attempt:B:1" }]
+  })
+  expect(decodedDirect.causalWindows).toHaveLength(1)
+  expect(renderAuthoredCassetteLyrics(decodedDirect)).toContain("direct graph operation restart-graph")
+  expect(renderAuthoredCassetteLyrics(decodedDirect)).toContain(
+    "successor plan role B-successor binds task B attempt attempt:B:1"
+  )
+  const [directWindow] = direct.causalWindows
+  const [directOccurrence] = directWindow?.occurrences ?? []
+  if (directWindow === undefined || directOccurrence === undefined) throw new Error("Expected a direct graph window")
+  const afterAcceptedPlan = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...direct,
+    acceptedReplacementPlanRoles: [{ occurrenceRole: "B-successor", taskId: "B", successorAttemptId: "attempt:B:1" }],
+    causalWindows: [
+      { ...directWindow, occurrences: [{ ...directOccurrence, acceptedPlanPredecessorRoles: ["B-successor"] }] }
+    ]
+  })
+  expect(renderAuthoredCassetteLyrics(afterAcceptedPlan)).toContain("follows accepted successor plan B-successor")
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({ ...afterAcceptedPlan, acceptedReplacementPlanRoles: [] })
+  ).toThrow("requires a declared accepted replacement plan role")
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...direct,
+      causalWindows: [{ ...directWindow, occurrences: [{ ...directOccurrence, graphReadCause: undefined }] }]
+    })
+  ).toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...valid,
+      acceptedReplacementPlanRoles: [
+        { occurrenceRole: "replacement", taskId: "B", successorAttemptId: "attempt:B:1" },
+        { occurrenceRole: "replacement", taskId: "B", successorAttemptId: "attempt:B:2" }
+      ]
+    })
+  ).toThrow("accepted replacement plan roles must be unique")
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...valid,

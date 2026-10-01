@@ -163,7 +163,7 @@ const closedDiagnosticCodes = (log) =>
 
 const ansiControlSequence = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "gu")
 const repositoryTestFailureLine =
-  /(?:^|\n)\s*(?:FAIL|❯)\s+((?:packages|scripts|src|test)\/[A-Za-z0-9._/-]+\.test\.(?:mjs|ts))(?=[:\s>])/gu
+  /(?:^|\n)\s*(?:FAIL|❯)\s+(?:coverage\s+)?((?:packages|scripts|src|test)\/[A-Za-z0-9._/-]+\.test\.(?:mjs|ts))(?=[:\s>])/gu
 const repositoryTestFile = /^(?:packages|scripts|src|test)\/[A-Za-z0-9._/-]+\.test\.(?:mjs|ts)$/u
 const isRepositoryTestFile = (path) =>
   repositoryTestFile.test(path) && path.split("/").every((segment) => segment !== "." && segment !== "..")

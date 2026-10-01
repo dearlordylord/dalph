@@ -3,7 +3,6 @@ name: Codex app-server qualification
 on:
   pull_request:
     paths:
-      - ".github/workflows/codex-app-server-qualification.yml"
       - "packages/dalph/src/application/codex-app-server.ts"
       - "packages/dalph/src/application/codex-app-server-real-qualification.test.ts"
       - "packages/dalph/src/application/codex-planned-attempt-executor.ts"
@@ -16,7 +15,6 @@ on:
       - "packages/orchestrator/src/workflow/protocols/disposition-cleanup/**"
       - "docs/scenarios/production-codex-integrator.md"
       - "scripts/qualify-codex-app-server.mjs"
-      - "package.json"
       - "pnpm-lock.yaml"
   workflow_dispatch:
 

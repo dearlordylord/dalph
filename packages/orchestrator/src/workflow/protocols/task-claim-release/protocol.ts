@@ -9,10 +9,20 @@ import {
 } from "../../../authorities/task-tracker/claim-mutation.js"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
+import type { TaskId } from "@dalph/contracts"
+
+/** One-based read within an exact release protocol invocation. */
+export const TaskClaimReleaseReadOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("TaskClaimReleaseReadOrdinal")
+)
+export type TaskClaimReleaseReadOrdinal = typeof TaskClaimReleaseReadOrdinal.Type
 
 /** The exact provider-neutral calls needed to release one active task claim. */
 export interface TaskClaimReleaseBoundary {
-  readonly readTaskClaim: TrackerMutationService["readTaskClaim"]
+  readonly readTaskClaim: (
+    taskId: TaskId,
+    readOrdinal: TaskClaimReleaseReadOrdinal
+  ) => ReturnType<TrackerMutationService["readTaskClaim"]>
   readonly releaseTaskClaim: TrackerMutationService["releaseTaskClaim"]
 }
 
@@ -47,7 +57,7 @@ export const runTaskClaimReleaseProtocol = Effect.fn("TrackerMutation.runTaskCla
   | TaskTrackerMutationThrottled
 > {
   for (let attempts = 0; attempts <= taskClaimReleaseRequestBound; attempts += 1) {
-    const observed = yield* tracker.readTaskClaim(release.claim.taskId)
+    const observed = yield* tracker.readTaskClaim(release.claim.taskId, TaskClaimReleaseReadOrdinal.make(attempts + 1))
     if (observed._tag === "UnclaimedTask") {
       return AuthoritativeTaskClaimReleased.make({ release })
     }

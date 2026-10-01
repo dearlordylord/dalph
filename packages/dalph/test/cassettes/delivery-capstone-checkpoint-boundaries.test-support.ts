@@ -21,12 +21,13 @@ export const tasks = ["A", "B", "C", "D", "E", "F", "G"] as const
 export type Task = (typeof tasks)[number]
 export const attempts = {
   A: "attempt:A:0",
-  B: "attempt:B:2",
-  C: "attempt:C:1",
+  B1: "attempt:B:0",
+  B2: "attempt:B:replacement:1",
+  C: "attempt:C:0",
   D: "attempt:D:0",
   E: "attempt:E:0",
-  F: "attempt:F:1",
-  G: "attempt:G:2"
+  F: "attempt:F:0",
+  G: "attempt:G:0"
 }
 export type Occurrence = Extract<AuthoredObservationCapture, { readonly _tag: "AuthoredStoryOccurrenceCaptured" }>
 export type Publication = Extract<AuthoredObservationCapture, { readonly _tag: "DeliveryPublicationCaptured" }>
@@ -45,8 +46,8 @@ export const DS = {
   recovered: 9,
   suspendC: 10,
   suspendedC: 11,
-  continuedB: 12,
-  resumedB: 13,
+  restartedB: 12,
+  startedB: 13,
   queuedA: 14,
   qualifiedA: 15,
   staleA: 16,
@@ -57,6 +58,8 @@ export const DS = {
   startedSuccessors: 21,
   settled: 22
 } as const
+export const attemptForBeat = (task: Task, beat: Beat): string =>
+  task === "B" ? (beat < DS.restartedB ? attempts.B1 : attempts.B2) : attempts[task]
 export const initialCapacity = 3
 export const loweredCapacity = 2
 export const beginOrdinal = 1
@@ -159,7 +162,59 @@ export const assertReopenedCapacityWait = (run: AuthoredScenarioCassetteRun, cur
   expect(wait).toMatchObject({ _tag: "TaskWorkCapacityWait", scope: { capacity: loweredCapacity, runId: run.runId } })
   if (wait._tag !== "TaskWorkCapacityWait") return expect.fail("DS18: capacity wait witness changed")
   expect(sortPairs(wait.holders.map(({ correlation, taskId }) => ({ taskId, ...correlation })))).toEqual(
-    sortPairs(expectedPairs(run, ["B", "D"]))
+    sortPairs(expectedPairs(run, ["B", "D"], DS.reopenedC))
+  )
+}
+
+/** P2's visible admission wait is process-local publication evidence before A terminal. */
+export const assertRestartCapacityWait = (run: AuthoredScenarioCassetteRun) => {
+  const replacement = recordFence(
+    run,
+    (event) => event._tag === "PlannedAttemptReplaced" && event.subject.plannedAttempt.attemptId === attempts.B1
+  )
+  const endedA = terminalFence(run, "A")
+  const publication = requireValue(
+    run.observationCaptures.find(
+      (capture): capture is Publication =>
+        capture._tag === "DeliveryPublicationCaptured" &&
+        afterFence(capture, replacement) &&
+        beforeFence(capture, endedA) &&
+        coherentFor(run, capture)
+    ),
+    "DS12: no coherent capacity publication between P1 replacement and A terminal"
+  )
+  const frame = frameFor(run, publication)
+  expect(frame.graph).toMatchObject({ _tag: "Established", revision: "G2" })
+  expect(sortPairs(frame.heldPositions)).toEqual(sortPairs(expectedPairs(run, ["A", "D"], DS.restartedB)))
+  const moment = requireValue(
+    run.observationMoments.find((item) => item.captureOrder === publication.captureOrder),
+    "DS12: exact P2 capacity owner view missing"
+  )
+  const { consequences, runtime } = Effect.runSync(
+    evaluateDeliveryRelationAndRuntimeInputBundle(publication.publication.bundle)
+  )
+  const b = requireValue(
+    consequences.ticketDeliveries.deliveries.find(({ taskId }) => taskId === "B"),
+    "DS12: B delivery missing from P2 capacity publication"
+  )
+  // B2's exact accepted identity is checked at the replacement journal cut.
+  // Its selected delivery is still proposed until worktree reconciliation after A terminal.
+  expect(b.placement._tag).toBe("Selected")
+  expect(b.standings).toContainEqual({ _tag: "ProposedDelivery" })
+  const status = deliveryStatusOf(
+    { _tag: "Run", runId: run.runId },
+    { _tag: "Ready", evaluation: runtime, liveOwners: moment.liveOwners }
+  )
+  if (!("_tag" in status) || status._tag !== "DeliveryStatusAvailable")
+    return expect.fail("DS12: actual P2 capacity status unavailable")
+  const wait = requireValue(
+    status.entries.find((entry) => entry._tag === "TaskWorkCapacityWait" && entry.taskId === "B"),
+    "DS12: exact B2 capacity wait absent before A terminal"
+  )
+  expect(wait).toMatchObject({ _tag: "TaskWorkCapacityWait", scope: { capacity: loweredCapacity, runId: run.runId } })
+  if (wait._tag !== "TaskWorkCapacityWait") return expect.fail("DS12: capacity wait witness changed")
+  expect(sortPairs(wait.holders.map(({ correlation, taskId }) => ({ taskId, ...correlation })))).toEqual(
+    sortPairs(expectedPairs(run, ["A", "D"], DS.restartedB))
   )
 }
 
@@ -183,29 +238,39 @@ export const occurrenceFence = (
       (capture): capture is Occurrence =>
         capture._tag === "AuthoredStoryOccurrenceCaptured" && predicate(capture.occurrence)
     )[ordinal],
-    "missing exact authored anchor"
+    `missing exact authored anchor ordinal=${ordinal} predicate=${predicate.toString()}`
   )
 })
 
 export const graphFence = (run: AuthoredScenarioCassetteRun, revision: string, ordinal = 0) =>
   occurrenceFence(run, (item) => item._tag === "TrackerGraphReadReturned" && item.graph.revision === revision, ordinal)
 
-export const commandFence = (run: AuthoredScenarioCassetteRun, task: Task, command: "Begin" | "Resume" | "Suspend") =>
+export const commandFence = (
+  run: AuthoredScenarioCassetteRun,
+  task: Task,
+  command: "Begin" | "Resume" | "Suspend",
+  attemptId = attemptForBeat(task, DS.settled)
+) =>
   recordFence(
     run,
     (event) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.attemptId === attempts[task] &&
+      event.plannedAttempt.attemptId === attemptId &&
       event.command === command
   )
 
 /** A command response is not lifecycle acceptance; keep the lower fence at its accepted report. */
-export const responseFence = (run: AuthoredScenarioCassetteRun, task: Task, ordinal = beginOrdinal): Fence => {
+export const responseFence = (
+  run: AuthoredScenarioCassetteRun,
+  task: Task,
+  ordinal = beginOrdinal,
+  attemptId = attemptForBeat(task, DS.settled)
+): Fence => {
   const response = requireValue(
     run.records.find(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
-        event.plannedAttempt.attemptId === attempts[task] &&
+        event.plannedAttempt.attemptId === attemptId &&
         event.plannedAttempt.runId === run.runId &&
         event.commandOrdinal === ordinal
     ),
@@ -232,19 +297,27 @@ export const responseFence = (run: AuthoredScenarioCassetteRun, task: Task, ordi
   return { kind: "Journal", record: accepted }
 }
 
-export const terminalFence = (run: AuthoredScenarioCassetteRun, task: Task) =>
+export const terminalFence = (
+  run: AuthoredScenarioCassetteRun,
+  task: Task,
+  attemptId = attemptForBeat(task, DS.settled)
+) =>
   occurrenceFence(
     run,
     (item) =>
       item._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
-      item.report.attemptId === attempts[task] &&
+      item.report.attemptId === attemptId &&
       item.report._tag === "ExecutorWorkTerminal"
   )
 
-export const settlementFence = (run: AuthoredScenarioCassetteRun, task: Task) =>
+export const settlementFence = (
+  run: AuthoredScenarioCassetteRun,
+  task: Task,
+  attemptId = attemptForBeat(task, DS.settled)
+) =>
   recordFence(
     run,
-    (event) => event._tag === "IntegrationFinalitySettled" && event.claim.plannedAttempt.attemptId === attempts[task]
+    (event) => event._tag === "IntegrationFinalitySettled" && event.claim.plannedAttempt.attemptId === attemptId
   )
 
 /** Historical G5 settlement publication plus the exact correlated owner's subsequent same-activation removal. */
@@ -321,22 +394,23 @@ export const pair = (attempt: PlannedTaskAttempt) => ({
   taskId: attempt.taskId,
   attemptId: attempt.attemptId
 })
-export const expectedPairs = (run: AuthoredScenarioCassetteRun, names: ReadonlyArray<Task>) =>
-  names.map((taskId) => ({ runId: run.runId, taskId, attemptId: attempts[taskId] }))
+export const expectedPairs = (run: AuthoredScenarioCassetteRun, names: ReadonlyArray<Task>, beat: Beat) =>
+  names.map((taskId) => ({ runId: run.runId, taskId, attemptId: attemptForBeat(taskId, beat) }))
 export const sortPairs = <A extends { readonly taskId: string }>(values: ReadonlyArray<A>) =>
   values.toSorted((a, b) => a.taskId.localeCompare(b.taskId))
 
 export const executorStanding = (
   standings: ReadonlyArray<TicketDeliveryStanding>,
   run: AuthoredScenarioCassetteRun,
-  task: Task
+  task: Task,
+  beat: Beat
 ) =>
   requireValue(
     standings.find(
       (standing): standing is Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }> =>
         standing._tag === "ResponsibilitySituation" &&
         standing.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
-        standing.facts.responsibility.plannedAttempt.attemptId === attempts[task] &&
+        standing.facts.responsibility.plannedAttempt.attemptId === attemptForBeat(task, beat) &&
         standing.facts.responsibility.plannedAttempt.runId === run.runId
     ),
     `missing exact ${task} executor responsibility standing`

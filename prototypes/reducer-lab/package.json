@@ -8,6 +8,8 @@
     "build": "vite build",
     "check": "pnpm run typecheck && pnpm run smoke && pnpm run build",
     "check:browser": "node scripts/run-browser-smoke.mjs",
+    "check:browser:causal": "node scripts/run-browser-smoke.mjs --causal",
+    "check:browser:capstone": "node scripts/run-browser-smoke.mjs --capstone",
     "dev": "vite --host 0.0.0.0",
     "smoke": "node scripts/smoke.mjs",
     "smoke:url-state": "node scripts/url-state-smoke.mjs",
