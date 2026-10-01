@@ -2641,10 +2641,14 @@ full retained log is `/tmp/dalph-386-integration-publication-be6a75cd.log`,
 SHA-256 `e4cfb67467e137997bcdab1152ce4864c8d619d014bb3b07429732ef155e69d0`.
 The source worktree was clean at this exact HEAD before this audit-only edit.
 
-This is controlled process-integration evidence only. It does not establish
-the required fresh supervised real-provider S1 dogfood or full qualification;
-both remain outstanding. Preserve the accepted S1/S4/S8 outcomes and the
-45-second publication bound.
+This was controlled process-integration evidence only. At this 2026-09-29
+checkpoint it did not establish the required fresh supervised real-provider S1
+dogfood or full qualification; both were outstanding then. The later fresh
+hosted remote S1 completed on 2026-10-01 and is recorded in the [#388 workflow
+acceptance ledger](#hosted-s1-workflow-acceptance-2026-10-01). That later run
+does not turn this controlled evidence into hosted evidence or establish a full
+qualification. Preserve the accepted S1/S4/S8 outcomes and the 45-second
+publication bound.
 
 The latest Base-scoped `lint:changed` disposition available for this
 integration candidate was exit 20 solely because owner-managed
@@ -3588,3 +3592,71 @@ performed in this repair. The read-only hosted S1 observation (10 pages / 250
 entries in 43.52 seconds, still with a cursor) motivates a bounded scalability
 repair but does not establish the cause of the earlier ~16-minute run or prove
 an improvement in hosted S1 latency.
+
+## Hosted S1 workflow acceptance — 2026-10-01
+
+One fresh supervised production CLI execution completed the accepted remote
+publication workflow against a disposable private GitHub target. Source was
+`6b9900ee007f3e0bbb30fee60fdfe82c7d2aabf9`, planned Source Base was
+`d8e2fecf4b441ce983452b9f1f01956f6edc8d4d`, target Base was
+`c18b6c9f23eaefbdff9f020e0dd29b6a4f49fd17`, and the accepted task commit was
+`f8162146494cb4c6f9b72e6ff10ccbfd38d0a4c7`. The single target was
+`dearlordylord/dalph-issue-388-s1-20261001-0328z-r1#1`, at
+`refs/heads/main`; the independently observed remote head was
+`b604db3aa0acda029075e18b91a7cdea81a7f35c`, whose direct parents were the exact
+target Base and accepted task commit. This is a production CLI/Codex execution,
+not a controlled fixture, local-only publication, or provider smoke prompt.
+
+The retained evidence bundle is `/tmp/dalph-388-s1-20261001-0328z-r1/`:
+`acceptance-report.json`, `journal-export.json`, `terminal.json`,
+`cli.stdout.log`, `cli.stderr.log`, and `postflight-intent.json`. It records
+`PushApplied` at journal position 120, target promotion at 123, task completion
+acknowledgement at 139, integration finality at 152, task worktree absence at
+161, branch absence at 170, Integrator candidate cleanup at 178, and workflow
+termination at 184. There was one planned task attempt and one executor work
+responsibility. The independent issue observation was CLOSED.
+
+| #388 acceptance row | Evidence and disposition |
+| --- | --- |
+| Controlled S1–S8 behavior, competing-push S2, and scoped review closure precede the live attempt. | **Met.** The accepted S1–S8 test map and separate capstone scope remain in [the scenario](scenarios/direct-remote-publication.md); the retained S8 exact-title run passed 1/1 on 2026-09-30 in `/tmp/issue386-s8-graph-diagnostic-enabled.log`. S2 and review records are the pre-live qualification evidence already recorded in this audit and the accepted scenario; no review was reopened for this report. |
+| Use a minimal disposable target and preserve exact source, Base, accepted commit, endpoint, and ref identities. | **Met.** The readiness receipt and files above identify one new private repository/issue, one `refs/heads/main` target, Source/Base/C, and no additional run. |
+| Prove push acknowledgement, independent hosted-head ancestry, local promotion, GitHub completion, cleanup, termination, and one execution. | **Met.** Journal positions 120, 123, 139, 152, 161, 170, 178, and 184 plus the independent remote-head and issue observations above prove the sequence. The exact planned task worktree path and its `.git` entry were absent on the 03:59:11 UTC targeted postflight; its five ancestor-prefix directories contained zero files and the Integrator root was empty. Target-repository registrations were the only postflight cleanup targets. The earlier “residual directory entry” summary is superseded by this exact-path reconciliation. |
+| Do not substitute controlled fixtures, local-only publication, or a provider smoke prompt for hosted execution. | **Met.** `terminal.json`, CLI logs, readiness receipt, and remote observations identify one real production CLI invocation against the disposable hosted target. |
+| Predeclare the stop, reconcile outcomes, preserve failures, bound repairs, and do not retry throttled mutations. | **Met with an assembly overrun disclosed.** The run was declared for 10–15 minutes with a 04:00 UTC stop; it started 03:41:45.228904 UTC and stopped 03:44:46.674063 UTC after 181.445 seconds. Custody was stopped and no child remained. No ambiguous publication retry or throttled mutation occurred. Read-only postflight had a 03:48:03.230680 UTC stop; evidence assembly completed at 03:50:34.551335 UTC, 2m31s after that stop. Assembly used retained evidence and postflight statements; it performed no new boundary reads or live verification. Failed run evidence and the unexecuted suffix remain preserved. |
+| Record public recovery limits and keep scenario documentation aligned. | **Met.** Shipped public resume/grant controls remain unavailable and are explicitly recorded as a separate qualification limitation in [the scenario](scenarios/direct-remote-publication.md). This does not block the uninterrupted S1 workflow. The seven-task `deliveryInvariantStoryCapstone` remains a separate open manual proof. |
+
+The production workflow journal ended `Completed` and includes
+`WorkflowRunTerminated` with `AllTasksSucceeded`; this satisfies the #388
+workflow checklist, which does not require CLI exit 0. The CLI returned 1
+because app-server close surfaced `CodexAppServerFailure` at `NodeMainExit`.
+The live run did not persist its effective argv projection. A separately
+retained reproduction at
+`/tmp/dalph-388-s1-20261001-0328z-r1/diagnostic-wrapper-argv.json` recorded the
+configured basename `codex-luna-max` but observed `node codex.js … app-server`,
+with `launchExecutableMatches: false`; the diagnostic process was stopped by
+its owner. This reproduces a wrapper/executable identity mismatch and supports
+the close-failure explanation, but is not a retroactive argv trace of the live
+run. It is a separate launcher/substrate follow-up; no matcher change or hosted
+retry is authorized by this evidence.
+
+The report assembly time and resolved cleanup reconciliation above are
+postflight observations; they do not alter the run's recorded boundary
+chronology. The stale Live lease remains under local reconciliation. Issue #386
+remains administratively open, and the public recovery-control limitation is
+not missing proof for this uninterrupted S1. No issue closure or GitHub mutation
+is claimed here.
+
+### Scoped documentation review closure — 2026-10-01
+
+The Standards round-one review found one consistency issue: earlier scenario
+text still described hosted S1 as pending after the #388 hosted remote evidence
+had been recorded. The repair dates those former status statements, clarifies
+that controlled loopbackActions qualification is not hosted remote S1 evidence,
+and preserves the forward pre-live requirements. Standards round two confirmed
+that finding resolved. The prior scoped Spec review found no accepted-criteria
+blocker. The reviewed snapshot was
+`/tmp/dalph-388-docs-acceptance-20261001-r2.diff`, SHA-256
+`43063425bf7e00ee0cc358a54da99b284a9c9b91264efce41afa8f4b1fc741a0`.
+The review source remained `6b9900ee007f3e0bbb30fee60fdfe82c7d2aabf9`; this
+closure changes documentation only and claims no runtime or qualification
+change.

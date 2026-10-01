@@ -2,15 +2,20 @@
 
 Issue: [Specify final remote publication before task completion](https://github.com/dearlordylord/dalph/issues/383).
 
-**Status: accepted by the maintainer on 2026-09-19; controlled S1–S8 checks
-are recorded. The separate seven-task delivery capstone remains an open manual
-regression. An earlier candidate
-passed its exact-head full gate, but no full gate has been run on the current
-candidate; local `check:all` is optional under current policy. Acceptance remains
-unproven because the required fresh supervised hosted S1 dogfood has not reached
-publication, promotion, and closure.** Issue #390's retained-run closure is
-complete; the supervised S1 must be a fresh disposable run and must not repair
-the retained failed candidate.
+**Status: accepted by the maintainer on 2026-09-19; controlled S1–S8 checks,
+competing-push S2, and their scoped reviews are recorded. One fresh supervised
+hosted S1 completed on 2026-10-01 with publication, promotion, tracker
+completion, cleanup, and workflow termination proven; the evidence ledger is in
+the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance-2026-10-01).
+The CLI returned exit 1 while closing the Codex app server. A separate
+reproduction supports a configured-wrapper/observed-executable identity
+mismatch at that launcher boundary; this is a launcher follow-up, not a missing
+publication criterion. The exact live-run argv was not persisted. The separate
+seven-task delivery capstone remains open manual, and public recovery controls
+remain deferred and are not claimed by this journey. An earlier
+candidate passed its exact-head full gate, but no full gate has been run on the
+current candidate; local `check:all` is optional under current policy. Issue
+#390's retained-run closure is complete.**
 Alice selected direct publication, remote-first order, ordinary non-force push,
 and automatic integration recovery with user-authorized continuation after
 exhaustion. This document consolidates those decisions and their acceptance tests.
@@ -57,7 +62,7 @@ delivery sequence; a deferred owner is not evidence that #384 is complete.
 | Boundary or scenario | Issue-384 seam | Deferred extension |
 | --- | --- | --- |
 | Destination admission | Validate one credential-free endpoint, one fully qualified existing branch, one local-to-remote mapping, and pin it in `WorkflowRunBegan` before claim/provider work. | None; unfinished history without the pin is a typed retained constraint. |
-| S1 publication order | Publish exact M with an ordinary non-force explicit refspec, retain correlated per-ref proof, request the local exact-head compare-and-set only after that proof, then complete the task from fresh tracker premises after local promotion is observed. | The disposable hosted journey is a later qualification step; this document does not claim it ran. |
+| S1 publication order | Publish exact M with an ordinary non-force explicit refspec, retain correlated per-ref proof, request the local exact-head compare-and-set only after that proof, then complete the task from fresh tracker premises after local promotion is observed. | The fresh supervised hosted journey completed 2026-10-01; the retained evidence and checklist disposition are in the linked #388 audit. |
 | S3 proof/reconciliation | Reuse exact M for up-to-date or same-endpoint descendant proof; reconcile ambiguous sends only after sender custody is stopped; retain work on typed denial/throttle. | #385 handles compatible competing heads; #387 handles repaired temporary authority. |
 | S5 recovery cuts | Cover initial baseline catch-up, intent-before-send, applied/unapplied response, lost response, ambiguous append, proof-before-promotion, and promotion-before-observation in memory and SQLite. | #385 adds successor authorization and successor catch-up cuts; #386 adds grant-after-exhaustion cuts; #387 adds resume-after-receipt cuts. |
 | Initial finite bounds | Enforce three Integrator sessions and three publication intents per candidate, 30-second remote observation, 120-second push, and precise retained exhaustion/denial waits. | #386 owns a new authorized batch; no ungranted fourth action is part of #384. |
@@ -1015,7 +1020,7 @@ D invariants and extended models, not solely by replaying a successful cassette.
 | **S8: Current completion premises change after resume.** Starting facts: one Run R already owns task A, accepted task commit C, exact published candidate M, target, and a retained-delivery receipt; no local promotion or task completion has yet been recorded. After the receipt and reconciled publication proof, an outside tracker actor adds an open prerequisite to A, changes A's task revision, or replaces Dalph's claim with another claim. Ordinary `runWorkflow` resumes the same receipt, preserves M's publication proof, promotes that exact candidate locally, then reads the current complete graph, current task-work specification, and exact task claim at the finality boundary. A decisive changed prerequisite, task revision, or foreign claim retains a wait before `CompletionClaimReplaced`; the task-local `FocusedTaskCompletionFacts` read occurs only after the exact promotion-bound claim exists. The unchanged-premise path reaches that task-local read before a completion mutation. No process crash is needed for these changes; the established crash/retry rule still covers the separate lost completion response. The person sees the same responsibility retained for a tracker wait: an unfinished prerequisite or changed revision forbids a close, and a foreign claim forbids claim replacement or close. Dalph keeps R/A/C/M/target and the exact candidate resource; it does not begin another task attempt, start another Integrator session, repeat publication, complete the tracker task, replace or release a task claim, or clean up the candidate before finality settles. Publication proof alone does not settle the responsibility: exact resume continues ordinary Run while local promotion or tracker finality remains, and accepted `IntegrationFinalitySettled` evidence gates the no-dispatch final status. | `packages/dalph/test/scenarios/production.test.ts::S8 dependency blocks finality`, `::S8 changed revision blocks finality`, and `::S8 foreign claim blocks finality` use ordinary `runWorkflow` with the integrated production interpreter. All three record a complete post-promotion graph, exact current task-work specification, and exact current task claim. The dependency case proves the open prerequisite from graph facts; the revision case proves the changed current task fingerprint; the claim case observes and preserves the foreign active claim. Each decisive changed premise stops before claim replacement and before `FocusedTaskCompletionFacts`, which is only read after the promotion-bound claim exists. All three require exact resumed Run/proof/candidate/promotion identities, no completion attempt or acknowledgement, no finality settlement or candidate cleanup, and no duplicate Begin/session/publication/executor/provider work. The unchanged-premise/lost-response sibling is `::ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination`; it reconciles the exact request as `NotApplied`, retries once, and records one applied completion without publication or integration work. Its Operator boundary assertions observe a real `IntegrationFinalitySettled` append, pause the next tracker graph read while the Run remains active, and prove a fresh exact request returns `RemotePublicationResumeStatus` with the same proof and no journal change, owner wake, Git call, publication retry, allowance, session, or task Begin. Releasing the graph-read barrier lets ordinary production write `WorkflowRunTerminated`; a second fresh exact request returns the same status without receipt, wake, or work. The same test also checks the lower-level accepted-result endpoint's `ContinueFinality` dispatch while finality is pending and no dispatch after settlement. These S8 cases refine [D28c](../DELIVERY-INVARIANTS.md#integration-and-promotion) and `completionRequestUsesExactPremises` in [integrationFinality.qnt](../../specs/integrationFinality.qnt): current tracker premises independently gate completion while recorded publication proof remains intact. `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::rejects changed focused task facts before another tracker completion mutation` and its missing/foreign/prerequisite cases remain narrower protocol checks. Public CLI recovery remains deferred. |
 | **Deferred public recovery: Alice uses the shipped command after failure/exhaustion.** | #386/#387 internal controls precede a later public-control seam `resumes and grants one batch through the public entry`. Exact retained subject, idempotent request/result, loss/reconnect, same Run, no duplicate grant, and one task Begin must be proven separately; do not claim this from core-control tests. |
 | **S1–S8: chronology and forbidden paths.** | `packages/dalph/test/integration/direct-remote-publication.integration.test.ts::publishes M before local promotion and task completion, then releases its dependant from a later complete graph`, `packages/dalph/test/scenarios/production.test.ts::retains remote delivery across Pause and Exit`, and `packages/dalph/test/scenarios/production.test.ts` cases `ordinary production Run retries resumed finality after a lost completion response and returns status after settlement and termination`, `S8 dependency blocks finality`, `S8 changed revision blocks finality`, and `S8 foreign claim blocks finality` cover the maintained publication, lifecycle, cleanup, and finality transcripts. Conformance owners must retain negative controls for wrong candidate/destination, missing proof, unsafe mutation, duplicate successor/grant, reset budgets, early termination, and dependant release before the later complete graph. |
-| **S1: one real disposable dogfood task.** | Built production CLI with a named Kimi or Codex profile. The run log must capture exact source/Base/C/M, task/Run/attempt, endpoint/ref, remote acknowledgement and independent hosted-head evidence, local promotion, GitHub confirmation, exact cleanup and termination. No controlled fixture, local-only success, hosted #388 qualification, or provider smoke prompt substitutes. |
+| **S1: one real disposable dogfood task.** | Built production CLI with a named Kimi or Codex profile. The run log must capture exact source/Base/C/M, task/Run/attempt, endpoint/ref, remote acknowledgement and independent hosted-head evidence, local promotion, GitHub confirmation, exact cleanup and termination. A controlled loopbackActions qualification, local-only success, or provider smoke prompt does not substitute for the hosted remote S1. The actual disposable GitHub remote execution recorded in the #388 audit is valid hosted S1 evidence. |
 
 The seven-task `deliveryInvariantStoryCapstone` remains a separate accepted delivery story under [the delivery capstone scenario](delivery-capstone.md). Its explicit `pnpm test:integration:capstone` proof is currently open. This amendment removes that broad composition from the blocking S1–S8 publication mapping while retaining the controlled publication/dependant, lifecycle, finality-positive, and finality-negative checks above. It reduces seven-task composition coverage for this parent; it changes no production behavior and does not claim the separate capstone passed.
 
@@ -1194,8 +1199,9 @@ executor commands one per-attempt gate. Its regression test
 `turn/start`, starts `Begin` and `attach` concurrently, and proves attachment
 cannot settle until `Begin` releases; the focused command passed with 1 test
 passed and 178 skipped. This repair changes provider-local sequencing only;
-the no-extra-remote-read decision is unchanged. The fresh supervised
-disposable S1 journey remains pending.
+the no-extra-remote-read decision is unchanged. At this 2026-09-30 repair
+checkpoint, the fresh supervised disposable S1 remained pending; the later
+2026-10-01 hosted S1 evidence is recorded in the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance-2026-10-01).
 
 ## Implementation and acceptance boundary
 
@@ -1216,16 +1222,20 @@ acceptance evidence must preserve the #384 facts and order. Automatic successors
 need an explicit cleanup disposition; no issue may fabricate Full rerun to reuse
 that code. Public control exposure retains the qualification limit stated above.
 
-Before the fresh supervised hosted S1, require passing evidence from the
-controlled S1–S8 checks and the competing-push S2 check. Also run focused tests
-mapped to each changed accepted scenario and `pnpm check:fast` for integration
-readiness. This documentation-only change does not alter Dalph runtime workflow
-or provider operations. Local `check:all` remains an optional maintainer/release diagnostic,
-not a prerequisite for each implementation attempt. Run one fresh supervised
-disposable S1 dogfood journey only after the #390 retained-run closure; do not
-repair the retained failed candidate. Record expected duration and wall-clock
-stop time before long operations; reconcile retained Runs before retry, preserve
-failed evidence and unexecuted suffixes, and never retry throttled mutations.
+For any fresh supervised hosted S1, require passing evidence from the controlled
+S1–S8 checks and the competing-push S2 check. Also run focused tests mapped to
+each changed accepted scenario and `pnpm check:fast` for integration readiness.
+Run a fresh supervised disposable S1 only after the #390 retained-run closure;
+do not repair the retained failed candidate. Before long operations, record the
+expected duration and wall-clock stop; reconcile retained Runs before retry,
+preserve failed evidence and unexecuted suffixes, and never retry throttled
+mutations. For the 2026-10-01 S1, these prerequisites were met; the retained
+#388 evidence records the predeclared bound, one disposable execution, exact
+remote and local identities, and postflight reconciliation. Local `check:all`
+remains an optional maintainer/release diagnostic, not a prerequisite for each
+implementation attempt. This documentation-only update changes no Dalph
+runtime workflow or provider operation. The separate seven-task capstone
+remains open manual.
 
 The Astra review identified public control exposure, temporary-failure
 resumption, mandatory revalidation of conclusive proof, and a prescribed
@@ -1243,5 +1253,7 @@ frozen full gate in run
 `a29737d9b00612d407d6b7eb5c7de10fdb2bb29a`. That historical result does not
 qualify the current candidate. No frozen full gate has been run for the current
 candidate; local `check:all` is an optional maintainer/release diagnostic under
-current policy. The required fresh supervised hosted S1 remains unproven. No
-GitHub issue closure is claimed.
+current policy. At the time of this earlier implementation checkpoint, the
+required fresh supervised hosted S1 remained unproven; the 2026-10-01 hosted S1
+is documented in the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance-2026-10-01).
+No GitHub issue closure is claimed by this scenario document.
