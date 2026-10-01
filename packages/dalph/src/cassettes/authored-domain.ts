@@ -1245,6 +1245,12 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
     targetLineageObservation: Schema.optionalKey(TargetLineageObservation),
     /** Ordered Git target-lineage facts returned by successive production reads. */
     targetLineageObservations: Schema.optionalKey(Schema.Array(TargetLineageObservation)),
+    /** Exact attempt owns its lineage responses; independent attempts may read in either order. */
+    targetLineageByAttempt: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({ attemptId: AttemptId, observations: Schema.NonEmptyArray(TargetLineageObservation) })
+      )
+    ),
     trackerGraph: AuthoredTrackerGraph,
     worktreeObservation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   }),

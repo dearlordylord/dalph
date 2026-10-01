@@ -178,6 +178,7 @@ import {
 } from "./authored-observation-playback.js"
 import { authoredCandidateCleanupBoundaryLayer } from "./authored-candidate-cleanup.js"
 import { authoredDeliveryStatusReadOf, AuthoredDeliveryStatusRead } from "./authored-delivery-status.js"
+import { makeAuthoredAttemptTargetLineage } from "./authored-target-lineage.js"
 
 const authoredCassetteRemotePublicationTarget = RemotePublicationTarget.make({
   branch: RemotePublicationBranchRef.make("refs/heads/main"),
@@ -2256,6 +2257,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         })
       )
       const authoredTargetLineage = yield* Ref.make(cassette.startingFacts.targetLineageObservations ?? [])
+      const lineageByAttempt = cassette.startingFacts.targetLineageByAttempt
+      if (lineageByAttempt !== undefined && cassette.startingFacts.targetLineageObservations !== undefined)
+        return yield* Effect.die("authored lineage responses cannot mix global and exact-attempt ownership")
+      const authoredAttemptLineage =
+        lineageByAttempt === undefined ? undefined : yield* makeAuthoredAttemptTargetLineage(lineageByAttempt)
       const authoredCleanupStory = cassette.story.some(
         ({ _tag }) =>
           _tag === "IntegratorCandidateCleanupEvidenceRevisionReturned" ||
@@ -2285,6 +2291,8 @@ const runAuthoredScenarioCassetteWith = (request: {
             return yield* gitTargetLineage.read(plannedBaseSha, target)
           })
       })
+      const targetLineageForAttempt = (attemptId: AttemptId) =>
+        authoredAttemptLineage === undefined ? authoredGitTargetLineage : authoredAttemptLineage.forAttempt(attemptId)
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
       const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
       const ordinaryInterpreterLayer = workflowInterpreterLayer.pipe(
@@ -2355,7 +2363,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 return result
               }),
             readTargetLineage: (operation) =>
-              observeTargetLineageThrough(authoredGitTargetLineage, operation).pipe(
+              observeTargetLineageThrough(targetLineageForAttempt(operation.plannedAttempt.attemptId), operation).pipe(
                 Effect.tap((result) =>
                   cursor
                     .observeDirectGitTargetLineageResult(
