@@ -372,30 +372,48 @@ it.effect("replays independent A-E boundary chains in opposite valid interleavin
       expect(unfinished.detail).toContain("unconsumed required occurrences: A:claim")
       expect(unfinished.detail).toContain("E:executor")
     }
-    const play = (order: ReadonlyArray<(typeof names)[number]>) =>
+    const stages = ["claim", "graph", "spec", "plan", "worktree", "executor"] as const
+    const play = (order: ReadonlyArray<readonly [(typeof names)[number], (typeof stages)[number]]>) =>
       Effect.gen(function* () {
         const cursor = yield* makeStoryCursor([...authored.story, terminal], { causalWindows: [authored.window] })
-        for (const name of order) {
+        for (const [name, stage] of order) {
           const claim = causalContext(`operation:${name}:claim`, [])
           const graphContext = causalContext(`operation:${name}:graph`, [`operation:${name}:claim`])
           const spec = causalContext(`operation:${name}:spec`, [`operation:${name}:graph`])
-          yield* cursor.consumeDalphSelectionFor(operation(name, "claim"), claim)
-          yield* cursor.consumeDalphSelectionFor(readGraph, graphContext)
-          yield* cursor.consumeTrackerGraphFor(target, graphContext)
-          yield* cursor.consumeDalphSelectionFor(operation(name, "spec"), spec)
-          yield* cursor.consumeTaskWorkSpecificationFor(TaskId.make(name), spec)
-          yield* cursor.consumeDalphSelectionFor(operation(name, "plan"), causalContext(`operation:${name}:plan`, []))
-          yield* cursor.consumeDalphSelectionFor(
-            operation(name, "worktree"),
-            causalContext(`operation:${name}:worktree`, [])
-          )
-          yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make(`attempt:${name}:0`))
+          switch (stage) {
+            case "claim":
+              yield* cursor.consumeDalphSelectionFor(operation(name, "claim"), claim)
+              break
+            case "graph":
+              yield* cursor.consumeDalphSelectionFor(readGraph, graphContext)
+              yield* cursor.consumeTrackerGraphFor(target, graphContext)
+              break
+            case "spec":
+              yield* cursor.consumeDalphSelectionFor(operation(name, "spec"), spec)
+              yield* cursor.consumeTaskWorkSpecificationFor(TaskId.make(name), spec)
+              break
+            case "plan":
+              yield* cursor.consumeDalphSelectionFor(
+                operation(name, "plan"),
+                causalContext(`operation:${name}:plan`, [])
+              )
+              break
+            case "worktree":
+              yield* cursor.consumeDalphSelectionFor(
+                operation(name, "worktree"),
+                causalContext(`operation:${name}:worktree`, [])
+              )
+              break
+            case "executor":
+              yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make(`attempt:${name}:0`))
+              break
+          }
         }
         expect(yield* cursor.storyPosition).toBe(authored.story.length)
         yield* cursor.consumeTerminalAssertions
       })
-    yield* play(names)
-    yield* play([...names].reverse())
+    yield* play(names.flatMap((name) => stages.map((stage) => [name, stage] as const)))
+    yield* play(stages.flatMap((stage) => [...names].reverse().map((name) => [name, stage] as const)))
   })
 )
 
