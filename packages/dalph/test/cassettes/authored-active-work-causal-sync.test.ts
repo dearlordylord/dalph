@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -223,6 +223,48 @@ it.effect("replays opposite graph, specification, and worktree selection orders 
       expect(yield* cursor.storyPosition).toBe(5)
       yield* cursor.consumeTerminalAssertions
     }
+  })
+)
+
+it.effect("records concurrent causal claims in the same order as atomic consumption", () =>
+  Effect.gen(function* () {
+    const firstCaptured = yield* Deferred.make<void>()
+    const releaseFirst = yield* Deferred.make<void>()
+    const secondStarted = yield* Deferred.make<void>()
+    const captureOrder: Array<string> = []
+    const first = { _tag: "AcquireTaskClaim" as const, taskId: TaskId.make("A") }
+    const second = { _tag: "AcquireTaskClaim" as const, taskId: TaskId.make("B") }
+    const authored = authorCausalWindow(
+      0,
+      parallelAuthored<AuthoredCausalBoundaryNode>(
+        authoredOccurrence(AuthoredOccurrenceId.make("A"), { item: selection("A", [], first) }),
+        authoredOccurrence(AuthoredOccurrenceId.make("B"), { item: selection("B", [], second) })
+      )
+    )
+    const cursor = yield* makeStoryCursor([...authored.story, terminal], {
+      causalWindows: [authored.window],
+      onOccurrence: ({ occurrenceId }) =>
+        Effect.gen(function* () {
+          if (occurrenceId === "A") {
+            yield* Deferred.succeed(firstCaptured, undefined)
+            yield* Deferred.await(releaseFirst)
+          }
+          if (occurrenceId !== undefined) captureOrder.push(occurrenceId)
+        })
+    })
+    const firstFiber = yield* cursor
+      .consumeDalphSelectionFor(first, causalContext("operation:A", []))
+      .pipe(Effect.forkChild)
+    yield* Deferred.await(firstCaptured)
+    const secondFiber = yield* Effect.gen(function* () {
+      yield* Deferred.succeed(secondStarted, undefined)
+      return yield* cursor.consumeDalphSelectionFor(second, causalContext("operation:B", []))
+    }).pipe(Effect.forkChild)
+    yield* Deferred.await(secondStarted)
+    yield* Deferred.succeed(releaseFirst, undefined)
+    yield* Fiber.join(firstFiber)
+    yield* Fiber.join(secondFiber)
+    expect(captureOrder).toEqual(["A", "B"])
   })
 )
 

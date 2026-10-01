@@ -971,6 +971,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             nextIndex += 1
           }
           if (nextIndex !== index) yield* SubscriptionRef.set(position, nextIndex)
+          yield* (
+            options.onOccurrence?.({
+              item: claimedItem,
+              storyPosition: nextIndex,
+              authoredStoryIndex: value.storyIndex,
+              occurrenceId: id
+            }) ?? Effect.void
+          )
+          yield* announceTerminalAssertions
           return { _tag: "Claimed" as const, item: claimedItem, index: value.storyIndex, id, storyPosition: nextIndex }
         })
       )
@@ -978,15 +987,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       if (result._tag === "Failure") {
         return yield* new AuthoredCausalSelectionFailure({ detail: result.detail, storyPosition: result.index })
       }
-      yield* (
-        options.onOccurrence?.({
-          item: result.item,
-          storyPosition: result.storyPosition,
-          authoredStoryIndex: result.index,
-          occurrenceId: result.id
-        }) ?? Effect.void
-      )
-      yield* announceTerminalAssertions
       return Option.some(result)
     })
 
