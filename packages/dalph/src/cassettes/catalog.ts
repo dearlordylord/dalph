@@ -1677,6 +1677,83 @@ const changedAttemptRestartAuthorityReads = [
   { _tag: "TaskClaimCurrentReadReturned", taskId: "A" }
 ] as const
 
+/** The Operator's exact Restart authority reads and successor are independent of the coordinator's G2. */
+const restartAuthorityOffsets = {
+  selectedG2: 0,
+  returnedG2: 1,
+  directGraph: 2,
+  directSpecification: 3,
+  directClaim: 4,
+  successorWorktree: 5,
+  successorBegin: 6,
+  successorProjection: 7
+} as const
+const changedAttemptRestartAuthorityWindow = (startIndex: number) =>
+  Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex,
+    endIndex: startIndex + changedAttemptRestartAuthorityReads.length + changedAttemptSuccessorStory.length,
+    occurrences: [
+      {
+        id: "restart-post-quiescence-G2-selection",
+        storyIndex: startIndex + restartAuthorityOffsets.selectedG2,
+        predecessorIds: [],
+        graphReadCause: "PostQuiescenceReconfirmation"
+      },
+      {
+        id: "restart-post-quiescence-G2-result",
+        storyIndex: startIndex + restartAuthorityOffsets.returnedG2,
+        predecessorIds: ["restart-post-quiescence-G2-selection"],
+        ownerRole: "restart-post-quiescence-G2-selection"
+      },
+      {
+        id: "restart-direct-authority-graph",
+        storyIndex: startIndex + restartAuthorityOffsets.directGraph,
+        predecessorIds: [],
+        graphReadCause: "AttemptRestartAuthorityCheck",
+        graphReadExplicitTaskIds: ["A"],
+        directGraphRole: "restart-direct-authority-graph",
+        directGraphPredecessorRoles: []
+      },
+      {
+        id: "restart-direct-authority-specification",
+        storyIndex: startIndex + restartAuthorityOffsets.directSpecification,
+        predecessorIds: ["restart-direct-authority-graph"],
+        directFocusedRead: {
+          role: "restart-direct-authority-specification",
+          kind: "ReadTaskWorkSpecification",
+          taskId: "A",
+          predecessorRoles: ["restart-direct-authority-graph"]
+        }
+      },
+      {
+        id: "restart-direct-authority-claim",
+        storyIndex: startIndex + restartAuthorityOffsets.directClaim,
+        predecessorIds: ["restart-direct-authority-specification"],
+        directFocusedRead: {
+          role: "restart-direct-authority-claim",
+          kind: "ReadTaskClaim",
+          taskId: "A",
+          predecessorRoles: ["restart-direct-authority-graph", "restart-direct-authority-specification"]
+        }
+      },
+      {
+        id: "restart-successor-worktree",
+        storyIndex: startIndex + restartAuthorityOffsets.successorWorktree,
+        predecessorIds: ["restart-direct-authority-claim"]
+      },
+      {
+        id: "restart-successor-begin",
+        storyIndex: startIndex + restartAuthorityOffsets.successorBegin,
+        predecessorIds: ["restart-successor-worktree"]
+      },
+      {
+        id: "restart-successor-projection",
+        storyIndex: startIndex + restartAuthorityOffsets.successorProjection,
+        predecessorIds: ["restart-successor-begin"]
+      }
+    ]
+  })
+
 const changedAttemptRestartAuthorityReadsBeforeFinalReconfirmation = [
   changedAttemptRestartAuthorityReads[1],
   changedAttemptRestartAuthorityReads[3],
@@ -1708,9 +1785,7 @@ const changedAttemptSuccessorStory = [
 ] as const
 
 /** Alice replaces exact safely suspended P1, then ordinary worktree reconciliation and admission start clean P2. */
-export const changedAttemptRestartsCleanlyAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
+const changedAttemptRestartsCleanlyUnwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice restarts the exact changed attempt into one clean successor",
   startingFacts: attemptChoiceStartingFacts,
@@ -1725,11 +1800,18 @@ export const changedAttemptRestartsCleanlyAuthoredCassette: ScenarioCassette = S
   ]
 })
 
+export const changedAttemptRestartsCleanlyAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptRestartsCleanlyUnwindowed,
+  causalWindows: [changedAttemptRestartAuthorityWindow(changedAttemptRestartStoryThroughChoice.length)]
+})
+
 /** Process loss after the atomic append reconstructs exact P2 and never allocates P3. */
 export const changedAttemptRestartAfterSupersessionCrashAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Dalph reconstructs the exact replacement successor after process loss",
   story: [
     ...changedAttemptRestartStoryThroughChoice,
@@ -1751,7 +1833,7 @@ export const changedAttemptRestartAfterSupersessionCrashAuthoredCassette: Scenar
 export const changedAttemptRestartFactsChangedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Alice sees changed-again task facts prevent the recorded Restart from planning P2",
   story: [
     ...changedAttemptRestartStoryThroughChoice,
@@ -1767,7 +1849,7 @@ export const changedAttemptRestartFactsChangedAuthoredCassette: ScenarioCassette
 export const changedAttemptRestartClaimUnavailableAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Alice sees Restart wait after three unreadable exact-claim reads",
   story: [
     ...changedAttemptRestartStoryThroughChoice,
@@ -1786,7 +1868,7 @@ export const changedAttemptRestartClaimUnavailableAuthoredCassette: ScenarioCass
 export const changedAttemptRestartWorktreeNotReadyAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...changedAttemptRestartsCleanlyAuthoredCassette,
+  ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Alice sees Restart wait when Git reports the old worktree absent",
   story: [
     ...changedAttemptRestartStoryThroughChoice,
