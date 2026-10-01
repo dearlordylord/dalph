@@ -1798,6 +1798,23 @@ const changedAttemptRestartClaimUnavailableWindow = (startIndex: number) => {
   })
 }
 
+/** W1's changed observation belongs after the exact Restart authority claim, independently of G2. */
+const changedAttemptRestartWorktreeNotReadyWindow = (startIndex: number) => {
+  const full = changedAttemptRestartAuthorityWindow(startIndex)
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    ...full,
+    endIndex: startIndex + restartAuthorityOffsets.successorBegin,
+    occurrences: [
+      ...full.occurrences.slice(0, restartAuthorityOffsets.successorWorktree),
+      {
+        id: "restart-non-ready-worktree-change",
+        storyIndex: startIndex + restartAuthorityOffsets.successorWorktree,
+        predecessorIds: ["restart-direct-authority-claim"]
+      }
+    ]
+  })
+}
+
 const changedAttemptRestartAuthorityReadsBeforeFinalReconfirmation = [
   changedAttemptRestartAuthorityReads[1],
   changedAttemptRestartAuthorityReads[3],
@@ -1916,6 +1933,7 @@ export const changedAttemptRestartWorktreeNotReadyAuthoredCassette: ScenarioCass
 )({
   ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Alice sees Restart wait when Git reports the old worktree absent",
+  causalWindows: [changedAttemptRestartWorktreeNotReadyWindow(changedAttemptRestartStoryThroughChoice.length)],
   story: [
     ...changedAttemptRestartStoryThroughChoice,
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
