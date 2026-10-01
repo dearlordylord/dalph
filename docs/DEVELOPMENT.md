@@ -106,12 +106,16 @@ Choose checks by affected behavior, not by commit or handoff alone:
   a negative control. A required fresh live-provider scenario remains separate
   from both local and hosted broad gates.
 - **Before hosted submission:** run `pnpm check:submit` once on the coherent
-  candidate when source or test code changed. It adds the hosted full lint census
-  and the in-memory cassette suite to the development-loop checks. Both address
+  candidate when source or test code changed. It prepares production artifacts
+  before typecheck and the hosted full lint census, then runs the in-memory
+  cassette suite.
+  The lint and cassette checks address
   failures first discovered in hosted #309 runs; prior local measurements were
   about 33 seconds for `check:fast` plus the lint census and 45 seconds for the
   cassette suite. It does not run the full local qualification or repeat after
-  documentation-only edits.
+  documentation-only edits. The artifact preparation matches hosted preflight:
+  workspace package exports resolve through `dist`, so a fresh worktree's
+  type-aware lint must not depend on build output left by earlier work.
 - **Baseline:** no separate baseline is mandatory. The final preflight owns
   its lint pass; run the maintained Lab only when its boundary is affected.
   `check:baseline` remains an explicit diagnostic convenience, not a prerequisite.
@@ -180,6 +184,40 @@ stage and its report says `formalDisposition: not-requested`. A maintainer can
 run `pnpm check:quint` separately; hosted formal and quality cells remain
 independent. This qualification-tooling selection changes no Dalph runtime
 behavior or assertions inside the formal command.
+
+### Local CI evidence before a hosted push
+
+On a clean Linux worktree with Python 3, inotify, the pinned Node version, and
+installed workspace dependencies, run
+`pnpm check:all --candidate=<exact Base SHA>` for the exact
+committed HEAD. This runs the preflight and delivery, recorded-catalog, and
+coverage commands selected from the same stage algebra as hosted quality CI.
+For a PR, read its current `baseRefOid` and `headRefOid` (for example with
+`gh pr view <number> --json baseRefOid,headRefOid`) immediately before the
+local run. Verify that the local HEAD equals `headRefOid`, pass `baseRefOid`
+to `--candidate`, and set `DALPH_DIAGNOSTICS_BASE` to that same Base for earlier
+changed-file diagnostics. A local `origin/master` may lag the PR Base; do not
+infer the exact Base from it. If hosted CI checks a synthetic merge commit,
+compare that commit's tree with the reviewed head tree before counting the
+local result as evidence for the same source bytes.
+If model inputs changed, run `pnpm check:quint --force` on that unchanged HEAD
+for the complete formal command profile. `check:submit` is a cheaper prepush
+diagnostic and never claims full CI coverage.
+
+A passing local stage supplies acceptance evidence for the same command and
+source boundary. The local gate is sequential in one worktree; hosted CI also
+tests clean runner setup, its generated Node matrix, coverage UID isolation,
+portable artifact export/aggregation, and two formal shards under the hosted
+CPU policy. Record these remaining platform and workflow differences instead
+of reporting the remote jobs as passed. Remote CI can continue in the
+background after a locally qualified push; investigate its result only when it
+provides new failure evidence or the repository requires its status for merge.
+This makes the local result the development decision and preserves the hosted
+run as a separate deployment and platform check. The shared quality command
+selection is checked by `quality-gate-stage-plan.test.mjs`; the local and hosted
+formal profiles have identical commands, steps, and execution obligations as
+checked by `quint-effective-profile.test.mjs`, with different time budgets and
+hosted shard resource policy.
 
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
@@ -279,7 +317,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
 | `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, and the Base-scoped quality-stage fixture probe. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. Without that Base, the fixture probe reports that it was skipped. |
-| `check:submit` | One local readiness pass before hosted submission: `check:fast`, the hosted full lint census, and the in-memory cassette suite. It does not run a full gate or require Linux inotify. |
+| `check:submit` | One local readiness pass before hosted submission: production artifact preparation, `check:fast`, the hosted full lint census, and the in-memory cassette suite. It does not run a full gate or require Linux inotify. |
 | `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Optional diagnostic only; never a prerequisite to final qualification. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
