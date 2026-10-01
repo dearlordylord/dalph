@@ -1179,12 +1179,68 @@ const unpauseStoryItem = (
   return unpausePauseProgress(item)
 }
 
-export const taskPauseObservationUnpausedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
+const taskPauseObservationUnpausedUnwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...taskPauseCoversGroupingChildAuthoredCassette,
   name: "Alice unpauses task A before its Pause observation confirms",
   story: taskPauseCoversGroupingChildAuthoredCassette.story.flatMap(unpauseStoryItem)
+})
+const unpauseBeforeBClaimEnd = beforeBClaimWindow(taskPauseObservationUnpausedUnwindowed.story).endIndex
+const unpauseARefreshIndex = taskPauseObservationUnpausedUnwindowed.story.findLastIndex(
+  (item, index) =>
+    index > unpauseBeforeBClaimEnd &&
+    item._tag === "DalphSelects" &&
+    item.operation._tag === "ReadTaskWorkSpecification" &&
+    item.operation.taskId === "A"
+)
+const unpauseBRefreshIndex = taskPauseObservationUnpausedUnwindowed.story.findLastIndex(
+  (item, index) =>
+    index > unpauseBeforeBClaimEnd &&
+    index < unpauseARefreshIndex &&
+    item._tag === "DalphSelects" &&
+    item.operation._tag === "ReadTaskWorkSpecification" &&
+    item.operation.taskId === "B"
+)
+const unpauseARefreshResponseIndex = taskPauseObservationUnpausedUnwindowed.story.findIndex(
+  (item, index) =>
+    index > unpauseARefreshIndex && item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === "A"
+)
+Schema.decodeUnknownSync(Schema.Literal(true))(
+  unpauseBRefreshIndex >= 0 &&
+    unpauseARefreshIndex > unpauseBRefreshIndex &&
+    unpauseARefreshResponseIndex > unpauseARefreshIndex
+)
+const unpauseRefreshItems = taskPauseObservationUnpausedUnwindowed.story.slice(
+  unpauseBRefreshIndex,
+  unpauseARefreshResponseIndex + 1
+)
+const unpauseBSelectedPredecessorIndex = unpauseRefreshItems.findLastIndex(
+  (item, offset) => unpauseBRefreshIndex + offset < unpauseARefreshIndex && item._tag === "DalphSelects"
+)
+Schema.decodeUnknownSync(Schema.Literal(true))(unpauseBSelectedPredecessorIndex >= 0)
+const unpauseRefreshWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+  startIndex: unpauseBRefreshIndex,
+  endIndex: unpauseARefreshResponseIndex + 1,
+  occurrences: unpauseRefreshItems.map((item, offset) => {
+    const id = `unpause-refresh-${offset}`
+    const previousId = `unpause-refresh-${offset - 1}`
+    const isARead = unpauseBRefreshIndex + offset === unpauseARefreshIndex
+    return {
+      id,
+      storyIndex: unpauseBRefreshIndex + offset,
+      predecessorIds:
+        offset === 0 ? [] : [previousId, ...(isARead ? [`unpause-refresh-${unpauseBSelectedPredecessorIndex}`] : [])],
+      ...(item._tag === "TaskWorkSpecificationReadReturned" || item._tag === "TaskClaimCurrentReadReturned"
+        ? { ownerRole: previousId }
+        : {}),
+      ...(isARead ? { waitForSelectedPredecessor: true } : {})
+    }
+  })
+})
+export const taskPauseObservationUnpausedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...taskPauseObservationUnpausedUnwindowed,
+  causalWindows: [...(taskPauseObservationUnpausedUnwindowed.causalWindows ?? []), unpauseRefreshWindow]
 })
 
 /** G2 newly covers D, so only a post-G2 exact executor report can settle its Pause obligation. */
