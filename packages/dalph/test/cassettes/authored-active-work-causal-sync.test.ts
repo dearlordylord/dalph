@@ -294,6 +294,12 @@ it.effect("replays independent A-E boundary chains in opposite valid interleavin
         expect(failure.detail).toContain(`unmet predecessors: ${predecessor}`)
       }
     }
+    const unfinished = yield* Effect.flip(premature.consumeTerminalAssertions)
+    expect(unfinished).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    if (unfinished instanceof AuthoredCausalSelectionFailure) {
+      expect(unfinished.detail).toContain("unconsumed required occurrences: A:claim")
+      expect(unfinished.detail).toContain("E:executor")
+    }
     const play = (order: ReadonlyArray<(typeof names)[number]>) =>
       Effect.gen(function* () {
         const cursor = yield* makeStoryCursor([...authored.story, terminal], { causalWindows: [authored.window] })

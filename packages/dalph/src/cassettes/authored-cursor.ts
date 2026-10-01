@@ -38,6 +38,7 @@ import {
   type AuthoredOccurrenceId,
   AuthoredOccurrenceMatchFailure,
   compileAuthoredOccurrenceGraph,
+  finishAuthoredOccurrenceGraph,
   matchAuthoredOccurrence
 } from "./authored-causal-graph.js"
 
@@ -548,7 +549,7 @@ export interface StoryCursor {
   >
   readonly consumeTerminalAssertions: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.ExpectedBehavior.Type,
-    CursorFailure
+    ExactCausalCursorFailure
   >
   readonly consumeTrackerGraph: Effect.Effect<AuthoredTrackerGraphReadResult, CursorFailure>
   /** Consume the result paired with one exact selected complete tracker read. */
@@ -2242,11 +2243,24 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ).pipe(Effect.orDie)
     )
   })
-  const consumeTerminalAssertions = consume("ExpectedBehavior").pipe(
-    Effect.flatMap((item) =>
-      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(item).pipe(Effect.orDie)
+  const consumeTerminalAssertions = Effect.gen(function* () {
+    const frontiers = yield* Ref.get(causalWindowFrontiers)
+    for (const window of causalWindows.values()) {
+      const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
+      const failure = finishAuthoredOccurrenceGraph(window.graph, { consumed })
+      if (failure !== undefined) {
+        return yield* new AuthoredCausalSelectionFailure({
+          detail: failure.detail,
+          storyPosition: yield* SubscriptionRef.get(position)
+        })
+      }
+    }
+    return yield* consume("ExpectedBehavior").pipe(
+      Effect.flatMap((item) =>
+        Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(item).pipe(Effect.orDie)
+      )
     )
-  )
+  })
   const consumeTrackerGraphLoop = Effect.fn("AuthoredCassette.consumeTrackerGraphLoop")(function* (): Effect.fn.Return<
     AuthoredTrackerGraphReadResult,
     CursorFailure
