@@ -21,11 +21,15 @@ it.effect(
       const records = yield* fixture.journal.read(fixture.runId)
       expect(records.filter(({ event }) => event._tag === "IntegrationFinalitySettled")).toHaveLength(7)
       expect(records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
-      expect((yield* Ref.get(fixture.graphReads)).filter(({ revision }) => revision.startsWith("Gfinal"))).toHaveLength(
-        1
-      )
       expect(yield* Ref.get(fixture.processEndRequests)).toBe(0)
-      const finalReads = (yield* Ref.get(fixture.graphReads)).filter(({ revision }) => revision.startsWith("Gfinal"))
+      const finalReads = (yield* Ref.get(fixture.graphReads)).filter(
+        ({ intent, revision }) =>
+          revision.startsWith("Gfinal") &&
+          intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+          intent.event.operation._tag === "ReadTrackerGraph" &&
+          intent.event.operation.cause._tag === "PostQuiescenceReconfirmation"
+      )
+      expect(finalReads).toHaveLength(1)
       const finalRead = finalReads[0]
       if (finalRead === undefined || finalRead.runtime === null)
         return expect.fail("missing live quiescence observation before final tracker call")
@@ -84,7 +88,13 @@ it.effect(
       yield* process.event((event) => event._tag === "WorkflowRunTerminated")
       const records = yield* fixture.journal.read(fixture.runId)
       const reads = yield* Ref.get(fixture.graphReads)
-      const finalRead = reads.find(({ revision }) => revision.startsWith("Gfinal"))
+      const finalRead = reads.find(
+        ({ intent, revision }) =>
+          revision.startsWith("Gfinal") &&
+          intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+          intent.event.operation._tag === "ReadTrackerGraph" &&
+          intent.event.operation.cause._tag === "PostQuiescenceReconfirmation"
+      )
       if (finalRead === undefined) return expect.fail("missing actual final tracker read")
       expect(finalRead.settledTaskIds).toEqual(allNames)
       expect(finalRead.snapshot.toWire().tasks.map(({ id, lifecycle }) => [id, lifecycle._tag])).toEqual(
@@ -218,12 +228,14 @@ it.effect(
       const records = yield* fixture.journal.read(fixture.runId)
       expect(records.slice(0, prefix.length)).toEqual(prefix)
       const reads = (yield* Ref.get(fixture.graphReads)).filter(
-        ({ intent }) =>
+        ({ intent, revision }) =>
+          revision.startsWith("Gfinal") &&
           intent.event._tag === "TaskTrackerReadIntentRecorded" &&
           intent.event.operation._tag === "ReadTrackerGraph" &&
           intent.event.operation.cause._tag === "PostQuiescenceReconfirmation"
       )
       expect(reads).toHaveLength(2)
+      expect(reads[0]?.intent.position).toBeLessThanOrEqual(prefix.length)
       expect(reads[1]?.intent.position).toBeGreaterThan(prefix.length)
       const operations = reads.flatMap(({ intent }) =>
         intent.event._tag === "TaskTrackerReadIntentRecorded" ? [intent.event.operation.operationId] : []

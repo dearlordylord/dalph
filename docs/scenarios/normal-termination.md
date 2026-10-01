@@ -30,11 +30,15 @@ its original claim, deletes its completion marker, checks both owning records,
 and settles. No person triggers these controlled executor/Integrator responses.
 After seven settlements, no executable proposal, live action owner, held
 position, retained executor/integration/finality/cleanup responsibility, or
-isolated conflict remains. Only then does stabilization record its new complete
-read intent and call the tracker for Gfinal. The fixture correlates the actual
-target-only provider call with that exact pending durable
-`PostQuiescenceReconfirmation` operation. Gfinal has different lifecycle content
-from G5 and reports all seven exact tasks successful. It contains no claim facts.
+isolated conflict remains. A new activation may first make its required
+`WorkflowEstablishment` graph read (G1), which can already return Gfinal.
+Stabilization then records a distinct complete read intent and calls the tracker
+for its terminal `PostQuiescenceReconfirmation` read (G2). The fixture correlates
+that actual target-only provider call with its exact pending durable operation.
+Earlier quiescence checks may also make G2 reads while work remains, including
+one against G5; they cannot supply terminal evidence. The terminal G2 occurs
+after all seven settlements and returns Gfinal. Gfinal has different lifecycle
+content from G5 and reports all seven exact tasks successful. It contains no claim facts.
 The controlled tracker starts with A successful and B–G open. Only successful
 `CompletionTaskBoundary.completeTask` calls change its lifecycle state; every
 graph response is projected from that state, never from Journal settlements.
@@ -47,16 +51,18 @@ one completed Run. This does not request application Exit or process termination
 
 ## Crash and forbidden results
 
-A crash after the Gfinal observation but before termination preserves the
-prefix. Restart obtains a distinct later read intent and observation before
-termination; old freshness is insufficient. If termination appended but its
-acknowledgement was lost, restart reconstructs the final record with zero new
-termination append attempts, tracker reads, or delivery effects.
+A crash after the terminal G2 observation but before termination preserves the
+prefix. Restart may make a new G1 establishment read, then obtains a distinct
+later terminal G2 intent and observation before termination; old freshness is
+insufficient. If termination appended but its acknowledgement was lost, restart
+reconstructs the final record with zero new termination append attempts,
+tracker reads, or delivery effects.
 
-Dalph must not borrow G5 as final evidence, infer claim absence from graph
-success, terminate with any named outstanding work, append termination twice,
-or turn normal Completed into application Exit. No live provider or clock retry
-is required: controlled queues and exact append cut points expose the boundaries.
+Dalph must not borrow G5 or G1 as final evidence, infer claim absence from graph
+success, terminate with any named outstanding work, repeat a task mutation or
+append termination twice, or turn normal Completed into application Exit. No
+live provider or clock retry is required: controlled queues and exact append
+cut points expose the boundaries.
 
 ## Scenario-to-test mapping and implementation plan
 
@@ -69,7 +75,7 @@ The two outstanding-work tests live in
 | --- | --- |
 | Seven exact successful tasks and separate claim absence | `proves seven tracker successes from Gfinal and seven exact claim absences` |
 | Empty work and one normal termination, distinct from Exit | `records Completed once only after Gfinal and no remaining work` |
-| Gfinal crash loses process-local freshness | `obtains a distinct later Gfinal after a crash before termination` |
+| Terminal G2 crash loses process-local freshness; restart gets a distinct later G2 | `obtains a distinct later Gfinal after a crash before termination` |
 | Successful termination append loses acknowledgement | `reconstructs lost termination acknowledgement without another append attempt or boundary call` |
 | Actual proposal, live owner, held/executor work, integration, finality, and pending exact claim cleanup forbid termination | `keeps proposals live owners held executor integration finality and claim-cleanup work nonterminal` |
 | Another exact executor's report cannot settle B | `keeps an exact executor correlation conflict and its retained position nonterminal` |
