@@ -120,9 +120,11 @@ also require its UI/trace projection in the blocking preflight. Run
 it. Selection retains deleted and renamed source paths.
 The seven-task `deliveryInvariantStoryCapstone` is excluded from routine cassette
 execution and the recorded-catalog round trip. Run `pnpm test:integration:capstone`
-explicitly for its S8 acceptance proof. Its current fixture chronology is under
-repair, so a passing routine gate does not close S8. This selection changes test
-policy only; Dalph production runtime and its accepted behavior do not change.
+explicitly for its separate delivery-capstone proof. Its current fixture chronology
+is under repair, so a passing routine gate does not prove that accepted story.
+The S1–S8 publication mapping uses the focused checks named in the accepted
+direct-publication scenario. This selection changes test policy only; Dalph
+production runtime and its accepted behavior do not change.
 Complexity, duplication, and unused-export checks are optional trend diagnostics,
 not delivery blockers; `lint` owns formatter and code-lint correctness only.
 This reduces heuristic and sampling assurance without changing application tests.
