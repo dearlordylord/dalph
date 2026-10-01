@@ -3660,3 +3660,31 @@ blocker. The reviewed snapshot was
 The review source remained `6b9900ee007f3e0bbb30fee60fdfe82c7d2aabf9`; this
 closure changes documentation only and claims no runtime or qualification
 change.
+
+### Original supervised S1 substrate reconciliation — 2026-10-01
+
+The earlier postflight note that the stale Live lease remained under local
+reconciliation described the state before this reconciliation. The original
+substrate reconciliation succeeded before 04:14 UTC; its retained log is
+`/tmp/dalph-388-s1-original-reconcile.log`, SHA-256
+`e8acaae7055c9692514e7700fbeb43cb2fe3904e336eb8c36e4d89d360293021`.
+
+Under the normal store lease, the old CLI owner was absent. Helper PID 3297605
+was matched to identity `linux:131413068`. Exact launch PID 3249619, incarnation
+`df766…`, identity `linux:131224068`, had no fresh process, process group, or
+token. Reconciliation cleared only that exact launch incarnation, released the
+lease through its own lease API, and confirmed the nonblocking flock available
+with the helper absent. The executor-private snapshot changed from
+`64cea…31777f` to `1e558…8219c0`; the journal remained unchanged. Lease state
+changed from `357150…8adaa` to
+`2ee7cf4bccf8aba8d8e83dbe377a9a1d4e9f56ddc5daa76e650c40261659385b`. The
+semantic payload excluding `serverLaunch` remained `e223036d…380e4c9e`.
+Immutable backups remain preserved.
+
+This was terminal metadata reconciliation only: no app-server, provider,
+thread, turn, GitHub, or source operation occurred. The production runtime
+source remains `6b9900ee007f3e0bbb30fee60fdfe82c7d2aabf9`; the accepted workflow
+remains `Completed` with the recorded `WorkflowRunTerminated` event. This
+resolves the local lease reconciliation item without changing hosted workflow
+acceptance. Earlier pending statements are historical snapshots before this
+reconciliation. No issue closure or GitHub mutation is claimed.
