@@ -1,4 +1,4 @@
-import { Effect, Schedule, Schema } from "effect"
+import { Effect, Ref, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import {
@@ -6,6 +6,7 @@ import {
   type ActiveTaskClaim as ActiveTaskClaimValue,
   isExactTaskClaim,
   TaskClaimAcquisition,
+  TaskClaimAcquisitionReadOrdinal,
   TaskClaimConflict,
   type TaskClaimReadFailure,
   TaskClaimRequestFailure,
@@ -47,8 +48,19 @@ export const runTaskClaimAcquisitionProtocol = Effect.fn("TrackerMutation.runTas
   acquisition: TaskClaimAcquisition
 ) {
   const attemptedClaim = ActiveTaskClaim.make(acquisition)
+  const readCount = yield* Ref.make(0)
+  const readCurrentClaim = Effect.gen(function* () {
+    const previous = yield* Ref.getAndUpdate(readCount, (count) => count + 1)
+    const acquisitionRead = {
+      operationId: acquisition.operationId,
+      readOrdinal: TaskClaimAcquisitionReadOrdinal.make(previous + 1)
+    }
+    return yield* (tracker.readTaskClaimForAcquisition === undefined
+      ? tracker.readTaskClaim(acquisition.taskId)
+      : tracker.readTaskClaimForAcquisition(acquisition.taskId, acquisitionRead))
+  })
   const pass = Effect.gen(function* () {
-    const observation = yield* tracker.readTaskClaim(acquisition.taskId)
+    const observation = yield* readCurrentClaim
     if (observation._tag === "ActiveTaskClaim") {
       return yield* acceptObservedActiveClaim(observation, attemptedClaim, acquisition)
     }
@@ -85,7 +97,7 @@ export const runTaskClaimAcquisitionProtocol = Effect.fn("TrackerMutation.runTas
           ? Effect.gen(function* () {
               // The final allowed request is ambiguous just like every other
               // request, so reconcile it with one last authoritative read.
-              const observation = yield* tracker.readTaskClaim(acquisition.taskId)
+              const observation = yield* readCurrentClaim
               if (observation._tag === "ActiveTaskClaim") {
                 return yield* acceptObservedActiveClaim(observation, attemptedClaim, acquisition)
               }

@@ -675,6 +675,8 @@ export {
   controlledTrackerMutationLayerFrom,
   isExactTaskClaim,
   TaskClaimAcquisition,
+  TaskClaimAcquisitionRead,
+  TaskClaimAcquisitionReadOrdinal,
   TaskClaimConflict,
   TaskClaimObservation,
   TaskClaimOwnershipConflict,

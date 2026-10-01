@@ -43,6 +43,7 @@ import {
   CompletionClaimCleanupReadOrdinal,
   CompletionClaimRequestOrdinal,
   TaskClaimReleaseReadOrdinal,
+  TaskClaimAcquisitionReadOrdinal,
   OperationId,
   PlannedAttemptWorktreeObservation
 } from "@dalph/orchestrator"
@@ -1250,6 +1251,10 @@ export const AuthoredCausalWindow = Schema.Struct({
           })
         ])
       ),
+      /** The protocol's fresh read before one exact acquisition request. */
+      directAcquisitionClaimRead: Schema.optionalKey(
+        Schema.Struct({ operationId: OperationId, readOrdinal: TaskClaimAcquisitionReadOrdinal })
+      ),
       /** A direct Git operation binds only after its exact result is observed. */
       directGitRead: Schema.optionalKey(
         Schema.Struct({
@@ -1297,6 +1302,7 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
   const firstBoundaryStoryIndex = 2
   let previousEnd = firstBoundaryStoryIndex
   const cleanupReads = new Set<string>()
+  const acquisitionReads = new Set<string>()
   const allowedTags = new Set<AuthoredCassetteStoryItem["_tag"]>([
     ...authoredCassetteStoryItemOwners.DalphOperationTrace,
     ...authoredCassetteStoryItemOwners.Git,
@@ -1334,6 +1340,12 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         )
         if (cleanupReads.has(key)) return `direct cleanup claim read ${occurrence.id} repeats one exact call`
         cleanupReads.add(key)
+      }
+      if (occurrence.directAcquisitionClaimRead !== undefined) {
+        const read = occurrence.directAcquisitionClaimRead
+        const key = JSON.stringify([read.operationId, read.readOrdinal])
+        if (acquisitionReads.has(key)) return `direct acquisition claim read ${occurrence.id} repeats one exact call`
+        acquisitionReads.add(key)
       }
       if (item === undefined || !allowedTags.has(item._tag)) {
         return `causal occurrence ${occurrence.id} must name a controlled boundary item`
@@ -1420,6 +1432,15 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         )
           return `direct cleanup claim result ${occurrence.id} requires its exact task and no selected owner`
       }
+      if (occurrence.directAcquisitionClaimRead !== undefined) {
+        if (
+          (item._tag !== "TaskClaimCurrentReadReturned" &&
+            item._tag !== "TaskClaimReadReturned" &&
+            item._tag !== "TaskClaimReadFailed") ||
+          occurrence.ownerRole !== undefined
+        )
+          return `direct acquisition claim result ${occurrence.id} requires a claim response and no selected owner`
+      }
       if (
         (item._tag === "DirectGitWorktreeReadReturned" || item._tag === "DirectGitTargetLineageReadReturned") &&
         occurrence.directGitRead === undefined
@@ -1431,7 +1452,8 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
           occurrence.directFocusedRead,
           occurrence.repeatedFocusedRead,
           occurrence.directGitRead,
-          occurrence.directCleanupClaimRead
+          occurrence.directCleanupClaimRead,
+          occurrence.directAcquisitionClaimRead
         ].filter((value) => value !== undefined).length > 1
       )
         return `causal occurrence ${occurrence.id} names more than one direct operation`
@@ -1469,6 +1491,7 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         occurrence.directFocusedRead === undefined &&
         occurrence.repeatedFocusedRead === undefined &&
         occurrence.directCleanupClaimRead === undefined &&
+        occurrence.directAcquisitionClaimRead === undefined &&
         (item._tag === "TaskClaimReadFailed" ||
           item._tag === "TaskClaimReadReturned" ||
           item._tag === "TaskClaimCurrentReadReturned")

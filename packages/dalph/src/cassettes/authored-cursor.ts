@@ -7,6 +7,7 @@ import {
   type IntegratorCandidateText,
   type OperationId,
   type CompletionOriginalClaimCleanupRead,
+  type TaskClaimAcquisitionRead,
   type PlannedAttemptWorktreeObservation,
   type TargetLineageObservation,
   type TrackerTarget,
@@ -547,7 +548,8 @@ export interface StoryCursor {
   readonly consumeTaskClaimReadFor: (
     taskId: TaskId,
     context?: AuthoredOperationCausalContext,
-    cleanupRead?: CompletionOriginalClaimCleanupRead
+    cleanupRead?: CompletionOriginalClaimCleanupRead,
+    acquisitionRead?: TaskClaimAcquisitionRead
   ) => Effect.Effect<Option.Option<AuthoredTaskClaimReadItem>, AuthoredCausalSelectionFailure>
   readonly consumeTaskClaimAcquisitionConflictReturned: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type>
@@ -683,6 +685,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         window.occurrences.map(
           ({
             acceptedPlanPredecessorRoles,
+            directAcquisitionClaimRead,
             directCleanupClaimRead,
             directFocusedRead,
             directGitRead,
@@ -701,6 +704,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             predecessors: predecessorIds,
             value: {
               acceptedPlanPredecessorRoles,
+              directAcquisitionClaimRead,
               directCleanupClaimRead,
               directFocusedRead,
               repeatedFocusedRead,
@@ -952,7 +956,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     context?: AuthoredOperationCausalContext,
     ownerSelectionMatches?: (item: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type) => boolean,
     selectedOperation?: CassetteDecision,
-    cleanupRead?: CompletionOriginalClaimCleanupRead
+    cleanupRead?: CompletionOriginalClaimCleanupRead,
+    acquisitionRead?: TaskClaimAcquisitionRead
   ): Effect.Effect<
     Option.Option<Extract<ClaimedStoryItem<A>, { readonly _tag: "Claimed" }>>,
     AuthoredCausalSelectionFailure
@@ -976,6 +981,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             String(index),
             ({
               acceptedPlanPredecessorRoles,
+              directAcquisitionClaimRead,
               directCleanupClaimRead,
               directFocusedRead,
               directGitRead,
@@ -1056,6 +1062,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                         directCleanupClaimRead.call !== "ReleaseOriginalClaimRead"
                       ? cleanupRead.attemptOrdinal !== directCleanupClaimRead.attemptOrdinal
                       : true)
+                )
+                  return false
+              }
+              if (directAcquisitionClaimRead !== undefined) {
+                if (
+                  context !== undefined ||
+                  acquisitionRead === undefined ||
+                  acquisitionRead.operationId !== directAcquisitionClaimRead.operationId ||
+                  acquisitionRead.readOrdinal !== directAcquisitionClaimRead.readOrdinal
                 )
                   return false
               }
@@ -2385,7 +2400,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   })
   const consumeTaskClaimReadFor: StoryCursor["consumeTaskClaimReadFor"] = Effect.fn(
     "AuthoredCassette.consumeTaskClaimReadFor"
-  )(function* (taskId, context, cleanupRead) {
+  )(function* (taskId, context, cleanupRead, acquisitionRead) {
     const causal = yield* claimCausalWindow(
       (item): item is AuthoredTaskClaimReadItem =>
         isTaskClaimReadItem(item) &&
@@ -2393,7 +2408,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       context,
       undefined,
       undefined,
-      cleanupRead
+      cleanupRead,
+      acquisitionRead
     )
     if (Option.isSome(causal)) return Option.some(causal.value.item)
     return yield* consumeTaskClaimRead

@@ -74,6 +74,18 @@ export class TaskClaimReleaseFailure extends Schema.TaggedError<TaskClaimRelease
   { release: TaskClaimRelease, detail: Schema.String }
 ) {}
 
+/** One-based authoritative read within one exact claim acquisition operation. */
+export const TaskClaimAcquisitionReadOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("TaskClaimAcquisitionReadOrdinal")
+)
+export type TaskClaimAcquisitionReadOrdinal = typeof TaskClaimAcquisitionReadOrdinal.Type
+
+export const TaskClaimAcquisitionRead = Schema.Struct({
+  operationId: OperationId,
+  readOrdinal: TaskClaimAcquisitionReadOrdinal
+})
+export type TaskClaimAcquisitionRead = typeof TaskClaimAcquisitionRead.Type
+
 export interface TrackerMutationService {
   readonly acquireTaskClaim: (
     acquisition: TaskClaimAcquisition
@@ -86,6 +98,11 @@ export interface TrackerMutationService {
     | TaskTrackerMutationThrottled
   >
   readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
+  /** Optional exact-call observer for controlled protocol fixtures; production uses readTaskClaim. */
+  readonly readTaskClaimForAcquisition?: (
+    taskId: TaskId,
+    acquisitionRead: TaskClaimAcquisitionRead
+  ) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
   readonly releaseTaskClaim: (
     release: TaskClaimRelease
   ) => Effect.Effect<

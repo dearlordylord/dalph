@@ -209,7 +209,11 @@ import {
 } from "../../src/cassettes/authored-runner.js"
 import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.js"
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
-import { AuthoredCassetteInteractionMismatch, makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import {
+  AuthoredCassetteInteractionMismatch,
+  AuthoredCausalSelectionFailure,
+  makeStoryCursor
+} from "../../src/cassettes/authored-cursor.js"
 import { AuthoredCausalWindow } from "../../src/cassettes/authored-domain.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 import {
@@ -5559,9 +5563,75 @@ it.effect("drives a public operator claim-reacquisition request through a later 
       safeReportAt + 1 + postSafeGraphReadItemCount
     )
     const requestId = TaskClaimReacquisitionRequestId.make("coverage-reacquire-missing-A")
+    const reacquisitionStart = storyBeforeAssertions.length + 5
     const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
       ...singleton,
       name: "an operator replaces a missing claim with a fresh claim identity",
+      causalWindows: [
+        Schema.decodeUnknownSync(AuthoredCausalWindow)({
+          startIndex: reacquisitionStart,
+          endIndex: reacquisitionStart + 10,
+          occurrences: [
+            {
+              id: "reacquisition-G2-selection",
+              storyIndex: reacquisitionStart,
+              predecessorIds: [],
+              graphReadCause: "PostQuiescenceReconfirmation"
+            },
+            {
+              id: "reacquisition-G2-result",
+              storyIndex: reacquisitionStart + 1,
+              predecessorIds: ["reacquisition-G2-selection"],
+              ownerRole: "reacquisition-G2-selection"
+            },
+            { id: "reacquisition-claim-selection", storyIndex: reacquisitionStart + 2, predecessorIds: [] },
+            {
+              id: "reacquisition-internal-read",
+              storyIndex: reacquisitionStart + 3,
+              predecessorIds: ["reacquisition-claim-selection"],
+              directAcquisitionClaimRead: {
+                operationId: "task-claim-reacquisition:coverage-reacquire-missing-A",
+                readOrdinal: 1
+              }
+            },
+            {
+              id: "reacquisition-confirmation-read",
+              storyIndex: reacquisitionStart + 4,
+              predecessorIds: ["reacquisition-internal-read"],
+              directAcquisitionClaimRead: {
+                operationId: "task-claim-reacquisition:coverage-reacquire-missing-A",
+                readOrdinal: 2
+              }
+            },
+            {
+              id: "reacquisition-followup-selection",
+              storyIndex: reacquisitionStart + 5,
+              predecessorIds: ["reacquisition-confirmation-read"]
+            },
+            {
+              id: "reacquisition-followup-result",
+              storyIndex: reacquisitionStart + 6,
+              predecessorIds: ["reacquisition-followup-selection"],
+              ownerRole: "reacquisition-followup-selection"
+            },
+            {
+              id: "reacquisition-worktree-selection",
+              storyIndex: reacquisitionStart + 7,
+              predecessorIds: ["reacquisition-followup-result"]
+            },
+            {
+              id: "reacquisition-lineage-selection",
+              storyIndex: reacquisitionStart + 8,
+              predecessorIds: ["reacquisition-worktree-selection"]
+            },
+            {
+              id: "reacquisition-resume-report",
+              storyIndex: reacquisitionStart + 9,
+              predecessorIds: ["reacquisition-lineage-selection"]
+            }
+          ]
+        })
+      ],
       story: [
         ...storyBeforeAssertions,
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -5577,6 +5647,8 @@ it.effect("drives a public operator claim-reacquisition request through a later 
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: singleton.startingFacts.trackerGraph },
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
@@ -5605,6 +5677,28 @@ it.effect("drives a public operator claim-reacquisition request through a later 
     expect(
       run.records.some(({ event }) => event._tag === "TaskClaimReacquisitionDirected" && event.requestId === requestId)
     ).toBe(true)
+
+    const wrongReadIdentity = {
+      ...cassette,
+      causalWindows: cassette.causalWindows?.map((window) => ({
+        ...window,
+        occurrences: window.occurrences.map((occurrence) =>
+          occurrence.id === "reacquisition-confirmation-read"
+            ? {
+                ...occurrence,
+                directAcquisitionClaimRead: { operationId: "task-claim-reacquisition:another-request", readOrdinal: 2 }
+              }
+            : occurrence
+        )
+      }))
+    }
+    const wrongReadExit = yield* runAuthoredScenarioCassette(wrongReadIdentity).pipe(Effect.exit)
+    expect(Exit.isFailure(wrongReadExit)).toBe(true)
+    if (Exit.isFailure(wrongReadExit)) {
+      expect(Result.getOrUndefined(Cause.findDefect(wrongReadExit.cause))).toBeInstanceOf(
+        AuthoredCausalSelectionFailure
+      )
+    }
   })
 )
 

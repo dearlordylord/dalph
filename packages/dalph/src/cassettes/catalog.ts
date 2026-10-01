@@ -2240,11 +2240,66 @@ export const changedAttemptStopsWithForeignClaimAuthoredCassette: ScenarioCasset
   )
 
 /** A definite foreign reacquisition conflict is exposed, then remains terminal across restart. */
+const foreignReacquisitionOffsets = {
+  precedingSpecificationClaimAndDirection: 5,
+  length: 6,
+  g2Result: 1,
+  claimSelection: 2,
+  internalRead: 3,
+  conflict: 4,
+  rejection: 5
+} as const
+const foreignReacquisitionStart =
+  safelySuspendedStoryBeforeAssertions.length + foreignReacquisitionOffsets.precedingSpecificationClaimAndDirection
 export const changedAttemptReacquisitionForeignConflictAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...singletonTaskCompletesAuthoredCassette,
   name: "a missing claim reacquisition preserves a foreign claim and never retries after restart",
+  causalWindows: [
+    Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: foreignReacquisitionStart,
+      endIndex: foreignReacquisitionStart + foreignReacquisitionOffsets.length,
+      occurrences: [
+        {
+          id: "foreign-reacquisition-G2-selection",
+          storyIndex: foreignReacquisitionStart,
+          predecessorIds: [],
+          graphReadCause: "PostQuiescenceReconfirmation"
+        },
+        {
+          id: "foreign-reacquisition-G2-result",
+          storyIndex: foreignReacquisitionStart + foreignReacquisitionOffsets.g2Result,
+          predecessorIds: ["foreign-reacquisition-G2-selection"],
+          ownerRole: "foreign-reacquisition-G2-selection"
+        },
+        {
+          id: "foreign-reacquisition-claim-selection",
+          storyIndex: foreignReacquisitionStart + foreignReacquisitionOffsets.claimSelection,
+          predecessorIds: []
+        },
+        {
+          id: "foreign-reacquisition-internal-read",
+          storyIndex: foreignReacquisitionStart + foreignReacquisitionOffsets.internalRead,
+          predecessorIds: ["foreign-reacquisition-claim-selection"],
+          directAcquisitionClaimRead: {
+            operationId: "task-claim-reacquisition:coverage-reacquire-foreign-A",
+            readOrdinal: 1
+          }
+        },
+        {
+          id: "foreign-reacquisition-conflict",
+          storyIndex: foreignReacquisitionStart + foreignReacquisitionOffsets.conflict,
+          predecessorIds: ["foreign-reacquisition-internal-read"]
+        },
+        {
+          id: "foreign-reacquisition-rejected",
+          storyIndex: foreignReacquisitionStart + foreignReacquisitionOffsets.rejection,
+          predecessorIds: ["foreign-reacquisition-conflict"]
+        }
+      ]
+    })
+  ],
   story: [
     ...safelySuspendedStoryBeforeAssertions,
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -2260,6 +2315,7 @@ export const changedAttemptReacquisitionForeignConflictAuthoredCassette: Scenari
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
     {
       _tag: "TaskClaimAcquisitionConflictReturned",
       operationId: "task-claim-reacquisition:coverage-reacquire-foreign-A",

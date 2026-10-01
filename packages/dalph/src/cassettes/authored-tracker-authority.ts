@@ -18,6 +18,7 @@ import {
   OperationId,
   TrackerRevision,
   TaskClaimConflict,
+  type TaskClaimAcquisitionRead,
   TaskClaimOwnershipConflict,
   TaskClaimReadFailure,
   type TaskClaimObservation,
@@ -200,7 +201,8 @@ export const controlledTrackerAuthorityLayer = (
       const readTaskClaimFor = (
         taskId: TaskId,
         causalContext?: AuthoredOperationCausalContext,
-        cleanupRead?: CompletionOriginalClaimCleanupRead
+        cleanupRead?: CompletionOriginalClaimCleanupRead,
+        acquisitionRead?: TaskClaimAcquisitionRead
       ) =>
         cursor
           .consumeTaskClaimReadFor(
@@ -208,7 +210,8 @@ export const controlledTrackerAuthorityLayer = (
             causalContext,
             cleanupRead === undefined || options.runId === undefined
               ? cleanupRead
-              : authoredCleanupReadForRun(cleanupRead, options.runId)
+              : authoredCleanupReadForRun(cleanupRead, options.runId),
+            acquisitionRead
           )
           .pipe(
             Effect.orDie,
@@ -238,6 +241,8 @@ export const controlledTrackerAuthorityLayer = (
           )
       const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) => readTaskClaimFor(taskId)
       const trackerMutation = TrackerMutation.of({
+        readTaskClaimForAcquisition: (taskId, acquisitionRead) =>
+          readTaskClaimFor(taskId, undefined, undefined, acquisitionRead),
         acquireTaskClaim: (acquisition) =>
           Ref.get(authoredObservations).pipe(
             Effect.flatMap((observations) => {
