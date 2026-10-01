@@ -5,8 +5,8 @@
 [#337](https://github.com/dearlordylord/dalph/issues/337) composes
 [#256](https://github.com/dearlordylord/dalph/issues/256), including its
 superseding autonomous-work/ordinary-refresh amendment, for #279. It changes
-cassette evidence only. The production workflow, tracker authority, cleanup
-protocol, and canonical passive status remain unchanged. #338 owns status
+cassette evidence and the replacement admission repair described below. Tracker
+authority, cleanup protocol, and canonical passive status remain unchanged. #338 owns status
 wiring, Reducer Lab, and the browser checkpoint.
 
 Alice begins with five open tasks and capacity three. The exact chronological
@@ -15,8 +15,28 @@ outcomes are [the 22 delivery beats](../DELIVERY-STORY.md#the-beats), read with
 #256's superseding amendment. Executor reports do not request graph reads or
 repeat executing work. The final graph proves lifecycle success, never claims.
 
+This capstone explicitly substitutes for canonical beats 12–13: it restarts
+B's suspended P1/F1 from the observed F2 specification, preserves P1/W1/K1
+while B waits for capacity, then reconciles and begins P2/F2 after A becomes
+terminal. `DELIVERY-STORY.md` and the separate controlled DS01–DS13 Continue
+proof still describe B continuing and resuming its original attempt.
+
 The authored runner starts with an empty Journal and uses one Run identity.
-Alice changes B's instructions, lowers capacity, later continues B, reopens C,
+Alice changes B's instructions, lowers capacity, then restarts its safely
+suspended F1 attempt as one F2 attempt at the observed target head. The new
+attempt waits while A and D occupy the two slots; after A becomes terminal,
+the runner reconciles and begins the F2 worktree once. P1, W1, K1, and the
+existing work remain preserved. The production admission repair requires the
+replacement's `ReconcileTaskWorktree` proposal to reserve or reuse a task-work
+position. Replacement provenance does not inherit a released predecessor slot:
+while A/D hold capacity two, no successor Git reconciliation is admitted. After
+A releases its position, successor reconciliation and Begin may proceed. The
+same rule applies when admission is reconstructed after reopening; it preserves
+the original attempt and its resources rather than evicting an existing owner.
+
+The controlled planner's task-local Fresh identity and separate replacement
+namespace are test-only options; production planner defaults are unchanged.
+Alice reopens C,
 raises capacity, and adds F/G. A's accepted result crosses the rejected exact
 head offer and Alice's exact FullRerun choice. The successor is Git-qualified
 and promoted before A's focused success and exact claim cleanup settle.
@@ -32,13 +52,15 @@ No application Exit is requested.
 
 ## Scenario-to-test plan
 
-When Dalph has recorded B or C's Suspend call but the executor has not replied,
-the accepted journal still requires that attempt's position. Likewise, B's
-accepted Resume and A's acquired integration target have exact committed cuts
+When Dalph has recorded B1 or C's Suspend call but the executor has not replied,
+the accepted journal still requires that attempt's position. B's P1-to-P2
+replacement has an exact committed cut; the P2 capacity wait is checked from
+the actual pre-A-terminal publication and owner view, then P2's accepted Begin
+has its own committed cut. A's acquired integration target also has an exact cut
 before their next boundary. When Alice lowers capacity to two, the journal
 records the new limit while A, C, and D still hold three positions; it must not
 evict any of them. These cuts need not have a separate Delivery publication.
-DS04, DS07, DS10, DS13, DS14, and DS21 use exact committed journal
+DS04, DS07, DS10, DS12, DS13, DS14, and DS21 use exact committed journal
 checkpoints, canonical position/capacity reconstruction, and the prepared
 trace's graph evidence. DS21 follows both E/F/G's accepted Begin reports and
 A–D's settlements; admission does not wait for those settlements. DS18 uses
@@ -51,9 +73,18 @@ until that removal; any other owner at the removal cut fails the empty-owner
 assertion. No missing publication is
 replaced with an invented frame or a later matching state.
 
+The runtime admission boundary is independently proved by
+`packages/orchestrator/src/coordination/run/fresh-workflow.test.ts`:
+`continues a valid restarted replacement successor without resurrecting its original fresh commitment`.
+It rejects successor reconciliation at full capacity in initial and reopened
+admission, then admits it after A releases its position. The complete-story DS12
+check proves the actual pre-A-terminal B2 capacity wait with A/D as holders;
+DS13 proves B2 Begin after A terminal and before A queues for integration.
+
 | Outcome | Test in `capstone.execution.test.ts` |
 | --- | --- |
 | One exact DS01–DS22 state table, identities, order, and counts | `maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run` |
+| Exact F1-to-F2 Restart, one replacement, preserved P1 responsibility, capacity wait, and one P2 Begin/finality | `maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run` |
 | Exact predecessor-only cleanup, response-loss reconciliation, preserved history/evidence | `completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup` |
 | Deterministic replay of the same declared chronology | `replays the maintained capstone with the same exact chronology` |
 | Honest catalog and document publication | `delivery story manifest names the executed capstone and contains no unsupported beat` |
@@ -83,7 +114,13 @@ commands, A's predecessor cleanup never deletes history/evidence, a crash after
 Gfinal requires another later read, and lost termination acknowledgement never
 authorizes another append. No synthetic crash occurrence enters the Journal.
 
-## Implementation checkpoint
+## Historical implementation checkpoint
+
+The receipts below describe an earlier fixture revision, not current-candidate
+proof. Its 402-item and 15-activation totals are historical measurements, not
+acceptance requirements. Current proof checks the complete authored occurrence
+inventory, one Run identity, chronological checkpoints, settlements, and Completed
+termination.
 
 The harness starts the existing production owner from process entry and
 rebuilds it only at the declared process cut. The focused owner, causal-sync,
@@ -110,7 +147,7 @@ scoped receipts, not a claim that final whole-candidate qualification passed.
 Truthful catalog/manifest publication is implemented, and all three
 delivery-story link tests pass. The complexity-only E/F/G profile refactor also
 passes the six focused owner/capstone tests without acceptance weakening; its
-declaration remains exactly 402 items (92,350 serialized bytes with the same
+declaration at that historical revision remained exactly 402 items (92,350 serialized bytes with the same
 declaration digest). Final whole-candidate qualification and integration remain
 pending. Coverage qualification remains with the user-authorized separate
 handoff and is not rerun here.
@@ -158,3 +195,63 @@ workflow or outside-system protocol.
 | Missing return fails at its exact next owed graph selection | `double-diamond-activation-chronology.test.ts`: `rejects omission of the actual double-diamond activation return before its owed next graph` |
 | Unasserted idle exits and declared process loss remain valid owner seams | `authored-owner-lifetime.test.ts`: `consumes each idle-boundary process death once before installing the next owner` |
 | The uninterrupted capstone retains its actual owner chronology | `capstone.execution.test.ts`: existing three public acceptance tests |
+
+
+## Controlled original and replacement identity
+
+The controlled first admission plans B at task-local Fresh slot zero, independent
+of cross-task arrival order. That exact P1/F1 remains immutable through Suspend
+and Restart. The planner uses a separate replacement namespace for Restart:
+`attempt:B:0` is original P1/F1, and `attempt:B:replacement:1` is P2/F2 at H2.
+The latter has its own branch and worktree, while exact slot/Base/specification
+replay returns the same successor identity. Production planning and default
+controlled planners are unchanged. This is a test-boundary identity refinement,
+not permission to replace an immutable plan or bypass Restart validation.
+The accepted capacity barrier is unchanged: P2 waits while A/D occupy both slots;
+after A terminal, it reconciles and Begins exactly once.
+
+Focused mapping: `plan.property.test.ts::keeps replacement slot one distinct
+from an initial task-local B slot zero` proves original/successor identities,
+exact F2/H2, distinct resources and same-request replay. Existing default
+replacement property controls remain; `restart.test.ts::rejects a replacement
+when the planner returns a non-distinct successor` remains the negative boundary.
+The full capstone's capacity/finality checks remain required separate evidence.
+
+### Controlled Fresh identity arrival order
+
+The capstone planner assigns Fresh identity slots independently for each task.
+B and C both receive slot zero whether B or C reaches planning first. A Restart
+uses the distinct replacement namespace and durable slot one, retaining exact F2
+and Base authority. The default planner continues to use its existing Run-wide
+Fresh ordinal. This controlled identity choice changes no production workflow
+behavior or capacity barrier. Opposite-order controls in `plan.property.test.ts`
+prove both B/C arrival orders and replay of the exact Restart successor.
+
+## Concurrent controlled Git lineage reads
+
+The capstone's test-only Git service binds each ordered response queue to its
+exact immutable attempt. Independent attempts can observe different target heads
+in either arrival order without consuming each other's facts. Within each attempt,
+the accepted continuation, Restart or integration stage consumes the next exact
+Base/head observation. Missing responses, wrong Bases and unconsumed responses
+reject the cassette. `authored-target-lineage.test.ts` covers opposite order,
+same-Base/different-head ownership and fail-closed consumption. This changes only
+controlled test evidence; production Git services remain unchanged. A FullRerun
+keeps A's H1 Base and observes H2 in A's fourth stage. Original B's Restart
+observation belongs to B:0; its replacement owns a separate H2 queue.
+
+The controlled baseline adapter reads the shared local target head using the
+fixture's pinned observation Base. That Base belongs to the test Git provider;
+it does not replace the successor attempt's immutable H2. Baseline tests in
+`authored-target-lineage.test.ts` prove a replacement with a different Base can
+read the current head, while an unreadable pinned observation remains a wait.
+C's capacity-return specification/claim/worktree chain keeps its exact
+AttemptContinuation graph authority from the safe-revalidation marker. The
+later empty WorkflowEstablishment graph cannot replace that predecessor; the
+positive/negative control is in `capstone-post-return-causality.test.ts`.
+
+Within the current-head group, multiple facts for one immutable Base must agree
+on ancestry. Identical facts retain their declared multiplicity and consume only
+once per read. Conflicting same-Base/head ancestry facts reject without advancing
+the group. The two corresponding `authored-target-lineage.test.ts` controls
+prevent Base matching from silently choosing between contradictory results.

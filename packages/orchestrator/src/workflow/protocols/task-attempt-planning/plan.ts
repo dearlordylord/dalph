@@ -75,6 +75,10 @@ interface DeterministicPlannedTaskAttemptOptions {
   readonly executor: TaskExecutorLocator
   readonly runId: RunId
   readonly worktreeRoot: WorktreeLocator
+  /** Uses independent Fresh identity slots for each task in controlled concurrent stories. */
+  readonly freshIdentity?: "TaskLocal"
+  /** Keeps task-local replacement slots distinct from Run-wide Fresh ordinals in controlled mixed-plan stories. */
+  readonly exactReplacementIdentity?: "SeparateNamespace"
 }
 
 export const deterministicPlannedTaskAttemptLayer = (options: DeterministicPlannedTaskAttemptOptions) =>
@@ -82,15 +86,28 @@ export const deterministicPlannedTaskAttemptLayer = (options: DeterministicPlann
     PlannedTaskAttemptPlanner,
     Effect.gen(function* () {
       const nextAttemptOrdinal = yield* Ref.make(0)
+      const nextTaskOrdinals = yield* Ref.make<ReadonlyMap<string, number>>(new Map())
       return PlannedTaskAttemptPlanner.of({
         plan: Effect.fn("PlannedTaskAttemptPlanner.Deterministic.plan")(function* (request) {
-          const ordinal = yield* Ref.modify(nextAttemptOrdinal, (current) => {
-            const selected = request._tag === "Fresh" ? current : Number(request.ordinal)
-            return [selected, Math.max(current, selected + 1)] as const
-          })
+          const ordinal =
+            options.freshIdentity === "TaskLocal"
+              ? yield* Ref.modify(nextTaskOrdinals, (current) => {
+                  const taskId = request.specification.taskId
+                  const next = current.get(taskId) ?? 0
+                  const selected = request._tag === "Fresh" ? next : Number(request.ordinal)
+                  return [selected, new Map(current).set(taskId, Math.max(next, selected + 1))] as const
+                })
+              : yield* Ref.modify(nextAttemptOrdinal, (current) => {
+                  const selected = request._tag === "Fresh" ? current : Number(request.ordinal)
+                  return [selected, Math.max(current, selected + 1)] as const
+                })
           const specification = request.specification
-          const attemptId = AttemptId.make(`attempt:${specification.taskId}:${ordinal}`)
-          const resourceSegment = `attempt-${encodeURIComponent(specification.taskId)}-${ordinal}`
+          const identitySlot =
+            request._tag === "ExactReplacement" && options.exactReplacementIdentity === "SeparateNamespace"
+              ? `replacement:${ordinal}`
+              : String(ordinal)
+          const attemptId = AttemptId.make(`attempt:${specification.taskId}:${identitySlot}`)
+          const resourceSegment = `attempt-${encodeURIComponent(specification.taskId)}-${identitySlot.replaceAll(":", "-")}`
           return PlannedTaskAttempt.make({
             attemptId,
             baseSha: request._tag === "Fresh" ? options.baseSha : request.baseSha,

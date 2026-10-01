@@ -13,6 +13,7 @@ import {
   responseFence,
   settlementFence,
   suspendOrdinal,
+  beginOrdinal,
   type Task,
   terminalFence,
   DS,
@@ -33,8 +34,8 @@ export interface DeliveryCapstoneCheckpointRow {
 }
 
 export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<DeliveryCapstoneCheckpointRow> => {
-  const bSuspend = commandFence(run, "B", "Suspend")
-  const bSuspended = responseFence(run, "B", suspendOrdinal)
+  const bSuspend = commandFence(run, "B", "Suspend", attempts.B1)
+  const bSuspended = responseFence(run, "B", suspendOrdinal, attempts.B1)
   const cSuspend = commandFence(run, "C", "Suspend")
   const cSuspended = responseFence(run, "C", suspendOrdinal)
   const lower = occurrenceFence(
@@ -46,16 +47,13 @@ export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<Deliver
     (item) => item._tag === "SetTaskExecutionCapacity" && item.capacity === initialCapacity
   )
   const death = occurrenceFence(run, (item) => item._tag === "CoordinatorProcessDies")
-  const continueB = occurrenceFence(
+  const restartB = occurrenceFence(
     run,
-    (item) => item._tag === "OperatorContinuesAttempt" && item.attemptId === attempts.B
+    (item) => item._tag === "OperatorRestartsAttempt" && item.attemptId === attempts.B1
   )
-  const continuedB = recordFence(
+  const replacedB = recordFence(
     run,
-    (event) =>
-      event._tag === "AttemptChoiceApplied" &&
-      event.subject.plannedAttempt.attemptId === attempts.B &&
-      event.choice === "ContinueExistingAttempt"
+    (event) => event._tag === "PlannedAttemptReplaced" && event.subject.plannedAttempt.attemptId === attempts.B1
   )
   const queueA = recordFence(
     run,
@@ -88,7 +86,13 @@ export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<Deliver
       event.correlation.qualifiedCandidate.run.session.plannedAttempt.attemptId === attempts.A
   )
   const fullRerun = occurrenceFence(run, (item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
-  const lastInitial = responseFence(run, "B")
+  const initialBegins = (["A", "B", "C"] as const).map((task) =>
+    responseFence(run, task, beginOrdinal, task === "B" ? attempts.B1 : attempts[task])
+  )
+  const lastInitial = initialBegins.reduce((latest, fence) => {
+    if (latest.kind !== "Journal" || fence.kind !== "Journal") return expect.fail("initial Begin fence is not durable")
+    return fence.record.position > latest.record.position ? fence : latest
+  })
   return [
     {
       beat: DS.entry,
@@ -119,7 +123,11 @@ export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<Deliver
       alice: [],
       after: occurrenceFence(
         run,
-        (item) => item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === "B" && item.title === "Changed B"
+        (item) =>
+          item._tag === "TaskWorkSpecificationReadReturned" &&
+          item.taskId === "B" &&
+          item.title === "Implement B F2" &&
+          item.body === "Implement changed B from F2."
       ),
       before: bSuspend
     },
@@ -136,7 +144,7 @@ export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<Deliver
         (item) =>
           item._tag === "PlannedAttemptExecutorWorkReported" &&
           item.request === "Suspend" &&
-          item.report.attemptId === attempts.B
+          item.report.attemptId === attempts.B1
       )
     },
     {
@@ -210,28 +218,28 @@ export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<Deliver
       alice: ["B"],
       closedC: true,
       after: cSuspended,
-      before: continueB
+      before: restartB
     },
     {
-      beat: DS.continuedB,
+      beat: DS.restartedB,
       graph: "G2",
       capacity: loweredCapacity,
       held: ["A", "D"],
       retained: ["B", "C"],
       alice: [],
       closedC: true,
-      after: continuedB,
+      after: replacedB,
       before: terminalFence(run, "A")
     },
     {
-      beat: DS.resumedB,
+      beat: DS.startedB,
       graph: "G2",
       capacity: loweredCapacity,
       held: ["B", "D"],
       retained: ["A", "C"],
       alice: [],
       closedC: true,
-      after: responseFence(run, "B", resumeOrdinal),
+      after: responseFence(run, "B", beginOrdinal, attempts.B2),
       before: queueA
     },
     {

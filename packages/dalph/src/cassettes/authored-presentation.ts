@@ -54,11 +54,15 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: noLandmark,
       CassetteOffersRunReactivationHints: noLandmark,
       CassetteAwaitsSafeContinuationRevalidationPublication: noLandmark,
+      CassetteAwaitsSelectedTaskCapacityPublication: noLandmark,
+      CassetteHoldsAcceptedResultQueueUntilAttemptBegin: noLandmark,
       CassettePublishesCurrentTrackerNotification: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
       DalphSelects: noLandmark,
       ExpectedBehavior: noLandmark,
       GitWorktreeObservationChanged: noLandmark,
+      DirectGitWorktreeReadReturned: noLandmark,
+      DirectGitTargetLineageReadReturned: noLandmark,
       GitPlannedWorktreeCreateResponseLost: noLandmark,
       IntegratorRequestReceived: noLandmark,
       OperatorAppliesIntegrationQuarantineDirection: noLandmark,
@@ -458,6 +462,10 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `The cassette parks fresh task-claim selections for ${item.taskIds.join(", ")} until terminal assertions.`,
       CassetteAwaitsSafeContinuationRevalidationPublication: (item) =>
         `Cassette awaits ${item.taskId} attempt ${item.attemptId} revalidation under graph ${item.graphRevision}.`,
+      CassetteAwaitsSelectedTaskCapacityPublication: (item) =>
+        `Cassette awaits selected task ${item.taskId} at capacity ${item.capacity} under graph ${item.graphRevision}.`,
+      CassetteHoldsAcceptedResultQueueUntilAttemptBegin: (item) =>
+        `Cassette holds accepted-result queue for attempt ${item.queuedAttemptId} until Begin for ${item.releasedByAttemptId} is durable.`,
       CassetteOffersRunReactivationHints: (item) =>
         `The cassette offers ${item.hints.length} tracker-notification or timer hints while active refresh is already running.`,
       CassettePublishesCurrentTrackerNotification: () =>
@@ -467,6 +475,10 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,
+      DirectGitWorktreeReadReturned: (item) =>
+        `Git returns ${item.observation._tag} for task ${item.taskId} attempt ${item.attemptId}'s direct worktree read.`,
+      DirectGitTargetLineageReadReturned: (item) =>
+        `Git returns target lineage for task ${item.taskId} attempt ${item.attemptId}'s direct read.`,
       CompletionTaskFocusedReadReturned: (item) =>
         `The task tracker reports task ${item.taskId} ${item.lifecycle} with ${item.unfinishedPrerequisiteTaskIds.length} unfinished prerequisites in the focused completion read.`,
       CompletionTaskRequestReturned: (item) =>
@@ -566,6 +578,10 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
   )
   return [
     `Scenario: ${cassette.name}.`,
+    ...(cassette.acceptedReplacementPlanRoles ?? []).map(
+      ({ occurrenceRole, successorAttemptId, taskId }) =>
+        `After PlannedAttemptReplaced is accepted, successor plan role ${occurrenceRole} binds task ${taskId} attempt ${successorAttemptId}.`
+    ),
     ...cassette.story.map((item, index) => {
       const lyric = renderAuthoredStoryItemLyric(item)
       const causal = causalByIndex.get(index)
@@ -573,9 +589,26 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
         causal?.graphReadExplicitTaskIds === undefined
           ? ""
           : `; graph read covers ${causal.graphReadExplicitTaskIds.length === 0 ? "no explicit tasks" : causal.graphReadExplicitTaskIds.join(", ")}`
+      const directGraphRole =
+        causal?.directGraphRole === undefined
+          ? ""
+          : `; direct graph operation ${causal.directGraphRole} follows ${causal.directGraphPredecessorRoles?.join(", ") || "no operation predecessor"}`
+      const directFocusedRead =
+        causal?.directFocusedRead === undefined
+          ? ""
+          : `; direct ${causal.directFocusedRead.kind} for task ${causal.directFocusedRead.taskId} binds ${causal.directFocusedRead.role} after ${causal.directFocusedRead.predecessorRoles.join(", ") || "no operation predecessor"}`
+      const directGitRead =
+        causal?.directGitRead === undefined
+          ? ""
+          : `; direct ${causal.directGitRead.kind} for task ${causal.directGitRead.taskId} attempt ${causal.directGitRead.attemptId} binds ${causal.directGitRead.role} after ${causal.directGitRead.predecessorRoles.join(", ") || "no operation predecessor"}`
+      const graphReadCause = causal?.graphReadCause === undefined ? "" : `; graph read cause ${causal.graphReadCause}`
+      const acceptedPlanPredecessors =
+        causal?.acceptedPlanPredecessorRoles === undefined
+          ? ""
+          : `; follows accepted successor plan ${causal.acceptedPlanPredecessorRoles.join(", ")}`
       return causal === undefined
         ? lyric
-        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${graphReadCoverage}.`
+        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${acceptedPlanPredecessors}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${directFocusedRead}${directGitRead}${graphReadCause}${graphReadCoverage}.`
     })
   ].join("\n")
 }

@@ -600,7 +600,23 @@ export const authorizeFreshContinuationProposal = (
   const immutableProposal = immutableSnapshot(proposal)
   const continuationSnapshot = freshContinuationSnapshotOf(decision.step, runId)
   if (continuationSnapshot === undefined) return proposal
-  const authorized = Object.freeze(immutableProposal)
+  // Replacement identity does not inherit the predecessor's released capacity position.
+  // Its first Git effect must compete with current exact executor owners.
+  const authorized = immutableSnapshot(
+    decision.authority._tag === "ReplacementAuthority" && decision.step._tag === "ReconcileTaskWorktree"
+      ? {
+          ...immutableProposal,
+          admission: {
+            ...immutableProposal.admission,
+            taskWorkPosition: {
+              _tag: "TaskWorkPositionRequired" as const,
+              mode: "ReserveOrReuse" as const,
+              taskId: decision.step.task.id
+            }
+          }
+        }
+      : immutableProposal
+  )
   issuedFreshContinuationProposals.set(authorized, { authority: decision.authority, continuationSnapshot })
   return authorized
 }

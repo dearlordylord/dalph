@@ -716,7 +716,12 @@ const confirmOriginalClaimReleased = Effect.fn("IntegrationFinality.confirmOrigi
       CompletionClaimCleanupBoundaryCall.ConfirmOriginalClaimReleased({ attemptOrdinal, readOrdinal })
     ),
     tracker
-      .readOriginalTaskClaim(request.claim.originalClaim.taskId)
+      .readOriginalTaskClaim(request.claim.originalClaim.taskId, {
+        deletionOperationId: request.operationId,
+        call: "ConfirmOriginalClaimReleased",
+        attemptOrdinal,
+        readOrdinal
+      })
       .pipe(
         Effect.mapError((failure) => new CompletionClaimReadFailure({ detail: failure.detail, taskId: failure.taskId }))
       ),
@@ -762,7 +767,12 @@ const confirmNoActiveClaimAfterMarkerAbsent = Effect.fn("IntegrationFinality.con
         CompletionClaimCleanupBoundaryCall.ConfirmNoActiveClaimAfterMarkerAbsent({ attemptOrdinal, readOrdinal })
       ),
       tracker
-        .readOriginalTaskClaim(request.claim.originalClaim.taskId)
+        .readOriginalTaskClaim(request.claim.originalClaim.taskId, {
+          deletionOperationId: request.operationId,
+          call: "ConfirmNoActiveClaimAfterMarkerAbsent",
+          attemptOrdinal,
+          readOrdinal
+        })
         .pipe(
           Effect.mapError(
             (failure) => new CompletionClaimReadFailure({ detail: failure.detail, taskId: failure.taskId })
@@ -815,8 +825,14 @@ const releaseOriginalClaimBeforeCompletionMarkerDeletion = Effect.fn(
     )
     const operation = originalClaimReleaseOperationFor(request)
     const boundary: TaskClaimReleaseBoundary = {
-      readTaskClaim: tracker.readOriginalTaskClaim,
-      releaseTaskClaim: tracker.releaseOriginalTaskClaim
+      readTaskClaim: (taskId, readOrdinal) =>
+        tracker.readOriginalTaskClaim(taskId, {
+          deletionOperationId: request.operationId,
+          call: "ReleaseOriginalClaimRead",
+          releaseOperationId: operation.release.operationId,
+          readOrdinal
+        }),
+      releaseTaskClaim: (release) => tracker.releaseOriginalTaskClaim(release, operation)
     }
     yield* runJournaledTaskClaimRelease(
       request.claim.plannedAttempt.runId,

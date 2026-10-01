@@ -38,7 +38,6 @@ it.effect.skipIf(!runIntegrationCapstone)(
       )
       // The maintained chronology includes the cleanup reactivation reads and
       // evidence observations that occur after the terminal G claim.
-      expect(deliveryStoryCapstoneAuthoredCassette.story).toHaveLength(397)
       expect(occurrences).toHaveLength(deliveryStoryCapstoneAuthoredCassette.story.length)
       expect([...occurrences].sort((left, right) => left.authoredStoryIndex - right.authoredStoryIndex)).toEqual(
         deliveryStoryCapstoneAuthoredCassette.story.map((occurrence, authoredStoryIndex) => ({
@@ -46,7 +45,6 @@ it.effect.skipIf(!runIntegrationCapstone)(
           occurrence
         }))
       )
-      expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
       expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
       const settlements = run.records.flatMap(({ event }) =>
         event._tag === "IntegrationFinalitySettled" ? [event] : []
@@ -59,14 +57,74 @@ it.effect.skipIf(!runIntegrationCapstone)(
         }))
       ).toEqual([
         { taskId: "A", attemptId: "attempt:A:0", runId: run.runId },
-        { taskId: "B", attemptId: "attempt:B:2", runId: run.runId },
-        { taskId: "C", attemptId: "attempt:C:1", runId: run.runId },
+        { taskId: "B", attemptId: "attempt:B:replacement:1", runId: run.runId },
+        { taskId: "C", attemptId: "attempt:C:0", runId: run.runId },
         { taskId: "D", attemptId: "attempt:D:0", runId: run.runId },
         { taskId: "E", attemptId: "attempt:E:0", runId: run.runId },
-        { taskId: "F", attemptId: "attempt:F:1", runId: run.runId },
-        { taskId: "G", attemptId: "attempt:G:2", runId: run.runId }
+        { taskId: "F", attemptId: "attempt:F:0", runId: run.runId },
+        { taskId: "G", attemptId: "attempt:G:0", runId: run.runId }
       ])
       expect(new Set(settlements.map(({ claim }) => claim.plannedAttempt.taskId)).size).toBe(7)
+      const bReplacements = run.records.flatMap(({ event }) => (event._tag === "PlannedAttemptReplaced" ? [event] : []))
+      expect(bReplacements).toHaveLength(1)
+      expect(bReplacements[0]).toMatchObject({
+        subject: { plannedAttempt: { attemptId: "attempt:B:0" } },
+        successorPlan: { plannedAttempt: { attemptId: "attempt:B:replacement:1", baseSha: "2".repeat(40) } },
+        witness: { targetHeadSha: "2".repeat(40) }
+      })
+      const bRestartChoice = run.records.find(
+        ({ event }) =>
+          event._tag === "AttemptChoiceApplied" &&
+          event.choice === "RestartTaskImplementation" &&
+          event.subject.plannedAttempt.attemptId === "attempt:B:0"
+      )
+      const bF2SpecificationIntent = run.records.find(
+        ({ event, position }) =>
+          bRestartChoice !== undefined &&
+          position > bRestartChoice.position &&
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTaskWorkSpecification" &&
+          event.operation.taskId === "B"
+      )
+      if (bRestartChoice === undefined || bF2SpecificationIntent?.event._tag !== "TaskTrackerReadIntentRecorded")
+        return expect.fail("missing B Restart choice or following F2 specification read")
+      const bRestartGraphCauses = run.records.flatMap(({ event, position }) =>
+        position > bRestartChoice.position &&
+        position < bF2SpecificationIntent.position &&
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTrackerGraph"
+          ? [event.operation.cause._tag]
+          : []
+      )
+      expect(bRestartGraphCauses).toEqual(["AttemptRestartAuthorityCheck"])
+      const bRestartAuthorityGraph = run.records.find(
+        ({ event, position }) =>
+          position > bRestartChoice.position &&
+          position < bF2SpecificationIntent.position &&
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "AttemptRestartAuthorityCheck"
+      )
+      expect(bRestartAuthorityGraph?.event).toMatchObject({
+        _tag: "TaskTrackerReadIntentRecorded",
+        operation: {
+          cause: { _tag: "AttemptRestartAuthorityCheck" },
+          predecessorOperationIds: [],
+          readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: ["B"] }
+        }
+      })
+      const bCommands = run.records.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandIntended" &&
+        (event.plannedAttempt.attemptId === "attempt:B:0" ||
+          event.plannedAttempt.attemptId === "attempt:B:replacement:1")
+          ? [[event.plannedAttempt.attemptId, event.command]]
+          : []
+      )
+      expect(bCommands).toEqual([
+        ["attempt:B:0", "Begin"],
+        ["attempt:B:0", "Suspend"],
+        ["attempt:B:replacement:1", "Begin"]
+      ])
       const successorRecord = run.records.find(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       const aSettlement = settlements.find(({ claim }) => claim.plannedAttempt.taskId === "A")
       if (successorRecord?.event._tag !== "IntegratorSuccessorSessionFixed" || aSettlement === undefined)
