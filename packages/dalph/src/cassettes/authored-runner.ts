@@ -1390,7 +1390,13 @@ const appliedAttemptChoiceMatches = (
   /* v8 ignore stop -- @preserve */
   if (item._tag === "OperatorContinuesAttempt") return result._tag === "ContinueApplied"
   if (item._tag === "OperatorRestartsAttempt") return result._tag === "RestartApplied"
-  return result._tag === "StopApplied" && result.status._tag === item.expected.status
+  return (
+    result._tag === "StopApplied" &&
+    (item.expected.status === "PendingOrSettledNoRelease"
+      ? result.status._tag === "ImplementationAbandonedClaimDispositionPending" ||
+        result.status._tag === "SettledNoRelease"
+      : result.status._tag === item.expected.status)
+  )
 }
 
 const queriedAttemptChoiceMatches = (

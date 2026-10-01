@@ -2125,7 +2125,7 @@ const stoppedAttemptWithoutClaimMutationCassette = (
       {
         _tag: "OperatorStopsAttempt",
         attemptId: "attempt:A:0",
-        expected: { _tag: "Applied", status: "ImplementationAbandonedClaimDispositionPending" },
+        expected: { _tag: "Applied", status: "PendingOrSettledNoRelease" },
         observedTaskRevision: changedAttemptRevision,
         requestNonce,
         taskId: "A"

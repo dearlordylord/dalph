@@ -19,6 +19,7 @@ export const AuthoredStopAttemptResult = Schema.Union([
     status: Schema.Literals([
       "AwaitingQuiescence",
       "ImplementationAbandonedClaimDispositionPending",
+      "PendingOrSettledNoRelease",
       "ImplementationAbandonedClaimReleasePending",
       "SettledNoRelease",
       "SettledReleased"
