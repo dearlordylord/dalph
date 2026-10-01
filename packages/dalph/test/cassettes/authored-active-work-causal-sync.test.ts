@@ -31,6 +31,13 @@ import {
   type StoryCursor,
   makeStoryCursor
 } from "../../src/cassettes/authored-cursor.js"
+import { authorCausalWindow } from "../../src/cassettes/authored-causal-authoring.js"
+import {
+  AuthoredOccurrenceId,
+  authoredOccurrence,
+  parallelAuthored,
+  sequenceAuthored
+} from "../../src/cassettes/authored-causal-graph.js"
 import { controlledExecutorLayer, controlledTrace } from "../../src/cassettes/authored-adapters.js"
 import {
   consumeControlledTaskWorkSpecification,
@@ -179,28 +186,37 @@ it.effect("replays opposite graph, specification, and worktree selection orders 
 
 it.effect("distinguishes equal-shaped graph reads by cause and exact response owner", () =>
   Effect.gen(function* () {
-    const story = [
-      AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph }),
-      graphResult("restart"),
-      AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph }),
-      graphResult("activation"),
-      terminal
-    ]
-    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
-      startIndex: 0,
-      endIndex: 4,
-      occurrences: [
-        { id: "restart", storyIndex: 0, predecessorIds: [], graphReadCause: "AttemptRestartAuthorityCheck" },
-        { id: "restart-result", storyIndex: 1, predecessorIds: ["restart"], ownerRole: "restart" },
-        { id: "activation", storyIndex: 2, predecessorIds: [], graphReadCause: "WorkflowEstablishment" },
-        { id: "activation-result", storyIndex: 3, predecessorIds: ["activation"], ownerRole: "activation" }
-      ]
-    })
+    const id = (value: string) => AuthoredOccurrenceId.make(value)
+    const selection = AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph })
+    const authored = authorCausalWindow(
+      0,
+      parallelAuthored(
+        sequenceAuthored(
+          authoredOccurrence(id("restart"), { item: selection, graphReadCause: "AttemptRestartAuthorityCheck" }),
+          authoredOccurrence(id("restart-result"), { item: graphResult("restart"), ownerRole: id("restart") })
+        ),
+        sequenceAuthored(
+          authoredOccurrence(id("activation"), { item: selection, graphReadCause: "WorkflowEstablishment" }),
+          authoredOccurrence(id("activation-result"), { item: graphResult("activation"), ownerRole: id("activation") })
+        )
+      )
+    )
     for (const order of [
       ["restart", "activation"],
       ["activation", "restart"]
     ]) {
-      const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+      const captured: Array<{
+        readonly storyPosition: number
+        readonly authoredStoryIndex?: number
+        readonly occurrenceId?: string
+      }> = []
+      const cursor = yield* makeStoryCursor([...authored.story, terminal], {
+        causalWindows: [authored.window],
+        onOccurrence: (observed) =>
+          Effect.sync(() => {
+            captured.push(observed)
+          })
+      })
       const contexts = {
         restart: { ...causalContext("operation:restart", []), graphReadCause: "AttemptRestartAuthorityCheck" as const },
         activation: { ...causalContext("operation:activation", []), graphReadCause: "WorkflowEstablishment" as const }
@@ -213,6 +229,13 @@ it.effect("distinguishes equal-shaped graph reads by cause and exact response ow
         if (returned._tag === "TrackerGraphReadReturned") expect(returned.graph.revision).toBe(role)
       }
       yield* cursor.consumeTerminalAssertions
+      expect(captured.map(({ storyPosition }) => storyPosition)).toEqual(
+        order[0] === "restart" ? [1, 2, 3, 4, 5] : [0, 0, 1, 4, 5]
+      )
+      expect(captured.slice(0, 4).map(({ authoredStoryIndex }) => authoredStoryIndex)).toEqual(
+        order[0] === "restart" ? [0, 1, 2, 3] : [2, 3, 0, 1]
+      )
+      expect(captured.slice(0, 4).every(({ occurrenceId }) => occurrenceId !== undefined)).toBe(true)
     }
   })
 )

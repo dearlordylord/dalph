@@ -142,3 +142,72 @@ export const sequenceAuthoredOccurrences = <A>(
     const previous = values[index - 1]
     return { id, predecessors: previous === undefined ? [] : [previous.id], value }
   })
+
+/** A maintainer-authored partial order; parallel branches have no implicit cross-branch edge. */
+export type AuthoredOccurrencePlan<A> =
+  | { readonly _tag: "Occurrence"; readonly id: AuthoredOccurrenceId; readonly value: A }
+  | {
+      readonly _tag: "Sequence" | "Parallel"
+      readonly parts: readonly [AuthoredOccurrencePlan<A>, ...Array<AuthoredOccurrencePlan<A>>]
+    }
+
+export const authoredOccurrence = <A>(id: AuthoredOccurrenceId, value: A): AuthoredOccurrencePlan<A> => ({
+  _tag: "Occurrence",
+  id,
+  value
+})
+
+export const sequenceAuthored = <A>(
+  ...parts: readonly [AuthoredOccurrencePlan<A>, ...Array<AuthoredOccurrencePlan<A>>]
+): AuthoredOccurrencePlan<A> => ({ _tag: "Sequence", parts })
+
+export const parallelAuthored = <A>(
+  ...parts: readonly [AuthoredOccurrencePlan<A>, ...Array<AuthoredOccurrencePlan<A>>]
+): AuthoredOccurrencePlan<A> => ({ _tag: "Parallel", parts })
+
+interface CompiledPlan<A> {
+  readonly occurrences: ReadonlyArray<AuthoredOccurrence<A>>
+  readonly entryIds: ReadonlyArray<AuthoredOccurrenceId>
+  readonly exitIds: ReadonlyArray<AuthoredOccurrenceId>
+}
+
+/** Connects all exits of a sequence predecessor to all entries of its successor. */
+export const expandAuthoredOccurrencePlan = <A>(
+  plan: AuthoredOccurrencePlan<A>
+): ReadonlyArray<AuthoredOccurrence<A>> => {
+  const expand = (current: AuthoredOccurrencePlan<A>): CompiledPlan<A> => {
+    if (current._tag === "Occurrence") {
+      return {
+        occurrences: [{ id: current.id, predecessors: [], value: current.value }],
+        entryIds: [current.id],
+        exitIds: [current.id]
+      }
+    }
+    const [first, ...rest] = current.parts
+    let accumulated = expand(first)
+    for (const part of rest) {
+      const next = expand(part)
+      accumulated =
+        current._tag === "Parallel"
+          ? {
+              occurrences: [...accumulated.occurrences, ...next.occurrences],
+              entryIds: [...accumulated.entryIds, ...next.entryIds],
+              exitIds: [...accumulated.exitIds, ...next.exitIds]
+            }
+          : {
+              occurrences: [
+                ...accumulated.occurrences,
+                ...next.occurrences.map((occurrence) =>
+                  next.entryIds.includes(occurrence.id)
+                    ? { ...occurrence, predecessors: [...occurrence.predecessors, ...accumulated.exitIds] }
+                    : occurrence
+                )
+              ],
+              entryIds: accumulated.entryIds,
+              exitIds: next.exitIds
+            }
+    }
+    return accumulated
+  }
+  return expand(plan).occurrences
+}

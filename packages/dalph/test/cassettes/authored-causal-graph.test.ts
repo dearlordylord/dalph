@@ -3,10 +3,14 @@ import {
   AuthoredOccurrenceGraphFailure,
   AuthoredOccurrenceId,
   AuthoredOccurrenceMatchFailure,
+  authoredOccurrence,
   compileAuthoredOccurrenceGraph,
+  expandAuthoredOccurrencePlan,
   finishAuthoredOccurrenceGraph,
   initialAuthoredOccurrenceFrontier,
   matchAuthoredOccurrence,
+  parallelAuthored,
+  sequenceAuthored,
   sequenceAuthoredOccurrences,
   unconsumedAuthoredOccurrences,
   type AuthoredOccurrence
@@ -89,6 +93,37 @@ it("rejects duplicate IDs, missing predecessors, repeated edges, and cycles befo
 it("compiles sequential stories into strict adjacent predecessor edges", () => {
   const compiled = graph(sequenceAuthoredOccurrences(["first", "second"].map((value) => ({ id: id(value), value }))))
   expect(consume(compiled, initialAuthoredOccurrenceFrontier(), "second")).toBeInstanceOf(
+    AuthoredOccurrenceMatchFailure
+  )
+})
+
+it("compiles sequence and parallel authoring into only the required cross-stage edges", () => {
+  const step = (name: string) => authoredOccurrence(id(name), name)
+  const compiled = graph(
+    expandAuthoredOccurrencePlan(
+      sequenceAuthored(
+        step("graph"),
+        parallelAuthored(
+          sequenceAuthored(step("A specification"), step("A plan"), step("A worktree")),
+          sequenceAuthored(step("B specification"), step("B plan"), step("B worktree"))
+        ),
+        step("terminal")
+      )
+    )
+  )
+  for (const order of [
+    ["graph", "A specification", "B specification", "B plan", "A plan", "A worktree", "B worktree", "terminal"],
+    ["graph", "B specification", "B plan", "B worktree", "A specification", "A plan", "A worktree", "terminal"]
+  ]) {
+    let frontier = initialAuthoredOccurrenceFrontier()
+    for (const name of order) {
+      const result = consume(compiled, frontier, name)
+      if (result instanceof AuthoredOccurrenceMatchFailure) throw result
+      frontier = result.frontier
+    }
+    expect(finishAuthoredOccurrenceGraph(compiled, frontier)).toBeUndefined()
+  }
+  expect(consume(compiled, initialAuthoredOccurrenceFrontier(), "A specification")).toBeInstanceOf(
     AuthoredOccurrenceMatchFailure
   )
 })

@@ -15,6 +15,7 @@ import {
   deliveryFinalitySpineAuthoredCassette,
   deliveryInvariantStoryAuthoredCassette
 } from "../../src/cassettes/catalog.js"
+import { renderAuthoredCassetteLyrics } from "../../src/cassettes/authored-presentation.js"
 
 it("accepts a causal anchor that leaves activation return outside its assertion", () => {
   const selected = {
@@ -44,7 +45,9 @@ it("validates a causal boundary window against the decoded story before playback
       }
     ]
   }
-  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(valid)).not.toThrow()
+  const decoded = Schema.decodeUnknownSync(AuthoredScenarioCassette)(valid)
+  expect(renderAuthoredCassetteLyrics(decoded)).toContain("Causal occurrence graph follows no prior occurrence")
+  expect(renderAuthoredCassetteLyrics(decoded)).toContain("response owner graph")
   for (const occurrences of [
     [{ id: "graph", storyIndex: startIndex, predecessorIds: [] }],
     [

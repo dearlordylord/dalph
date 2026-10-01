@@ -304,7 +304,12 @@ export interface AuthoredObservationStatus extends AuthoredObservationCorrelatio
 /** Raw capture retained in exact local arrival order before Delivery projection is evaluated. */
 export type AuthoredObservationCapture = AuthoredObservationCorrelation &
   (
-    | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
+    | {
+        readonly _tag: "AuthoredStoryOccurrenceCaptured"
+        readonly occurrence: AuthoredCassetteStoryItem
+        readonly authoredStoryIndex?: number
+        readonly occurrenceId?: AuthoredStoryOccurrenceObserved["occurrenceId"]
+      }
     | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
     | { readonly _tag: "DeliveryStatusCaptured"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
     | {
@@ -314,7 +319,12 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
   )
 
 type AuthoredObservationCaptureInput =
-  | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
+  | {
+      readonly _tag: "AuthoredStoryOccurrenceCaptured"
+      readonly occurrence: AuthoredCassetteStoryItem
+      readonly authoredStoryIndex?: number
+      readonly occurrenceId?: AuthoredStoryOccurrenceObserved["occurrenceId"]
+    }
   | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
   | { readonly _tag: "DeliveryStatusCaptured"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
   | {
@@ -334,7 +344,12 @@ interface AuthoredObservationMomentContext extends AuthoredObservationCorrelatio
 /** One exact playback moment. Only DeliveryPublicationMoment changes the source-stage values. */
 export type AuthoredObservationMoment = AuthoredObservationMomentContext &
   (
-    | { readonly _tag: "AuthoredStoryOccurrenceMoment"; readonly occurrence: AuthoredCassetteStoryItem }
+    | {
+        readonly _tag: "AuthoredStoryOccurrenceMoment"
+        readonly occurrence: AuthoredCassetteStoryItem
+        readonly authoredStoryIndex?: number
+        readonly occurrenceId?: AuthoredStoryOccurrenceObserved["occurrenceId"]
+      }
     | { readonly _tag: "DeliveryPublicationMoment"; readonly deliveryFrame: AuthoredDeliveryFrame }
     | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
     | { readonly _tag: "DeliveryStatusMoment"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
@@ -1264,7 +1279,9 @@ export const evaluateAuthoredObservationCapture: (
       ...correlation,
       deliveryFrame,
       liveOwners,
-      occurrence: capture.occurrence
+      occurrence: capture.occurrence,
+      ...(capture.authoredStoryIndex === undefined ? {} : { authoredStoryIndex: capture.authoredStoryIndex }),
+      ...(capture.occurrenceId === undefined ? {} : { occurrenceId: capture.occurrenceId })
     } satisfies AuthoredObservationMoment
   })
 
@@ -1616,7 +1633,15 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           const captured: AuthoredObservationCapture =
             observation._tag === "AuthoredStoryOccurrenceCaptured"
-              ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
+              ? {
+                  ...correlation,
+                  _tag: observation._tag,
+                  occurrence: observation.occurrence,
+                  ...(observation.authoredStoryIndex === undefined
+                    ? {}
+                    : { authoredStoryIndex: observation.authoredStoryIndex }),
+                  ...(observation.occurrenceId === undefined ? {} : { occurrenceId: observation.occurrenceId })
+                }
               : observation._tag === "DeliveryPublicationCaptured"
                 ? { ...correlation, _tag: observation._tag, publication: observation.publication }
                 : observation._tag === "DeliveryStatusCaptured"
@@ -1631,9 +1656,14 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const cursor = yield* makeStoryCursor(cassette.story, {
         ...(cassette.causalWindows === undefined ? {} : { causalWindows: cassette.causalWindows }),
-        onOccurrence: ({ item, storyPosition }: AuthoredStoryOccurrenceObserved) =>
+        onOccurrence: ({ authoredStoryIndex, item, occurrenceId, storyPosition }: AuthoredStoryOccurrenceObserved) =>
           appendObservation(
-            { _tag: "AuthoredStoryOccurrenceCaptured", occurrence: item },
+            {
+              _tag: "AuthoredStoryOccurrenceCaptured",
+              occurrence: item,
+              ...(authoredStoryIndex === undefined ? {} : { authoredStoryIndex }),
+              ...(occurrenceId === undefined ? {} : { occurrenceId })
+            },
             AuthoredStoryPosition.make(storyPosition)
           ).pipe(Effect.asVoid)
       })

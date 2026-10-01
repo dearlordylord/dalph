@@ -6,7 +6,8 @@ import {
   type TargetPromotionGitRequest,
   type IntegratorCandidateText,
   type OperationId,
-  type TrackerTarget
+  type TrackerTarget,
+  type WorkflowOperation
 } from "@dalph/orchestrator"
 import {
   type AuthoredCassetteDecision as CassetteDecision,
@@ -79,7 +80,9 @@ class AuthoredConcurrentReadBatchFailure extends Schema.TaggedError<AuthoredConc
 export interface AuthoredOperationCausalContext {
   readonly operationId: OperationId
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
-  readonly graphReadCause?: Extract<import("@dalph/orchestrator").WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>["cause"]["_tag"] | undefined
+  readonly graphReadCause?:
+    | Extract<WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>["cause"]["_tag"]
+    | undefined
 }
 
 /**
@@ -571,6 +574,9 @@ export interface AuthoredStoryOccurrenceObserved {
   readonly item: StoryItem
   /** Count of typed story occurrences consumed through this exact occurrence. */
   readonly storyPosition: number
+  /** Stable source location when the consumed causal occurrence arrived out of display order. */
+  readonly authoredStoryIndex?: number
+  readonly occurrenceId?: AuthoredOccurrenceId
 }
 
 interface StoryCursorOptions {
@@ -660,7 +666,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const compiledCausalWindows = yield* Effect.forEach(options.causalWindows ?? [], (window) =>
     Effect.gen(function* () {
       const graph = compileAuthoredOccurrenceGraph(
-        window.occurrences.map(({ id, ownerRole, predecessorIds, storyIndex, graphReadCause }) => ({
+        window.occurrences.map(({ graphReadCause, id, ownerRole, predecessorIds, storyIndex }) => ({
           id,
           predecessors: predecessorIds,
           value: { storyIndex, ownerRole, graphReadCause }
@@ -1152,7 +1158,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             window.graph,
             { consumed },
             String(index),
-            ({ ownerRole, storyIndex, graphReadCause }) => {
+            ({ graphReadCause, ownerRole, storyIndex }) => {
               const item = story[storyIndex]
               if (!predicate(item)) return false
               if (graphReadCause !== undefined && graphReadCause !== context?.graphReadCause) return false
@@ -1213,14 +1219,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             nextIndex += 1
           }
           if (nextIndex !== index) yield* SubscriptionRef.set(position, nextIndex)
-          return { _tag: "Claimed" as const, item: claimedItem, index: value.storyIndex }
+          return { _tag: "Claimed" as const, item: claimedItem, index: value.storyIndex, id, storyPosition: nextIndex }
         })
       )
       if (result._tag === "NoWindow" || result._tag === "Unrelated") return Option.none()
       if (result._tag === "Failure") {
         return yield* new AuthoredCausalSelectionFailure({ detail: result.detail, storyPosition: result.index })
       }
-      yield* options.onOccurrence?.({ item: result.item, storyPosition: result.index + 1 }) ?? Effect.void
+      yield* (
+        options.onOccurrence?.({
+          item: result.item,
+          storyPosition: result.storyPosition,
+          authoredStoryIndex: result.index,
+          occurrenceId: result.id
+        }) ?? Effect.void
+      )
       yield* announceTerminalAssertions
       return Option.some(result)
     })

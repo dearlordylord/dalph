@@ -558,5 +558,23 @@ export const renderAuthoredStoryItemLyric = (item: AuthoredCassetteStoryItem): s
 }
 
 /** Readable prose is derived from structured story items and is never parsed. */
-export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string =>
-  [`Scenario: ${cassette.name}.`, ...cassette.story.map(renderAuthoredStoryItemLyric)].join("\n")
+export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette): string => {
+  const causalByIndex = new Map<
+    number,
+    NonNullable<AuthoredScenarioCassette["causalWindows"]>[number]["occurrences"][number]
+  >(
+    (cassette.causalWindows ?? []).flatMap(({ occurrences }) =>
+      occurrences.map((occurrence) => [occurrence.storyIndex, occurrence] as const)
+    )
+  )
+  return [
+    `Scenario: ${cassette.name}.`,
+    ...cassette.story.map((item, index) => {
+      const lyric = renderAuthoredStoryItemLyric(item)
+      const causal = causalByIndex.get(index)
+      return causal === undefined
+        ? lyric
+        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}.`
+    })
+  ].join("\n")
+}
