@@ -5669,6 +5669,46 @@ const doubleDiamondClaimRefreshWindow = (story: ReadonlyArray<AuthoredCassetteSt
     ]
   })
 }
+const doubleDiamondFAdmissionBeforeELineageWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
+  const afterClaimRefresh = doubleDiamondClaimRefreshWindow(story).endIndex
+  const startIndex = story.findIndex(
+    (item, index) =>
+      index > afterClaimRefresh &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTaskWorkSpecification" &&
+      item.operation.taskId === "F"
+  )
+  const lineageIndex = story.findIndex(
+    (item, index) =>
+      index > startIndex &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTargetLineage" &&
+      item.operation.taskId === "E"
+  )
+  Schema.decodeUnknownSync(Schema.Literal(true))(startIndex >= 0 && lineageIndex > startIndex)
+  const items = story.slice(startIndex, lineageIndex + 1)
+  const selectedPredecessorOffset = items.findLastIndex(
+    (item, offset) => offset < items.length - 1 && item._tag === "DalphSelects"
+  )
+  Schema.decodeUnknownSync(Schema.Literal(true))(selectedPredecessorOffset >= 0)
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex,
+    endIndex: lineageIndex + 1,
+    occurrences: items.map((item, offset) => {
+      const id = `before-E-lineage-${offset}`
+      const previousId = `before-E-lineage-${offset - 1}`
+      const isLineage = startIndex + offset === lineageIndex
+      return {
+        id,
+        storyIndex: startIndex + offset,
+        predecessorIds:
+          offset === 0 ? [] : [previousId, ...(isLineage ? [`before-E-lineage-${selectedPredecessorOffset}`] : [])],
+        ...(item._tag === "TaskWorkSpecificationReadReturned" ? { ownerRole: previousId } : {}),
+        ...(isLineage ? { waitForSelectedPredecessor: true } : {})
+      }
+    })
+  })
+}
 export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
@@ -5677,7 +5717,8 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "B"),
     initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "C"),
     diamondBAndCReadWindow(deliveryInvariantStoryUnwindowed.story),
-    doubleDiamondClaimRefreshWindow(deliveryInvariantStoryUnwindowed.story)
+    doubleDiamondClaimRefreshWindow(deliveryInvariantStoryUnwindowed.story),
+    doubleDiamondFAdmissionBeforeELineageWindow(deliveryInvariantStoryUnwindowed.story)
   ]
 })
 
