@@ -58,3 +58,15 @@ it.effect("rejects a wrong Base without consuming the exact attempt response", (
     yield* authored.assertExhausted
   })
 )
+
+it.effect("keeps same-Base reads with different heads owned by their exact attempts", () =>
+  Effect.gen(function* () {
+    const authored = yield* makeAuthoredAttemptTargetLineage([
+      { attemptId: attemptA, observations: [observation(baseA, headA)] },
+      { attemptId: attemptB, observations: [observation(baseA, headB)] }
+    ])
+    expect((yield* authored.forAttempt(attemptB).read(baseA, target)).targetHeadSha).toBe(headB)
+    expect((yield* authored.forAttempt(attemptA).read(baseA, target)).targetHeadSha).toBe(headA)
+    yield* authored.assertExhausted
+  })
+)
