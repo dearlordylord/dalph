@@ -7,6 +7,7 @@ import {
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette
 } from "../../src/cassettes/index.js"
+import { shiftAuthoredCausalWindow } from "../../src/cassettes/authored-causal-authoring.js"
 
 const cassette = maintainedAuthoredCassetteCatalog.deliveryInvariantStory
 const declaredReturn = {
@@ -139,7 +140,13 @@ it.effect("rejects omission of the actual double-diamond activation return befor
       _tag: "DalphSelects",
       operation: { _tag: "ReadTrackerGraph", target: "double-diamond-target" }
     })
-    const missingReturn = { ...cassette, story: cassette.story.filter((_, index) => index !== returnPosition) }
+    const missingReturn = {
+      ...cassette,
+      story: cassette.story.filter((_, index) => index !== returnPosition),
+      causalWindows: cassette.causalWindows?.map((window) =>
+        window.startIndex > returnPosition ? shiftAuthoredCausalWindow(window, -1) : window
+      )
+    }
     const outcome = yield* runAuthoredScenarioCassette(missingReturn).pipe(Effect.result)
     if (Result.isSuccess(outcome)) {
       return yield* Effect.die("omitted activation return unexpectedly completed the double diamond")
