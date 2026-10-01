@@ -32,6 +32,14 @@ import {
   isTaskClaimReadItem,
   type AuthoredAttemptChoiceItem as AttemptChoiceItem
 } from "./authored-cursor-items.js"
+import {
+  AuthoredOccurrenceGraphFailure,
+  AuthoredOccurrenceId,
+  AuthoredOccurrenceMatchFailure,
+  compileAuthoredOccurrenceGraph,
+  matchAuthoredOccurrence,
+  type AuthoredOccurrenceGraph
+} from "./authored-causal-graph.js"
 
 export class AuthoredCassetteInteractionMismatch extends Schema.TaggedError<AuthoredCassetteInteractionMismatch>()(
   "AuthoredCassetteInteractionMismatch",
@@ -630,6 +638,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   }
   interface ConcurrentTrackerReadBatchState {
     readonly index: number
+    readonly selectionGraph: AuthoredOccurrenceGraph<number | null>
     readonly members: ReadonlyArray<ConcurrentTrackerReadMemberState>
   }
   interface CausalRegistry {
@@ -809,8 +818,30 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               index
             )
           }
+          const memberRoles = new Set(item.members.map(({ causal }) => String(causal.occurrenceRole)))
+          const externalRoles = new Set(
+            item.members.flatMap(({ causal }) =>
+              causal.predecessorRoles.filter((role) => !memberRoles.has(String(role))).map(String)
+            )
+          )
+          const selectionGraph = compileAuthoredOccurrenceGraph<number | null>([
+            ...[...externalRoles].map((role) => ({
+              id: AuthoredOccurrenceId.make(role),
+              predecessors: [],
+              value: null
+            })),
+            ...item.members.map((member, memberIndex) => ({
+              id: AuthoredOccurrenceId.make(String(member.causal.occurrenceRole)),
+              predecessors: member.causal.predecessorRoles.map((role) => AuthoredOccurrenceId.make(String(role))),
+              value: memberIndex
+            }))
+          ])
+          if (selectionGraph instanceof AuthoredOccurrenceGraphFailure) {
+            return yield* concurrentBatchFailure(selectionGraph.detail, index)
+          }
           const batch: ConcurrentTrackerReadBatchState = {
             index,
+            selectionGraph,
             members: item.members.map((member) => ({ member, resultConsumed: false }))
           }
           yield* Ref.set(exactCausalState, { ...current, batch })
@@ -856,13 +887,27 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           cassetteDecisionMatches(member.operation, operation) ? [index] : []
         )
         const unclaimed = structural.filter((index) => current.members[index]?.context === undefined)
-        const eligible = unclaimed.filter((index) => {
-          const candidate = current.members[index]
-          return (
-            candidate !== undefined &&
-            causalSelectionIssue(candidate.member.causal, context, state.causal) === undefined
-          )
-        })
+        const frontier = {
+          consumed: new Set([...state.causal.byRole.keys()].map((role) => AuthoredOccurrenceId.make(role)))
+        }
+        const matched = matchAuthoredOccurrence(
+          current.selectionGraph,
+          frontier,
+          JSON.stringify(operation),
+          (memberIndex) => {
+            const candidate = memberIndex === null ? undefined : current.members[memberIndex]
+            return (
+              candidate !== undefined &&
+              candidate.context === undefined &&
+              cassetteDecisionMatches(candidate.member.operation, operation) &&
+              causalSelectionIssue(candidate.member.causal, context, state.causal) === undefined
+            )
+          }
+        )
+        const eligible =
+          matched instanceof AuthoredOccurrenceMatchFailure || matched.occurrence.value === null
+            ? []
+            : [matched.occurrence.value]
         return { eligible, structural, unclaimed }
       }
       const failedSelection = (

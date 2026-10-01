@@ -106,6 +106,30 @@ const bindCausalPrefix = Effect.fn("AuthoredCassetteTest.bindCausalPrefix")(func
   yield* cursor.consumeTrackerGraphFor(target, causalContext("operation:G1", []))
 })
 
+it.effect("validates concurrent read roles before the first boundary call", () =>
+  Effect.gen(function* () {
+    const duplicateRoles = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
+      _tag: "ConcurrentTrackerReadBatch",
+      members: [
+        {
+          causal: causal({ occurrenceRole: "same", predecessorRoles: [] }),
+          operation: readGraph,
+          result: { _tag: "TrackerGraphReadReturned", graph: graph("G0") }
+        },
+        {
+          causal: causal({ occurrenceRole: "same", predecessorRoles: [] }),
+          operation: readGraph,
+          result: { _tag: "TrackerGraphReadReturned", graph: graph("G1") }
+        }
+      ]
+    })
+    const cursor = yield* makeStoryCursor([duplicateRoles, terminal])
+    const failure = yield* Effect.flip(cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G0", [])))
+    expect(failure).toMatchObject({ detail: "duplicate occurrence same" })
+    expect(yield* cursor.storyPosition).toBe(0)
+  })
+)
+
 it.effect("binds an exact operation anchor without revalidating its earlier Journal-owned ancestry", () =>
   Effect.gen(function* () {
     const checked = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
