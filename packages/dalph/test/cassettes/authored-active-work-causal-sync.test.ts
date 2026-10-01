@@ -281,6 +281,19 @@ it.effect("replays independent A-E boundary chains in opposite valid interleavin
       0,
       parallelAuthored<AuthoredCausalBoundaryNode>(chain("A"), chain("B"), chain("C"), chain("D"), chain("E"))
     )
+    const premature = yield* makeStoryCursor([...authored.story, terminal], { causalWindows: [authored.window] })
+    for (const [step, predecessor] of [
+      ["plan", "A:spec-result"],
+      ["worktree", "A:plan"]
+    ] as const) {
+      const failure = yield* Effect.flip(
+        premature.consumeDalphSelectionFor(operation("A", step), causalContext(`operation:A:${step}:early`, []))
+      )
+      expect(failure).toBeInstanceOf(AuthoredCausalSelectionFailure)
+      if (failure instanceof AuthoredCausalSelectionFailure) {
+        expect(failure.detail).toContain(`unmet predecessors: ${predecessor}`)
+      }
+    }
     const play = (order: ReadonlyArray<(typeof names)[number]>) =>
       Effect.gen(function* () {
         const cursor = yield* makeStoryCursor([...authored.story, terminal], { causalWindows: [authored.window] })
