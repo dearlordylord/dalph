@@ -229,6 +229,30 @@ const runCapstoneBrowserSmoke = async (browser) => {
   console.log("✓ discards the first capstone presentation on rerun and retains only the fresh Run trace")
 }
 
+const runCausalBrowserSmoke = async (browser) => {
+  const page = await browser.newPage()
+  const errors = []
+  page.on("pageerror", (error) => errors.push(String(error)))
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text())
+  })
+  await page.goto(labUrl, { waitUntil: "networkidle" })
+  await selectCassette(page, "authored:activeWorkF2SafelySuspends")
+  const article = page.locator("#selected-cassette")
+  await page.getByRole("button", { name: /Run selected cassette:/u }).click()
+  await page.waitForFunction(
+    () => document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+    undefined,
+    { timeout: 90_000 }
+  )
+  const options = await page.locator(".delivery-timeline-controls select option").allTextContents()
+  assert.ok(options.some((label) => label.includes("occurrence active-A-F1")))
+  assert.ok(options.some((label) => label.includes("occurrence active-B-F2")))
+  assert.equal(await article.getAttribute("data-state"), "Completed")
+  assert.deepEqual(errors, [])
+  console.log("✓ causal catalog replay exposes exact occurrence identity in the browser")
+}
+
 const browser = await chromium.launch({
   headless: true,
   ...(process.env.REDUCER_LAB_CHROMIUM === undefined
@@ -238,6 +262,8 @@ const browser = await chromium.launch({
 try {
   if (process.argv.includes("--capstone")) {
     await runCapstoneBrowserSmoke(browser)
+  } else if (process.argv.includes("--causal")) {
+    await runCausalBrowserSmoke(browser)
   } else {
   const page = await browser.newPage()
   const browserErrors = []
