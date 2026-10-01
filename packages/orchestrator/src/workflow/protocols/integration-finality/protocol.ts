@@ -825,7 +825,13 @@ const releaseOriginalClaimBeforeCompletionMarkerDeletion = Effect.fn(
     )
     const operation = originalClaimReleaseOperationFor(request)
     const boundary: TaskClaimReleaseBoundary = {
-      readTaskClaim: tracker.readOriginalTaskClaim,
+      readTaskClaim: (taskId, readOrdinal) =>
+        tracker.readOriginalTaskClaim(taskId, {
+          deletionOperationId: request.operationId,
+          call: "ReleaseOriginalClaimRead",
+          releaseOperationId: operation.release.operationId,
+          readOrdinal
+        }),
       releaseTaskClaim: tracker.releaseOriginalTaskClaim
     }
     yield* runJournaledTaskClaimRelease(

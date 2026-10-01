@@ -1017,8 +1017,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                   cleanupRead === undefined ||
                   cleanupRead.deletionOperationId !== directCleanupClaimRead.deletionOperationId ||
                   cleanupRead.call !== directCleanupClaimRead.call ||
-                  cleanupRead.attemptOrdinal !== directCleanupClaimRead.attemptOrdinal ||
-                  cleanupRead.readOrdinal !== directCleanupClaimRead.readOrdinal
+                  cleanupRead.readOrdinal !== directCleanupClaimRead.readOrdinal ||
+                  (cleanupRead.call === "ReleaseOriginalClaimRead" &&
+                  directCleanupClaimRead.call === "ReleaseOriginalClaimRead"
+                    ? cleanupRead.releaseOperationId !== directCleanupClaimRead.releaseOperationId
+                    : cleanupRead.call !== "ReleaseOriginalClaimRead" &&
+                        directCleanupClaimRead.call !== "ReleaseOriginalClaimRead"
+                      ? cleanupRead.attemptOrdinal !== directCleanupClaimRead.attemptOrdinal
+                      : true)
                 )
                   return false
               }

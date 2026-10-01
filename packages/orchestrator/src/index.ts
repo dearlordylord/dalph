@@ -528,6 +528,7 @@ export {
 export {
   AuthoritativeTaskClaimReleased,
   runTaskClaimReleaseProtocol,
+  TaskClaimReleaseReadOrdinal,
   TaskClaimReleaseDidNotConverge
 } from "./workflow/protocols/task-claim-release/protocol.js"
 export {

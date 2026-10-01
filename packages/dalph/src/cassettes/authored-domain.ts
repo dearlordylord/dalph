@@ -42,6 +42,7 @@ import {
   JournalPosition,
   CompletionClaimCleanupReadOrdinal,
   CompletionClaimRequestOrdinal,
+  TaskClaimReleaseReadOrdinal,
   OperationId,
   PlannedAttemptWorktreeObservation
 } from "@dalph/orchestrator"
@@ -1211,13 +1212,22 @@ export const AuthoredCausalWindow = Schema.Struct({
       ),
       /** A cleanup read is initiated by its journaled call, without a selected workflow read. */
       directCleanupClaimRead: Schema.optionalKey(
-        Schema.Struct({
-          taskId: TaskId,
-          deletionOperationId: OperationId,
-          call: Schema.Literals(["ConfirmOriginalClaimReleased", "ConfirmNoActiveClaimAfterMarkerAbsent"]),
-          attemptOrdinal: CompletionClaimRequestOrdinal,
-          readOrdinal: CompletionClaimCleanupReadOrdinal
-        })
+        Schema.Union([
+          Schema.Struct({
+            taskId: TaskId,
+            deletionOperationId: OperationId,
+            call: Schema.Literals(["ConfirmOriginalClaimReleased", "ConfirmNoActiveClaimAfterMarkerAbsent"]),
+            attemptOrdinal: CompletionClaimRequestOrdinal,
+            readOrdinal: CompletionClaimCleanupReadOrdinal
+          }),
+          Schema.Struct({
+            taskId: TaskId,
+            deletionOperationId: OperationId,
+            call: Schema.Literal("ReleaseOriginalClaimRead"),
+            releaseOperationId: OperationId,
+            readOrdinal: TaskClaimReleaseReadOrdinal
+          })
+        ])
       ),
       /** A direct Git operation binds only after its exact result is observed. */
       directGitRead: Schema.optionalKey(
@@ -1296,13 +1306,11 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
       const item = cassette.story[occurrence.storyIndex]
       if (occurrence.directCleanupClaimRead !== undefined) {
         const read = occurrence.directCleanupClaimRead
-        const key = JSON.stringify([
-          read.taskId,
-          read.deletionOperationId,
-          read.call,
-          read.attemptOrdinal,
-          read.readOrdinal
-        ])
+        const key = JSON.stringify(
+          read.call === "ReleaseOriginalClaimRead"
+            ? [read.taskId, read.deletionOperationId, read.call, read.releaseOperationId, read.readOrdinal]
+            : [read.taskId, read.deletionOperationId, read.call, read.attemptOrdinal, read.readOrdinal]
+        )
         if (cleanupReads.has(key)) return `direct cleanup claim read ${occurrence.id} repeats one exact call`
         cleanupReads.add(key)
       }

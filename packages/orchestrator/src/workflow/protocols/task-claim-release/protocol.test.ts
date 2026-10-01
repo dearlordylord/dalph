@@ -15,7 +15,11 @@ import {
   UnclaimedTask
 } from "../../../index.js"
 import type { TrackerMutationService } from "../../../authorities/task-tracker/claim-mutation.js"
-import { runTaskClaimReleaseProtocol, TaskClaimReleaseDidNotConverge } from "./protocol.js"
+import {
+  runTaskClaimReleaseProtocol,
+  TaskClaimReleaseDidNotConverge,
+  type TaskClaimReleaseBoundary
+} from "./protocol.js"
 
 const taskId = TaskId.make("released-task")
 const claim = ActiveTaskClaim.make({
@@ -32,10 +36,9 @@ it.effect("rereads before and after deleting the exact claim", () =>
   Effect.gen(function* () {
     const current = yield* Ref.make<typeof claim | undefined>(claim)
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
-    const tracker: TrackerMutationService = {
-      acquireTaskClaim: unusedAcquisition,
-      readTaskClaim: () =>
-        Ref.updateAndGet(calls, (items) => [...items, "read"]).pipe(
+    const tracker: TaskClaimReleaseBoundary = {
+      readTaskClaim: (_, readOrdinal) =>
+        Ref.updateAndGet(calls, (items) => [...items, `read:${readOrdinal}`]).pipe(
           Effect.andThen(Ref.get(current)),
           Effect.map((observed) => observed ?? UnclaimedTask.make({ taskId }))
         ),
@@ -46,7 +49,7 @@ it.effect("rereads before and after deleting the exact claim", () =>
     }
 
     expect((yield* runTaskClaimReleaseProtocol(tracker, release))._tag).toBe("AuthoritativeTaskClaimReleased")
-    expect(yield* Ref.get(calls)).toEqual(["read", "release:claim-release", "read"])
+    expect(yield* Ref.get(calls)).toEqual(["read:1", "release:claim-release", "read:2"])
   })
 )
 

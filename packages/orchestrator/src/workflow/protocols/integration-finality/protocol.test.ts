@@ -1575,7 +1575,10 @@ it.effect("localizes A cleanup conflicts while independent B completes its own c
     })
     const progressIndependentB = (boundary: CompletionClaimBoundary["Service"]) =>
       runTaskClaimReleaseProtocol(
-        { readTaskClaim: boundary.readOriginalTaskClaim, releaseTaskClaim: boundary.releaseOriginalTaskClaim },
+        {
+          readTaskClaim: (taskId) => boundary.readOriginalTaskClaim(taskId),
+          releaseTaskClaim: boundary.releaseOriginalTaskClaim
+        },
         { claim: independentClaim, operationId: OperationId.make("completion-cleanup-independent-B-release") }
       )
     const cases: ReadonlyArray<ReadonlyArray<CompletionClaimObservation>> = [

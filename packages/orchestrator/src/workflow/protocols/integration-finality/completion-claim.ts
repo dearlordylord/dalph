@@ -12,6 +12,7 @@ import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
 import type { CompletionClaimCleanupReadOrdinal, CompletionClaimRequestOrdinal } from "./events.js"
+import type { TaskClaimReleaseReadOrdinal } from "../task-claim-release/protocol.js"
 import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import {
   TargetPromotionCorrelation,
@@ -72,12 +73,19 @@ export const CompletionClaimReadRequest = Schema.Struct({ expectedClaim: Complet
 export type CompletionClaimReadRequest = typeof CompletionClaimReadRequest.Type
 
 /** Identifies one journaled cleanup read that has no WorkflowTrace selection. */
-export interface CompletionOriginalClaimCleanupRead {
-  readonly deletionOperationId: OperationId
-  readonly call: "ConfirmOriginalClaimReleased" | "ConfirmNoActiveClaimAfterMarkerAbsent"
-  readonly attemptOrdinal: CompletionClaimRequestOrdinal
-  readonly readOrdinal: CompletionClaimCleanupReadOrdinal
-}
+export type CompletionOriginalClaimCleanupRead =
+  | {
+      readonly deletionOperationId: OperationId
+      readonly call: "ConfirmOriginalClaimReleased" | "ConfirmNoActiveClaimAfterMarkerAbsent"
+      readonly attemptOrdinal: CompletionClaimRequestOrdinal
+      readonly readOrdinal: CompletionClaimCleanupReadOrdinal
+    }
+  | {
+      readonly deletionOperationId: OperationId
+      readonly call: "ReleaseOriginalClaimRead"
+      readonly releaseOperationId: OperationId
+      readonly readOrdinal: TaskClaimReleaseReadOrdinal
+    }
 
 /** Derives the one exact read request used before create, after ambiguity, and during cleanup. */
 export const completionClaimReadRequestFor = (expectedClaim: CompletionTaskClaim): CompletionClaimReadRequest =>
