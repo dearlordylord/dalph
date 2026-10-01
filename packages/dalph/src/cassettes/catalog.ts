@@ -5548,7 +5548,10 @@ const deliveryInvariantStoryUnwindowed: ScenarioCassette = Schema.decodeUnknownS
   ]
 })
 
-const initialDiamondClaimGraphWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>, taskId: "B" | "C") => {
+const initialDiamondClaimGraphWindow = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  taskId: "B" | "C" | "H" | "I"
+) => {
   const claimIndex = story.findIndex(
     (item) =>
       item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" && item.operation.taskId === taskId
@@ -5573,65 +5576,68 @@ const initialDiamondClaimGraphWindow = (story: ReadonlyArray<AuthoredCassetteSto
     ]
   })
 }
-const diamondBAndCReadWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
-  const afterCClaim = initialDiamondClaimGraphWindow(story, "C").endIndex
-  const bSpecificationIndex = story.findIndex(
+const diamondPairReadWindow = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  firstTaskId: "B" | "H",
+  secondTaskId: "C" | "I"
+) => {
+  const afterSecondClaim = initialDiamondClaimGraphWindow(story, secondTaskId).endIndex
+  const firstSpecificationIndex = story.findIndex(
     (item, index) =>
-      index > afterCClaim &&
+      index > afterSecondClaim &&
       item._tag === "DalphSelects" &&
       item.operation._tag === "ReadTaskWorkSpecification" &&
-      item.operation.taskId === "B"
+      item.operation.taskId === firstTaskId
   )
-  const bResponseIndex = bSpecificationIndex + 1
-  const cGraphIndex = bResponseIndex + 1
-  const cGraphResponseIndex = cGraphIndex + 1
-  const cSpecificationIndex = cGraphResponseIndex + 1
-  const cResponseIndex = cSpecificationIndex + 1
+  const firstResponseIndex = firstSpecificationIndex + 1
+  const secondGraphIndex = firstResponseIndex + 1
+  const secondGraphResponseIndex = secondGraphIndex + 1
+  const secondSpecificationIndex = secondGraphResponseIndex + 1
+  const secondResponseIndex = secondSpecificationIndex + 1
   Schema.decodeUnknownSync(Schema.Literal(true))(
-    bSpecificationIndex >= 0 &&
-      story[bResponseIndex]?._tag === "TaskWorkSpecificationReadReturned" &&
-      story[cGraphIndex]?._tag === "DalphSelects" &&
-      story[cGraphIndex].operation._tag === "ReadTrackerGraph" &&
-      story[cGraphResponseIndex]?._tag === "TrackerGraphReadReturned" &&
-      story[cSpecificationIndex]?._tag === "DalphSelects" &&
-      story[cSpecificationIndex].operation._tag === "ReadTaskWorkSpecification" &&
-      story[cSpecificationIndex].operation.taskId === "C" &&
-      story[cResponseIndex]?._tag === "TaskWorkSpecificationReadReturned"
+    firstSpecificationIndex >= 0 &&
+      story[firstResponseIndex]?._tag === "TaskWorkSpecificationReadReturned" &&
+      story[secondGraphIndex]?._tag === "DalphSelects" &&
+      story[secondGraphIndex].operation._tag === "ReadTrackerGraph" &&
+      story[secondGraphResponseIndex]?._tag === "TrackerGraphReadReturned" &&
+      story[secondSpecificationIndex]?._tag === "DalphSelects" &&
+      story[secondSpecificationIndex].operation._tag === "ReadTaskWorkSpecification" &&
+      story[secondSpecificationIndex].operation.taskId === secondTaskId &&
+      story[secondResponseIndex]?._tag === "TaskWorkSpecificationReadReturned"
   )
+  const firstSpecificationId = `diamond-${firstTaskId}-specification`
+  const secondGraphId = `diamond-${secondTaskId}-recheck-graph`
+  const secondSpecificationId = `diamond-${secondTaskId}-specification`
   return Schema.decodeUnknownSync(AuthoredCausalWindow)({
-    startIndex: bSpecificationIndex,
-    endIndex: cResponseIndex + 1,
+    startIndex: firstSpecificationIndex,
+    endIndex: secondResponseIndex + 1,
     occurrences: [
-      { id: "diamond-B-specification", storyIndex: bSpecificationIndex, predecessorIds: [] },
+      { id: firstSpecificationId, storyIndex: firstSpecificationIndex, predecessorIds: [] },
       {
-        id: "diamond-B-specification-result",
-        storyIndex: bResponseIndex,
-        predecessorIds: ["diamond-B-specification"],
-        ownerRole: "diamond-B-specification"
+        id: `${firstSpecificationId}-result`,
+        storyIndex: firstResponseIndex,
+        predecessorIds: [firstSpecificationId],
+        ownerRole: firstSpecificationId
       },
-      { id: "diamond-C-recheck-graph", storyIndex: cGraphIndex, predecessorIds: [] },
+      { id: secondGraphId, storyIndex: secondGraphIndex, predecessorIds: [] },
       {
-        id: "diamond-C-recheck-graph-result",
-        storyIndex: cGraphResponseIndex,
-        predecessorIds: ["diamond-C-recheck-graph"],
-        ownerRole: "diamond-C-recheck-graph"
+        id: `${secondGraphId}-result`,
+        storyIndex: secondGraphResponseIndex,
+        predecessorIds: [secondGraphId],
+        ownerRole: secondGraphId
       },
+      { id: secondSpecificationId, storyIndex: secondSpecificationIndex, predecessorIds: [`${secondGraphId}-result`] },
       {
-        id: "diamond-C-specification",
-        storyIndex: cSpecificationIndex,
-        predecessorIds: ["diamond-C-recheck-graph-result"]
-      },
-      {
-        id: "diamond-C-specification-result",
-        storyIndex: cResponseIndex,
-        predecessorIds: ["diamond-C-specification"],
-        ownerRole: "diamond-C-specification"
+        id: `${secondSpecificationId}-result`,
+        storyIndex: secondResponseIndex,
+        predecessorIds: [secondSpecificationId],
+        ownerRole: secondSpecificationId
       }
     ]
   })
 }
 const doubleDiamondClaimRefreshWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
-  const afterInitialReads = diamondBAndCReadWindow(story).endIndex
+  const afterInitialReads = diamondPairReadWindow(story, "B", "C").endIndex
   const bClaimIndex = story.findIndex(
     (item, index) =>
       index > afterInitialReads &&
@@ -5741,9 +5747,12 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
   causalWindows: [
     initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "B"),
     initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "C"),
-    diamondBAndCReadWindow(deliveryInvariantStoryUnwindowed.story),
+    diamondPairReadWindow(deliveryInvariantStoryUnwindowed.story, "B", "C"),
     doubleDiamondClaimRefreshWindow(deliveryInvariantStoryUnwindowed.story),
-    doubleDiamondFAdmissionBeforeELineageWindow(deliveryInvariantStoryUnwindowed.story)
+    doubleDiamondFAdmissionBeforeELineageWindow(deliveryInvariantStoryUnwindowed.story),
+    initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "H"),
+    initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "I"),
+    diamondPairReadWindow(deliveryInvariantStoryUnwindowed.story, "H", "I")
   ]
 })
 
@@ -5994,7 +6003,7 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
   causalWindows: [
     initialDiamondClaimGraphWindow(productionShapedFiveTaskDiamondUnwindowed.story, "B"),
     initialDiamondClaimGraphWindow(productionShapedFiveTaskDiamondUnwindowed.story, "C"),
-    diamondBAndCReadWindow(productionShapedFiveTaskDiamondUnwindowed.story),
+    diamondPairReadWindow(productionShapedFiveTaskDiamondUnwindowed.story, "B", "C"),
     fiveTaskDiamondPromotionPredecessorWindow(productionShapedFiveTaskDiamondUnwindowed.story)
   ]
 })
