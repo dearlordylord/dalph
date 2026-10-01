@@ -130,6 +130,10 @@ correlation edit. Re-run the affected negative controls when causal matching or
 runtime behavior changes, then run `check:fast` on the coherent candidate before
 integration. A failed full qualification still follows its separate recovery
 rule; focused capstone attempts do not consume a full-gate admission.
+When diagnosing a capstone that must be terminated at its wall-clock stop,
+append progress captures to a temporary sidecar and restore the diagnostic
+hook afterward. Vitest may hold intercepted console output until test exit, so
+console logging alone does not retain the last observed boundary on timeout.
 The S1–S8 publication mapping uses the focused checks named in the accepted
 direct-publication scenario. This selection changes test policy only; Dalph
 production runtime and its accepted behavior do not change.
