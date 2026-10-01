@@ -36,3 +36,11 @@ export const authorCausalWindow = (
   })
   return { story: occurrences.map(({ value }) => value.item), window }
 }
+
+/** Relocates a causal segment when a fixture composes earlier story items around it. */
+export const shiftAuthoredCausalWindow = (window: AuthoredCausalWindowType, offset: number): AuthoredCausalWindowType =>
+  Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex: window.startIndex + offset,
+    endIndex: window.endIndex + offset,
+    occurrences: window.occurrences.map((occurrence) => ({ ...occurrence, storyIndex: occurrence.storyIndex + offset }))
+  })

@@ -10,12 +10,12 @@ import {
 } from "@dalph/orchestrator"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
+import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
 import {
-  AuthoredCassetteStoryItem,
-  type AuthoredConcurrentTrackerRead,
-  type AuthoredOrchestrationEvidence
-} from "./authored-domain.js"
-import { authorCausalWindow, type AuthoredCausalBoundaryNode } from "./authored-causal-authoring.js"
+  authorCausalWindow,
+  shiftAuthoredCausalWindow,
+  type AuthoredCausalBoundaryNode
+} from "./authored-causal-authoring.js"
 import {
   AuthoredOccurrenceId,
   authoredOccurrence,
@@ -2750,8 +2750,55 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
   ]
 })
 
-/** The predecessor catalog entry is decoded before replacing its tracker batch with a causal window. */
-const activeWorkF2BatchSource: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+const activeWorkF2ReadPlan = (member: {
+  readonly role: string
+  readonly predecessors: ReadonlyArray<string>
+  readonly taskId: string
+  readonly body: string
+  readonly title: string
+}): AuthoredOccurrencePlan<AuthoredCausalBoundaryNode> => {
+  const role = AuthoredOccurrenceId.make(member.role)
+  return sequenceAuthored(
+    authoredOccurrence(role, {
+      item: decodeStoryItem({
+        _tag: "DalphSelects",
+        causal: { occurrenceRole: role, predecessorRoles: member.predecessors },
+        operation: { _tag: "ReadTaskWorkSpecification", taskId: member.taskId }
+      })
+    }),
+    authoredOccurrence(AuthoredOccurrenceId.make(`${role}:result`), {
+      item: decodeStoryItem({
+        _tag: "TaskWorkSpecificationReadReturned",
+        body: member.body,
+        taskId: member.taskId,
+        title: member.title
+      }),
+      ownerRole: role
+    })
+  )
+}
+const activeWorkF2CausalSegment = authorCausalWindow(
+  0,
+  parallelAuthored(
+    activeWorkF2ReadPlan({
+      role: "active-A-F1",
+      predecessors: ["plan-A-F1", "active-shared-G1"],
+      taskId: "A",
+      body: "Implement the accepted singleton behavior.",
+      title: "Implement singleton"
+    }),
+    activeWorkF2ReadPlan({
+      role: "active-B-F2",
+      predecessors: ["plan-B-F1", "active-shared-G1"],
+      taskId: "B",
+      body: "Implement changed B from F2.",
+      title: "Implement B F2"
+    })
+  )
+)
+
+/** The unwindowed story gives the named causal segment its exact position in the composed catalog. */
+const activeWorkF2Unwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "notification and timer coalesce before B1 safely suspends for F2",
   startingFacts: {
@@ -2806,31 +2853,7 @@ const activeWorkF2BatchSource: ScenarioCassette = Schema.decodeUnknownSync(Autho
       _tag: "CassetteOffersRunReactivationHints",
       hints: ["TrackerNotification", "Timer", "TrackerNotification", "Timer"]
     },
-    {
-      _tag: "ConcurrentTrackerReadBatch",
-      members: [
-        {
-          causal: { occurrenceRole: "active-A-F1", predecessorRoles: ["plan-A-F1", "active-shared-G1"] },
-          operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" },
-          result: {
-            _tag: "TaskWorkSpecificationReadReturned",
-            body: "Implement the accepted singleton behavior.",
-            taskId: "A",
-            title: "Implement singleton"
-          }
-        },
-        {
-          causal: { occurrenceRole: "active-B-F2", predecessorRoles: ["plan-B-F1", "active-shared-G1"] },
-          operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" },
-          result: {
-            _tag: "TaskWorkSpecificationReadReturned",
-            body: "Implement changed B from F2.",
-            taskId: "B",
-            title: "Implement B F2"
-          }
-        }
-      ]
-    },
+    ...activeWorkF2CausalSegment.story,
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
@@ -2876,44 +2899,18 @@ const activeWorkF2BatchSource: ScenarioCassette = Schema.decodeUnknownSync(Autho
   ]
 })
 
-const activeWorkF2BatchIndex = activeWorkF2BatchSource.story.findIndex(
-  (item) => item._tag === "ConcurrentTrackerReadBatch"
+const activeWorkF2CausalStartIndex = activeWorkF2Unwindowed.story.findIndex(
+  (item) => item._tag === "DalphSelects" && item.causal?.occurrenceRole === "active-A-F1"
 )
-const activeWorkF2Batch = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)(
-  activeWorkF2BatchSource.story[activeWorkF2BatchIndex]
-)
-const activeWorkF2ReadPlan = (
-  member: AuthoredConcurrentTrackerRead
-): AuthoredOccurrencePlan<AuthoredCausalBoundaryNode> => {
-  const role = AuthoredOccurrenceId.make(String(member.causal.occurrenceRole))
-  return sequenceAuthored(
-    authoredOccurrence(role, {
-      item: decodeStoryItem({ _tag: "DalphSelects", operation: member.operation, causal: member.causal })
-    }),
-    authoredOccurrence(AuthoredOccurrenceId.make(`${role}:result`), {
-      item: decodeStoryItem(member.result),
-      ownerRole: role
-    })
-  )
-}
-const [activeWorkF2FirstRead, ...activeWorkF2OtherReads] = activeWorkF2Batch.members
-const activeWorkF2CausalWindow = authorCausalWindow(
-  activeWorkF2BatchIndex,
-  parallelAuthored(activeWorkF2ReadPlan(activeWorkF2FirstRead), ...activeWorkF2OtherReads.map(activeWorkF2ReadPlan))
+const activeWorkF2CausalWindow = shiftAuthoredCausalWindow(
+  activeWorkF2CausalSegment.window,
+  activeWorkF2CausalStartIndex
 )
 
 /** Alice's F2 edit reaches the exact active B1 refresh through a general causal boundary window. */
 export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
-)({
-  ...activeWorkF2BatchSource,
-  story: [
-    ...activeWorkF2BatchSource.story.slice(0, activeWorkF2BatchIndex),
-    ...activeWorkF2CausalWindow.story,
-    ...activeWorkF2BatchSource.story.slice(activeWorkF2BatchIndex + 1)
-  ],
-  causalWindows: [activeWorkF2CausalWindow.window]
-})
+)({ ...activeWorkF2Unwindowed, causalWindows: [activeWorkF2CausalWindow] })
 
 /** Accepted executor output remains ordered by journal position and starts integration in the next activation. */
 export const acceptedResultRestartsIntoIntegrationAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
