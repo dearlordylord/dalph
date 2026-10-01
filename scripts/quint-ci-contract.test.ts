@@ -281,8 +281,18 @@ describe("hosted formal-model contract", () => {
       suffixJob.indexOf("Restore coverage workspace ownership")
     )
     expect(suffixJob.indexOf("Restore coverage workspace ownership")).toBeLessThan(
+      suffixJob.indexOf("Identify failed hosted quality stage")
+    )
+    expect(suffixJob.indexOf("Identify failed hosted quality stage")).toBeLessThan(
+      suffixJob.indexOf("Upload failed hosted quality child logs")
+    )
+    expect(suffixJob.indexOf("Upload failed hosted quality child logs")).toBeLessThan(
       suffixJob.indexOf("Upload hosted quality stage evidence")
     )
+    expect(suffixJob).toContain('JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).outcome')
+    expect(suffixJob).toContain("steps.failed_stage.outputs.upload == 'true' || failure()")
+    expect(suffixJob).toContain("path: .scratch/quality-gates/*/logs/*.log")
+    expect(suffixJob).toContain("include-hidden-files: true")
     expect(suffixJob).toMatch(/- name: Upload hosted quality stage evidence[\s\S]*?if: always\(\)/u)
 
     expect(aggregateJob).toContain("needs: [change-plan, docs-quality, quality-preflight, quality-suffix]")

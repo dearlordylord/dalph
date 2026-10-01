@@ -196,6 +196,11 @@ rerun the structural preflight. Those cells use bounded fail-slow concurrency,
 so one ordinary failure does not cancel independent cells. The quality aggregate
 reports every expected cell, including rows that are missing or unproven, and
 the separate formal aggregate remains independent of the quality suffix.
+On a failed suffix cell, CI also uploads its complete retained child logs as a
+one-day diagnostic artifact. The portable stage envelope still owns the verdict;
+the extra logs supply test assertions and stack traces that its short stage log
+and failed-file inventory cannot show. This changes CI evidence retention only,
+not Dalph runtime behavior or quality outcomes.
 
 When the hosted quality aggregate reports more than one independent defect,
 repair every reported defect before submitting the repaired candidate C2. The

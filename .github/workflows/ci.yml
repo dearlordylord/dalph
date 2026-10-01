@@ -261,6 +261,27 @@ jobs:
             "$(dirname "$GITHUB_WORKSPACE")"
           sudo userdel --remove dalph-quality
 
+      # Ordinary failed stage verdicts leave this job green until aggregation.
+      # Preserve the full child output once, outside the portable verdict bundle.
+      - name: Identify failed hosted quality stage
+        if: always()
+        id: failed_stage
+        run: |
+          envelope="hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}/envelope.json"
+          if [[ -f "$envelope" ]] && [[ "$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).outcome' "$envelope")" == failed ]]; then
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload failed hosted quality child logs
+        if: always() && (steps.failed_stage.outputs.upload == 'true' || failure())
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-quality-child-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.nodeVersion }}-${{ matrix.stageId }}
+          path: .scratch/quality-gates/*/logs/*.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 1
+
       # This step must run after an ordinary command failure so the aggregate
       # can distinguish a failed stage from a missing/unproven stage.
       - name: Upload hosted quality stage evidence
