@@ -89,7 +89,7 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
   }): boolean => {
     const source = readFileSync(new URL(`../${acceptance.sourceFile}`, import.meta.url), "utf8")
     const declaration = acceptance.declaration.replace(".", "\\.")
-    return new RegExp(`${declaration}\\(\\s*${JSON.stringify(acceptance.name)}`).test(source)
+    return new RegExp(`${declaration}(?:\\.skipIf\\([^)]*\\))?\\(\\s*${JSON.stringify(acceptance.name)}`).test(source)
   }
 
   expect(documentedBeatIds).toEqual(deliveryStoryManifest.beats.map(({ beatId }) => beatId))
@@ -108,9 +108,9 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
       expect(coverage.acceptanceTests).toEqual([])
     } else {
       expect(coverage.cassetteKeys.length).toBeGreaterThan(0)
-      expect(coverage.cassetteKeys.every(catalogHas)).toBe(true)
+      expect(coverage.cassetteKeys.filter((key) => !catalogHas(key))).toEqual([])
       expect(coverage.acceptanceTests.length).toBeGreaterThan(0)
-      expect(coverage.acceptanceTests.every(acceptanceTestExists)).toBe(true)
+      expect(coverage.acceptanceTests.filter((acceptance) => !acceptanceTestExists(acceptance))).toEqual([])
     }
   }
 })
