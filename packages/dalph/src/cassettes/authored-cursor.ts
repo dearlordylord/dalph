@@ -874,13 +874,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
 
   const claimCausalWindow = <A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A,
-    context?: AuthoredOperationCausalContext
+    context?: AuthoredOperationCausalContext,
+    ownerSelectionMatches?: (item: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type) => boolean
   ): Effect.Effect<
     Option.Option<Extract<ClaimedStoryItem<A>, { readonly _tag: "Claimed" }>>,
     AuthoredCausalSelectionFailure
   > =>
     Effect.gen(function* () {
-      if (yield* awaitControlBoundary()) return yield* claimCausalWindow(predicate, context)
+      if (yield* awaitControlBoundary()) return yield* claimCausalWindow(predicate, context, ownerSelectionMatches)
       const result = yield* transition.withPermits(1)(
         Effect.gen(function* () {
           const index = yield* SubscriptionRef.get(position)
@@ -899,6 +900,11 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               const item = story[storyIndex]
               if (!predicate(item)) return false
               if (graphReadCause !== undefined && graphReadCause !== context?.graphReadCause) return false
+              if (ownerSelectionMatches !== undefined) {
+                const owner = ownerRole === undefined ? undefined : window.graph.byId.get(ownerRole)
+                const ownerItem = owner === undefined ? undefined : story[owner.value.storyIndex]
+                if (ownerItem?._tag !== "DalphSelects" || !ownerSelectionMatches(ownerItem)) return false
+              }
               const selected = story[storyIndex]
               if (
                 ownerRole !== undefined &&
@@ -926,10 +932,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                 value.ownerRole !== undefined &&
                 state.causal.byRole.get(String(value.ownerRole))?.operationId !== context?.operationId
             )
+            const wrongBoundaryOwner = relevant.find(({ value }) => {
+              if (ownerSelectionMatches === undefined || value.ownerRole === undefined) return false
+              const owner = window.graph.byId.get(value.ownerRole)
+              const ownerItem = owner === undefined ? undefined : story[owner.value.storyIndex]
+              return ownerItem?._tag !== "DalphSelects" || !ownerSelectionMatches(ownerItem)
+            })
             const detail =
-              wrongOwner === undefined
-                ? matched.detail
-                : `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
+              wrongOwner !== undefined
+                ? `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
+                : wrongBoundaryOwner !== undefined
+                  ? `occurrence ${wrongBoundaryOwner.id} has a selected owner for a different boundary request`
+                  : matched.detail
             return { _tag: "Failure" as const, detail, index }
           }
           const { id, value } = matched.occurrence
@@ -2274,13 +2288,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTrackerGraph = consumeTrackerGraphLoop()
   const consumeTrackerGraphFor: StoryCursor["consumeTrackerGraphFor"] = Effect.fn(
     "AuthoredCassette.consumeTrackerGraphFor"
-  )(function* (_target, context) {
+  )(function* (target, context) {
     const causal = yield* claimCausalWindow<AuthoredTrackerGraphReadResult>(
       (item): item is AuthoredTrackerGraphReadResult =>
         item?._tag === "TrackerGraphReadFailed" ||
         item?._tag === "TrackerGraphReadReturned" ||
         item?._tag === "RunActivationFinalTrackerGraphReadReturned",
-      context
+      context,
+      (selected) => selected.operation._tag === "ReadTrackerGraph" && selected.operation.target === target
     )
     if (Option.isSome(causal)) return causal.value.item
     return yield* consumeTrackerGraph

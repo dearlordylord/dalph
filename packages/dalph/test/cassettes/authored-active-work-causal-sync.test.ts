@@ -180,6 +180,17 @@ it.effect("replays opposite graph, specification, and worktree selection orders 
     expect(wrongOwner).toBeInstanceOf(AuthoredCausalSelectionFailure)
     if (wrongOwner instanceof AuthoredCausalSelectionFailure)
       expect(wrongOwner.detail).toContain("requires exact selected owner F")
+    const wrongTarget = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const graphOwner = causalContext("operation:G:target", [])
+    yield* wrongTarget.consumeDalphSelectionFor(readGraph, graphOwner)
+    const targetFailure = yield* Effect.flip(
+      wrongTarget.consumeTrackerGraphFor(FixtureTarget.make("another-target"), graphOwner)
+    )
+    expect(targetFailure).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    if (targetFailure instanceof AuthoredCausalSelectionFailure) {
+      expect(targetFailure.detail).toContain("different boundary request")
+    }
+    expect((yield* wrongTarget.consumeTrackerGraphFor(target, graphOwner))._tag).toBe("TrackerGraphReadReturned")
     for (const order of [
       ["F", "F-result", "W", "G", "G-result"],
       ["G", "F", "G-result", "F-result", "W"]
