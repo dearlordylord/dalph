@@ -2,6 +2,8 @@ export {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   authoredCassetteStoryItemOwners,
   AuthoredCassetteDecision,
+  AuthoredCausalSelection,
+  AuthoredCausalWindow,
   AuthoredCassetteStoryItem,
   AuthoredCassetteStoryItemOwnerContradiction,
   AuthoredExpectedBehavior,
@@ -16,7 +18,27 @@ export {
   AuthoredTaskWorkSpecification,
   AuthoredTrackerGraph
 } from "./authored-domain.js"
-export { AuthoredCassetteInteractionMismatch, AuthoredIntegratorGitObservationFailure } from "./authored-cursor.js"
+export {
+  AuthoredCassetteInteractionMismatch,
+  AuthoredCausalSelectionFailure,
+  AuthoredIntegratorGitObservationFailure
+} from "./authored-cursor.js"
+export {
+  authorCausalWindow,
+  shiftAuthoredCausalWindow,
+  type AuthoredCausalBoundaryNode
+} from "./authored-causal-authoring.js"
+export {
+  AuthoredOccurrenceId,
+  authoredOccurrence,
+  compileAuthoredOccurrenceGraph,
+  expandAuthoredOccurrencePlan,
+  finishAuthoredOccurrenceGraph,
+  matchAuthoredOccurrence,
+  parallelAuthored,
+  sequenceAuthored,
+  type AuthoredOccurrencePlan
+} from "./authored-causal-graph.js"
 export { AuthoredCassetteBehaviorMismatch } from "./authored-outcomes.js"
 export { renderAuthoredCassetteLyrics } from "./authored-presentation.js"
 export {
