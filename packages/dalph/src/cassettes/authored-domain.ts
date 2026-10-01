@@ -1178,7 +1178,10 @@ export const AuthoredCausalWindow = Schema.Struct({
       /** Exact task subjects covered by a complete tracker graph read. */
       graphReadExplicitTaskIds: Schema.optionalKey(Schema.Array(TaskId).check(Schema.isUnique())),
       /** Exact selected operation whose boundary result this node returns, when applicable. */
-      ownerRole: Schema.optionalKey(AuthoredOccurrenceId)
+      ownerRole: Schema.optionalKey(AuthoredOccurrenceId),
+      /** A direct interpreter graph read has no selection trace; bind its raw operation at this result. */
+      directGraphRole: Schema.optionalKey(AuthoredCausalRole),
+      directGraphPredecessorRoles: Schema.optionalKey(Schema.Array(AuthoredCausalRole).check(Schema.isUnique()))
     })
   )
 })
@@ -1199,7 +1202,11 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
     worktreeObservation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   }),
   story: Schema.Array(AuthoredCassetteStoryItem),
-  causalWindows: Schema.optionalKey(Schema.Array(AuthoredCausalWindow))
+  causalWindows: Schema.optionalKey(Schema.Array(AuthoredCausalWindow)),
+  /** The accepted replacement event owns this exact successor plan operation. */
+  acceptedReplacementPlanRoles: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ occurrenceRole: AuthoredCausalRole, taskId: TaskId, successorAttemptId: AttemptId }))
+  )
 })
 
 const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
@@ -1239,16 +1246,31 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
       if (occurrence.waitForPredecessors === true && occurrence.predecessorIds.length === 0) {
         return `causal occurrence ${occurrence.id} can await only a named predecessor`
       }
-      if (
-        occurrence.graphReadCause !== undefined &&
-        (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
-      )
+      const selectedGraph = item._tag === "DalphSelects" && item.operation._tag === "ReadTrackerGraph"
+      const returnedGraph =
+        item._tag === "TrackerGraphReadReturned" ||
+        item._tag === "TrackerGraphReadFailed" ||
+        item._tag === "RunActivationFinalTrackerGraphReadReturned"
+      const directGraph =
+        returnedGraph &&
+        occurrence.directGraphRole !== undefined &&
+        occurrence.directGraphPredecessorRoles !== undefined
+      if (occurrence.graphReadCause !== undefined && !selectedGraph && !directGraph)
         return `causal occurrence ${occurrence.id} assigns a graph cause to a non-graph selection`
-      if (
-        occurrence.graphReadExplicitTaskIds !== undefined &&
-        (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
-      )
+      if (occurrence.graphReadExplicitTaskIds !== undefined && !selectedGraph && !directGraph)
         return `causal occurrence ${occurrence.id} assigns graph task coverage to a non-graph selection`
+      if (
+        directGraph &&
+        (occurrence.ownerRole !== undefined ||
+          occurrence.graphReadCause === undefined ||
+          occurrence.graphReadExplicitTaskIds === undefined)
+      )
+        return `direct graph result ${occurrence.id} requires cause, coverage, and no selected owner`
+      if (
+        (occurrence.directGraphRole === undefined) !== (occurrence.directGraphPredecessorRoles === undefined) ||
+        (occurrence.directGraphRole !== undefined && !returnedGraph)
+      )
+        return `causal occurrence ${occurrence.id} binds a direct operation to a non-graph result`
       const owner = occurrence.ownerRole === undefined ? undefined : graph.byId.get(occurrence.ownerRole)
       const ownerItem = owner === undefined ? undefined : cassette.story[owner.value]
       if (
@@ -1262,7 +1284,7 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         item._tag === "TrackerGraphReadReturned" ||
         item._tag === "RunActivationFinalTrackerGraphReadReturned"
       ) {
-        if (ownerItem?._tag !== "DalphSelects" || ownerItem.operation._tag !== "ReadTrackerGraph") {
+        if (!directGraph && (ownerItem?._tag !== "DalphSelects" || ownerItem.operation._tag !== "ReadTrackerGraph")) {
           return `causal graph result ${occurrence.id} requires its selected graph read owner`
         }
       }
@@ -1292,6 +1314,26 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
     }
     previousEnd = endIndex
   }
+  const replacementRoles = cassette.acceptedReplacementPlanRoles ?? []
+  if (new Set(replacementRoles.map(({ occurrenceRole }) => occurrenceRole)).size !== replacementRoles.length)
+    return "accepted replacement plan roles must be unique"
+  if (new Set(replacementRoles.map(({ successorAttemptId }) => successorAttemptId)).size !== replacementRoles.length)
+    return "accepted replacement successor attempts must be unique"
+  const selectedRoles = cassette.story.flatMap((item) =>
+    item._tag === "DalphSelects" ? [item.causal?.occurrenceRole ?? item.causalAnchor?.occurrenceRole] : []
+  )
+  const directRoles = (cassette.causalWindows ?? []).flatMap(({ occurrences }) =>
+    occurrences.flatMap(({ directGraphRole }) => (directGraphRole === undefined ? [] : [directGraphRole]))
+  )
+  if (new Set(directRoles).size !== directRoles.length) return "direct graph operation roles must be unique"
+  if (
+    replacementRoles.some(
+      ({ occurrenceRole }) => selectedRoles.includes(occurrenceRole) || directRoles.includes(occurrenceRole)
+    )
+  )
+    return "accepted replacement plan role cannot also name a selected or direct operation"
+  if (directRoles.some((role) => selectedRoles.includes(role)))
+    return "direct graph role cannot also name a selected operation"
   return undefined
 })
 

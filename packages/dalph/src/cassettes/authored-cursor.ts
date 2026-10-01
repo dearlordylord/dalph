@@ -553,6 +553,11 @@ export interface StoryCursor {
     target: TrackerTarget,
     context?: AuthoredOperationCausalContext
   ) => Effect.Effect<AuthoredTrackerGraphReadResult, ExactCausalCursorFailure>
+  /** Bind a successor plan only after its exact replacement journal event is accepted. */
+  readonly registerAcceptedReplacementPlan: (
+    role: AuthoredCausalSelection["occurrenceRole"],
+    context: AuthoredOperationCausalContext
+  ) => Effect.Effect<void, AuthoredCausalSelectionFailure>
   /** Consume a targeted death only after its required journal event has become durable. */
   readonly pauseAtCoordinatorProcessDeathAfterJournalEvent: Effect.Effect<void>
   readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
@@ -647,6 +652,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       const graph = compileAuthoredOccurrenceGraph(
         window.occurrences.map(
           ({
+            directGraphPredecessorRoles,
+            directGraphRole,
             graphReadCause,
             graphReadExplicitTaskIds,
             id,
@@ -657,7 +664,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           }) => ({
             id,
             predecessors: predecessorIds,
-            value: { storyIndex, ownerRole, graphReadCause, graphReadExplicitTaskIds, waitForPredecessors }
+            value: {
+              storyIndex,
+              ownerRole,
+              graphReadCause,
+              graphReadExplicitTaskIds,
+              waitForPredecessors,
+              directGraphRole,
+              directGraphPredecessorRoles
+            }
           })
         )
       )
@@ -910,7 +925,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             window.graph,
             { consumed },
             String(index),
-            ({ graphReadCause, graphReadExplicitTaskIds, ownerRole, storyIndex }) => {
+            ({
+              directGraphPredecessorRoles,
+              directGraphRole,
+              graphReadCause,
+              graphReadExplicitTaskIds,
+              ownerRole,
+              storyIndex
+            }) => {
               const item = story[storyIndex]
               if (!predicate(item)) return false
               if (graphReadCause !== undefined && graphReadCause !== context?.graphReadCause) return false
@@ -920,12 +942,23 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                   JSON.stringify([...(context?.graphReadExplicitTaskIds ?? [])].sort())
               )
                 return false
-              if (ownerSelectionMatches !== undefined) {
+              if (ownerSelectionMatches !== undefined && directGraphRole === undefined) {
                 const owner = ownerRole === undefined ? undefined : window.graph.byId.get(ownerRole)
                 const ownerItem = owner === undefined ? undefined : story[owner.value.storyIndex]
                 if (ownerItem?._tag !== "DalphSelects" || !ownerSelectionMatches(ownerItem)) return false
               }
               const selected = story[storyIndex]
+              if (directGraphRole !== undefined && directGraphPredecessorRoles !== undefined) {
+                if (context === undefined || state.causal.byOperationId.has(String(context.operationId))) return false
+                if (
+                  causalSelectionIssue(
+                    { occurrenceRole: directGraphRole, predecessorRoles: directGraphPredecessorRoles },
+                    context,
+                    state.causal
+                  ) !== undefined
+                )
+                  return false
+              }
               if (
                 ownerRole !== undefined &&
                 state.causal.byRole.get(String(ownerRole))?.operationId !== context?.operationId
@@ -1012,6 +1045,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               byOperationId: new Map(causal.byOperationId).set(String(context.operationId), String(id)),
               byRole: new Map(causal.byRole).set(String(id), context)
             }
+          } else if (value.directGraphRole !== undefined) {
+            if (context === undefined)
+              return { _tag: "Failure" as const, detail: `direct graph result ${id} lacks raw identity`, index }
+            causal = registerCausalSelection({ occurrenceRole: value.directGraphRole }, context, causal)
           }
           yield* Ref.set(exactCausalState, { ...state, causal })
           const nextConsumed = matched.frontier.consumed
@@ -2333,7 +2370,35 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (Option.isSome(causal)) return causal.value.item
     return yield* consumeTrackerGraph
   })
+  const registerAcceptedReplacementPlan: StoryCursor["registerAcceptedReplacementPlan"] = Effect.fn(
+    "AuthoredCassette.registerAcceptedReplacementPlan"
+  )(function* (role, context) {
+    const issue = yield* transition.withPermits(1)(
+      Effect.gen(function* () {
+        const state = yield* Ref.get(exactCausalState)
+        const binding = causalBindingIssue({ occurrenceRole: role }, context, state.causal)
+        if (binding !== undefined) return binding
+        const prior = state.causal.byRole.get(String(role))
+        if (
+          prior !== undefined &&
+          JSON.stringify(prior.predecessorOperationIds) !== JSON.stringify(context.predecessorOperationIds)
+        )
+          return `accepted replacement plan ${role} has contradictory predecessors`
+        yield* Ref.set(exactCausalState, {
+          ...state,
+          causal: registerCausalSelection({ occurrenceRole: role }, context, state.causal)
+        })
+        return undefined
+      })
+    )
+    if (issue !== undefined)
+      return yield* new AuthoredCausalSelectionFailure({
+        detail: issue,
+        storyPosition: yield* SubscriptionRef.get(position)
+      })
+  })
   return {
+    registerAcceptedReplacementPlan,
     completeControlDirectionBeforeDeliveryActionAdmission: Effect.gen(function* () {
       const gate = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)
       /* v8 ignore next -- @preserve Closure pairs this completion with the exact earlier before-admission control item. */

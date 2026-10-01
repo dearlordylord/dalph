@@ -88,6 +88,95 @@ const anchorSelection = (occurrenceRole: string, operation: AuthoredCassetteDeci
 const graphResult = (revision: string) =>
   AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.make({ graph: graph(revision) })
 
+it.effect("pairs a direct Restart graph result separately from an independent selected graph read", () =>
+  Effect.gen(function* () {
+    const story = [graphResult("restart"), selection("establishment", []), graphResult("establishment"), terminal]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 3,
+      occurrences: [
+        {
+          id: "restart-result",
+          storyIndex: 0,
+          predecessorIds: [],
+          directGraphRole: "restart-operation",
+          directGraphPredecessorRoles: [],
+          graphReadCause: "AttemptRestartAuthorityCheck",
+          graphReadExplicitTaskIds: ["B"]
+        },
+        {
+          id: "establishment",
+          storyIndex: 1,
+          predecessorIds: [],
+          graphReadCause: "WorkflowEstablishment",
+          graphReadExplicitTaskIds: []
+        },
+        { id: "establishment-result", storyIndex: 2, predecessorIds: ["establishment"], ownerRole: "establishment" }
+      ]
+    })
+    const restart = {
+      ...causalContext("operation:restart", []),
+      graphReadCause: "AttemptRestartAuthorityCheck" as const,
+      graphReadExplicitTaskIds: [taskB]
+    }
+    const establishment = {
+      ...causalContext("operation:establishment", []),
+      graphReadCause: "WorkflowEstablishment" as const,
+      graphReadExplicitTaskIds: []
+    }
+    for (const order of ["restart-first", "establishment-first"] as const) {
+      const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+      if (order === "restart-first") {
+        expect(yield* cursor.consumeTrackerGraphFor(target, restart)).toMatchObject({ graph: { revision: "restart" } })
+        yield* cursor.consumeDalphSelectionFor(readGraph, establishment)
+        expect(yield* cursor.consumeTrackerGraphFor(target, establishment)).toMatchObject({
+          graph: { revision: "establishment" }
+        })
+      } else {
+        yield* cursor.consumeDalphSelectionFor(readGraph, establishment)
+        expect(yield* cursor.consumeTrackerGraphFor(target, establishment)).toMatchObject({
+          graph: { revision: "establishment" }
+        })
+        expect(yield* cursor.consumeTrackerGraphFor(target, restart)).toMatchObject({ graph: { revision: "restart" } })
+      }
+      yield* cursor.consumeTerminalAssertions
+    }
+    const wrong = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const failure = yield* Effect.flip(
+      wrong.consumeTrackerGraphFor(target, { ...restart, graphReadExplicitTaskIds: [] })
+    )
+    expect(failure).toBeInstanceOf(AuthoredCausalSelectionFailure)
+  })
+)
+
+it.effect("binds an accepted replacement plan once for later exact predecessors", () =>
+  Effect.gen(function* () {
+    const successor = causalContext("operation:successor-plan", [])
+    const specification = { _tag: "ReadTaskWorkSpecification" as const, taskId: taskB }
+    const story = [selection("B-later-specification", ["B-successor-plan"], specification), terminal]
+    const early = yield* makeStoryCursor(story)
+    expect(
+      yield* Effect.flip(
+        early.consumeDalphSelectionFor(specification, causalContext("operation:spec", ["operation:successor-plan"]))
+      )
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const cursor = yield* makeStoryCursor(story)
+    yield* cursor.registerAcceptedReplacementPlan(
+      causal({ occurrenceRole: "B-successor-plan", predecessorRoles: [] }).occurrenceRole,
+      successor
+    )
+    yield* cursor.consumeDalphSelectionFor(specification, causalContext("operation:spec", ["operation:successor-plan"]))
+    yield* cursor.consumeTerminalAssertions
+    const contradiction = yield* Effect.flip(
+      cursor.registerAcceptedReplacementPlan(
+        causal({ occurrenceRole: "B-successor-plan", predecessorRoles: [] }).occurrenceRole,
+        causalContext("operation:other-plan", [])
+      )
+    )
+    expect(contradiction).toBeInstanceOf(AuthoredCausalSelectionFailure)
+  })
+)
+
 const terminal = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
   orchestration: null,
   protocol: null,

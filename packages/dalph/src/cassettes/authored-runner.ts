@@ -2025,6 +2025,28 @@ const runAuthoredScenarioCassetteWith = (request: {
                       event
                     })
                     if (taskClaimHandled) return
+                    if (event._tag === "PlannedAttemptReplaced") {
+                      const plan = event.successorPlan
+                      const binding = cassette.acceptedReplacementPlanRoles?.find(
+                        ({ successorAttemptId }) => successorAttemptId === plan.plannedAttempt.attemptId
+                      )
+                      if (binding !== undefined) {
+                        if (
+                          requestedRunId !== runId ||
+                          plan.plannedAttempt.runId !== runId ||
+                          plan.plannedAttempt.taskId !== binding.taskId
+                        )
+                          yield* Effect.die(
+                            "accepted replacement plan differs from its authored Run/task/attempt binding"
+                          )
+                        yield* cursor
+                          .registerAcceptedReplacementPlan(binding.occurrenceRole, {
+                            operationId: plan.operationId,
+                            predecessorOperationIds: plan.predecessorOperationIds
+                          })
+                          .pipe(Effect.orDie)
+                      }
+                    }
                     if (event._tag === "IntegrationQuarantined" && event.basis._tag === "PromotionStale") {
                       yield* Deferred.succeed(promotionStaleQuarantineDurable, undefined)
                     }

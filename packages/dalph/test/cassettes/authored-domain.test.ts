@@ -60,6 +60,45 @@ it("validates a causal boundary window against the decoded story before playback
     ]
   })
   expect(renderAuthoredCassetteLyrics(withGraphCoverage)).toContain("graph read covers A")
+  const direct = {
+    ...valid,
+    causalWindows: [
+      {
+        startIndex: startIndex + 1,
+        endIndex: startIndex + 2,
+        occurrences: [
+          {
+            id: "direct-restart-result",
+            storyIndex: startIndex + 1,
+            predecessorIds: [],
+            directGraphRole: "restart-graph",
+            directGraphPredecessorRoles: [],
+            graphReadCause: "AttemptRestartAuthorityCheck",
+            graphReadExplicitTaskIds: ["B"]
+          }
+        ]
+      }
+    ]
+  }
+  expect(Schema.decodeUnknownSync(AuthoredScenarioCassette)(direct).causalWindows).toHaveLength(1)
+  const [directWindow] = direct.causalWindows
+  const [directOccurrence] = directWindow?.occurrences ?? []
+  if (directWindow === undefined || directOccurrence === undefined) throw new Error("Expected a direct graph window")
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...direct,
+      causalWindows: [{ ...directWindow, occurrences: [{ ...directOccurrence, graphReadCause: undefined }] }]
+    })
+  ).toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...valid,
+      acceptedReplacementPlanRoles: [
+        { occurrenceRole: "replacement", taskId: "B", successorAttemptId: "attempt:B:1" },
+        { occurrenceRole: "replacement", taskId: "B", successorAttemptId: "attempt:B:2" }
+      ]
+    })
+  ).toThrow("accepted replacement plan roles must be unique")
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...valid,
