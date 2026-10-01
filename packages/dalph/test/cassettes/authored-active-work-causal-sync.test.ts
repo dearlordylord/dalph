@@ -32,7 +32,7 @@ import {
   type StoryCursor,
   makeStoryCursor
 } from "../../src/cassettes/authored-cursor.js"
-import { authorCausalWindow } from "../../src/cassettes/authored-causal-authoring.js"
+import { authorCausalWindow, type AuthoredCausalBoundaryNode } from "../../src/cassettes/authored-causal-authoring.js"
 import {
   AuthoredOccurrenceId,
   authoredOccurrence,
@@ -70,7 +70,11 @@ const causalContext = (
   predecessorOperationIds: predecessorOperationIds.map((operationId) => OperationId.make(operationId))
 })
 
-const selection = (occurrenceRole: string, predecessorRoles: ReadonlyArray<string>, operation = readGraph) =>
+const selection = (
+  occurrenceRole: string,
+  predecessorRoles: ReadonlyArray<string>,
+  operation: AuthoredCassetteDecision = readGraph
+) =>
   AuthoredCassetteStoryItem.cases.DalphSelects.make({ causal: causal({ occurrenceRole, predecessorRoles }), operation })
 
 const anchorSelection = (occurrenceRole: string, operation: AuthoredCassetteDecision = readGraph) =>
@@ -98,8 +102,8 @@ const causalPrefix = [
 
 const sameShapeWindow = authorCausalWindow(
   4,
-  parallelAuthored(
-    sequenceAuthored(
+  parallelAuthored<AuthoredCausalBoundaryNode>(
+    sequenceAuthored<AuthoredCausalBoundaryNode>(
       authoredOccurrence(AuthoredOccurrenceId.make("independent-B-F1"), {
         item: selection("independent-B-F1", ["independent-G0"], readBSpecification)
       }),
@@ -112,7 +116,7 @@ const sameShapeWindow = authorCausalWindow(
         ownerRole: AuthoredOccurrenceId.make("independent-B-F1")
       })
     ),
-    sequenceAuthored(
+    sequenceAuthored<AuthoredCausalBoundaryNode>(
       authoredOccurrence(AuthoredOccurrenceId.make("active-B-F2"), {
         item: selection("active-B-F2", ["active-G1"], readBSpecification)
       }),
@@ -166,12 +170,16 @@ it.effect("replays opposite graph, specification, and worktree selection orders 
     ]
     const early = yield* makeStoryCursor(story, { causalWindows: [window] })
     const blocked = yield* Effect.flip(early.consumeDalphSelectionFor(worktree, causalContext("operation:W:early", [])))
-    expect(blocked.detail).toContain("unmet predecessors: F-result")
+    expect(blocked).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    if (blocked instanceof AuthoredCausalSelectionFailure)
+      expect(blocked.detail).toContain("unmet predecessors: F-result")
     yield* early.consumeDalphSelectionFor(readBSpecification, causalContext("operation:F:early", []))
     const wrongOwner = yield* Effect.flip(
       early.consumeTaskWorkSpecificationFor(taskB, causalContext("operation:G:foreign", []))
     )
-    expect(wrongOwner.detail).toContain("requires exact selected owner F")
+    expect(wrongOwner).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    if (wrongOwner instanceof AuthoredCausalSelectionFailure)
+      expect(wrongOwner.detail).toContain("requires exact selected owner F")
     for (const order of [
       ["F", "F-result", "W", "G", "G-result"],
       ["G", "F", "G-result", "F-result", "W"]
@@ -207,18 +215,100 @@ it.effect("replays opposite graph, specification, and worktree selection orders 
   })
 )
 
+it.effect("replays independent A-E boundary chains in opposite valid interleavings", () =>
+  Effect.gen(function* () {
+    const names = ["A", "B", "C", "D", "E"] as const
+    const id = (name: string, step: string) => AuthoredOccurrenceId.make(`${name}:${step}`)
+    const operation = (name: string, step: string) => {
+      const taskId = TaskId.make(name)
+      const attemptId = AttemptId.make(`attempt:${name}:0`)
+      switch (step) {
+        case "claim":
+          return { _tag: "AcquireTaskClaim" as const, taskId }
+        case "graph":
+          return readGraph
+        case "spec":
+          return { _tag: "ReadTaskWorkSpecification" as const, taskId }
+        case "plan":
+          return { _tag: "RecordTaskAttemptPlan" as const, taskId, attemptId }
+        default:
+          return { _tag: "ReconcileTaskWorktree" as const, taskId, attemptId }
+      }
+    }
+    const chain = (name: (typeof names)[number]) =>
+      sequenceAuthored<AuthoredCausalBoundaryNode>(
+        authoredOccurrence(id(name, "claim"), { item: selection(`${name}:claim`, [], operation(name, "claim")) }),
+        authoredOccurrence(id(name, "graph"), {
+          item: selection(`${name}:graph`, [`${name}:claim`], operation(name, "graph"))
+        }),
+        authoredOccurrence(id(name, "graph-result"), { item: graphResult(`G-${name}`), ownerRole: id(name, "graph") }),
+        authoredOccurrence(id(name, "spec"), {
+          item: selection(`${name}:spec`, [`${name}:graph`], operation(name, "spec"))
+        }),
+        authoredOccurrence(id(name, "spec-result"), {
+          item: AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make({
+            taskId: TaskId.make(name),
+            title: name,
+            body: name
+          }),
+          ownerRole: id(name, "spec")
+        }),
+        authoredOccurrence(id(name, "plan"), {
+          item: AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: operation(name, "plan") })
+        }),
+        authoredOccurrence(id(name, "worktree"), {
+          item: AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: operation(name, "worktree") })
+        }),
+        authoredOccurrence(id(name, "executor"), {
+          item: AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.make({
+            request: "Begin",
+            report: { _tag: "ExecutorWorkExecuting", attemptId: AttemptId.make(`attempt:${name}:0`) }
+          })
+        })
+      )
+    const authored = authorCausalWindow(
+      0,
+      parallelAuthored<AuthoredCausalBoundaryNode>(chain("A"), chain("B"), chain("C"), chain("D"), chain("E"))
+    )
+    const play = (order: ReadonlyArray<(typeof names)[number]>) =>
+      Effect.gen(function* () {
+        const cursor = yield* makeStoryCursor([...authored.story, terminal], { causalWindows: [authored.window] })
+        for (const name of order) {
+          const claim = causalContext(`operation:${name}:claim`, [])
+          const graphContext = causalContext(`operation:${name}:graph`, [`operation:${name}:claim`])
+          const spec = causalContext(`operation:${name}:spec`, [`operation:${name}:graph`])
+          yield* cursor.consumeDalphSelectionFor(operation(name, "claim"), claim)
+          yield* cursor.consumeDalphSelectionFor(readGraph, graphContext)
+          yield* cursor.consumeTrackerGraphFor(target, graphContext)
+          yield* cursor.consumeDalphSelectionFor(operation(name, "spec"), spec)
+          yield* cursor.consumeTaskWorkSpecificationFor(TaskId.make(name), spec)
+          yield* cursor.consumeDalphSelectionFor(operation(name, "plan"), causalContext(`operation:${name}:plan`, []))
+          yield* cursor.consumeDalphSelectionFor(
+            operation(name, "worktree"),
+            causalContext(`operation:${name}:worktree`, [])
+          )
+          yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make(`attempt:${name}:0`))
+        }
+        expect(yield* cursor.storyPosition).toBe(authored.story.length)
+        yield* cursor.consumeTerminalAssertions
+      })
+    yield* play(names)
+    yield* play([...names].reverse())
+  })
+)
+
 it.effect("distinguishes equal-shaped graph reads by cause and exact response owner", () =>
   Effect.gen(function* () {
     const id = (value: string) => AuthoredOccurrenceId.make(value)
     const selection = AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph })
     const authored = authorCausalWindow(
       0,
-      parallelAuthored(
-        sequenceAuthored(
+      parallelAuthored<AuthoredCausalBoundaryNode>(
+        sequenceAuthored<AuthoredCausalBoundaryNode>(
           authoredOccurrence(id("restart"), { item: selection, graphReadCause: "AttemptRestartAuthorityCheck" }),
           authoredOccurrence(id("restart-result"), { item: graphResult("restart"), ownerRole: id("restart") })
         ),
-        sequenceAuthored(
+        sequenceAuthored<AuthoredCausalBoundaryNode>(
           authoredOccurrence(id("activation"), { item: selection, graphReadCause: "WorkflowEstablishment" }),
           authoredOccurrence(id("activation-result"), { item: graphResult("activation"), ownerRole: id("activation") })
         )
@@ -336,7 +426,7 @@ it.effect("rejects two enabled same-shaped concurrent reads without choosing arr
   Effect.gen(function* () {
     const ambiguous = authorCausalWindow(
       0,
-      parallelAuthored(
+      parallelAuthored<AuthoredCausalBoundaryNode>(
         authoredOccurrence(AuthoredOccurrenceId.make("first"), {
           item: AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph })
         }),
@@ -347,7 +437,10 @@ it.effect("rejects two enabled same-shaped concurrent reads without choosing arr
     )
     const cursor = yield* makeStoryCursor([...ambiguous.story, terminal], { causalWindows: [ambiguous.window] })
     const failure = yield* Effect.flip(cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G0", [])))
-    expect(failure.detail).toContain("ambiguous enabled occurrences: first, second")
+    expect(failure).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    if (failure instanceof AuthoredCausalSelectionFailure) {
+      expect(failure.detail).toContain("ambiguous enabled occurrences: first, second")
+    }
     expect(yield* cursor.storyPosition).toBe(0)
   })
 )
@@ -356,7 +449,7 @@ it.effect("binds an exact operation anchor without revalidating its earlier Jour
   Effect.gen(function* () {
     const checked = authorCausalWindow(
       1,
-      sequenceAuthored(
+      sequenceAuthored<AuthoredCausalBoundaryNode>(
         authoredOccurrence(AuthoredOccurrenceId.make("active-G1"), { item: selection("active-G1", ["plan-B-F1"]) }),
         authoredOccurrence(AuthoredOccurrenceId.make("active-G1:result"), {
           item: graphResult("G1"),
