@@ -4707,9 +4707,7 @@ const completionConflictStory = (() => {
 })()
 
 /** A terminal-without-success tracker race remains local to A and preserves its promoted responsibility. */
-export const completionTaskConflictAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
+const completionTaskConflictUnwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...deliveryFinalitySpineAuthoredCassette,
   name: "A tracker client changes A while Dalph's completion request is pending",
   startingFacts: {
@@ -4725,6 +4723,38 @@ export const completionTaskConflictAuthoredCassette: ScenarioCassette = Schema.d
     trackerGraph: completionTaskConflictStartingGraph
   },
   story: completionConflictStory
+})
+const completionConflictCPlanIndex = completionTaskConflictUnwindowed.story.findIndex(
+  (item) =>
+    item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan" && item.operation.taskId === "C"
+)
+const completionConflictALineageIndex = completionConflictCPlanIndex + 1
+Schema.decodeUnknownSync(Schema.Literal(true))(
+  completionConflictCPlanIndex >= 0 &&
+    completionTaskConflictUnwindowed.story[completionConflictALineageIndex]?._tag === "DalphSelects" &&
+    completionTaskConflictUnwindowed.story[completionConflictALineageIndex].operation._tag === "ReadTargetLineage" &&
+    completionTaskConflictUnwindowed.story[completionConflictALineageIndex].operation.taskId === "A"
+)
+/** This story's integrator session identity names the journal position after C's durable plan. */
+export const completionTaskConflictAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...completionTaskConflictUnwindowed,
+  causalWindows: [
+    Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: completionConflictCPlanIndex,
+      endIndex: completionConflictALineageIndex + 1,
+      occurrences: [
+        { id: "conflict-C-plan", storyIndex: completionConflictCPlanIndex, predecessorIds: [] },
+        {
+          id: "A-integration-lineage",
+          storyIndex: completionConflictALineageIndex,
+          predecessorIds: ["conflict-C-plan"],
+          waitForPredecessors: true
+        }
+      ]
+    })
+  ]
 })
 
 const doubleDiamondTaskIds = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"] as const
