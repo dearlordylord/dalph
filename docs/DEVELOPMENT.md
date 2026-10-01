@@ -184,6 +184,28 @@ run `pnpm check:quint` separately; hosted formal and quality cells remain
 independent. This qualification-tooling selection changes no Dalph runtime
 behavior or assertions inside the formal command.
 
+### Local CI evidence before a hosted push
+
+On a clean Linux worktree with Python 3, inotify, the pinned Node version, and
+installed workspace dependencies, run
+`pnpm check:all --candidate=<exact Base SHA>` for the exact
+committed HEAD. This runs the preflight and delivery, recorded-catalog, and
+coverage commands selected from the same stage algebra as hosted quality CI.
+If model inputs changed, run `pnpm check:quint --force` on that unchanged HEAD
+for the complete formal command profile. `check:submit` is a cheaper prepush
+diagnostic and never claims full CI coverage.
+
+A passing local stage supplies acceptance evidence for the same command and
+source boundary. The local gate is sequential in one worktree; hosted CI also
+tests clean runner setup, its generated Node matrix, coverage UID isolation,
+portable artifact export/aggregation, and two formal shards under the hosted
+CPU policy. Record these remaining platform and workflow differences instead
+of reporting the remote jobs as passed. Remote CI can continue in the
+background after a locally qualified push; investigate its result only when it
+provides new failure evidence or the repository requires its status for merge.
+This makes the local result the development decision and preserves the hosted
+run as a separate deployment and platform check.
+
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
 removal needs consumer evidence and affected type/build checks; changed behavior
