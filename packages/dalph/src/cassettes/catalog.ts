@@ -5258,9 +5258,7 @@ const doubleDiamondIntegrationReleasingWork = (
  * clears the middle wave. The maintainer accepted this chronology on 2026-09-11; it is one legal
  * execution, not a universal production ordering (https://github.com/dearlordylord/dalph/issues/350#issuecomment-5640171481).
  */
-export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
+const deliveryInvariantStoryUnwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
   name: "accepted results settle through integration and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
   schemaVersion: 1,
@@ -5525,6 +5523,99 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
   ]
 })
 
+const initialDiamondClaimGraphWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>, taskId: "B" | "C") => {
+  const claimIndex = story.findIndex(
+    (item) =>
+      item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" && item.operation.taskId === taskId
+  )
+  const graphIndex = claimIndex + 1
+  Schema.decodeUnknownSync(Schema.Literal(true))(
+    claimIndex >= 0 &&
+      story[graphIndex]?._tag === "DalphSelects" &&
+      story[graphIndex].operation._tag === "ReadTrackerGraph"
+  )
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex: claimIndex,
+    endIndex: graphIndex + 1,
+    occurrences: [
+      { id: `diamond-${taskId}-claim`, storyIndex: claimIndex, predecessorIds: [] },
+      {
+        id: `diamond-${taskId}-graph`,
+        storyIndex: graphIndex,
+        predecessorIds: [`diamond-${taskId}-claim`],
+        waitForSelectedPredecessor: true
+      }
+    ]
+  })
+}
+const diamondBAndCReadWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
+  const afterCClaim = initialDiamondClaimGraphWindow(story, "C").endIndex
+  const bSpecificationIndex = story.findIndex(
+    (item, index) =>
+      index > afterCClaim &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTaskWorkSpecification" &&
+      item.operation.taskId === "B"
+  )
+  const bResponseIndex = bSpecificationIndex + 1
+  const cGraphIndex = bResponseIndex + 1
+  const cGraphResponseIndex = cGraphIndex + 1
+  const cSpecificationIndex = cGraphResponseIndex + 1
+  const cResponseIndex = cSpecificationIndex + 1
+  Schema.decodeUnknownSync(Schema.Literal(true))(
+    bSpecificationIndex >= 0 &&
+      story[bResponseIndex]?._tag === "TaskWorkSpecificationReadReturned" &&
+      story[cGraphIndex]?._tag === "DalphSelects" &&
+      story[cGraphIndex].operation._tag === "ReadTrackerGraph" &&
+      story[cGraphResponseIndex]?._tag === "TrackerGraphReadReturned" &&
+      story[cSpecificationIndex]?._tag === "DalphSelects" &&
+      story[cSpecificationIndex].operation._tag === "ReadTaskWorkSpecification" &&
+      story[cSpecificationIndex].operation.taskId === "C" &&
+      story[cResponseIndex]?._tag === "TaskWorkSpecificationReadReturned"
+  )
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex: bSpecificationIndex,
+    endIndex: cResponseIndex + 1,
+    occurrences: [
+      { id: "diamond-B-specification", storyIndex: bSpecificationIndex, predecessorIds: [] },
+      {
+        id: "diamond-B-specification-result",
+        storyIndex: bResponseIndex,
+        predecessorIds: ["diamond-B-specification"],
+        ownerRole: "diamond-B-specification"
+      },
+      { id: "diamond-C-recheck-graph", storyIndex: cGraphIndex, predecessorIds: [] },
+      {
+        id: "diamond-C-recheck-graph-result",
+        storyIndex: cGraphResponseIndex,
+        predecessorIds: ["diamond-C-recheck-graph"],
+        ownerRole: "diamond-C-recheck-graph"
+      },
+      {
+        id: "diamond-C-specification",
+        storyIndex: cSpecificationIndex,
+        predecessorIds: ["diamond-C-recheck-graph-result"]
+      },
+      {
+        id: "diamond-C-specification-result",
+        storyIndex: cResponseIndex,
+        predecessorIds: ["diamond-C-specification"],
+        ownerRole: "diamond-C-specification"
+      }
+    ]
+  })
+}
+export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...deliveryInvariantStoryUnwindowed,
+  causalWindows: [
+    initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "B"),
+    initialDiamondClaimGraphWindow(deliveryInvariantStoryUnwindowed.story, "C"),
+    diamondBAndCReadWindow(deliveryInvariantStoryUnwindowed.story)
+  ]
+})
+
 const fiveTaskDiamondGraph = (revision: string, completed: ReadonlySet<string>) => ({
   ...doubleDiamondGraph(revision, completed, false),
   tasks: doubleDiamondGraph(revision, completed, false).tasks.flatMap((task) =>
@@ -5588,9 +5679,7 @@ const fiveTaskDiamondBIntegrationFinality = () =>
   )
 
 /** Capacity two consumes A -> (B, C, E) -> D only after exact tracker-confirmed finality. */
-export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
+const productionShapedFiveTaskDiamondUnwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
   name: "five-task dependency diamond settles every accepted result before releasing D",
   schemaVersion: 1,
@@ -5732,6 +5821,17 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
         }))
       }
     }
+  ]
+})
+
+export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...productionShapedFiveTaskDiamondUnwindowed,
+  causalWindows: [
+    initialDiamondClaimGraphWindow(productionShapedFiveTaskDiamondUnwindowed.story, "B"),
+    initialDiamondClaimGraphWindow(productionShapedFiveTaskDiamondUnwindowed.story, "C"),
+    diamondBAndCReadWindow(productionShapedFiveTaskDiamondUnwindowed.story)
   ]
 })
 
