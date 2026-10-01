@@ -123,11 +123,6 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
 export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
 
 /**
- * Result owned by one cassette-only concurrent tracker read. These are the
- * two tracker boundaries used by the active-work G1/F2 chronology; Git and
- * claim reads keep their ordinary ordered story items.
- */
-/**
  * Executor reports in authored input name the attempt but never a RunId.
  * Dalph adds the RunId it created when the ordinary executor boundary is used.
  */
