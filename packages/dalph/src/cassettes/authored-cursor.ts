@@ -1105,6 +1105,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                 value.ownerRole !== undefined &&
                 state.causal.byRole.get(String(value.ownerRole))?.operationId !== context?.operationId
             )
+            const wrongCleanupRead = relevant.find(
+              ({ value }) => value.directCleanupClaimRead?.call === cleanupRead?.call
+            )
             const wrongBoundaryOwner = relevant.find(({ value }) => {
               if (ownerSelectionMatches === undefined || value.ownerRole === undefined) return false
               const owner = window.graph.byId.get(value.ownerRole)
@@ -1117,13 +1120,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                 .map((role) => `${id}: ${role}`)
             )
             const detail =
-              wrongOwner !== undefined
-                ? `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
-                : wrongBoundaryOwner !== undefined
-                  ? `occurrence ${wrongBoundaryOwner.id} has a selected owner for a different boundary request`
-                  : missingAcceptedPlans.length > 0
-                    ? `unmet accepted successor plan predecessors: ${missingAcceptedPlans.join(", ")}`
-                    : matched.detail
+              wrongCleanupRead !== undefined && cleanupRead !== undefined
+                ? `cleanup claim read identity mismatch: expected ${JSON.stringify(wrongCleanupRead.value.directCleanupClaimRead)}, actual ${JSON.stringify(cleanupRead)}`
+                : wrongOwner !== undefined
+                  ? `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
+                  : wrongBoundaryOwner !== undefined
+                    ? `occurrence ${wrongBoundaryOwner.id} has a selected owner for a different boundary request`
+                    : missingAcceptedPlans.length > 0
+                      ? `unmet accepted successor plan predecessors: ${missingAcceptedPlans.join(", ")}`
+                      : matched.detail
             return { _tag: "Failure" as const, detail, index }
           }
           const { id, value } = matched.occurrence

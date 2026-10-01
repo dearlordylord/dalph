@@ -135,14 +135,15 @@ it.effect("binds unselected cleanup claim reads to their exact journaled calls",
         })
       )
     ).toBeInstanceOf(AuthoredCausalSelectionFailure)
-    expect(
-      yield* Effect.flip(
-        cursor.consumeTaskClaimReadFor(taskB, undefined, {
-          ...releaseRead,
-          releaseOperationId: OperationId.make("wrong-release")
-        })
-      )
-    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const wrongRelease = yield* Effect.flip(
+      cursor.consumeTaskClaimReadFor(taskB, undefined, {
+        ...releaseRead,
+        releaseOperationId: OperationId.make("wrong-release")
+      })
+    )
+    expect(wrongRelease).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    expect(wrongRelease.detail).toContain('"releaseOperationId":"release:B"')
+    expect(wrongRelease.detail).toContain('"releaseOperationId":"wrong-release"')
     expect(yield* cursor.consumeTaskClaimReadFor(taskB, undefined, releaseRead)).toMatchObject({
       value: { taskId: taskB }
     })
