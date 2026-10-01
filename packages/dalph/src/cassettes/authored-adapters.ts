@@ -224,7 +224,9 @@ const emitControlledDecision = (
       .consumeDalphSelectionFor(actual, {
         operationId: workflowOperationId(item.operation),
         predecessorOperationIds: item.operation.predecessorOperationIds,
-        graphReadCause: item.operation._tag === "ReadTrackerGraph" ? item.operation.cause._tag : undefined
+        graphReadCause: item.operation._tag === "ReadTrackerGraph" ? item.operation.cause._tag : undefined,
+        graphReadExplicitTaskIds:
+          item.operation._tag === "ReadTrackerGraph" ? item.operation.readShape.explicitlyCoveredTaskIds : undefined
       })
       .pipe(
         Effect.mapError(

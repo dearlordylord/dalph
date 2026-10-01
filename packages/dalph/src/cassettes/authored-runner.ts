@@ -2283,7 +2283,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                     consumeControlledTrackerGraph(cursor, operation.target, {
                       operationId: operation.operationId,
                       predecessorOperationIds: operation.predecessorOperationIds,
-                      graphReadCause: operation.cause._tag
+                      graphReadCause: operation.cause._tag,
+                      graphReadExplicitTaskIds: operation.readShape.explicitlyCoveredTaskIds
                     }),
                   readTaskWorkSpecification: (operation) =>
                     consumeControlledTaskWorkSpecification(cursor, operation.taskId, {

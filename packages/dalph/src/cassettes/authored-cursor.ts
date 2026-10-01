@@ -75,6 +75,7 @@ export interface AuthoredOperationCausalContext {
   readonly graphReadCause?:
     | Extract<WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>["cause"]["_tag"]
     | undefined
+  readonly graphReadExplicitTaskIds?: ReadonlyArray<TaskId> | undefined
 }
 
 /**
@@ -643,10 +644,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Effect.gen(function* () {
       const graph = compileAuthoredOccurrenceGraph(
         window.occurrences.map(
-          ({ graphReadCause, id, ownerRole, predecessorIds, storyIndex, waitForPredecessors }) => ({
+          ({
+            graphReadCause,
+            graphReadExplicitTaskIds,
+            id,
+            ownerRole,
+            predecessorIds,
+            storyIndex,
+            waitForPredecessors
+          }) => ({
             id,
             predecessors: predecessorIds,
-            value: { storyIndex, ownerRole, graphReadCause, waitForPredecessors }
+            value: { storyIndex, ownerRole, graphReadCause, graphReadExplicitTaskIds, waitForPredecessors }
           })
         )
       )
@@ -898,10 +907,16 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             window.graph,
             { consumed },
             String(index),
-            ({ graphReadCause, ownerRole, storyIndex }) => {
+            ({ graphReadCause, graphReadExplicitTaskIds, ownerRole, storyIndex }) => {
               const item = story[storyIndex]
               if (!predicate(item)) return false
               if (graphReadCause !== undefined && graphReadCause !== context?.graphReadCause) return false
+              if (
+                graphReadExplicitTaskIds !== undefined &&
+                JSON.stringify([...graphReadExplicitTaskIds].sort()) !==
+                  JSON.stringify([...(context?.graphReadExplicitTaskIds ?? [])].sort())
+              )
+                return false
               if (ownerSelectionMatches !== undefined) {
                 const owner = ownerRole === undefined ? undefined : window.graph.byId.get(ownerRole)
                 const ownerItem = owner === undefined ? undefined : story[owner.value.storyIndex]

@@ -569,9 +569,13 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
     ...cassette.story.map((item, index) => {
       const lyric = renderAuthoredStoryItemLyric(item)
       const causal = causalByIndex.get(index)
+      const graphReadCoverage =
+        causal?.graphReadExplicitTaskIds === undefined
+          ? ""
+          : `; graph read covers ${causal.graphReadExplicitTaskIds.length === 0 ? "no explicit tasks" : causal.graphReadExplicitTaskIds.join(", ")}`
       return causal === undefined
         ? lyric
-        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}.`
+        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${graphReadCoverage}.`
     })
   ].join("\n")
 }

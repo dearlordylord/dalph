@@ -15,6 +15,7 @@ export interface AuthoredCausalBoundaryNode {
   /** The selection node whose exact operation owns this response. */
   readonly ownerRole?: AuthoredOccurrenceId
   readonly graphReadCause?: AuthoredCausalWindowType["occurrences"][number]["graphReadCause"]
+  readonly graphReadExplicitTaskIds?: AuthoredCausalWindowType["occurrences"][number]["graphReadExplicitTaskIds"]
   readonly waitForPredecessors?: true
 }
 
@@ -33,6 +34,9 @@ export const authorCausalWindow = (
       predecessorIds: predecessors,
       ...(value.ownerRole === undefined ? {} : { ownerRole: value.ownerRole }),
       ...(value.graphReadCause === undefined ? {} : { graphReadCause: value.graphReadCause }),
+      ...(value.graphReadExplicitTaskIds === undefined
+        ? {}
+        : { graphReadExplicitTaskIds: value.graphReadExplicitTaskIds }),
       ...(value.waitForPredecessors === undefined ? {} : { waitForPredecessors: true })
     }))
   })

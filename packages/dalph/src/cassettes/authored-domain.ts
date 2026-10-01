@@ -1175,6 +1175,8 @@ export const AuthoredCausalWindow = Schema.Struct({
           "TaskControlMembershipCheck"
         ])
       ),
+      /** Exact task subjects covered by a complete tracker graph read. */
+      graphReadExplicitTaskIds: Schema.optionalKey(Schema.Array(TaskId).check(Schema.isUnique())),
       /** Exact selected operation whose boundary result this node returns, when applicable. */
       ownerRole: Schema.optionalKey(AuthoredOccurrenceId)
     })
@@ -1242,6 +1244,11 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
       )
         return `causal occurrence ${occurrence.id} assigns a graph cause to a non-graph selection`
+      if (
+        occurrence.graphReadExplicitTaskIds !== undefined &&
+        (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
+      )
+        return `causal occurrence ${occurrence.id} assigns graph task coverage to a non-graph selection`
       const owner = occurrence.ownerRole === undefined ? undefined : graph.byId.get(occurrence.ownerRole)
       const ownerItem = owner === undefined ? undefined : cassette.story[owner.value]
       if (

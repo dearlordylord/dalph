@@ -165,6 +165,54 @@ it.effect("reports a same-kind attempt identity mismatch inside a causal window"
   })
 )
 
+it.effect("distinguishes independent graph reads by their exact covered tasks", () =>
+  Effect.gen(function* () {
+    const taskA = TaskId.make("A")
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 4,
+      occurrences: [
+        {
+          id: "A-graph",
+          storyIndex: 0,
+          predecessorIds: [],
+          graphReadCause: "WorkflowEstablishment",
+          graphReadExplicitTaskIds: [taskA]
+        },
+        { id: "A-result", storyIndex: 1, predecessorIds: ["A-graph"], ownerRole: "A-graph" },
+        {
+          id: "B-graph",
+          storyIndex: 2,
+          predecessorIds: [],
+          graphReadCause: "WorkflowEstablishment",
+          graphReadExplicitTaskIds: [taskB]
+        },
+        { id: "B-result", storyIndex: 3, predecessorIds: ["B-graph"], ownerRole: "B-graph" }
+      ]
+    })
+    const story = [selection("A-graph", []), graphResult("A"), selection("B-graph", []), graphResult("B"), terminal]
+    const context = (operationId: string, taskId: TaskId): AuthoredOperationCausalContext => ({
+      ...causalContext(operationId, []),
+      graphReadCause: "WorkflowEstablishment",
+      graphReadExplicitTaskIds: [taskId]
+    })
+    const wrong = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const missing = yield* Effect.flip(wrong.consumeDalphSelectionFor(readGraph, context("graph:C", TaskId.make("C"))))
+    expect(missing).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const b = context("graph:B", taskB)
+    const a = context("graph:A", taskA)
+    yield* cursor.consumeDalphSelectionFor(readGraph, b)
+    expect(yield* cursor.consumeTrackerGraphFor(target, b)).toMatchObject({
+      graph: { revision: TrackerRevision.make("B") }
+    })
+    yield* cursor.consumeDalphSelectionFor(readGraph, a)
+    expect(yield* cursor.consumeTrackerGraphFor(target, a)).toMatchObject({
+      graph: { revision: TrackerRevision.make("A") }
+    })
+  })
+)
+
 it.effect("replays opposite graph, specification, and worktree selection orders from one causal window", () =>
   Effect.gen(function* () {
     const worktree = { _tag: "ReconcileTaskWorktree" as const, taskId: taskB, attemptId: AttemptId.make("B2") }

@@ -50,6 +50,16 @@ it("validates a causal boundary window against the decoded story before playback
   expect(renderAuthoredCassetteLyrics(decoded)).toContain("response owner graph")
   const [validWindow] = valid.causalWindows
   if (validWindow === undefined) throw new Error("Expected a causal window")
+  const withGraphCoverage = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...valid,
+    causalWindows: [
+      {
+        ...validWindow,
+        occurrences: [{ ...validWindow.occurrences[0], graphReadExplicitTaskIds: ["A"] }, validWindow.occurrences[1]]
+      }
+    ]
+  })
+  expect(renderAuthoredCassetteLyrics(withGraphCoverage)).toContain("graph read covers A")
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...valid,
@@ -61,6 +71,31 @@ it("validates a causal boundary window against the decoded story before playback
       ]
     })
   ).toThrow("can await only a named predecessor")
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...valid,
+      causalWindows: [
+        {
+          ...validWindow,
+          occurrences: [validWindow.occurrences[0], { ...validWindow.occurrences[1], graphReadExplicitTaskIds: ["A"] }]
+        }
+      ]
+    })
+  ).toThrow("assigns graph task coverage to a non-graph selection")
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...valid,
+      causalWindows: [
+        {
+          ...validWindow,
+          occurrences: [
+            { ...validWindow.occurrences[0], graphReadExplicitTaskIds: ["A", "A"] },
+            validWindow.occurrences[1]
+          ]
+        }
+      ]
+    })
+  ).toThrow()
   for (const occurrences of [
     [{ id: "graph", storyIndex: startIndex, predecessorIds: [] }],
     [
