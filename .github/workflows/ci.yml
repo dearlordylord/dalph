@@ -127,7 +127,7 @@ jobs:
 
       - name: Upload hosted preflight logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hosted-preflight-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}
           path: .scratch/quality-gates/*/logs/*.log
@@ -274,7 +274,7 @@ jobs:
 
       - name: Upload failed hosted quality child logs
         if: always() && (steps.failed_stage.outputs.upload == 'true' || failure())
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hosted-quality-child-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.nodeVersion }}-${{ matrix.stageId }}
           path: .scratch/quality-gates/*/logs/*.log
@@ -286,7 +286,7 @@ jobs:
       # can distinguish a failed stage from a missing/unproven stage.
       - name: Upload hosted quality stage evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hosted-quality-stage-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.nodeVersion }}-${{ matrix.stageId }}
           path: hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}
@@ -366,7 +366,7 @@ jobs:
       - name: Upload hosted quality aggregate evidence
         id: hosted_quality_evidence
         if: always() && needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hosted-quality-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
           path: hosted-quality/stages
@@ -426,7 +426,7 @@ jobs:
         run: pnpm check:ci:formal:shard --shard "${{ matrix.shard }}" --report "formal-shard-reports/shard-${{ matrix.shard }}.json"
 
       - name: Upload formal model shard evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: formal-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-${{ matrix.shard }}
           path: formal-shard-reports/shard-${{ matrix.shard }}.json
