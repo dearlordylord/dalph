@@ -168,6 +168,14 @@ it.effect("reports a same-kind attempt identity mismatch inside a causal window"
 it.effect("distinguishes independent graph reads by their exact covered tasks", () =>
   Effect.gen(function* () {
     const taskA = TaskId.make("A")
+    const authored = authorCausalWindow(
+      0,
+      authoredOccurrence(AuthoredOccurrenceId.make("B-covered-graph"), {
+        item: selection("B-covered-graph", []),
+        graphReadExplicitTaskIds: [taskB]
+      })
+    )
+    expect(authored.window.occurrences[0].graphReadExplicitTaskIds).toEqual([taskB])
     const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
       startIndex: 0,
       endIndex: 4,
