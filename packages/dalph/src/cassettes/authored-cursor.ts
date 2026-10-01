@@ -908,7 +908,11 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           matched instanceof AuthoredOccurrenceMatchFailure || matched.occurrence.value === null
             ? []
             : [matched.occurrence.value]
-        return { eligible, structural, unclaimed }
+        const ambiguity =
+          matched instanceof AuthoredOccurrenceMatchFailure && matched.detail.startsWith("ambiguous enabled occurrences")
+            ? matched.detail
+            : undefined
+        return { ambiguity, eligible, structural, unclaimed }
       }
       const failedSelection = (
         current: ConcurrentTrackerReadBatchState,
@@ -923,8 +927,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             ? `unlisted concurrent tracker read ${JSON.stringify(operation)}`
             : indexes.unclaimed.length === 0
               ? `duplicate concurrent tracker read ${JSON.stringify(operation)}`
-              : indexes.eligible.length > 1
-                ? `concurrent tracker read ${JSON.stringify(operation)} matches more than one causal owner`
+              : indexes.ambiguity !== undefined
+                ? indexes.ambiguity
                 : (causalDetail ?? `concurrent tracker read ${JSON.stringify(operation)} has no exact causal owner`)
         return { _tag: "Failure", causal: causalDetail !== undefined, detail }
       }

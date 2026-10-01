@@ -130,6 +130,30 @@ it.effect("validates concurrent read roles before the first boundary call", () =
   })
 )
 
+it.effect("rejects two enabled same-shaped concurrent reads without choosing array order", () =>
+  Effect.gen(function* () {
+    const ambiguous = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
+      _tag: "ConcurrentTrackerReadBatch",
+      members: [
+        {
+          causal: causal({ occurrenceRole: "first", predecessorRoles: [] }),
+          operation: readGraph,
+          result: { _tag: "TrackerGraphReadReturned", graph: graph("G0") }
+        },
+        {
+          causal: causal({ occurrenceRole: "second", predecessorRoles: [] }),
+          operation: readGraph,
+          result: { _tag: "TrackerGraphReadReturned", graph: graph("G1") }
+        }
+      ]
+    })
+    const cursor = yield* makeStoryCursor([ambiguous, terminal])
+    const failure = yield* Effect.flip(cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G0", [])))
+    expect(failure.detail).toContain("ambiguous enabled occurrences: first, second")
+    expect(yield* cursor.storyPosition).toBe(0)
+  })
+)
+
 it.effect("binds an exact operation anchor without revalidating its earlier Journal-owned ancestry", () =>
   Effect.gen(function* () {
     const checked = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
