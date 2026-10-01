@@ -1630,6 +1630,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         return capture
       })
       const cursor = yield* makeStoryCursor(cassette.story, {
+        ...(cassette.causalWindows === undefined ? {} : { causalWindows: cassette.causalWindows }),
         onOccurrence: ({ item, storyPosition }: AuthoredStoryOccurrenceObserved) =>
           appendObservation(
             { _tag: "AuthoredStoryOccurrenceCaptured", occurrence: item },

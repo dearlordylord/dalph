@@ -10,9 +10,11 @@ import {
 } from "@dalph/orchestrator"
 import {
   type AuthoredCassetteDecision as CassetteDecision,
+  AuthoredCassetteDecision,
   type AuthoredCausalSelection,
   type AuthoredConcurrentTrackerRead,
   type AuthoredConcurrentTrackerReadResult,
+  type AuthoredCausalWindow,
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
   AuthoredTrackerGraphReadResult,
@@ -182,10 +184,11 @@ const authoredDalphSelectionMatches = (
   item: StoryItem | undefined,
   operation: CassetteDecision
 ): item is typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type =>
-  item?._tag === "DalphSelects" && JSON.stringify(item.operation) === JSON.stringify(operation)
+  item?._tag === "DalphSelects" && cassetteDecisionMatches(item.operation, operation)
 
+const cassetteDecisionEquivalence = Schema.toEquivalence(AuthoredCassetteDecision)
 const cassetteDecisionMatches = (left: CassetteDecision, right: CassetteDecision): boolean =>
-  JSON.stringify(left) === JSON.stringify(right)
+  cassetteDecisionEquivalence(left, right)
 
 const isIntegratorRecoverySelection = (operation: CassetteDecision): boolean =>
   operation._tag === "ReadTrackerGraph" || operation._tag === "ReadTaskClaim" || operation._tag === "ReadTargetLineage"
@@ -571,6 +574,7 @@ export interface AuthoredStoryOccurrenceObserved {
 
 interface StoryCursorOptions {
   readonly onOccurrence?: (occurrence: AuthoredStoryOccurrenceObserved) => Effect.Effect<void>
+  readonly causalWindows?: ReadonlyArray<AuthoredCausalWindow>
 }
 
 export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* (
@@ -652,6 +656,28 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const exactCausalState = yield* Ref.make<ExactCausalCursorState>({
     causal: { byOperationId: new Map(), byRole: new Map() }
   })
+  const compiledCausalWindows = yield* Effect.forEach(options.causalWindows ?? [], (window) =>
+    Effect.gen(function* () {
+      const graph = compileAuthoredOccurrenceGraph(
+        window.occurrences.map(({ id, ownerRole, predecessorIds, storyIndex }) => ({
+          id,
+          predecessors: predecessorIds,
+          value: { storyIndex, ownerRole }
+        }))
+      )
+      if (graph instanceof AuthoredOccurrenceGraphFailure) return yield* Effect.die(graph)
+      return [
+        window.startIndex,
+        {
+          ...window,
+          graph,
+          byIndex: new Map<number, AuthoredOccurrenceId>(window.occurrences.map((node) => [node.storyIndex, node.id]))
+        }
+      ] as const
+    })
+  )
+  const causalWindows = new Map(compiledCausalWindows)
+  const causalWindowFrontiers = yield* Ref.make<ReadonlyMap<number, ReadonlySet<AuthoredOccurrenceId>>>(new Map())
   const controlDirectionBeforeAdmission = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
     Option.none()
   )
@@ -1102,16 +1128,124 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   }
 
+  const claimCausalWindow = <A extends StoryItem>(
+    predicate: (item: StoryItem | undefined) => item is A,
+    context?: AuthoredOperationCausalContext
+  ): Effect.Effect<
+    Option.Option<Extract<ClaimedStoryItem<A>, { readonly _tag: "Claimed" }>>,
+    AuthoredCausalSelectionFailure
+  > =>
+    Effect.gen(function* () {
+      if (yield* awaitControlBoundary()) return yield* claimCausalWindow(predicate, context)
+      const result = yield* transition.withPermits(1)(
+        Effect.gen(function* () {
+          const index = yield* SubscriptionRef.get(position)
+          const window = [...causalWindows.values()].find(
+            ({ endIndex, startIndex }) => startIndex <= index && index < endIndex
+          )
+          if (window === undefined) return { _tag: "NoWindow" as const }
+          const frontiers = yield* Ref.get(causalWindowFrontiers)
+          const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
+          const state = yield* Ref.get(exactCausalState)
+          const matched = matchAuthoredOccurrence(
+            window.graph,
+            { consumed },
+            String(index),
+            ({ ownerRole, storyIndex }) => {
+              const item = story[storyIndex]
+              if (!predicate(item)) return false
+              const selected = story[storyIndex]
+              if (
+                ownerRole !== undefined &&
+                state.causal.byRole.get(String(ownerRole))?.operationId !== context?.operationId
+              ) {
+                return false
+              }
+              if (selected?._tag === "DalphSelects") {
+                if (context === undefined) return false
+                if (state.causal.byOperationId.has(String(context.operationId))) return false
+                if (selected.causal !== undefined || selected.causalAnchor !== undefined) {
+                  return standaloneCausalSelectionIssue(selected, context, state.causal) === undefined
+                }
+              }
+              return true
+            }
+          )
+          if (matched instanceof AuthoredOccurrenceMatchFailure) {
+            const relevant = window.graph.occurrences.filter(
+              (occurrence) => !consumed.has(occurrence.id) && predicate(story[occurrence.value.storyIndex])
+            )
+            if (relevant.length === 0) return { _tag: "Unrelated" as const }
+            const wrongOwner = relevant.find(
+              ({ value }) =>
+                value.ownerRole !== undefined &&
+                state.causal.byRole.get(String(value.ownerRole))?.operationId !== context?.operationId
+            )
+            const detail =
+              wrongOwner === undefined
+                ? matched.detail
+                : `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
+            return { _tag: "Failure" as const, detail, index }
+          }
+          const { id, value } = matched.occurrence
+          const item = story[value.storyIndex]
+          if (!predicate(item)) return { _tag: "Failure" as const, detail: `occurrence ${id} disappeared`, index }
+          const claimedItem: A = item
+          const selected = story[value.storyIndex]
+          let causal = state.causal
+          if (selected?._tag === "DalphSelects") {
+            if (context === undefined)
+              return { _tag: "Failure" as const, detail: `selection ${id} lacks raw identity`, index }
+            causal = {
+              byOperationId: new Map(causal.byOperationId).set(String(context.operationId), String(id)),
+              byRole: new Map(causal.byRole).set(String(id), context)
+            }
+          }
+          yield* Ref.set(exactCausalState, { ...state, causal })
+          const nextConsumed = matched.frontier.consumed
+          yield* Ref.set(causalWindowFrontiers, new Map(frontiers).set(window.startIndex, nextConsumed))
+          let nextIndex = index
+          while (nextIndex < window.endIndex) {
+            const nextId = window.byIndex.get(nextIndex)
+            if (nextId === undefined || !nextConsumed.has(nextId)) break
+            nextIndex += 1
+          }
+          if (nextIndex !== index) yield* SubscriptionRef.set(position, nextIndex)
+          return { _tag: "Claimed" as const, item: claimedItem, index: value.storyIndex }
+        })
+      )
+      if (result._tag === "NoWindow" || result._tag === "Unrelated") return Option.none()
+      if (result._tag === "Failure") {
+        return yield* new AuthoredCausalSelectionFailure({ detail: result.detail, storyPosition: result.index })
+      }
+      yield* options.onOccurrence?.({ item: result.item, storyPosition: result.index + 1 }) ?? Effect.void
+      yield* announceTerminalAssertions
+      return Option.some(result)
+    })
+
   function claimNext<A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A,
-    bypassControlBoundary = false
+    bypassControlBoundary = false,
+    context?: AuthoredOperationCausalContext
   ): Effect.Effect<ClaimedStoryItem<A>> {
     return Effect.gen(function* () {
+      const causal = yield* claimCausalWindow(predicate, context).pipe(Effect.orDie)
+      if (Option.isSome(causal)) return causal.value
+      const causalIndex = yield* SubscriptionRef.get(position)
+      if (
+        [...causalWindows.values()].some(
+          ({ endIndex, startIndex }) => startIndex <= causalIndex && causalIndex < endIndex
+        )
+      ) {
+        return { _tag: "Mismatch" as const, index: causalIndex, item: story[causalIndex] }
+      }
       // The coordinator-death probe runs from a durable journal append. It
       // must be able to inspect the next crash boundary while a
       // before-admission control gate is still awaiting completion; otherwise
       // the append that proves the control read deadlocks behind its own gate.
-      if (!bypassControlBoundary && (yield* awaitControlBoundary())) return yield* claimNext(predicate)
+      if (!bypassControlBoundary && (yield* awaitControlBoundary())) {
+        return yield* claimNext(predicate, bypassControlBoundary, context)
+      }
       const claimed = yield* SubscriptionRef.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
         const item = story[index]
         return predicate(item)
@@ -1123,7 +1257,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       }
       yield* announceTerminalAssertions
       const advanced = bypassControlBoundary ? false : yield* awaitBarrierAdvance(claimed)
-      return advanced ? yield* claimNext(predicate) : claimed
+      return advanced ? yield* claimNext(predicate, bypassControlBoundary, context) : claimed
     })
   }
   const consume = (tag: StoryItem["_tag"]) =>
@@ -1303,13 +1437,19 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
     "AuthoredCassette.consumeDalphSelectionForLoop"
   )(function* (operation, context) {
+    const causalWindow = yield* claimCausalWindow<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type>(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type =>
+        authoredDalphSelectionMatches(item, operation),
+      context
+    )
+    if (Option.isSome(causalWindow)) return causalWindow.value.item
     if (exactCausalStory) {
       const concurrent = yield* consumeConcurrentTrackerReadSelection(operation, context)
       if (Option.isSome(concurrent)) return concurrent.value
       const causal = yield* consumeStandaloneCausalSelection(operation, context)
       if (Option.isSome(causal)) return causal.value
     }
-    const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
+    const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation), false, context)
     if (claimed._tag === "Claimed") return claimed.item
     if (yield* awaitOwnedSelectionBoundary(claimed.item, claimed.index)) {
       return yield* consumeDalphSelectionForLoop(operation, context)
@@ -2229,6 +2369,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTaskWorkSpecificationFor: StoryCursor["consumeTaskWorkSpecificationFor"] = Effect.fn(
     "AuthoredCassette.consumeTaskWorkSpecificationFor"
   )(function* (taskId, context) {
+    const causal = yield* claimCausalWindow<
+      typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type
+    >(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type =>
+        item?._tag === "TaskWorkSpecificationReadReturned" && item.taskId === taskId,
+      context
+    )
+    if (Option.isSome(causal)) return causal.value.item
     const concurrent = yield* consumeConcurrentTrackerReadResult(
       context,
       (member) => member.operation._tag === "ReadTaskWorkSpecification" && member.operation.taskId === taskId
@@ -2374,6 +2522,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTrackerGraphFor: StoryCursor["consumeTrackerGraphFor"] = Effect.fn(
     "AuthoredCassette.consumeTrackerGraphFor"
   )(function* (target, context) {
+    const causal = yield* claimCausalWindow<AuthoredTrackerGraphReadResult>(
+      (item): item is AuthoredTrackerGraphReadResult =>
+        item?._tag === "TrackerGraphReadFailed" ||
+        item?._tag === "TrackerGraphReadReturned" ||
+        item?._tag === "RunActivationFinalTrackerGraphReadReturned",
+      context
+    )
+    if (Option.isSome(causal)) return causal.value.item
     const concurrent = yield* consumeConcurrentTrackerReadResult(
       context,
       (member) => member.operation._tag === "ReadTrackerGraph" && member.operation.target === target

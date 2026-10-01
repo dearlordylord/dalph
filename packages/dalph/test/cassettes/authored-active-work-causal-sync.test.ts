@@ -21,6 +21,7 @@ import {
 } from "@dalph/orchestrator"
 import {
   type AuthoredCassetteDecision,
+  AuthoredCausalWindow,
   AuthoredCassetteStoryItem,
   AuthoredCausalSelection
 } from "../../src/cassettes/authored-domain.js"
@@ -105,6 +106,76 @@ const bindCausalPrefix = Effect.fn("AuthoredCassetteTest.bindCausalPrefix")(func
   yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G1", []))
   yield* cursor.consumeTrackerGraphFor(target, causalContext("operation:G1", []))
 })
+
+it.effect("replays opposite graph, specification, and worktree selection orders from one causal window", () =>
+  Effect.gen(function* () {
+    const worktree = { _tag: "ReconcileTaskWorktree" as const, taskId: taskB, attemptId: AttemptId.make("B2") }
+    const specificationResult = AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make({
+      body: "Implement changed B.",
+      taskId: taskB,
+      title: "B F2"
+    })
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 5,
+      occurrences: [
+        { id: "G", storyIndex: 0, predecessorIds: [] },
+        { id: "G-result", storyIndex: 1, predecessorIds: ["G"], ownerRole: "G" },
+        { id: "F", storyIndex: 2, predecessorIds: [] },
+        { id: "F-result", storyIndex: 3, predecessorIds: ["F"], ownerRole: "F" },
+        { id: "W", storyIndex: 4, predecessorIds: ["F-result"] }
+      ]
+    })
+    const story = [
+      AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph }),
+      graphResult("G2"),
+      AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readBSpecification }),
+      specificationResult,
+      AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: worktree }),
+      terminal
+    ]
+    const early = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const blocked = yield* Effect.flip(early.consumeDalphSelectionFor(worktree, causalContext("operation:W:early", [])))
+    expect(blocked.detail).toContain("unmet predecessors: F-result")
+    yield* early.consumeDalphSelectionFor(readBSpecification, causalContext("operation:F:early", []))
+    const wrongOwner = yield* Effect.flip(
+      early.consumeTaskWorkSpecificationFor(taskB, causalContext("operation:G:foreign", []))
+    )
+    expect(wrongOwner.detail).toContain("requires exact selected owner F")
+    for (const order of [
+      ["F", "F-result", "W", "G", "G-result"],
+      ["G", "F", "G-result", "F-result", "W"]
+    ]) {
+      const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+      const contexts = {
+        F: causalContext("operation:F", []),
+        G: causalContext("operation:G", []),
+        W: causalContext("operation:W", [])
+      }
+      for (const step of order) {
+        switch (step) {
+          case "F":
+            yield* cursor.consumeDalphSelectionFor(readBSpecification, contexts.F)
+            break
+          case "F-result":
+            expect((yield* cursor.consumeTaskWorkSpecificationFor(taskB, contexts.F)).title).toBe("B F2")
+            break
+          case "G":
+            yield* cursor.consumeDalphSelectionFor(readGraph, contexts.G)
+            break
+          case "G-result":
+            expect((yield* cursor.consumeTrackerGraphFor(target, contexts.G))._tag).toBe("TrackerGraphReadReturned")
+            break
+          case "W":
+            yield* cursor.consumeDalphSelectionFor(worktree, contexts.W)
+            break
+        }
+      }
+      expect(yield* cursor.storyPosition).toBe(5)
+      yield* cursor.consumeTerminalAssertions
+    }
+  })
+)
 
 it.effect("validates concurrent read roles before the first boundary call", () =>
   Effect.gen(function* () {

@@ -47,6 +47,11 @@ import {
   AuthoredRestartAttemptResult,
   AuthoredStopAttemptResult
 } from "./authored-attempt-choice.js"
+import {
+  AuthoredOccurrenceGraphFailure,
+  AuthoredOccurrenceId,
+  compileAuthoredOccurrenceGraph
+} from "./authored-causal-graph.js"
 import { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
 export { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
 
@@ -1179,6 +1184,27 @@ export const assertExactlyOneAuthoredCassetteStoryItemOwner = Effect.fn(
 })
 
 const authoredScenarioCassetteVersion = 1 as const
+/** Zero-based location of a story item in the authored display order. */
+export const AuthoredCausalStoryIndex = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("AuthoredCausalStoryIndex")
+)
+export type AuthoredCausalStoryIndex = typeof AuthoredCausalStoryIndex.Type
+/** A bounded set of boundary calls that may arrive in any causal topological order. */
+export const AuthoredCausalWindow = Schema.Struct({
+  startIndex: AuthoredCausalStoryIndex,
+  endIndex: AuthoredCausalStoryIndex,
+  occurrences: Schema.NonEmptyArray(
+    Schema.Struct({
+      id: AuthoredOccurrenceId,
+      storyIndex: AuthoredCausalStoryIndex,
+      predecessorIds: Schema.Array(AuthoredOccurrenceId).check(Schema.isUnique()),
+      /** Exact selected operation whose boundary result this node returns, when applicable. */
+      ownerRole: Schema.optionalKey(AuthoredOccurrenceId)
+    })
+  )
+})
+export type AuthoredCausalWindow = typeof AuthoredCausalWindow.Type
+
 const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
   name: Schema.NonEmptyString,
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
@@ -1193,7 +1219,58 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
     trackerGraph: AuthoredTrackerGraph,
     worktreeObservation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   }),
-  story: Schema.Array(AuthoredCassetteStoryItem)
+  story: Schema.Array(AuthoredCassetteStoryItem),
+  causalWindows: Schema.optionalKey(Schema.Array(AuthoredCausalWindow))
+})
+
+const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+  const firstBoundaryStoryIndex = 2
+  let previousEnd = firstBoundaryStoryIndex
+  const allowedTags = new Set<AuthoredCassetteStoryItem["_tag"]>([
+    ...authoredCassetteStoryItemOwners.DalphOperationTrace,
+    ...authoredCassetteStoryItemOwners.Git,
+    ...authoredCassetteStoryItemOwners.OuterIntegrator,
+    ...authoredCassetteStoryItemOwners.IntegratorCandidateCleanup,
+    ...authoredCassetteStoryItemOwners.TargetPromotion,
+    ...authoredCassetteStoryItemOwners.PlannedAttemptExecutor,
+    ...authoredCassetteStoryItemOwners.TaskTracker
+  ])
+  allowedTags.delete("ConcurrentTrackerReadBatch")
+  for (const window of cassette.causalWindows ?? []) {
+    const { endIndex, occurrences, startIndex } = window
+    if (startIndex < previousEnd || endIndex <= startIndex || endIndex >= cassette.story.length) {
+      return `causal window ${startIndex}..${endIndex} must be ordered and lie between coordinator setup and terminal assertions`
+    }
+    if (occurrences.length !== endIndex - startIndex) {
+      return `causal window ${startIndex}..${endIndex} must name every story item exactly once`
+    }
+    const indices = new Set(occurrences.map(({ storyIndex }) => storyIndex))
+    if (indices.size !== occurrences.length || [...indices].some((index) => index < startIndex || index >= endIndex)) {
+      return `causal window ${startIndex}..${endIndex} has duplicate or out-of-range story indices`
+    }
+    const graph = compileAuthoredOccurrenceGraph(
+      occurrences.map(({ id, predecessorIds, storyIndex }) => ({ id, predecessors: predecessorIds, value: storyIndex }))
+    )
+    if (graph instanceof AuthoredOccurrenceGraphFailure) return graph.detail
+    for (const occurrence of occurrences) {
+      const item = cassette.story[occurrence.storyIndex]
+      if (item === undefined || !allowedTags.has(item._tag)) {
+        return `causal occurrence ${occurrence.id} must name a controlled boundary item`
+      }
+      if (occurrence.ownerRole !== undefined) {
+        const owner = graph.byId.get(occurrence.ownerRole)
+        if (
+          owner === undefined ||
+          cassette.story[owner.value]?._tag !== "DalphSelects" ||
+          !occurrence.predecessorIds.includes(occurrence.ownerRole)
+        ) {
+          return `causal occurrence ${occurrence.id} must follow its exact selected operation ${occurrence.ownerRole}`
+        }
+      }
+    }
+    previousEnd = endIndex
+  }
+  return undefined
 })
 
 const exactlyOneAt = (
@@ -2120,6 +2197,7 @@ const admittedContinuationHoldHasExactAttemptChoiceClosure = Schema.makeFilter(
 const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   exactlyOneAt("InitialControlPolicy", () => 0, "one InitialControlPolicy must be the first story item")
 )
+  .check(causalWindowsAreValid)
   .check(exactlyOneAt("RunCoordinator", () => 1, "one RunCoordinator must follow InitialControlPolicy"))
   .check(
     exactlyOneAt(

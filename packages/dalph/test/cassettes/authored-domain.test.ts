@@ -25,6 +25,50 @@ it("accepts a causal anchor that leaves activation return outside its assertion"
   expect(Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.DalphSelects)(selected)).toEqual(selected)
 })
 
+it("validates a causal boundary window against the decoded story before playback", () => {
+  const cassette = deliveryFinalitySpineAuthoredCassette
+  const startIndex = cassette.story.findIndex(
+    (item, index) => item._tag === "DalphSelects" && cassette.story[index + 1]?._tag === "TrackerGraphReadReturned"
+  )
+  expect(startIndex).toBeGreaterThanOrEqual(2)
+  const valid = {
+    ...cassette,
+    causalWindows: [
+      {
+        startIndex,
+        endIndex: startIndex + 2,
+        occurrences: [
+          { id: "graph", storyIndex: startIndex, predecessorIds: [] },
+          { id: "result", storyIndex: startIndex + 1, predecessorIds: ["graph"], ownerRole: "graph" }
+        ]
+      }
+    ]
+  }
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(valid)).not.toThrow()
+  for (const occurrences of [
+    [{ id: "graph", storyIndex: startIndex, predecessorIds: [] }],
+    [
+      { id: "graph", storyIndex: startIndex, predecessorIds: [] },
+      { id: "graph", storyIndex: startIndex + 1, predecessorIds: ["graph"] }
+    ],
+    [
+      { id: "graph", storyIndex: startIndex, predecessorIds: ["missing"] },
+      { id: "result", storyIndex: startIndex + 1, predecessorIds: ["graph"] }
+    ],
+    [
+      { id: "graph", storyIndex: startIndex, predecessorIds: ["result"] },
+      { id: "result", storyIndex: startIndex + 1, predecessorIds: ["graph"] }
+    ]
+  ]) {
+    expect(() =>
+      Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+        ...valid,
+        causalWindows: [{ ...valid.causalWindows[0], occurrences }]
+      })
+    ).toThrow()
+  }
+})
+
 it("accepts an independently declared activation return owed by the selected operation", () => {
   const selected = {
     _tag: "DalphSelects",
