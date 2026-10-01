@@ -105,6 +105,7 @@ import {
 } from "./cassette-lab-view.ts"
 import { deliverySourceExplanationAt } from "./delivery-source-explanation.ts"
 import {
+  authoredStoryLandmarkIndex,
   dominantTaskTone,
   makeDeliveryWorkbenchPlaybackRuntime,
   renderCassetteDeliveryWorkbench,
@@ -134,6 +135,15 @@ const deliveryMomentIndex = (result: CompletedCassette, deliveryFrameIndex: numb
 const assert = (condition: boolean, message: string): void => {
   if (!condition) throw new Error(message)
 }
+
+assert(
+  authoredStoryLandmarkIndex({ storyPosition: 4, authoredStoryIndex: 7 }) === 7,
+  "A causal occurrence uses its declared story index for the Lab landmark"
+)
+assert(
+  authoredStoryLandmarkIndex({ storyPosition: 4 }) === 3,
+  "A sequential occurrence uses the preceding declared story index"
+)
 
 /** Explicit test output: request every public view without retaining it in the catalog result. */
 const materializeRequestedTraceHistories = (prepared: PreparedTrace) =>

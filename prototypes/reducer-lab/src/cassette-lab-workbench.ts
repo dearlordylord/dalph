@@ -140,6 +140,12 @@ const declaredProjection = (row: AuthoredRow): DeliveryGraphProjection => ({
 const activationLabel = (ordinal: number): string =>
   ordinal === 1 ? "Initial activation 1" : `Later activation ${ordinal}`
 
+/** Causal playback can observe an item beyond the contiguous story prefix. */
+export const authoredStoryLandmarkIndex = (moment: {
+  readonly authoredStoryIndex?: number
+  readonly storyPosition: number
+}): number => moment.authoredStoryIndex ?? moment.storyPosition - 1
+
 const momentLabel = (moment: AuthoredObservationMoment, index: number): string => {
   const kind = moment._tag === "DeliveryPublicationMoment"
     ? "Delivery publication"
@@ -147,7 +153,7 @@ const momentLabel = (moment: AuthoredObservationMoment, index: number): string =
       ? "runtime owners"
       : moment._tag === "DeliveryStatusMoment"
         ? "canonical delivery status read"
-      : `story · ${moment.occurrence._tag}`
+      : `story · ${moment.occurrence._tag}${moment.occurrenceId === undefined ? "" : ` · occurrence ${moment.occurrenceId}`}`
   return `${index + 1}. ${activationLabel(moment.activationOrdinal)} · capture ${moment.captureOrder} · ${kind} · story position ${moment.storyPosition}`
 }
 
@@ -323,8 +329,8 @@ const renderFrameFacts = (
     [
       "Authored input consumed",
       row.storyItemSummaries[frame.storyPosition] === undefined
-        ? `${frame.storyPosition} items; declared story end reached`
-        : `${frame.storyPosition} interactions consumed at this production publication; next declared item #${frame.storyPosition + 1}: ${row.storyItemSummaries[frame.storyPosition]}${running ? "" : ". The terminal assertion subsequently completed."}`
+        ? `declared story prefix reached ${frame.storyPosition}; story end reached`
+        : `declared story prefix reached ${frame.storyPosition} at this production publication; next declared item #${frame.storyPosition + 1}: ${row.storyItemSummaries[frame.storyPosition]}${running ? "" : ". The terminal assertion subsequently completed."}`
     ],
     [
       "Observed graph",
@@ -741,7 +747,7 @@ const frameChangeSummary = (
   }
   if (previous.storyPosition !== frame.storyPosition) {
     const consumed = frame.storyPosition - previous.storyPosition
-    changes.push(`${consumed} declared ${consumed === 1 ? "interaction" : "interactions"} consumed`)
+    changes.push(`declared story prefix advanced by ${consumed} ${consumed === 1 ? "item" : "items"}`)
     const landmarks = row.storyItemLandmarks
       .slice(previous.storyPosition, frame.storyPosition)
       .flatMap((landmark) => landmark === null ? [] : [landmark])
@@ -1601,7 +1607,11 @@ const renderTimeline = (
       `Capture ${moment.captureOrder} · ${activationLabel(moment.activationOrdinal)} · story position ${moment.storyPosition}`
     )
     if (moment._tag === "AuthoredStoryOccurrenceMoment") {
-      appendText(momentEvidence, "p", `Typed authored occurrence consumed: ${moment.occurrence._tag}`)
+      appendText(
+        momentEvidence,
+        "p",
+        `Typed authored occurrence consumed: ${moment.occurrence._tag}${moment.occurrenceId === undefined ? "" : ` · ${moment.occurrenceId}`}`
+      )
       const graphTaskIds = moment.deliveryFrame?.graph._tag === "Established"
         ? moment.deliveryFrame.graph.tasks.map(({ id }) => id)
         : []
@@ -1806,7 +1816,7 @@ const renderTimeline = (
                 ...frame.deliveries.map(({ taskId }) => taskId)
               ])],
           storyLandmark: moment._tag === "AuthoredStoryOccurrenceMoment"
-            ? row.storyItemLandmarks[moment.storyPosition - 1] ?? null
+            ? row.storyItemLandmarks[authoredStoryLandmarkIndex(moment)] ?? null
             : null
         }
       }),

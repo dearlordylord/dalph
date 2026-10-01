@@ -104,13 +104,13 @@ export const cassetteRawEvidenceItems = (
     ...result.observationCaptures.map((value, index) => ({
       collection: "ObservationCapture" as const,
       index: CassetteRawEvidenceIndex.make(index),
-      label: `Capture ${value.captureOrder} · ${value._tag} · activation ${value.activationOrdinal} · story ${value.storyPosition}`,
+      label: `Capture ${value.captureOrder} · ${value._tag} · activation ${value.activationOrdinal} · story ${value.storyPosition}${value._tag === "AuthoredStoryOccurrenceCaptured" && value.occurrenceId !== undefined ? ` · occurrence ${value.occurrenceId}` : ""}`,
       value
     })),
     ...(result.observationMoments?.map((value, index) => ({
       collection: "ObservationMoment" as const,
       index: CassetteRawEvidenceIndex.make(index),
-      label: `Moment ${value.captureOrder} · ${value._tag} · activation ${value.activationOrdinal} · story ${value.storyPosition}`,
+      label: `Moment ${value.captureOrder} · ${value._tag} · activation ${value.activationOrdinal} · story ${value.storyPosition}${value._tag === "AuthoredStoryOccurrenceMoment" && value.occurrenceId !== undefined ? ` · occurrence ${value.occurrenceId}` : ""}`,
       value
     })) ?? []),
     ...(result.deliveryFrames?.map((value, index) => ({
