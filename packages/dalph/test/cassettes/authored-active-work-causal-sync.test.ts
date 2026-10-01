@@ -142,6 +142,29 @@ const bindCausalPrefix = Effect.fn("AuthoredCassetteTest.bindCausalPrefix")(func
   yield* cursor.consumeTrackerGraphFor(target, causalContext("operation:G1", []))
 })
 
+it.effect("reports a same-kind attempt identity mismatch inside a causal window", () =>
+  Effect.gen(function* () {
+    const expected = { _tag: "RecordTaskAttemptPlan" as const, taskId: taskB, attemptId: AttemptId.make("attempt:B:2") }
+    const actual = { ...expected, attemptId: AttemptId.make("attempt:B:1") }
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 1,
+      occurrences: [{ id: "B-plan", storyIndex: 0, predecessorIds: [] }]
+    })
+    const cursor = yield* makeStoryCursor(
+      [AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: expected }), terminal],
+      { causalWindows: [window] }
+    )
+    const failure = yield* Effect.flip(cursor.consumeDalphSelectionFor(actual, causalContext("operation:B-plan", [])))
+    expect(failure).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    if (failure instanceof AuthoredCausalSelectionFailure) {
+      expect(failure.detail).toContain("B-plan")
+      expect(failure.detail).toContain("attempt:B:2")
+      expect(failure.detail).toContain("attempt:B:1")
+    }
+  })
+)
+
 it.effect("replays opposite graph, specification, and worktree selection orders from one causal window", () =>
   Effect.gen(function* () {
     const worktree = { _tag: "ReconcileTaskWorktree" as const, taskId: taskB, attemptId: AttemptId.make("B2") }

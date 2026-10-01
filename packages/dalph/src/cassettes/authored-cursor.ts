@@ -875,13 +875,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const claimCausalWindow = <A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A,
     context?: AuthoredOperationCausalContext,
-    ownerSelectionMatches?: (item: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type) => boolean
+    ownerSelectionMatches?: (item: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type) => boolean,
+    selectedOperation?: CassetteDecision
   ): Effect.Effect<
     Option.Option<Extract<ClaimedStoryItem<A>, { readonly _tag: "Claimed" }>>,
     AuthoredCausalSelectionFailure
   > =>
     Effect.gen(function* () {
-      if (yield* awaitControlBoundary()) return yield* claimCausalWindow(predicate, context, ownerSelectionMatches)
+      if (yield* awaitControlBoundary())
+        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches, selectedOperation)
       const result = yield* transition.withPermits(1)(
         Effect.gen(function* () {
           const index = yield* SubscriptionRef.get(position)
@@ -926,7 +928,31 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             const relevant = window.graph.occurrences.filter(
               (occurrence) => !consumed.has(occurrence.id) && predicate(story[occurrence.value.storyIndex])
             )
-            if (relevant.length === 0) return { _tag: "Unrelated" as const }
+            if (relevant.length === 0) {
+              const sameOperationKind =
+                selectedOperation === undefined
+                  ? []
+                  : window.graph.occurrences.filter((occurrence) => {
+                      const candidate = story[occurrence.value.storyIndex]
+                      return (
+                        !consumed.has(occurrence.id) &&
+                        candidate?._tag === "DalphSelects" &&
+                        candidate.operation._tag === selectedOperation._tag
+                      )
+                    })
+              if (sameOperationKind.length > 0)
+                return {
+                  _tag: "Failure" as const,
+                  detail: `no exact occurrence; same-kind candidates: ${sameOperationKind
+                    .map((occurrence) => {
+                      const item = story[occurrence.value.storyIndex]
+                      return `${occurrence.id} expects ${JSON.stringify(item?._tag === "DalphSelects" ? item.operation : item)}`
+                    })
+                    .join(", ")}; received ${JSON.stringify(selectedOperation)}`,
+                  index
+                }
+              return { _tag: "Unrelated" as const }
+            }
             const pending = relevant.length === 1 ? relevant[0] : undefined
             const unmet = pending?.predecessors.filter((id) => !consumed.has(id)) ?? []
             if (
@@ -1001,7 +1027,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           Stream.take(1),
           Stream.runDrain
         )
-        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches)
+        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches, selectedOperation)
       }
       if (result._tag === "Failure") {
         return yield* new AuthoredCausalSelectionFailure({ detail: result.detail, storyPosition: result.index })
@@ -1189,7 +1215,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     const causalWindow = yield* claimCausalWindow<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type>(
       (item): item is typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type =>
         authoredDalphSelectionMatches(item, operation),
-      context
+      context,
+      undefined,
+      operation
     )
     if (Option.isSome(causalWindow)) return causalWindow.value.item
     if (exactCausalStory) {
