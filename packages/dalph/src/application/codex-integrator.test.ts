@@ -210,6 +210,8 @@ type FixtureOptions = {
   readonly duplicateTurnToken?: boolean
   readonly threadListingUnavailable?: boolean
   readonly listThreadsHidePersisted?: boolean
+  readonly listThreadsFailureAt?: number
+  readonly listThreadsCwdCalls?: { value: Array<CodexThreadWorkingDirectory | undefined> }
   readonly preexistingThread?: boolean
   readonly preRegisteredWorktree?: boolean
   readonly preRegisteredWorktreePathExists?: boolean
@@ -292,6 +294,7 @@ const fixtureLayer = (
           : []
       )
       const threadStartCalls = yield* Ref.make(0)
+      const listThreadCalls = yield* Ref.make(0)
       const resumeThreadCalls = yield* Ref.make(0)
       const turns = yield* Ref.make<
         ReadonlyArray<{
@@ -308,22 +311,34 @@ const fixtureLayer = (
         }>
       >([])
       const fixtureIncarnation = CodexServerIncarnation.make("fixture-incarnation")
-      const listThreads = () =>
-        Ref.get(persistentThreads).pipe(
-          Effect.map((threads) =>
-            (options.listThreadsHidePersisted === true
+      const listThreads = (cwd?: CodexThreadWorkingDirectory) =>
+        Effect.gen(function* () {
+          options.listThreadsCwdCalls?.value.push(cwd)
+          const call = yield* Ref.modify(listThreadCalls, (count) => [count + 1, count + 1] as const)
+          if (options.listThreadsFailureAt === call) {
+            return yield* Effect.fail(
+              CodexAppServerFailure.make({
+                operation: "thread/list",
+                kind: "Malformed",
+                detail: "thread list cursor repeated before the candidate census completed"
+              })
+            )
+          }
+          const threads = yield* Ref.get(persistentThreads)
+          const summaries = (
+            options.listThreadsHidePersisted === true
               ? []
               : options.duplicateThreads === true
                 ? [...threads, ...threads]
                 : threads
-            ).map((thread) =>
-              CodexThreadListSummary.IdentityOnly({
-                id: thread.id,
-                cwd: CodexThreadWorkingDirectory.make(fixtureWorktreePath)
-              })
-            )
+          ).map((thread) =>
+            CodexThreadListSummary.IdentityOnly({
+              id: thread.id,
+              cwd: CodexThreadWorkingDirectory.make(fixtureWorktreePath)
+            })
           )
-        )
+          return cwd === undefined ? summaries : summaries.filter((thread) => thread.cwd === cwd)
+        })
       const app: CodexAppServerService = {
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
@@ -2131,17 +2146,65 @@ describe("Codex Integrator", () => {
       repository
     })
     const threadStarts = { value: 0 }
+    const listThreadsCwdCalls: Array<CodexThreadWorkingDirectory | undefined> = []
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const integrator = yield* Integrator
         const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
         const recovered = yield* integrator.prepare(requestFor(1))
         return { first, recovered }
-      }).pipe(Effect.provide(providerLayer(config, { loseFirstThreadResponse: true, threadStarts })))
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            loseFirstThreadResponse: true,
+            threadStarts,
+            listThreadsCwdCalls: { value: listThreadsCwdCalls }
+          })
+        )
+      )
     )
     expect(result.first._tag).toBe("IntegratorCallFailure")
     expect(result.recovered._tag).toBe("PreparedCandidate")
     expect(threadStarts.value).toBe(1)
+    expect(listThreadsCwdCalls).toEqual([candidatePath, candidatePath])
+  })
+
+  it("does not retry thread/start after a lost response when candidate census fails", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/incomplete-census-store.json"
+      ),
+      repository
+    })
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const listThreadsCwdCalls: Array<CodexThreadWorkingDirectory | undefined> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        const recovered = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return { first, recovered }
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            loseFirstThreadResponse: true,
+            listThreadsFailureAt: 2,
+            listThreadsCwdCalls: { value: listThreadsCwdCalls },
+            threadStarts,
+            turnStarts
+          })
+        )
+      )
+    )
+    expect(result.first._tag).toBe("IntegratorCallFailure")
+    expect(result.recovered._tag).toBe("IntegratorCallFailure")
+    expect(result.recovered.detail).toContain("candidate census")
+    expect(listThreadsCwdCalls).toEqual([candidatePath, candidatePath])
+    expect(threadStarts.value).toBe(1)
+    expect(turnStarts.value).toBe(0)
   })
 
   it("reuses a same-incarnation thread-start intent after a complete empty thread census", async () => {

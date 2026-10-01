@@ -340,7 +340,9 @@ const guardedCodexAppServerLayer = <E, R>(
         ...appServer,
         startThread: (cwd, ownedThreadToken) =>
           requestBoundary.run("thread/start", appServer.startThread(cwd, ownedThreadToken)),
-        ...(listThreads === undefined ? {} : { listThreads: () => requestBoundary.run("thread/list", listThreads()) }),
+        ...(listThreads === undefined
+          ? {}
+          : { listThreads: (cwd) => requestBoundary.run("thread/list", listThreads(cwd)) }),
         readThread: (threadId) => requestBoundary.run("thread/read", appServer.readThread(threadId)),
         resumeThread: (threadId, cwd) => requestBoundary.run("thread/resume", appServer.resumeThread(threadId, cwd)),
         ...(listThreadTurns === undefined

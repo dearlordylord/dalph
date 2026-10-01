@@ -3506,3 +3506,85 @@ and `scenario.test.ts`. HEAD was Base
 non-audit source/test diffs from the exact predeclared command is
 `e807c778ffa6816d568217c44b8a0a6d3d6877d6e3c00f6eca7e6babfa233058`.
 Status and path set matched; stage the seven paths and commit as predeclared.
+
+#### Scoped Integrator exact-candidate census repair — 2026-10-01
+
+This bounded follow-up uses worktree
+`/workspace/typescript/dalph-worktrees/integrator-scoped-census-r1`, branch
+`work/integrator-scoped-census-r1`, Base/HEAD
+`1f817cbf0349aff9393082ef47e891eb67801c4c`. The pre-audit implementation and
+scenario-mapping diff SHA-256 was
+`d59bf4ce46380f2ddfbee3393066f59b12adec0d1f6c791f3737fcd78ae21844`.
+
+The accepted Integrator scenario 2 remains the behavior boundary: recovery
+must finish candidate discovery, reread exact thread metadata, and validate
+the durable ownership token before adopting a thread; incomplete or ambiguous
+census, duplicates, foreign cwd/token/correlation, or unreadable exact state
+must fail closed before another start or turn. The accepted scenario map in
+[production-codex-integrator.md](scenarios/production-codex-integrator.md#scenario-to-test-map)
+now names these separate proofs:
+
+- `filters every persistent page by exact cwd and merges the complete loaded-thread census`
+  checks scoped persistent pagination, full loaded pagination/metadata reads,
+  exact matching, and loaded-only discovery in
+  `codex-app-server-protocol.test.ts`.
+- `rejects an incomplete loaded census after exact-cwd persistent discovery`
+  checks that the protocol adapter fails the scoped census when the loaded
+  list cannot be read after persistent discovery.
+- `does not retry thread/start after a lost response when candidate census fails`
+  checks the Integrator recovery boundary: a failed census after the lost
+  response starts neither another thread nor a turn.
+- `rejects a foreign cwd returned by an exact-cwd persistent census` and
+  `fails closed on duplicate persistent threads` retain foreign and duplicate
+  rejection.
+- `filters the complete controlled Codex thread census to one exact candidate cwd`
+  checks the hermetic bridge/controller/provider-state path forwards and
+  consumes the scoped request; the no-cwd global listing remains available.
+
+The production app-server service now accepts an optional branded exact cwd.
+It forwards that value on every persistent `thread/list` page, rejects a
+returned persistent row with a different cwd, still reads every loaded-list
+page and exact metadata, rejects persisted/loaded cwd contradictions, and
+returns only exact-cwd identities to the Integrator. Global consumers retain
+the no-argument complete census. No state-database-only shortcut or arbitrary
+limit/deadline-as-success was introduced. The service/adapters changed are
+`codex-app-server.ts`, `codex-integrator-thread.ts`, `production-host.ts`,
+`kimi-integrator-provider.ts`, `production-hermetic-provider-bridge.ts`,
+`production-hermetic-controller.ts`, and
+`production-hermetic-provider-state.ts`.
+
+Review dispositions: the first Standards pass found that the hermetic
+controller dropped `cwd` and provider state returned the global census. This
+was resolved with faithful forwarding/filtering and the controlled-provider
+test above. The first Spec pass found that the lost-response test name/mapping
+could overstate a whole loaded-cursor failure; the test now names the aggregate
+candidate-census failure it actually injects, and the protocol loaded-census
+failure is mapped as a separate proof. The second changed-seam review found no
+new blocker. It identified an unreachable duplicate
+`loaded-thread-repeated-cursor` branch in the protocol fixture: the earlier
+branch for that mode returns before the later repeated-cursor branch can run.
+This fixture cleanup is deferred to the test-support/fixture-maintainer scope;
+it is not evidence that repeated loaded cursors were exercised, and no accepted
+requirement is waived. The existing scoped loaded-list failure assertion and
+complete loaded-pagination assertion remain distinct evidence.
+
+Verification setup reused existing dependency directories from the clean
+same-Base `integration-385-386-387-r4` worktree through local symlinks in this
+isolated worktree; no package install or shared dependency/configuration write
+was performed. The symlinks are task-local setup and will be removed after the
+normal commit hook completes.
+
+Verification on this candidate: the focused Vitest command
+`pnpm exec vitest run packages/dalph/src/application/codex-app-server-protocol.test.ts packages/dalph/src/application/codex-integrator.test.ts packages/dalph/test-support/production-hermetic-provider-state.test.ts --maxWorkers=1`
+passed 3 files / 120 tests (Vitest reported 14.62s). The tool transcript is
+retained in the task conversation; no separate raw test log was captured.
+`pnpm typecheck` exited 0; full output is
+`/tmp/dalph-integrator-census-r1-typecheck.log`. Base-pinned
+`DALPH_DIAGNOSTICS_BASE=1f817cbf0349aff9393082ef47e891eb67801c4c pnpm lint:changed`
+exited 0 after formatting only its two reported changed files; full output is
+`/tmp/dalph-integrator-census-r1-lint-final.log`. `git diff --check` exited 0.
+No full gate, `check:fast`, capstone, live-provider, or hosted S1 run was
+performed in this repair. The read-only hosted S1 observation (10 pages / 250
+entries in 43.52 seconds, still with a cursor) motivates a bounded scalability
+repair but does not establish the cause of the earlier ~16-minute run or prove
+an improvement in hosted S1 latency.

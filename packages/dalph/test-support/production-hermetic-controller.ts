@@ -237,8 +237,8 @@ export const makeHermeticController: (
       StartTurn: (value) =>
         provider.startTurnWithCompletion(value.threadId, value.cwd, value.text, value.ownedTurnToken),
       InterruptTurn: (value) => provider.codex.interruptTurn(value.threadId, value.turnId).pipe(Effect.as({})),
-      ListThreads: () =>
-        provider.codex.listThreads?.() ??
+      ListThreads: (value) =>
+        provider.codex.listThreads?.(value.cwd) ??
         Effect.fail(new HermeticControllerFailure({ operation: "codex.listThreads" })),
       ListBackgroundTerminals: (value) => provider.codex.listBackgroundTerminals(value.threadId),
       TerminateBackgroundTerminal: (value) =>

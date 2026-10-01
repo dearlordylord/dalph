@@ -12,6 +12,7 @@ import {
   type CodexAppServerService,
   type CodexThreadListSummary,
   type CodexThreadSnapshot,
+  CodexThreadWorkingDirectory,
   codexAppServerNodeLayer
 } from "./codex-app-server.js"
 import {
@@ -81,11 +82,44 @@ const responseFor = (method, params = {}) => {
       : { error: true }
   }
   if (method === "thread/loaded/list") {
+    if (mode === "loaded-thread-repeated-cursor") {
+      if (params.cwd !== undefined) return { error: true }
+      return { data: [], nextCursor: "repeated" }
+    }
+    if (mode === "scoped-thread-list-paginated") {
+      if (params.cwd !== undefined) return { error: true }
+      if (params.cursor === undefined) {
+        return { data: ["persistent-thread", "loaded-only-thread"], nextCursor: "loaded-page-two" }
+      }
+      return { data: ["loaded-only-thread"], nextCursor: null }
+    }
     if (mode === "loaded-thread-repeated-cursor") return { data: [], nextCursor: "repeated" }
     if (mode === "loaded-thread-census") return params.cursor === undefined
       ? { data: [validThread.id], nextCursor: "second" }
       : { data: [validThread.id], nextCursor: null }
     return { data: [], nextCursor: null }
+  }
+  if (mode === "loaded-thread-repeated-cursor" && method === "thread/list") {
+    return params.cwd === "/fixture/worktree" ? { data: [], nextCursor: null } : { error: true }
+  }
+  if (mode === "scoped-thread-list-paginated" && method === "thread/list") {
+    if (params.cwd !== "/fixture/worktree") return { error: true }
+    if (params.cursor === undefined) {
+      return {
+        data: [{ id: "persistent-thread", cwd: "/fixture/worktree" }],
+        nextCursor: "persistent-page-two"
+      }
+    }
+    return {
+      data: [{ id: "persistent-thread-two", cwd: "/fixture/worktree" }],
+      nextCursor: null
+    }
+  }
+  if (mode === "scoped-thread-list-foreign-cwd" && method === "thread/list") {
+    return { data: [{ ...validThread, cwd: "/fixture/foreign" }], nextCursor: null }
+  }
+  if (mode === "scoped-thread-list-paginated" && method === "thread/read") {
+    return { thread: { ...validThread, id: params.threadId } }
   }
   if (mode === "thread-turns-list-hydration" && (method === "thread/read" || method === "thread/resume")) {
     return { thread: { ...validThread, historyMode: "paginated" } }
@@ -1168,25 +1202,41 @@ it.effect("hydrates paginated history with full items from the declared turns op
   )
 )
 
-it.effect("includes loaded unpersisted threads, exhausts pagination, and deduplicates identities", () =>
-  withFixture("loaded-thread-census", (app) =>
+it.effect("filters every persistent page by exact cwd and merges the complete loaded-thread census", () =>
+  withFixture("scoped-thread-list-paginated", (app) =>
     Effect.gen(function* () {
       if (app.listThreads === undefined) return expect.fail("thread census is required")
-      const threads = yield* app.listThreads()
-      expect(threads.map((thread) => thread.id)).toEqual(["protocol-thread"])
-      const first = threads[0]
-      if (first === undefined) return expect.fail("loaded thread must be present")
-      const thread = yield* app.readThread(first.id)
-      expect(thread.ownedThreadToken).toBe("loaded-owned")
+      const threads = yield* app.listThreads(CodexThreadWorkingDirectory.make("/fixture/worktree"))
+      expect(threads.map((thread) => thread.id)).toEqual([
+        "persistent-thread",
+        "persistent-thread-two",
+        "loaded-only-thread"
+      ])
+      expect(threads.every((thread) => thread.cwd === "/fixture/worktree")).toBe(true)
     })
   )
 )
 
-it.effect("rejects an incomplete loaded census with a repeated cursor", () =>
+it.effect("rejects a foreign cwd returned by an exact-cwd persistent census", () =>
+  withFixture("scoped-thread-list-foreign-cwd", (app) =>
+    Effect.gen(function* () {
+      if (app.listThreads === undefined) return expect.fail("thread census is required")
+      expectAppFailure(
+        yield* Effect.exit(app.listThreads(CodexThreadWorkingDirectory.make("/fixture/worktree"))),
+        "thread/list"
+      )
+    })
+  )
+)
+
+it.effect("rejects an incomplete loaded census after exact-cwd persistent discovery", () =>
   withFixture("loaded-thread-repeated-cursor", (app) =>
     Effect.gen(function* () {
       if (app.listThreads === undefined) return expect.fail("thread census is required")
-      expectAppFailure(yield* Effect.exit(app.listThreads()), "thread/loaded/list")
+      expectAppFailure(
+        yield* Effect.exit(app.listThreads(CodexThreadWorkingDirectory.make("/fixture/worktree"))),
+        "thread/loaded/list"
+      )
     })
   )
 )

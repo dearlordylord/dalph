@@ -4,6 +4,7 @@ import { GitCommitSha, RunId, TaskId, makeTaskWorkSpecification } from "@dalph/c
 import { GitCommand, PlannedTaskAttemptOrdinal, githubTaskIdFor, nodeGitCommandLayer } from "@dalph/orchestrator"
 import { Deferred, Effect, Exit, FileSystem, Fiber, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
+import { CodexThreadWorkingDirectory } from "../src/application/codex-app-server.js"
 import { CodexOwnedTurnToken, CodexThreadOwnershipToken } from "../src/application/codex-attempt-store.js"
 import {
   decodeProductionRepositoryHostConfiguration,
@@ -67,6 +68,25 @@ const request = (operation: string, variables: Readonly<Record<string, unknown>>
   query: `query ${operation}($fixture: String!) { fixture }`,
   variables
 })
+
+it.effect("filters the complete controlled Codex thread census to one exact candidate cwd", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { configuration } = yield* setup
+      const provider = yield* makeHermeticProviderState(configuration, () => Effect.void, invocationId)
+      const candidateCwd = `${configuration.integratorCandidateWorktreeRoot}/candidate-one`
+      const unrelatedCwd = `${configuration.integratorCandidateWorktreeRoot}/candidate-two`
+      const candidate = yield* provider.codex.startThread(candidateCwd, CodexThreadOwnershipToken.make("candidate"))
+      yield* provider.codex.startThread(unrelatedCwd, CodexThreadOwnershipToken.make("unrelated"))
+      const listThreads = provider.codex.listThreads
+      if (listThreads === undefined) return yield* Effect.die("controlled Codex provider must expose its complete list")
+      const scoped = yield* listThreads(CodexThreadWorkingDirectory.make(candidateCwd))
+      const global = yield* listThreads()
+      expect(scoped.map((thread) => thread.id)).toEqual([candidate.id])
+      expect(global).toHaveLength(2)
+    })
+  ).pipe(Effect.provide(fixtureLayer))
+)
 
 it.effect("produces distinct accepted commits for long exact A/B attempt identities with bounded result paths", () =>
   Effect.scoped(

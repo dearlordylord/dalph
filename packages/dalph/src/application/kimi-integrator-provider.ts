@@ -111,10 +111,10 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
             )
           })
         ),
-      listThreads: () =>
+      listThreads: (cwd) =>
         Effect.gen(function* () {
           const sessions = yield* Ref.get(threadTokens)
-          return yield* Effect.forEach(sessions.keys(), (sessionId) =>
+          const listed = yield* Effect.forEach(sessions.keys(), (sessionId) =>
             client.observe(clientSessionId(sessionId)).pipe(
               mapFailure("thread/list"),
               Effect.map((observation) =>
@@ -125,6 +125,7 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
               )
             )
           )
+          return cwd === undefined ? listed : listed.filter((thread) => thread.cwd === cwd)
         }),
       listThreadsComplete: true,
       readThread: (threadId) => {

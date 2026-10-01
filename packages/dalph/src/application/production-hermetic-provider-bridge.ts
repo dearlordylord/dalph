@@ -87,7 +87,7 @@ export const HermeticCodexRequest = Schema.TaggedUnion({
     ownedTurnToken: Schema.optionalKey(CodexOwnedTurnToken)
   },
   InterruptTurn: { threadId: CodexThreadId, turnId: CodexTurnId },
-  ListThreads: {},
+  ListThreads: { cwd: Schema.optionalKey(CodexThreadWorkingDirectory) },
   ListBackgroundTerminals: { threadId: CodexThreadId },
   TerminateBackgroundTerminal: { threadId: CodexThreadId, processId: Schema.NonEmptyString },
   Close: {}
@@ -298,8 +298,8 @@ export const hermeticCodexAppServerLayer = (
           }),
         interruptTurn: (threadId, turnId) =>
           request({ _tag: "InterruptTurn", threadId, turnId }, "turn/interrupt").pipe(Effect.asVoid),
-        listThreads: () =>
-          request({ _tag: "ListThreads" }, "thread/list").pipe(
+        listThreads: (cwd) =>
+          request({ _tag: "ListThreads", ...(cwd === undefined ? {} : { cwd }) }, "thread/list").pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(HermeticCodexThreadSummary))),
             Effect.mapError((failure) => unavailable("thread/list", failure))
           ),

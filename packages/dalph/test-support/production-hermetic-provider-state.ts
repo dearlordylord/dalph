@@ -260,17 +260,19 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
         return thread
       }),
     listThreadsComplete: true,
-    listThreads: () =>
+    listThreads: (cwd) =>
       count("CodexListThreads").pipe(
         Effect.andThen(Ref.get(threads)),
         Effect.map((values) =>
-          [...values.values()].map((thread) =>
-            CodexThreadListSummary.CompleteSummary({
-              id: thread.id,
-              cwd: thread.cwd,
-              summary: { status: thread.status, turns: thread.turns }
-            })
-          )
+          [...values.values()]
+            .filter((thread) => cwd === undefined || thread.cwd === cwd)
+            .map((thread) =>
+              CodexThreadListSummary.CompleteSummary({
+                id: thread.id,
+                cwd: thread.cwd,
+                summary: { status: thread.status, turns: thread.turns }
+              })
+            )
         )
       ),
     readThread: (id) => count("CodexReadThread").pipe(Effect.andThen(readThread(id))),

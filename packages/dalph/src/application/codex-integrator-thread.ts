@@ -103,6 +103,6 @@ export const ensureThread = Effect.fn("CodexIntegrator.ensureThread")(function* 
   if (app.listThreads === undefined || app.listThreadsComplete !== true) {
     return yield* Effect.fail(providerFailure("persistent thread list is unavailable or incomplete"))
   }
-  const listed = yield* boundary(app.listThreads())
+  const listed = yield* boundary(app.listThreads(CodexThreadWorkingDirectory.make(record.candidatePath)))
   return yield* adoptOrStartListedThread(app, record, store, listed)
 })

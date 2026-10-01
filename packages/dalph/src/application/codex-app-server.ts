@@ -477,9 +477,11 @@ export interface CodexAppServerService {
     cwd: string,
     ownedThreadToken?: CodexThreadOwnershipToken
   ) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
-  /** Complete persistent-thread identity read used to reconcile an ambiguous thread/start. */
-  readonly listThreads?: () => Effect.Effect<ReadonlyArray<CodexThreadListSummary>, CodexAppServerFailure>
-  /** True only when the server completed every page; entry field coverage is carried by each summary tag. */
+  /** Complete persistent-thread census; an optional cwd asks for exact matches only. */
+  readonly listThreads?: (
+    cwd?: CodexThreadWorkingDirectory
+  ) => Effect.Effect<ReadonlyArray<CodexThreadListSummary>, CodexAppServerFailure>
+  /** True only when every persistent and loaded-thread page was completed. */
   readonly listThreadsComplete?: true
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
@@ -3431,7 +3433,9 @@ export const codexAppServerLayer = (
         }
         return source
       })
-      const listPersistentThreads = Effect.fn("CodexAppServer.listPersistentThreads")(function* () {
+      const listPersistentThreads = Effect.fn("CodexAppServer.listPersistentThreads")(function* (
+        cwd?: CodexThreadWorkingDirectory
+      ) {
         let pages: ReadonlyArray<ReadonlyArray<CodexThreadListSummary>> = []
         let cursors: ReadonlySet<CodexThreadListCursor> = new Set<CodexThreadListCursor>()
         let cursor: CodexThreadListCursor | undefined
@@ -3450,10 +3454,16 @@ export const codexAppServerLayer = (
               "subAgentOther",
               "unknown"
             ],
+            ...(cwd === undefined ? {} : { cwd }),
             ...(cursor === undefined ? {} : { cursor })
           })
           const parsed = threadListPage(response)
           if (parsed instanceof CodexAppServerFailure) return yield* Effect.fail(parsed)
+          if (cwd !== undefined && parsed.threads.some((thread) => thread.cwd !== cwd)) {
+            return yield* Effect.fail(
+              operationFailure("thread/list", "Ownership", "scoped thread list returned a foreign working directory")
+            )
+          }
           pages = [...pages, parsed.threads]
           if (parsed.nextCursor === undefined || parsed.nextCursor === null) {
             return pages.flatMap((items) => items)
@@ -3466,8 +3476,8 @@ export const codexAppServerLayer = (
         }
         return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list exceeded page bound"))
       })
-      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
-        let threads = yield* listPersistentThreads()
+      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* (cwd?: CodexThreadWorkingDirectory) {
+        let threads = yield* listPersistentThreads(cwd)
         let cursors: ReadonlySet<string> = new Set()
         let cursor: string | undefined
         for (let page = 0; page < maximumThreadListPages; page += 1) {
@@ -3491,7 +3501,9 @@ export const codexAppServerLayer = (
               threads = [...threads, CodexThreadListSummary.IdentityOnly({ id, cwd: source.cwd })]
             }
           }
-          if (loaded.nextCursor === null) return threads
+          if (loaded.nextCursor === null) {
+            return cwd === undefined ? threads : threads.filter((thread) => thread.cwd === cwd)
+          }
           if (cursors.has(loaded.nextCursor)) {
             return yield* Effect.fail(
               operationFailure("thread/loaded/list", "Malformed", "loaded thread list cursor repeated")
