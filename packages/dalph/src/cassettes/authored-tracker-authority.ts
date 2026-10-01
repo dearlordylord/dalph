@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One controlled tracker authority keeps ordinary and finality claim observations coherent. */
 import { Context, Effect, Layer, Match, Option, Ref } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import {
@@ -11,6 +12,7 @@ import {
   type CompletionClaimObservation,
   type CompletionClaimMarkerObservation,
   type CompletionClaimReadRequest,
+  type CompletionOriginalClaimCleanupRead,
   completionTaskClaimEquals,
   isExactTaskClaim,
   OperationId,
@@ -178,8 +180,12 @@ export const controlledTrackerAuthorityLayer = (
             })
           )
         )
-      const readTaskClaimFor = (taskId: TaskId, causalContext?: AuthoredOperationCausalContext) =>
-        cursor.consumeTaskClaimReadFor(taskId, causalContext).pipe(
+      const readTaskClaimFor = (
+        taskId: TaskId,
+        causalContext?: AuthoredOperationCausalContext,
+        cleanupRead?: CompletionOriginalClaimCleanupRead
+      ) =>
+        cursor.consumeTaskClaimReadFor(taskId, causalContext, cleanupRead).pipe(
           Effect.orDie,
           Effect.flatMap(
             Option.match({
@@ -305,7 +311,7 @@ export const controlledTrackerAuthorityLayer = (
         }
       )
       const completionClaimBoundary = CompletionClaimBoundary.of({
-        readOriginalTaskClaim: readTaskClaim,
+        readOriginalTaskClaim: (taskId, cleanupRead) => readTaskClaimFor(taskId, undefined, cleanupRead),
         readTaskClaim: (request) =>
           Effect.gen(function* () {
             yield* cursor.awaitPromotedCompletionClaimRead(request.taskId)

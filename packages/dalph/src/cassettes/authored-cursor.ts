@@ -6,6 +6,7 @@ import {
   type TargetPromotionGitRequest,
   type IntegratorCandidateText,
   type OperationId,
+  type CompletionOriginalClaimCleanupRead,
   type PlannedAttemptWorktreeObservation,
   type TargetLineageObservation,
   type TrackerTarget,
@@ -536,7 +537,8 @@ export interface StoryCursor {
   /** Correlate a task-claim response to the exact initiating workflow read. */
   readonly consumeTaskClaimReadFor: (
     taskId: TaskId,
-    context?: AuthoredOperationCausalContext
+    context?: AuthoredOperationCausalContext,
+    cleanupRead?: CompletionOriginalClaimCleanupRead
   ) => Effect.Effect<Option.Option<AuthoredTaskClaimReadItem>, AuthoredCausalSelectionFailure>
   readonly consumeTaskClaimAcquisitionConflictReturned: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type>
@@ -672,6 +674,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         window.occurrences.map(
           ({
             acceptedPlanPredecessorRoles,
+            directCleanupClaimRead,
             directFocusedRead,
             directGitRead,
             directGraphPredecessorRoles,
@@ -688,6 +691,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             predecessors: predecessorIds,
             value: {
               acceptedPlanPredecessorRoles,
+              directCleanupClaimRead,
               directFocusedRead,
               directGitRead,
               storyIndex,
@@ -928,14 +932,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     predicate: (item: StoryItem | undefined) => item is A,
     context?: AuthoredOperationCausalContext,
     ownerSelectionMatches?: (item: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type) => boolean,
-    selectedOperation?: CassetteDecision
+    selectedOperation?: CassetteDecision,
+    cleanupRead?: CompletionOriginalClaimCleanupRead
   ): Effect.Effect<
     Option.Option<Extract<ClaimedStoryItem<A>, { readonly _tag: "Claimed" }>>,
     AuthoredCausalSelectionFailure
   > =>
     Effect.gen(function* () {
       if (yield* awaitControlBoundary())
-        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches, selectedOperation)
+        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches, selectedOperation, cleanupRead)
       const result = yield* transition.withPermits(1)(
         Effect.gen(function* () {
           const index = yield* SubscriptionRef.get(position)
@@ -952,6 +957,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             String(index),
             ({
               acceptedPlanPredecessorRoles,
+              directCleanupClaimRead,
               directFocusedRead,
               directGitRead,
               directGraphPredecessorRoles,
@@ -1002,6 +1008,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                     context,
                     state.causal
                   ) !== undefined
+                )
+                  return false
+              }
+              if (directCleanupClaimRead !== undefined) {
+                if (
+                  context !== undefined ||
+                  cleanupRead === undefined ||
+                  cleanupRead.deletionOperationId !== directCleanupClaimRead.deletionOperationId ||
+                  cleanupRead.call !== directCleanupClaimRead.call ||
+                  cleanupRead.attemptOrdinal !== directCleanupClaimRead.attemptOrdinal ||
+                  cleanupRead.readOrdinal !== directCleanupClaimRead.readOrdinal
                 )
                   return false
               }
@@ -2324,12 +2341,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   })
   const consumeTaskClaimReadFor: StoryCursor["consumeTaskClaimReadFor"] = Effect.fn(
     "AuthoredCassette.consumeTaskClaimReadFor"
-  )(function* (taskId, context) {
+  )(function* (taskId, context, cleanupRead) {
     const causal = yield* claimCausalWindow(
       (item): item is AuthoredTaskClaimReadItem =>
         isTaskClaimReadItem(item) &&
         (item._tag === "TaskClaimReadReturned" ? item.observation.taskId : item.taskId) === taskId,
-      context
+      context,
+      undefined,
+      undefined,
+      cleanupRead
     )
     if (Option.isSome(causal)) return Option.some(causal.value.item)
     return yield* consumeTaskClaimRead

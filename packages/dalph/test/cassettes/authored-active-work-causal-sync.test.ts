@@ -14,6 +14,8 @@ import {
 } from "@dalph/contracts"
 import {
   FixtureTarget,
+  CompletionClaimCleanupReadOrdinal,
+  CompletionClaimRequestOrdinal,
   OperationId,
   PlannedWorktreeReady,
   TargetLineageObservation,
@@ -89,6 +91,49 @@ const anchorSelection = (occurrenceRole: string, operation: AuthoredCassetteDeci
 
 const graphResult = (revision: string) =>
   AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.make({ graph: graph(revision) })
+
+it.effect("binds unselected cleanup claim reads to their exact journaled calls", () =>
+  Effect.gen(function* () {
+    const deletionOperationId = OperationId.make("delete:B")
+    const cleanup = (readOrdinal: number) => ({
+      taskId: taskB,
+      deletionOperationId,
+      call: "ConfirmOriginalClaimReleased" as const,
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(readOrdinal)
+    })
+    const story = [
+      AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+      AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "first", storyIndex: 0, predecessorIds: [], directCleanupClaimRead: cleanup(1) },
+        { id: "second", storyIndex: 1, predecessorIds: [], directCleanupClaimRead: cleanup(2) }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    expect(yield* Effect.flip(cursor.consumeTaskClaimReadFor(taskB))).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    expect(
+      yield* Effect.flip(
+        cursor.consumeTaskClaimReadFor(taskB, undefined, {
+          ...cleanup(2),
+          deletionOperationId: OperationId.make("wrong")
+        })
+      )
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, undefined, cleanup(2))).toMatchObject({
+      value: { taskId: taskB }
+    })
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, undefined, cleanup(1))).toMatchObject({
+      value: { taskId: taskB }
+    })
+    yield* cursor.consumeTerminalAssertions
+  })
+)
 
 it.effect("pairs a direct Restart graph result separately from an independent selected graph read", () =>
   Effect.gen(function* () {
