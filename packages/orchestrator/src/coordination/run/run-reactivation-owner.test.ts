@@ -40,7 +40,10 @@ import {
   type RunReactivationOwnerService,
   runReactivationOwnerLayer
 } from "./run-reactivation-owner.js"
-import { acceptedRunFactPublicationFromPrefix } from "./accepted-run-fact-publication.js"
+import {
+  acceptedRunFactPublicationFromPrefix,
+  acceptedRunFactPublicationsBetween
+} from "./accepted-run-fact-publication.js"
 import {
   AcceptedRunFactPublication,
   type AcceptedRunControlObserver,
@@ -411,7 +414,7 @@ it.effect("an unchanged retained wait retracts only its publication-owned traili
   )
 )
 
-it.effect("a failed accepted graph read retracts progress-owned trailing activation until an operator wake", () =>
+it.effect("a failed accepted graph read creates no trailing activation until an operator wake", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const shell = yield* makeTestExitShell
@@ -468,7 +471,19 @@ it.effect("a failed accepted graph read retracts progress-owned trailing activat
         JournalPosition.make(3),
         acceptedFailurePrefix.prefix
       )
-      expect(failedReadPublication._tag).toBe("RetainedWait")
+      expect(failedReadPublication).toEqual(
+        AcceptedRunFactPublication.ReadFailed({ operationId: operation.operationId })
+      )
+      expect(
+        yield* acceptedRunFactPublicationsBetween(
+          JournalPosition.make(1),
+          JournalPosition.make(3),
+          acceptedFailurePrefix.prefix
+        )
+      ).toEqual([
+        AcceptedRunFactPublication.ReadPending({ operationId: operation.operationId }),
+        AcceptedRunFactPublication.ReadFailed({ operationId: operation.operationId })
+      ])
 
       yield* provideOwner(
         shell.shell,
@@ -496,7 +511,7 @@ it.effect("a failed accepted graph read retracts progress-owned trailing activat
           Effect.gen(function* () {
             yield* Deferred.await(firstStarted)
             const publish = yield* Deferred.await(publicationObserver)
-            yield* publish(AcceptedRunFactPublication.WorkflowProgress())
+            yield* publish(AcceptedRunFactPublication.ReadPending({ operationId: operation.operationId }))
             yield* publish(failedReadPublication)
             yield* Deferred.succeed(releaseFirst, undefined)
             yield* Queue.take(idleHandoffs)
@@ -513,7 +528,57 @@ it.effect("a failed accepted graph read retracts progress-owned trailing activat
   )
 )
 
-it.effect("classifies an accepted unchanged root/dependant graph reconfirmation as workflow progress", () =>
+it.effect("keeps an independent completed-read wake when another read fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const firstStarted = yield* Deferred.make<void>()
+      const releaseFirst = yield* Deferred.make<void>()
+      const secondStarted = yield* Deferred.make<void>()
+      const observer = yield* Deferred.make<(publication: AcceptedRunFactPublicationValue) => Effect.Effect<void>>()
+      const activations = yield* Ref.make(0)
+      const completedOperationId = OperationId.make("independent-completed-read")
+      const failedOperationId = OperationId.make("separate-failed-read")
+
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-independent-read-publication"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(activations, (count) => count + 1).pipe(
+              Effect.tap((count) =>
+                count === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFirst)))
+                  : Deferred.succeed(secondStarted, undefined)
+              ),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ acceptedFactPublication }) =>
+            Deferred.succeed(observer, acceptedFactPublication),
+          onFailure: () => Effect.void
+        },
+        () =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstStarted)
+            const publish = yield* Deferred.await(observer)
+            yield* publish(AcceptedRunFactPublication.ReadPending({ operationId: failedOperationId }))
+            yield* publish(AcceptedRunFactPublication.ReadObserved({ operationId: completedOperationId }))
+            yield* publish(AcceptedRunFactPublication.ReadFailed({ operationId: failedOperationId }))
+            yield* publish(AcceptedRunFactPublication.RetainedWait())
+            yield* Deferred.succeed(releaseFirst, undefined)
+            yield* Deferred.await(secondStarted)
+            expect(yield* Ref.get(activations)).toBe(2)
+          })
+      )
+    })
+  )
+)
+
+it.effect("classifies an accepted unchanged root/dependant graph reconfirmation as a completed read", () =>
   Effect.gen(function* () {
     const runId = RunId.make("test-run-unchanged-root-dependant-reconfirmation")
     const target = FixtureTarget.make("test-run-unchanged-root-dependant-reconfirmation")
@@ -580,7 +645,7 @@ it.effect("classifies an accepted unchanged root/dependant graph reconfirmation 
     }
 
     expect(yield* acceptedRunFactPublicationFromPrefix(JournalPosition.make(5), acceptedPrefix.prefix)).toEqual(
-      AcceptedRunFactPublication.WorkflowProgress()
+      AcceptedRunFactPublication.ReadObserved({ operationId: unchangedRead.operationId })
     )
   })
 )

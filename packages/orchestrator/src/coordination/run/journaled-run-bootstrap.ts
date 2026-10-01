@@ -74,6 +74,7 @@ import {
   type AcceptedRunReactivationObservers
 } from "./run.js"
 import { inspectStartupRecovery, StartupRecoveryBlocked } from "./startup-recovery.js"
+import { acceptedRunFactPublicationsBetween } from "./accepted-run-fact-publication.js"
 import { observePauseProgress } from "./pause-progress-observer.js"
 import {
   InRunJournal,
@@ -680,14 +681,20 @@ export const journaledRunBootstrapLayer = (
                     const runtimeFacts = bundle.actionInputs.runtimeFacts
                     const acceptedAt = runtimeFacts.acceptedAt
                     if (acceptedAt === null) return
-                    const publicationClassification = runtimeFacts.acceptedFactPublication
-                    const advanced = yield* Ref.modify(acceptedPublicationWatermark, (current) =>
-                      current !== null && acceptedAt <= current ? [false, current] : [true, acceptedAt]
+                    const after = yield* Ref.modify(acceptedPublicationWatermark, (current) =>
+                      current !== null && acceptedAt <= current ? [null, current] : [current, acceptedAt]
                     )
-                    if (!advanced) return
+                    if (after === null) return
+                    const accepted = yield* processJournal.journal.state.get.pipe(Effect.orDie)
+                    const publications = yield* acceptedRunFactPublicationsBetween(
+                      after,
+                      acceptedAt,
+                      accepted.prefix
+                    ).pipe(Effect.orDie)
                     yield* Option.match(reactivationObservers, {
                       onNone: () => Effect.void,
-                      onSome: ({ acceptedFactPublication }) => acceptedFactPublication(publicationClassification)
+                      onSome: ({ acceptedFactPublication }) =>
+                        Effect.forEach(publications, acceptedFactPublication, { discard: true })
                     })
                   })
               })

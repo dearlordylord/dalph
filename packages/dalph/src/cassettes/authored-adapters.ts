@@ -44,14 +44,7 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
     TrackerGraphReader,
     TrackerGraphReader.of({
       read: Effect.fn("AuthoredCassette.TrackerGraphReader.read")(function* () {
-        const item = yield* cursor.consumeTrackerGraph.pipe(
-          Effect.mapError((failure) =>
-            trackerReadFailure(
-              `${failure._tag} at story position ${failure.storyPosition}: expected ${failure.expected}, received ${failure.actual}`,
-              TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
-            )
-          )
-        )
+        const item = yield* cursor.consumeTrackerGraph.pipe(Effect.orDie)
         if (item._tag === "TrackerGraphReadFailed") {
           return yield* trackerReadFailure(`authored cassette tracker graph read failed: ${item.reason}`)
         }
@@ -65,14 +58,7 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
       }),
       readTaskWorkSpecification: Effect.fn("AuthoredCassette.TrackerGraphReader.readTaskWorkSpecification")(
         function* (_target, taskId) {
-          const item = yield* cursor.consumeTaskWorkSpecification.pipe(
-            Effect.mapError((failure) =>
-              trackerReadFailure(
-                `${failure._tag} at story position ${failure.storyPosition}`,
-                TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
-              )
-            )
-          )
+          const item = yield* cursor.consumeTaskWorkSpecification.pipe(Effect.orDie)
           if (item.taskId !== taskId) {
             return yield* trackerReadFailure(
               `authored cassette returned task-work specification ${item.taskId} for ${taskId}`

@@ -164,6 +164,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const trailingActivationObligation = yield* Ref.make<Option.Option<TrailingActivationObligation>>(Option.none())
       /** A retained wait can race the worker while both cross the activation-finalization gate. */
       const retainedWaitGeneration = yield* Ref.make<Option.Option<number>>(Option.none())
+      /** A completed read is independent of another operation's retained wait. */
+      const completedReadWakeGeneration = yield* Ref.make<Option.Option<number>>(Option.none())
       // Registration precedes the authoritative read below. The callback can
       // therefore capture a Pause accepted in the attach/read interval; the
       // mandatory reread then current-first replays the durable state.
@@ -311,10 +313,16 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const acceptedFactPublication = Effect.fn("RunReactivationOwner.acceptedFactPublication")(function* (
         publication: AcceptedRunFactPublication
       ) {
-        if (publication._tag === "WorkflowProgress") {
+        // A read intent has no authority result; its failed outcome cannot
+        // retract another operation's completed-fact wake.
+        if (publication._tag === "ReadPending" || publication._tag === "ReadFailed") return
+        if (publication._tag === "WorkflowProgress" || publication._tag === "ReadObserved") {
           const arrivalPhase = yield* Ref.get(activationPhase)
           yield* commandGate.withPermit(
             Effect.gen(function* () {
+              if (publication._tag === "ReadObserved") {
+                yield* Ref.set(completedReadWakeGeneration, Option.some(arrivalPhase.generation))
+              }
               const retainedGeneration = yield* Ref.get(retainedWaitGeneration)
               if (Option.isSome(retainedGeneration) && retainedGeneration.value === arrivalPhase.generation) {
                 yield* Ref.set(retainedWaitGeneration, Option.none())
@@ -325,9 +333,11 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           return
         }
         const arrivalPhase = yield* Ref.get(activationPhase)
-        yield* Ref.set(retainedWaitGeneration, Option.some(arrivalPhase.generation))
         yield* commandGate.withPermit(
           Effect.gen(function* () {
+            const readWake = yield* Ref.get(completedReadWakeGeneration)
+            if (Option.isSome(readWake) && readWake.value === arrivalPhase.generation) return
+            yield* Ref.set(retainedWaitGeneration, Option.some(arrivalPhase.generation))
             const pending = yield* Ref.get(trailingActivationObligation)
             if (Option.isNone(pending) || pending.value.kind._tag !== "AcceptedFactPublication") return
             yield* Ref.set(trailingActivationObligation, Option.none())
@@ -507,6 +517,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                   // releasing the gate so later hints follow the coalescing
                   // rules for this new activation.
                   yield* Ref.set(trailingActivationObligation, Option.none())
+                  yield* Ref.set(completedReadWakeGeneration, Option.none())
                   const retainedGeneration = yield* Ref.get(retainedWaitGeneration)
                   if (
                     pending.value.kind._tag === "AcceptedFactPublication" &&

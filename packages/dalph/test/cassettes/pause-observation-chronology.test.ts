@@ -1,9 +1,9 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, Result } from "effect"
 import { expect } from "vitest"
-import { TrackerAdapterReadError } from "@dalph/orchestrator"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import type { AuthoredCassetteInteractionMismatch } from "../../src/cassettes/authored-cursor.js"
 
 const boundaries = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries
 
@@ -51,15 +51,14 @@ it.effect("rejects an omitted final authored tracker response before Alice's exp
     })
     const missingResponse = { ...boundaries, story: boundaries.story.filter((_, index) => index !== responseAt) }
     expect(missingResponse.story[responseAt]).toEqual(boundaries.story[expectedAt])
-    const failure = yield* runAuthoredScenarioCassette(missingResponse).pipe(Effect.flip)
-    expect(failure).toMatchObject({
-      _tag: "TrackerGraphReader.AdapterReadError",
-      context: { _tag: "Fixture", operation: "TrackerGraphReader.selectAdapter" },
-      reason: { _tag: "BoundaryDecode" }
-    })
-    if (!Schema.is(TrackerAdapterReadError)(failure)) return yield* Effect.die("unexpected tracker adapter failure")
-    expect(failure.detail).toBe(
-      `AuthoredCassetteInteractionMismatch at story position ${responseAt}: expected ExpectedBehavior, received TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned`
-    )
+    const exit = yield* runAuthoredScenarioCassette(missingResponse).pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) return yield* Effect.die("missing tracker response was accepted")
+    expect(Result.getOrUndefined(Cause.findDefect(exit.cause))).toMatchObject({
+      _tag: "AuthoredCassetteInteractionMismatch",
+      storyPosition: responseAt,
+      expected: "ExpectedBehavior",
+      actual: "TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned"
+    } satisfies Partial<AuthoredCassetteInteractionMismatch>)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )

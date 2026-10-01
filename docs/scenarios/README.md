@@ -26,6 +26,7 @@ Git history.
 - [Reconcile Git lineage, worktrees, and promotion races](reconcile-git-facts.md)
 - [Reject stale task Pause and Unpause requests](reject-stale-task-control.md)
 - [Journal-first tracker observations](journal-first-tracker-observations.md)
+- [Publish independent Journal operations by their accepted outcomes](accepted-publication-operation-boundary.md)
 - [Describe delivery actions without performing them](describe-delivery-actions.md)
 - [Run delivery actions from accepted reactive facts](run-reactive-delivery-actions.md)
 - [Stabilize each Run above delivery](stabilize-each-run.md)

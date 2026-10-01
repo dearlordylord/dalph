@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { completeSingletonDeliveryCassette } from "../../test-support/complete-singleton-delivery.js"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Crypto, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
+import { Cause, Crypto, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Result, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -102,7 +102,6 @@ import {
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReleaseAuthority,
   TaskLifecycle,
-  TrackerAdapterReadError,
   TaskTrackerFactsObservedEvent,
   TaskTrackerFactsReadFailed,
   TargetPromotionGit,
@@ -210,7 +209,7 @@ import {
 } from "../../src/cassettes/authored-runner.js"
 import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.js"
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
-import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { AuthoredCassetteInteractionMismatch, makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { AuthoredCausalWindow } from "../../src/cassettes/authored-domain.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 import {
@@ -2125,16 +2124,15 @@ it.effect("rejects the completion conflict cassette when its terminal G2 respons
       ...completionTaskConflictAuthoredCassette,
       story: completionTaskConflictAuthoredCassette.story.filter((_, index) => index !== responseAt)
     }
-    const failure = yield* runAuthoredScenarioCassette(missingResponse).pipe(Effect.flip)
-    expect(failure).toMatchObject({
-      _tag: "TrackerGraphReader.AdapterReadError",
-      context: { _tag: "Fixture", operation: "TrackerGraphReader.selectAdapter" },
-      reason: { _tag: "BoundaryDecode" }
-    })
-    if (!Schema.is(TrackerAdapterReadError)(failure)) return yield* Effect.die("unexpected tracker adapter failure")
-    expect(failure.detail).toBe(
-      `AuthoredCassetteInteractionMismatch at story position ${responseAt}: expected ExpectedBehavior, received TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned`
-    )
+    const exit = yield* runAuthoredScenarioCassette(missingResponse).pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) return yield* Effect.die("missing terminal graph response was accepted")
+    expect(Result.getOrUndefined(Cause.findDefect(exit.cause))).toMatchObject({
+      _tag: "AuthoredCassetteInteractionMismatch",
+      storyPosition: responseAt,
+      expected: "ExpectedBehavior",
+      actual: "TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned"
+    } satisfies Partial<AuthoredCassetteInteractionMismatch>)
   })
 )
 
@@ -5304,9 +5302,13 @@ it.effect("reports mismatches through the surface that owns the current story it
           : item
       )
     }
-    expect((yield* runAuthoredScenarioCassette(wrongTrackerItem).pipe(Effect.flip))._tag).toBe(
-      "TrackerGraphReader.AdapterReadError"
-    )
+    const wrongTrackerExit = yield* runAuthoredScenarioCassette(wrongTrackerItem).pipe(Effect.exit)
+    expect(Exit.isFailure(wrongTrackerExit)).toBe(true)
+    if (Exit.isFailure(wrongTrackerExit)) {
+      expect(Result.getOrUndefined(Cause.findDefect(wrongTrackerExit.cause))).toBeInstanceOf(
+        AuthoredCassetteInteractionMismatch
+      )
+    }
 
     const wrongSpecificationItem = {
       ...singleton,
@@ -5316,9 +5318,13 @@ it.effect("reports mismatches through the surface that owns the current story it
           : item
       )
     }
-    expect((yield* runAuthoredScenarioCassette(wrongSpecificationItem).pipe(Effect.flip))._tag).toBe(
-      "TrackerGraphReader.AdapterReadError"
-    )
+    const wrongSpecificationExit = yield* runAuthoredScenarioCassette(wrongSpecificationItem).pipe(Effect.exit)
+    expect(Exit.isFailure(wrongSpecificationExit)).toBe(true)
+    if (Exit.isFailure(wrongSpecificationExit)) {
+      expect(Result.getOrUndefined(Cause.findDefect(wrongSpecificationExit.cause))).toBeInstanceOf(
+        AuthoredCassetteInteractionMismatch
+      )
+    }
 
     const invalidGraph = {
       revision: "invalid-duplicate-task",
