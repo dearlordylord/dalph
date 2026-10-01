@@ -3675,6 +3675,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         return yield* Effect.failCause(behaviorExit.cause)
       }
       const observedBehavior = behaviorExit.value
+      if (authoredAttemptLineage !== undefined) yield* authoredAttemptLineage.assertExhausted
       // Take the same completed-history cut as the former immutable Ref array.
       // A later scope finalizer may notify observers, so never freeze its builder.
       const observationCaptures = yield* Ref.modify(observationCaptureState, (state) => [

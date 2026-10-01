@@ -38,5 +38,13 @@ export const makeAuthoredAttemptTargetLineage = Effect.fn("AuthoredCassette.make
           return next
         })
     })
-  return { forAttempt }
+  const assertExhausted = Ref.get(remaining).pipe(
+    Effect.flatMap((current) => {
+      const incomplete = [...current].filter(([, responses]) => responses.length > 0)
+      return incomplete.length === 0
+        ? Effect.void
+        : Effect.die(`unconsumed authored target-lineage responses for ${incomplete.map(([id]) => id).join(", ")}`)
+    })
+  )
+  return { assertExhausted, forAttempt }
 })

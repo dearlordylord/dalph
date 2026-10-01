@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -51,6 +51,10 @@ it.effect("rejects a wrong Base without consuming the exact attempt response", (
     ])
     const failure = yield* Effect.flip(authored.forAttempt(attemptA).read(baseB, target))
     expect(failure).toBeInstanceOf(GitTargetLineageReadFailure)
+    const incomplete = yield* Effect.exit(authored.assertExhausted)
+    expect(Exit.isFailure(incomplete)).toBe(true)
+    if (Exit.isFailure(incomplete)) expect(Cause.pretty(incomplete.cause)).toContain(String(attemptA))
     expect((yield* authored.forAttempt(attemptA).read(baseA, target)).targetHeadSha).toBe(headA)
+    yield* authored.assertExhausted
   })
 )
