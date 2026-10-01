@@ -368,9 +368,19 @@ export const controlledTrackerAuthorityLayer = (
             yield* setCompletionObservation(taskId, request.claim)
             return request.claim
           }),
-        releaseOriginalTaskClaim: (release) =>
+        releaseOriginalTaskClaim: (release, operation) =>
           cursor
-            .consumeDalphSelectionFor({ _tag: "ReleaseTaskClaim", taskId: release.claim.taskId })
+            .consumeDalphSelectionFor(
+              { _tag: "ReleaseTaskClaim", taskId: release.claim.taskId },
+              operation === undefined
+                ? undefined
+                : {
+                    operationId: operation.release.operationId,
+                    predecessorOperationIds: operation.predecessorOperationIds,
+                    operationKind: "ReleaseTaskClaim",
+                    taskId: release.claim.taskId
+                  }
+            )
             .pipe(Effect.orDie, Effect.andThen(trackerMutation.releaseTaskClaim(release))),
         deleteTaskClaim: (request) =>
           Effect.gen(function* () {

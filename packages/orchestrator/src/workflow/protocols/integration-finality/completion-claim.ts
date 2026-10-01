@@ -13,6 +13,7 @@ import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
 import type { CompletionClaimCleanupReadOrdinal, CompletionClaimRequestOrdinal } from "./events.js"
 import type { TaskClaimReleaseReadOrdinal } from "../task-claim-release/protocol.js"
+import type { WorkflowTaskClaimReleaseOperation } from "../../registry/operation.js"
 import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import {
   TargetPromotionCorrelation,
@@ -217,7 +218,10 @@ export interface CompletionClaimBoundaryService {
     request: CompletionClaimDeletionRequest
   ) => Effect.Effect<void, CompletionClaimDeletionFailure | TaskTrackerMutationThrottled>
   /** Deletes only the exact original active record through the generic claim-release boundary. */
-  readonly releaseOriginalTaskClaim: TrackerMutationService["releaseTaskClaim"]
+  readonly releaseOriginalTaskClaim: (
+    release: TaskClaimRelease,
+    operation?: WorkflowTaskClaimReleaseOperation
+  ) => ReturnType<TrackerMutationService["releaseTaskClaim"]>
 }
 
 /** The ordinary Effect service for the task-tracker completion-claim boundary. */

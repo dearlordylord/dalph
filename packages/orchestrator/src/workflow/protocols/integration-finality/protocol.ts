@@ -832,7 +832,7 @@ const releaseOriginalClaimBeforeCompletionMarkerDeletion = Effect.fn(
           releaseOperationId: operation.release.operationId,
           readOrdinal
         }),
-      releaseTaskClaim: tracker.releaseOriginalTaskClaim
+      releaseTaskClaim: (release) => tracker.releaseOriginalTaskClaim(release, operation)
     }
     yield* runJournaledTaskClaimRelease(
       request.claim.plannedAttempt.runId,

@@ -21,6 +21,7 @@ import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import {
   makeCompletionTaskFactsObservationOperation,
   makeTaskClaimReleaseOperation,
+  type WorkflowTaskClaimReleaseOperation,
   TaskClaimReleaseAuthority
 } from "../../registry/operation.js"
 import { TaskClaimReleasedEvent, TaskClaimReleaseIntendedEvent, taskTrackerReadIntent } from "../../registry/event.js"
@@ -531,6 +532,7 @@ const makeBoundary = (input: {
   readonly originalClaimPresent?: boolean
   readonly originalRelease?: ReadonlyArray<MutationOutcome>
   readonly originalReleaseCalls?: Ref.Ref<number>
+  readonly releaseOperations?: Ref.Ref<ReadonlyArray<WorkflowTaskClaimReleaseOperation>>
   readonly chronology?: Ref.Ref<ReadonlyArray<"delete" | "read" | "readOriginal" | "releaseOriginal" | "replace">>
 }) =>
   (() => {
@@ -561,8 +563,18 @@ const makeBoundary = (input: {
       recordBoundaryCall("readOriginal").pipe(
         Effect.map(() => activeClaims.get(String(taskId)) ?? { _tag: "UnclaimedTask" as const, taskId })
       )
-    const releaseOriginalTaskClaim: CompletionClaimBoundary["Service"]["releaseOriginalTaskClaim"] = (release) =>
+    const releaseOriginalTaskClaim: CompletionClaimBoundary["Service"]["releaseOriginalTaskClaim"] = (
+      release,
+      operation
+    ) =>
       recordBoundaryCall("releaseOriginal").pipe(
+        Effect.andThen(
+          input.releaseOperations === undefined
+            ? Effect.void
+            : operation === undefined
+              ? Effect.die("journaled original claim release lacked its exact operation")
+              : Ref.update(input.releaseOperations, (current) => [...current, operation])
+        ),
         Effect.andThen(
           input.originalReleaseCalls === undefined
             ? Effect.void
@@ -1678,6 +1690,7 @@ it.effect("observes a lost active-claim deletion before deleting the completion 
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
     const originalReleaseCalls = yield* Ref.make(0)
+    const releaseOperations = yield* Ref.make<ReadonlyArray<WorkflowTaskClaimReleaseOperation>>([])
     const chronology = yield* Ref.make<
       ReadonlyArray<"delete" | "read" | "readOriginal" | "releaseOriginal" | "replace">
     >([])
@@ -1690,6 +1703,7 @@ it.effect("observes a lost active-claim deletion before deleting the completion 
           initial: [fixture.claim],
           originalRelease: ["UnknownApplied"],
           originalReleaseCalls,
+          releaseOperations,
           readCalls,
           replacementCalls
         }),
@@ -1700,6 +1714,8 @@ it.effect("observes a lost active-claim deletion before deleting the completion 
     )
 
     expect(yield* Ref.get(originalReleaseCalls)).toBe(1)
+    expect(yield* Ref.get(releaseOperations)).toHaveLength(1)
+    expect((yield* Ref.get(releaseOperations))[0]?.predecessorOperationIds).toContain(fixture.activeClaim.operationId)
     expect(yield* Ref.get(deletionCalls)).toBe(1)
     expect(yield* Ref.get(chronology)).toEqual([
       "read",
