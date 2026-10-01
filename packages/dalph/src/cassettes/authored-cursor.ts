@@ -909,7 +909,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             ? []
             : [matched.occurrence.value]
         const ambiguity =
-          matched instanceof AuthoredOccurrenceMatchFailure && matched.detail.startsWith("ambiguous enabled occurrences")
+          matched instanceof AuthoredOccurrenceMatchFailure &&
+          matched.detail.startsWith("ambiguous enabled occurrences")
             ? matched.detail
             : undefined
         return { ambiguity, eligible, structural, unclaimed }
