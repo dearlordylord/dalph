@@ -2067,11 +2067,94 @@ const changedAttemptStopStoryThroughApplication = changedAttemptStopsAndReleases
 )
 
 /** Concurrent valid Continue and Stop requests cross the public boundary; the first journal append wins. */
+const choiceRaceCausalStart = changedAttemptStopAppliedAt + 1
+const choiceRaceOffsets = {
+  g2Selection: 0,
+  g2Result: 1,
+  continuationGraphSelection: 2,
+  continuationGraphResult: 3,
+  specificationSelection: 4,
+  specificationResult: 5,
+  claimSelection: 6,
+  claimResult: 7,
+  worktreeSelection: 8,
+  lineageSelection: 9,
+  resumeResult: 10
+} as const
 export const changedAttemptChoiceRaceAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...changedAttemptStopsAndReleasesUnwindowed,
   name: "Alice races Continue and Stop for the same exposed F1 and F2 choice",
+  causalWindows: [
+    Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: choiceRaceCausalStart,
+      endIndex: choiceRaceCausalStart + choiceRaceOffsets.resumeResult + 1,
+      occurrences: [
+        {
+          id: "race-post-quiescence-graph-selection",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.g2Selection,
+          predecessorIds: [],
+          graphReadCause: "PostQuiescenceReconfirmation"
+        },
+        {
+          id: "race-post-quiescence-graph-result",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.g2Result,
+          predecessorIds: ["race-post-quiescence-graph-selection"],
+          ownerRole: "race-post-quiescence-graph-selection"
+        },
+        {
+          id: "race-continuation-graph-selection",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.continuationGraphSelection,
+          predecessorIds: [],
+          graphReadCause: "AttemptContinuation"
+        },
+        {
+          id: "race-continuation-graph-result",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.continuationGraphResult,
+          predecessorIds: ["race-continuation-graph-selection"],
+          ownerRole: "race-continuation-graph-selection"
+        },
+        {
+          id: "race-continuation-specification-selection",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.specificationSelection,
+          predecessorIds: ["race-continuation-graph-result"]
+        },
+        {
+          id: "race-continuation-specification-result",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.specificationResult,
+          predecessorIds: ["race-continuation-specification-selection"],
+          ownerRole: "race-continuation-specification-selection"
+        },
+        {
+          id: "race-continuation-claim-selection",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.claimSelection,
+          predecessorIds: ["race-continuation-specification-result"]
+        },
+        {
+          id: "race-continuation-claim-result",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.claimResult,
+          predecessorIds: ["race-continuation-claim-selection"],
+          ownerRole: "race-continuation-claim-selection"
+        },
+        {
+          id: "race-continuation-worktree-selection",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.worktreeSelection,
+          predecessorIds: ["race-continuation-claim-result"]
+        },
+        {
+          id: "race-continuation-lineage-selection",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.lineageSelection,
+          predecessorIds: ["race-continuation-worktree-selection"]
+        },
+        {
+          id: "race-continuation-resume-result",
+          storyIndex: choiceRaceCausalStart + choiceRaceOffsets.resumeResult,
+          predecessorIds: ["race-continuation-lineage-selection"]
+        }
+      ]
+    })
+  ],
   story: [
     ...changedAttemptStopsAndReleasesUnwindowed.story.slice(0, changedAttemptStopAppliedAt),
     {
