@@ -40,7 +40,8 @@ import {
   TrackerRevision,
   TrackerTarget,
   JournalPosition,
-  OperationId
+  OperationId,
+  PlannedAttemptWorktreeObservation
 } from "@dalph/orchestrator"
 import {
   AuthoredContinueAttemptResult,
@@ -836,6 +837,14 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   GitWorktreeObservationChanged: {
     observation: Schema.Union([PlannedBranchReady, PlannedWorktreeAbsent, PlannedWorktreeReady])
   },
+  /** Exact result from a direct planned-worktree read during Restart. */
+  DirectGitWorktreeReadReturned: {
+    taskId: TaskId,
+    attemptId: AttemptId,
+    observation: PlannedAttemptWorktreeObservation
+  },
+  /** Exact result from a direct target-lineage read during Restart. */
+  DirectGitTargetLineageReadReturned: { taskId: TaskId, attemptId: AttemptId, observation: TargetLineageObservation },
   /** Git applies the planned-worktree create, but Dalph loses the response before the ordinary reread. */
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
   /** The fake outer Integrator receives this exact session and run ordinal. */
@@ -1075,7 +1084,12 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
   ],
   DalphOperationTrace: ["DalphSelects"],
-  Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
+  Git: [
+    "GitPlannedWorktreeCreateResponseLost",
+    "GitWorktreeObservationChanged",
+    "DirectGitWorktreeReadReturned",
+    "DirectGitTargetLineageReadReturned"
+  ],
   OuterIntegrator: [
     "IntegratorRequestReceived",
     "IntegratorResultReturned",
@@ -1190,6 +1204,16 @@ export const AuthoredCausalWindow = Schema.Struct({
           taskId: TaskId,
           predecessorRoles: Schema.Array(AuthoredCausalRole).check(Schema.isUnique())
         })
+      ),
+      /** A direct Git operation binds only after its exact result is observed. */
+      directGitRead: Schema.optionalKey(
+        Schema.Struct({
+          role: AuthoredCausalRole,
+          kind: Schema.Literals(["ReadTaskWorktree", "ReadTargetLineage"]),
+          taskId: TaskId,
+          attemptId: AttemptId,
+          predecessorRoles: Schema.Array(AuthoredCausalRole).check(Schema.isUnique())
+        })
       )
     })
   )
@@ -1292,6 +1316,30 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         if (!exactResult || occurrence.ownerRole !== undefined)
           return `direct focused read ${occurrence.id} requires its exact kind, task, and no selected owner`
       }
+      if (occurrence.directGitRead !== undefined) {
+        const direct = occurrence.directGitRead
+        const exactResult =
+          direct.kind === "ReadTaskWorktree"
+            ? item._tag === "DirectGitWorktreeReadReturned" &&
+              item.taskId === direct.taskId &&
+              item.attemptId === direct.attemptId
+            : item._tag === "DirectGitTargetLineageReadReturned" &&
+              item.taskId === direct.taskId &&
+              item.attemptId === direct.attemptId
+        if (!exactResult || occurrence.ownerRole !== undefined)
+          return `direct Git read ${occurrence.id} requires its exact kind, task, attempt, and no selected owner`
+      }
+      if (
+        (item._tag === "DirectGitWorktreeReadReturned" || item._tag === "DirectGitTargetLineageReadReturned") &&
+        occurrence.directGitRead === undefined
+      )
+        return `direct Git result ${occurrence.id} requires its exact operation binding`
+      if (
+        [occurrence.directGraphRole, occurrence.directFocusedRead, occurrence.directGitRead].filter(
+          (value) => value !== undefined
+        ).length > 1
+      )
+        return `causal occurrence ${occurrence.id} names more than one direct operation`
       const owner = occurrence.ownerRole === undefined ? undefined : graph.byId.get(occurrence.ownerRole)
       const ownerItem = owner === undefined ? undefined : cassette.story[owner.value]
       if (
@@ -1345,9 +1393,10 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
     item._tag === "DalphSelects" ? [item.causal?.occurrenceRole ?? item.causalAnchor?.occurrenceRole] : []
   )
   const directRoles = (cassette.causalWindows ?? []).flatMap(({ occurrences }) =>
-    occurrences.flatMap(({ directFocusedRead, directGraphRole }) => [
+    occurrences.flatMap(({ directFocusedRead, directGitRead, directGraphRole }) => [
       ...(directGraphRole === undefined ? [] : [directGraphRole]),
-      ...(directFocusedRead === undefined ? [] : [directFocusedRead.role])
+      ...(directFocusedRead === undefined ? [] : [directFocusedRead.role]),
+      ...(directGitRead === undefined ? [] : [directGitRead.role])
     ])
   )
   if (new Set(directRoles).size !== directRoles.length) return "direct operation roles must be unique"

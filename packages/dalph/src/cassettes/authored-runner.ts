@@ -2337,9 +2337,42 @@ const runAuthoredScenarioCassetteWith = (request: {
                 if (Option.isSome(change)) {
                   yield* testGitWorktree.setObservation(change.value.observation)
                 }
-                return yield* observePlannedAttemptWorktreeThrough(gitWorktree, operation)
+                const result = yield* observePlannedAttemptWorktreeThrough(gitWorktree, operation)
+                yield* cursor
+                  .observeDirectGitWorktreeResult(
+                    operation.plannedAttempt.taskId,
+                    operation.plannedAttempt.attemptId,
+                    result.observation,
+                    {
+                      operationId: operation.operationId,
+                      predecessorOperationIds: operation.predecessorOperationIds,
+                      operationKind: operation._tag,
+                      taskId: operation.plannedAttempt.taskId,
+                      attemptId: operation.plannedAttempt.attemptId
+                    }
+                  )
+                  .pipe(Effect.orDie)
+                return result
               }),
-            readTargetLineage: (operation) => observeTargetLineageThrough(authoredGitTargetLineage, operation),
+            readTargetLineage: (operation) =>
+              observeTargetLineageThrough(authoredGitTargetLineage, operation).pipe(
+                Effect.tap((result) =>
+                  cursor
+                    .observeDirectGitTargetLineageResult(
+                      operation.plannedAttempt.taskId,
+                      operation.plannedAttempt.attemptId,
+                      result.observation,
+                      {
+                        operationId: operation.operationId,
+                        predecessorOperationIds: operation.predecessorOperationIds,
+                        operationKind: operation._tag,
+                        taskId: operation.plannedAttempt.taskId,
+                        attemptId: operation.plannedAttempt.attemptId
+                      }
+                    )
+                    .pipe(Effect.orDie)
+                )
+              ),
             reconcileTaskWorktree: (operation) =>
               runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
                 Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))

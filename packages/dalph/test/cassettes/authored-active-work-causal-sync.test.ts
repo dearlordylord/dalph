@@ -15,6 +15,8 @@ import {
 import {
   FixtureTarget,
   OperationId,
+  PlannedWorktreeReady,
+  TargetLineageObservation,
   TrackerRevision,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
@@ -252,6 +254,92 @@ it.effect("binds direct Restart specification and claim only at their exact resp
     yield* cursor.consumeTrackerGraphFor(target, graphContext)
     expect(yield* cursor.consumeTaskWorkSpecificationFor(taskB, specContext)).toMatchObject({ taskId: taskB })
     expect(yield* cursor.consumeTaskClaimReadFor(taskB, claimContext)).toMatchObject({ value: { taskId: taskB } })
+    yield* cursor.consumeTerminalAssertions
+  })
+)
+
+it.effect("binds direct Git reads only after matching their actual results", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:B:0")
+    const worktree = Schema.decodeUnknownSync(PlannedWorktreeReady)({
+      _tag: "PlannedWorktreeReady",
+      baseSha: "1".repeat(40),
+      branch: "refs/heads/dalph/B",
+      headSha: "2".repeat(40),
+      worktree: "/dalph/B"
+    })
+    const lineage = Schema.decodeUnknownSync(TargetLineageObservation)({
+      plannedBaseSha: "1".repeat(40),
+      targetHeadSha: "2".repeat(40),
+      plannedBaseIsAncestorOfTargetHead: true
+    })
+    const story = [
+      AuthoredCassetteStoryItem.cases.DirectGitWorktreeReadReturned.make({
+        taskId: taskB,
+        attemptId,
+        observation: worktree
+      }),
+      AuthoredCassetteStoryItem.cases.DirectGitTargetLineageReadReturned.make({
+        taskId: taskB,
+        attemptId,
+        observation: lineage
+      }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        {
+          id: "worktree",
+          storyIndex: 0,
+          predecessorIds: [],
+          directGitRead: {
+            role: "restart-worktree",
+            kind: "ReadTaskWorktree",
+            taskId: taskB,
+            attemptId,
+            predecessorRoles: []
+          }
+        },
+        {
+          id: "lineage",
+          storyIndex: 1,
+          predecessorIds: ["worktree"],
+          directGitRead: {
+            role: "restart-lineage",
+            kind: "ReadTargetLineage",
+            taskId: taskB,
+            attemptId,
+            predecessorRoles: ["restart-worktree"]
+          }
+        }
+      ]
+    })
+    const worktreeContext = {
+      ...causalContext("operation:worktree", []),
+      operationKind: "ReadTaskWorktree" as const,
+      taskId: taskB,
+      attemptId
+    }
+    const lineageContext = {
+      ...causalContext("operation:lineage", ["operation:worktree"]),
+      operationKind: "ReadTargetLineage" as const,
+      taskId: taskB,
+      attemptId
+    }
+    const premature = yield* makeStoryCursor(story, { causalWindows: [window] })
+    expect(
+      yield* Effect.flip(premature.observeDirectGitTargetLineageResult(taskB, attemptId, lineage, lineageContext))
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const wrongResult = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const different = Schema.decodeUnknownSync(PlannedWorktreeReady)({ ...worktree, worktree: "/dalph/other" })
+    expect(
+      yield* Effect.flip(wrongResult.observeDirectGitWorktreeResult(taskB, attemptId, different, worktreeContext))
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    yield* cursor.observeDirectGitWorktreeResult(taskB, attemptId, worktree, worktreeContext)
+    yield* cursor.observeDirectGitTargetLineageResult(taskB, attemptId, lineage, lineageContext)
     yield* cursor.consumeTerminalAssertions
   })
 )

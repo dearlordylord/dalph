@@ -1,11 +1,13 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
-import { Deferred, Effect, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Equal, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
 import {
   IntegratorRunCorrelation,
   type TargetPromotionGitRequest,
   type IntegratorCandidateText,
   type OperationId,
+  type PlannedAttemptWorktreeObservation,
+  type TargetLineageObservation,
   type TrackerTarget,
   type WorkflowOperation
 } from "@dalph/orchestrator"
@@ -74,6 +76,7 @@ export interface AuthoredOperationCausalContext {
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
   readonly operationKind?: WorkflowOperation["_tag"] | undefined
   readonly taskId?: TaskId | undefined
+  readonly attemptId?: AttemptId | undefined
   readonly graphReadCause?:
     | Extract<WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>["cause"]["_tag"]
     | undefined
@@ -560,6 +563,18 @@ export interface StoryCursor {
     role: AuthoredCausalSelection["occurrenceRole"],
     context: AuthoredOperationCausalContext
   ) => Effect.Effect<void, AuthoredCausalSelectionFailure>
+  readonly observeDirectGitWorktreeResult: (
+    taskId: TaskId,
+    attemptId: AttemptId,
+    observation: PlannedAttemptWorktreeObservation,
+    context: AuthoredOperationCausalContext
+  ) => Effect.Effect<void, AuthoredCausalSelectionFailure>
+  readonly observeDirectGitTargetLineageResult: (
+    taskId: TaskId,
+    attemptId: AttemptId,
+    observation: TargetLineageObservation,
+    context: AuthoredOperationCausalContext
+  ) => Effect.Effect<void, AuthoredCausalSelectionFailure>
   /** Consume a targeted death only after its required journal event has become durable. */
   readonly pauseAtCoordinatorProcessDeathAfterJournalEvent: Effect.Effect<void>
   readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
@@ -655,6 +670,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         window.occurrences.map(
           ({
             directFocusedRead,
+            directGitRead,
             directGraphPredecessorRoles,
             directGraphRole,
             graphReadCause,
@@ -669,6 +685,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             predecessors: predecessorIds,
             value: {
               directFocusedRead,
+              directGitRead,
               storyIndex,
               ownerRole,
               graphReadCause,
@@ -931,6 +948,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             String(index),
             ({
               directFocusedRead,
+              directGitRead,
               directGraphPredecessorRoles,
               directGraphRole,
               graphReadCause,
@@ -975,6 +993,24 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                 if (
                   causalSelectionIssue(
                     { occurrenceRole: directFocusedRead.role, predecessorRoles: directFocusedRead.predecessorRoles },
+                    context,
+                    state.causal
+                  ) !== undefined
+                )
+                  return false
+              }
+              if (directGitRead !== undefined) {
+                if (
+                  context === undefined ||
+                  context.operationKind !== directGitRead.kind ||
+                  context.taskId !== directGitRead.taskId ||
+                  context.attemptId !== directGitRead.attemptId ||
+                  state.causal.byOperationId.has(String(context.operationId))
+                )
+                  return false
+                if (
+                  causalSelectionIssue(
+                    { occurrenceRole: directGitRead.role, predecessorRoles: directGitRead.predecessorRoles },
                     context,
                     state.causal
                   ) !== undefined
@@ -1075,6 +1111,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             if (context === undefined)
               return { _tag: "Failure" as const, detail: `direct focused result ${id} lacks raw identity`, index }
             causal = registerCausalSelection({ occurrenceRole: value.directFocusedRead.role }, context, causal)
+          } else if (value.directGitRead !== undefined) {
+            if (context === undefined)
+              return { _tag: "Failure" as const, detail: `direct Git result ${id} lacks raw identity`, index }
+            causal = registerCausalSelection({ occurrenceRole: value.directGitRead.role }, context, causal)
           }
           yield* Ref.set(exactCausalState, { ...state, causal })
           const nextConsumed = matched.frontier.consumed
@@ -2396,6 +2436,34 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (Option.isSome(causal)) return causal.value.item
     return yield* consumeTrackerGraph
   })
+  const observeDirectGitWorktreeResult: StoryCursor["observeDirectGitWorktreeResult"] = Effect.fn(
+    "AuthoredCassette.observeDirectGitWorktreeResult"
+  )(function* (taskId, attemptId, observation, context) {
+    const causal = yield* claimCausalWindow(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.DirectGitWorktreeReadReturned.Type =>
+        item?._tag === "DirectGitWorktreeReadReturned" && item.taskId === taskId && item.attemptId === attemptId,
+      context
+    )
+    if (Option.isSome(causal) && !Equal.equals(causal.value.item.observation, observation))
+      return yield* new AuthoredCausalSelectionFailure({
+        detail: `direct Git worktree result for ${attemptId} differs from the authored observation`,
+        storyPosition: causal.value.index
+      })
+  })
+  const observeDirectGitTargetLineageResult: StoryCursor["observeDirectGitTargetLineageResult"] = Effect.fn(
+    "AuthoredCassette.observeDirectGitTargetLineageResult"
+  )(function* (taskId, attemptId, observation, context) {
+    const causal = yield* claimCausalWindow(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.DirectGitTargetLineageReadReturned.Type =>
+        item?._tag === "DirectGitTargetLineageReadReturned" && item.taskId === taskId && item.attemptId === attemptId,
+      context
+    )
+    if (Option.isSome(causal) && !Equal.equals(causal.value.item.observation, observation))
+      return yield* new AuthoredCausalSelectionFailure({
+        detail: `direct Git target-lineage result for ${attemptId} differs from the authored observation`,
+        storyPosition: causal.value.index
+      })
+  })
   const registerAcceptedReplacementPlan: StoryCursor["registerAcceptedReplacementPlan"] = Effect.fn(
     "AuthoredCassette.registerAcceptedReplacementPlan"
   )(function* (role, context) {
@@ -2424,6 +2492,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       })
   })
   return {
+    observeDirectGitTargetLineageResult,
+    observeDirectGitWorktreeResult,
     registerAcceptedReplacementPlan,
     completeControlDirectionBeforeDeliveryActionAdmission: Effect.gen(function* () {
       const gate = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)

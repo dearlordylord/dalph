@@ -59,6 +59,8 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       DalphSelects: noLandmark,
       ExpectedBehavior: noLandmark,
       GitWorktreeObservationChanged: noLandmark,
+      DirectGitWorktreeReadReturned: noLandmark,
+      DirectGitTargetLineageReadReturned: noLandmark,
       GitPlannedWorktreeCreateResponseLost: noLandmark,
       IntegratorRequestReceived: noLandmark,
       OperatorAppliesIntegrationQuarantineDirection: noLandmark,
@@ -467,6 +469,10 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,
+      DirectGitWorktreeReadReturned: (item) =>
+        `Git returns ${item.observation._tag} for task ${item.taskId} attempt ${item.attemptId}'s direct worktree read.`,
+      DirectGitTargetLineageReadReturned: (item) =>
+        `Git returns target lineage for task ${item.taskId} attempt ${item.attemptId}'s direct read.`,
       CompletionTaskFocusedReadReturned: (item) =>
         `The task tracker reports task ${item.taskId} ${item.lifecycle} with ${item.unfinishedPrerequisiteTaskIds.length} unfinished prerequisites in the focused completion read.`,
       CompletionTaskRequestReturned: (item) =>
@@ -585,10 +591,14 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
         causal?.directFocusedRead === undefined
           ? ""
           : `; direct ${causal.directFocusedRead.kind} for task ${causal.directFocusedRead.taskId} binds ${causal.directFocusedRead.role} after ${causal.directFocusedRead.predecessorRoles.join(", ") || "no operation predecessor"}`
+      const directGitRead =
+        causal?.directGitRead === undefined
+          ? ""
+          : `; direct ${causal.directGitRead.kind} for task ${causal.directGitRead.taskId} attempt ${causal.directGitRead.attemptId} binds ${causal.directGitRead.role} after ${causal.directGitRead.predecessorRoles.join(", ") || "no operation predecessor"}`
       const graphReadCause = causal?.graphReadCause === undefined ? "" : `; graph read cause ${causal.graphReadCause}`
       return causal === undefined
         ? lyric
-        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${directFocusedRead}${graphReadCause}${graphReadCoverage}.`
+        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${directFocusedRead}${directGitRead}${graphReadCause}${graphReadCoverage}.`
     })
   ].join("\n")
 }
