@@ -5,23 +5,41 @@ import { AuthoredScenarioCassette } from "../../src/cassettes/authored-domain.js
 import { activeWorkF2SafelySuspendsAuthoredCassette } from "../../src/cassettes/catalog.js"
 import { runAuthoredScenarioCassette } from "../../src/cassettes/authored-runner.js"
 
+const rewriteForLaterNotification = (
+  item: (typeof activeWorkF2SafelySuspendsAuthoredCassette.story)[number]
+): ReadonlyArray<unknown> => {
+  if (item._tag === "CoordinatorProcessDies") return []
+  if (item._tag === "CassettePublishesCurrentTrackerNotification") {
+    return [
+      { _tag: "CassetteOffersRunReactivationHints", hints: ["TrackerNotification"] },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      {
+        _tag: "TrackerGraphReadReturned",
+        graph: activeWorkF2SafelySuspendsAuthoredCassette.startingFacts.trackerGraph
+      },
+      { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } }
+    ]
+  }
+  return [item]
+}
+const activeWorkF2Window = activeWorkF2SafelySuspendsAuthoredCassette.causalWindows?.[0]
+const activeWorkF2WindowStart = activeWorkF2Window?.startIndex ?? 0
+const explicitLaterNotificationWindowStart = activeWorkF2SafelySuspendsAuthoredCassette.story
+  .slice(0, activeWorkF2WindowStart)
+  .flatMap(rewriteForLaterNotification).length
+const windowIndexShift = explicitLaterNotificationWindowStart - activeWorkF2WindowStart
 const explicitLaterNotification = {
   ...activeWorkF2SafelySuspendsAuthoredCassette,
-  story: activeWorkF2SafelySuspendsAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
-    if (item._tag === "CoordinatorProcessDies") return []
-    if (item._tag === "CassettePublishesCurrentTrackerNotification") {
-      return [
-        { _tag: "CassetteOffersRunReactivationHints", hints: ["TrackerNotification"] },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-        {
-          _tag: "TrackerGraphReadReturned",
-          graph: activeWorkF2SafelySuspendsAuthoredCassette.startingFacts.trackerGraph
-        },
-        { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } }
-      ]
-    }
-    return [item]
-  })
+  story: activeWorkF2SafelySuspendsAuthoredCassette.story.flatMap(rewriteForLaterNotification),
+  causalWindows: (activeWorkF2SafelySuspendsAuthoredCassette.causalWindows ?? []).map((window) => ({
+    ...window,
+    startIndex: window.startIndex + windowIndexShift,
+    endIndex: window.endIndex + windowIndexShift,
+    occurrences: window.occurrences.map((occurrence) => ({
+      ...occurrence,
+      storyIndex: occurrence.storyIndex + windowIndexShift
+    }))
+  }))
 }
 
 it.effect("installs one owner before a later explicit notification without inventing a startup notification", () =>
@@ -67,6 +85,7 @@ it.effect("consumes each idle-boundary process death once before installing the 
     const restartReconfirmationItemOffset = 3
     const cassette = {
       ...explicitLaterNotification,
+      causalWindows: [],
       story: [
         ...startingCassette.story.slice(
           0,

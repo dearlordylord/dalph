@@ -10,7 +10,19 @@ import {
 } from "@dalph/orchestrator"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
-import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
+import {
+  AuthoredCassetteStoryItem,
+  type AuthoredConcurrentTrackerRead,
+  type AuthoredOrchestrationEvidence
+} from "./authored-domain.js"
+import { authorCausalWindow, type AuthoredCausalBoundaryNode } from "./authored-causal-authoring.js"
+import {
+  AuthoredOccurrenceId,
+  authoredOccurrence,
+  parallelAuthored,
+  sequenceAuthored,
+  type AuthoredOccurrencePlan
+} from "./authored-causal-graph.js"
 import { deliveryStoryCapstoneAuthoredCassette } from "./delivery-story-capstone.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
@@ -2738,10 +2750,8 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
   ]
 })
 
-/** Alice's F2 edit reaches the exact active B1 refresh through the production reactivation owner. */
-export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
+/** The predecessor catalog entry is decoded before replacing its tracker batch with a causal window. */
+const activeWorkF2BatchSource: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "notification and timer coalesce before B1 safely suspends for F2",
   startingFacts: {
@@ -2864,6 +2874,45 @@ export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Sche
       taskWork: { absences: [], results: [] }
     }
   ]
+})
+
+const activeWorkF2BatchIndex = activeWorkF2BatchSource.story.findIndex(
+  (item) => item._tag === "ConcurrentTrackerReadBatch"
+)
+const activeWorkF2Batch = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)(
+  activeWorkF2BatchSource.story[activeWorkF2BatchIndex]
+)
+const activeWorkF2ReadPlan = (
+  member: AuthoredConcurrentTrackerRead
+): AuthoredOccurrencePlan<AuthoredCausalBoundaryNode> => {
+  const role = AuthoredOccurrenceId.make(String(member.causal.occurrenceRole))
+  return sequenceAuthored(
+    authoredOccurrence(role, {
+      item: decodeStoryItem({ _tag: "DalphSelects", operation: member.operation, causal: member.causal })
+    }),
+    authoredOccurrence(AuthoredOccurrenceId.make(`${role}:result`), {
+      item: decodeStoryItem(member.result),
+      ownerRole: role
+    })
+  )
+}
+const [activeWorkF2FirstRead, ...activeWorkF2OtherReads] = activeWorkF2Batch.members
+const activeWorkF2CausalWindow = authorCausalWindow(
+  activeWorkF2BatchIndex,
+  parallelAuthored(activeWorkF2ReadPlan(activeWorkF2FirstRead), ...activeWorkF2OtherReads.map(activeWorkF2ReadPlan))
+)
+
+/** Alice's F2 edit reaches the exact active B1 refresh through a general causal boundary window. */
+export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...activeWorkF2BatchSource,
+  story: [
+    ...activeWorkF2BatchSource.story.slice(0, activeWorkF2BatchIndex),
+    ...activeWorkF2CausalWindow.story,
+    ...activeWorkF2BatchSource.story.slice(activeWorkF2BatchIndex + 1)
+  ],
+  causalWindows: [activeWorkF2CausalWindow.window]
 })
 
 /** Accepted executor output remains ordered by journal position and starts integration in the next activation. */
