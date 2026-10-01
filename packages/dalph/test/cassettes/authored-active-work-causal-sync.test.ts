@@ -89,28 +89,46 @@ const terminal = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
   taskWork: { absences: [], results: [] }
 })
 
-const sameShapeBatch = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
-  _tag: "ConcurrentTrackerReadBatch",
-  members: [
-    {
-      causal: causal({ occurrenceRole: "independent-B-F1", predecessorRoles: ["independent-G0"] }),
-      operation: readBSpecification,
-      result: { _tag: "TaskWorkSpecificationReadReturned", body: "Implement B from F1.", taskId: taskB, title: "B F1" }
-    },
-    {
-      causal: causal({ occurrenceRole: "active-B-F2", predecessorRoles: ["active-G1"] }),
-      operation: readBSpecification,
-      result: { _tag: "TaskWorkSpecificationReadReturned", body: "Implement B from F2.", taskId: taskB, title: "B F2" }
-    }
-  ]
-})
-
 const causalPrefix = [
   selection("independent-G0", []),
   graphResult("G0"),
   selection("active-G1", []),
   graphResult("G1")
 ] as const
+
+const sameShapeWindow = authorCausalWindow(
+  4,
+  parallelAuthored(
+    sequenceAuthored(
+      authoredOccurrence(AuthoredOccurrenceId.make("independent-B-F1"), {
+        item: selection("independent-B-F1", ["independent-G0"], readBSpecification)
+      }),
+      authoredOccurrence(AuthoredOccurrenceId.make("independent-B-F1:result"), {
+        item: AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make({
+          body: "Implement B from F1.",
+          taskId: taskB,
+          title: "B F1"
+        }),
+        ownerRole: AuthoredOccurrenceId.make("independent-B-F1")
+      })
+    ),
+    sequenceAuthored(
+      authoredOccurrence(AuthoredOccurrenceId.make("active-B-F2"), {
+        item: selection("active-B-F2", ["active-G1"], readBSpecification)
+      }),
+      authoredOccurrence(AuthoredOccurrenceId.make("active-B-F2:result"), {
+        item: AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make({
+          body: "Implement B from F2.",
+          taskId: taskB,
+          title: "B F2"
+        }),
+        ownerRole: AuthoredOccurrenceId.make("active-B-F2")
+      })
+    )
+  )
+)
+const sameShapeStory = [...causalPrefix, ...sameShapeWindow.story, terminal]
+const sameShapeOptions = { causalWindows: [sameShapeWindow.window] }
 
 const bindCausalPrefix = Effect.fn("AuthoredCassetteTest.bindCausalPrefix")(function* (cursor: StoryCursor) {
   yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G0", []))
@@ -296,48 +314,38 @@ it.effect("runs a catalog cassette with a causally authored tracker boundary", (
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("validates concurrent read roles before the first boundary call", () =>
+it.effect("rejects duplicate causal occurrence IDs before the first boundary call", () =>
   Effect.gen(function* () {
-    const duplicateRoles = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
-      _tag: "ConcurrentTrackerReadBatch",
-      members: [
-        {
-          causal: causal({ occurrenceRole: "same", predecessorRoles: [] }),
-          operation: readGraph,
-          result: { _tag: "TrackerGraphReadReturned", graph: graph("G0") }
-        },
-        {
-          causal: causal({ occurrenceRole: "same", predecessorRoles: [] }),
-          operation: readGraph,
-          result: { _tag: "TrackerGraphReadReturned", graph: graph("G1") }
-        }
+    const duplicate = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "same", storyIndex: 0, predecessorIds: [] },
+        { id: "same", storyIndex: 1, predecessorIds: [] }
       ]
     })
-    const cursor = yield* makeStoryCursor([duplicateRoles, terminal])
-    const failure = yield* Effect.flip(cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G0", [])))
-    expect(failure).toMatchObject({ detail: "duplicate occurrence same" })
-    expect(yield* cursor.storyPosition).toBe(0)
+    const exit = yield* Effect.exit(
+      makeStoryCursor([selection("first", []), selection("second", []), terminal], { causalWindows: [duplicate] })
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("AuthoredOccurrenceGraphFailure")
   })
 )
 
 it.effect("rejects two enabled same-shaped concurrent reads without choosing array order", () =>
   Effect.gen(function* () {
-    const ambiguous = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
-      _tag: "ConcurrentTrackerReadBatch",
-      members: [
-        {
-          causal: causal({ occurrenceRole: "first", predecessorRoles: [] }),
-          operation: readGraph,
-          result: { _tag: "TrackerGraphReadReturned", graph: graph("G0") }
-        },
-        {
-          causal: causal({ occurrenceRole: "second", predecessorRoles: [] }),
-          operation: readGraph,
-          result: { _tag: "TrackerGraphReadReturned", graph: graph("G1") }
-        }
-      ]
-    })
-    const cursor = yield* makeStoryCursor([ambiguous, terminal])
+    const ambiguous = authorCausalWindow(
+      0,
+      parallelAuthored(
+        authoredOccurrence(AuthoredOccurrenceId.make("first"), {
+          item: AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph })
+        }),
+        authoredOccurrence(AuthoredOccurrenceId.make("second"), {
+          item: AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph })
+        })
+      )
+    )
+    const cursor = yield* makeStoryCursor([...ambiguous.story, terminal], { causalWindows: [ambiguous.window] })
     const failure = yield* Effect.flip(cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G0", [])))
     expect(failure.detail).toContain("ambiguous enabled occurrences: first, second")
     expect(yield* cursor.storyPosition).toBe(0)
@@ -346,17 +354,19 @@ it.effect("rejects two enabled same-shaped concurrent reads without choosing arr
 
 it.effect("binds an exact operation anchor without revalidating its earlier Journal-owned ancestry", () =>
   Effect.gen(function* () {
-    const checked = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
-      _tag: "ConcurrentTrackerReadBatch",
-      members: [
-        {
-          causal: causal({ occurrenceRole: "active-G1", predecessorRoles: ["plan-B-F1"] }),
-          operation: readGraph,
-          result: { _tag: "TrackerGraphReadReturned", graph: graph("G1") }
-        }
-      ]
-    })
-    const cursor = yield* makeStoryCursor([anchorSelection("plan-B-F1", readBSpecification), checked, terminal])
+    const checked = authorCausalWindow(
+      1,
+      sequenceAuthored(
+        authoredOccurrence(AuthoredOccurrenceId.make("active-G1"), { item: selection("active-G1", ["plan-B-F1"]) }),
+        authoredOccurrence(AuthoredOccurrenceId.make("active-G1:result"), {
+          item: graphResult("G1"),
+          ownerRole: AuthoredOccurrenceId.make("active-G1")
+        })
+      )
+    )
+    const story = [anchorSelection("plan-B-F1", readBSpecification), ...checked.story, terminal]
+    const options = { causalWindows: [checked.window] }
+    const cursor = yield* makeStoryCursor(story, options)
     const plan = causalContext("operation:plan-B", ["operation:historical-graph", "operation:claim-B"])
     yield* cursor.consumeDalphSelectionFor(readBSpecification, plan)
     yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G1", ["operation:plan-B"]))
@@ -369,7 +379,7 @@ it.effect("binds an exact operation anchor without revalidating its earlier Jour
       ["operation:plan-B", "operation:extra"],
       ["operation:historical-graph"]
     ]) {
-      const failing = yield* makeStoryCursor([anchorSelection("plan-B-F1", readBSpecification), checked, terminal])
+      const failing = yield* makeStoryCursor(story, options)
       yield* failing.consumeDalphSelectionFor(readBSpecification, plan)
       const exit = yield* Effect.exit(
         failing.consumeDalphSelectionFor(readGraph, causalContext("operation:G1:invalid", predecessors))
@@ -382,7 +392,7 @@ it.effect("binds an exact operation anchor without revalidating its earlier Jour
 
 it.effect("binds authored roles at the real operation-selection trace seam", () =>
   Effect.gen(function* () {
-    const cursor = yield* makeStoryCursor([...causalPrefix, sameShapeBatch, terminal])
+    const cursor = yield* makeStoryCursor(sameShapeStory, sameShapeOptions)
     const trace = controlledTrace(cursor)
     const g0 = makeTrackerGraphObservationOperation(
       { _tag: "WorkflowEstablishment" },
@@ -419,13 +429,13 @@ it.effect("binds authored roles at the real operation-selection trace seam", () 
     expect((yield* consumeControlledTaskWorkSpecification(cursor, taskB, contextOf(f1))).title).toBe("B F1")
     boundaryOrder.push("Return F1")
     expect(boundaryOrder).toEqual(["Select F1", "Select F2", "Return F2", "Return F1"])
-    expect(yield* cursor.storyPosition).toBe(causalPrefix.length + 1)
+    expect(yield* cursor.storyPosition).toBe(causalPrefix.length + sameShapeWindow.story.length)
   })
 )
 
 it.effect("selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations", () =>
   Effect.gen(function* () {
-    const cursor = yield* makeStoryCursor([...causalPrefix, sameShapeBatch, terminal])
+    const cursor = yield* makeStoryCursor(sameShapeStory, sameShapeOptions)
     yield* bindCausalPrefix(cursor)
 
     const activeF2 = causalContext("operation:B:F2", ["operation:G1"])
@@ -443,7 +453,7 @@ it.effect("selects F1 then F2 and pairs reverse-completing reads with their exac
     expect((yield* cursor.consumeTaskWorkSpecificationFor(taskB, independentF1)).title).toBe("B F1")
     boundaryOrder.push("Return F1")
     expect(boundaryOrder).toEqual(["Select F1", "Select F2", "Return F2", "Return F1"])
-    expect(yield* cursor.storyPosition).toBe(causalPrefix.length + 1)
+    expect(yield* cursor.storyPosition).toBe(causalPrefix.length + sameShapeWindow.story.length)
 
     const duplicate = yield* Effect.exit(cursor.consumeDalphSelectionFor(readBSpecification, activeF2))
     expect(Exit.isFailure(duplicate)).toBe(true)
@@ -463,7 +473,7 @@ it.effect("fails closed for missing crossed foreign and duplicate causal relatio
     ]
 
     for (const context of cases) {
-      const cursor = yield* makeStoryCursor([...causalPrefix, sameShapeBatch, terminal])
+      const cursor = yield* makeStoryCursor(sameShapeStory, sameShapeOptions)
       yield* bindCausalPrefix(cursor)
       const exit = yield* Effect.exit(cursor.consumeDalphSelectionFor(readBSpecification, context))
       expect(Exit.isFailure(exit)).toBe(true)
@@ -471,7 +481,7 @@ it.effect("fails closed for missing crossed foreign and duplicate causal relatio
       expect(yield* cursor.storyPosition).toBe(causalPrefix.length)
     }
 
-    const duplicateOwner = yield* makeStoryCursor([...causalPrefix, sameShapeBatch, terminal])
+    const duplicateOwner = yield* makeStoryCursor(sameShapeStory, sameShapeOptions)
     yield* bindCausalPrefix(duplicateOwner)
     const first = causalContext("operation:B:duplicate", ["operation:G1"])
     yield* duplicateOwner.consumeDalphSelectionFor(readBSpecification, first)
@@ -489,7 +499,7 @@ it.effect("fails closed for missing crossed foreign and duplicate causal relatio
 it.effect("drains repeatedly forked exact read operations without resetting the story position", () =>
   Effect.gen(function* () {
     for (const activeFirst of [true, false, true, false]) {
-      const cursor = yield* makeStoryCursor([...causalPrefix, sameShapeBatch, terminal])
+      const cursor = yield* makeStoryCursor(sameShapeStory, sameShapeOptions)
       yield* bindCausalPrefix(cursor)
       const activeF2 = causalContext(`operation:B:F2:${activeFirst}`, ["operation:G1"])
       const independentF1 = causalContext(`operation:B:F1:${activeFirst}`, ["operation:G0"])
@@ -504,7 +514,7 @@ it.effect("drains repeatedly forked exact read operations without resetting the 
         { concurrency: "unbounded" }
       )
 
-      expect(yield* cursor.storyPosition).toBe(causalPrefix.length + 1)
+      expect(yield* cursor.storyPosition).toBe(causalPrefix.length + sameShapeWindow.story.length)
       expect(yield* cursor.consumeTerminalAssertions).toEqual(terminal)
     }
   })

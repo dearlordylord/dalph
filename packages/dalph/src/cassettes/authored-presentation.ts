@@ -56,7 +56,6 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteAwaitsSafeContinuationRevalidationPublication: noLandmark,
       CassettePublishesCurrentTrackerNotification: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
-      ConcurrentTrackerReadBatch: noLandmark,
       DalphSelects: noLandmark,
       ExpectedBehavior: noLandmark,
       GitWorktreeObservationChanged: noLandmark,
@@ -465,8 +464,6 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         "The tracker notification source publishes its current value when the restarted Run reactivation owner attaches.",
       CassetteReleasesHeldTaskWorkSpecificationRead: (item) =>
         `The cassette releases task ${item.taskId}'s held specification read.`,
-      ConcurrentTrackerReadBatch: (item) =>
-        `The cassette accepts ${item.members.length} causally named tracker reads in either completion order.`,
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,

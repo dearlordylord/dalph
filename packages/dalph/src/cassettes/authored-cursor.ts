@@ -13,8 +13,6 @@ import {
   type AuthoredCassetteDecision as CassetteDecision,
   AuthoredCassetteDecision,
   type AuthoredCausalSelection,
-  type AuthoredConcurrentTrackerRead,
-  type AuthoredConcurrentTrackerReadResult,
   type AuthoredCausalWindow,
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
@@ -37,11 +35,10 @@ import {
 } from "./authored-cursor-items.js"
 import {
   AuthoredOccurrenceGraphFailure,
-  AuthoredOccurrenceId,
+  type AuthoredOccurrenceId,
   AuthoredOccurrenceMatchFailure,
   compileAuthoredOccurrenceGraph,
-  matchAuthoredOccurrence,
-  type AuthoredOccurrenceGraph
+  matchAuthoredOccurrence
 } from "./authored-causal-graph.js"
 
 export class AuthoredCassetteInteractionMismatch extends Schema.TaggedError<AuthoredCassetteInteractionMismatch>()(
@@ -70,12 +67,6 @@ export class AuthoredCausalSelectionFailure extends Schema.TaggedError<AuthoredC
   { detail: Schema.String, storyPosition: Schema.Int }
 ) {}
 
-/** A concurrent cassette read was missing, duplicated, crossed, or consumed twice. */
-class AuthoredConcurrentReadBatchFailure extends Schema.TaggedError<AuthoredConcurrentReadBatchFailure>()(
-  "AuthoredConcurrentReadBatchFailure",
-  { detail: Schema.String, storyPosition: Schema.Int }
-) {}
-
 /** Raw operation identity observed at the real WorkflowTrace selection seam. */
 export interface AuthoredOperationCausalContext {
   readonly operationId: OperationId
@@ -96,10 +87,7 @@ export class AuthoredCoordinatorProcessDies extends Schema.TaggedError<AuthoredC
 ) {}
 
 type CursorFailure = AuthoredCassetteInteractionMismatch
-type ExactCausalCursorFailure =
-  | AuthoredCassetteInteractionMismatch
-  | AuthoredCausalSelectionFailure
-  | AuthoredConcurrentReadBatchFailure
+type ExactCausalCursorFailure = AuthoredCassetteInteractionMismatch | AuthoredCausalSelectionFailure
 type OuterIntegratorGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed.Type
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type
@@ -641,28 +629,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           )(freshTaskClaimSelectionHoldItems[0]).pipe(Effect.orDie)
         )
   const exactCausalStory = story.some(
-    (item) =>
-      item._tag === "ConcurrentTrackerReadBatch" ||
-      (item._tag === "DalphSelects" && (item.causal !== undefined || item.causalAnchor !== undefined))
+    (item) => item._tag === "DalphSelects" && (item.causal !== undefined || item.causalAnchor !== undefined)
   )
   const position = yield* SubscriptionRef.make(0)
   const transition = yield* Semaphore.make(1)
-  interface ConcurrentTrackerReadMemberState {
-    readonly context?: AuthoredOperationCausalContext
-    readonly member: AuthoredConcurrentTrackerRead
-    readonly resultConsumed: boolean
-  }
-  interface ConcurrentTrackerReadBatchState {
-    readonly index: number
-    readonly selectionGraph: AuthoredOccurrenceGraph<number | null>
-    readonly members: ReadonlyArray<ConcurrentTrackerReadMemberState>
-  }
   interface CausalRegistry {
     readonly byOperationId: ReadonlyMap<string, string>
     readonly byRole: ReadonlyMap<string, AuthoredOperationCausalContext>
   }
   interface ExactCausalCursorState {
-    readonly batch?: ConcurrentTrackerReadBatchState
     readonly causal: CausalRegistry
   }
   const exactCausalState = yield* Ref.make<ExactCausalCursorState>({
@@ -837,249 +812,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     byOperationId: new Map(registry.byOperationId).set(String(context.operationId), String(causal.occurrenceRole)),
     byRole: new Map(registry.byRole).set(String(causal.occurrenceRole), context)
   })
-
-  const concurrentBatchFailure = (detail: string, storyPosition: number) =>
-    new AuthoredConcurrentReadBatchFailure({ detail, storyPosition })
-
-  const currentConcurrentTrackerReadBatch = Effect.fn("AuthoredCassette.currentConcurrentTrackerReadBatch")(
-    function* () {
-      return yield* transition.withPermits(1)(
-        Effect.gen(function* () {
-          const index = yield* SubscriptionRef.get(position)
-          const item = story[index]
-          if (item?._tag !== "ConcurrentTrackerReadBatch") return undefined
-          const current = yield* Ref.get(exactCausalState)
-          if (current.batch?.index === index) return current.batch
-          if (current.batch !== undefined) {
-            return yield* concurrentBatchFailure(
-              `concurrent tracker-read batch at story position ${current.batch.index} has not drained`,
-              index
-            )
-          }
-          const memberRoles = new Set(item.members.map(({ causal }) => String(causal.occurrenceRole)))
-          const externalRoles = new Set(
-            item.members.flatMap(({ causal }) =>
-              causal.predecessorRoles.filter((role) => !memberRoles.has(String(role))).map(String)
-            )
-          )
-          const selectionGraph = compileAuthoredOccurrenceGraph<number | null>([
-            ...[...externalRoles].map((role) => ({
-              id: AuthoredOccurrenceId.make(role),
-              predecessors: [],
-              value: null
-            })),
-            ...item.members.map((member, memberIndex) => ({
-              id: AuthoredOccurrenceId.make(String(member.causal.occurrenceRole)),
-              predecessors: member.causal.predecessorRoles.map((role) => AuthoredOccurrenceId.make(String(role))),
-              value: memberIndex
-            }))
-          ])
-          if (selectionGraph instanceof AuthoredOccurrenceGraphFailure) {
-            return yield* concurrentBatchFailure(selectionGraph.detail, index)
-          }
-          const batch: ConcurrentTrackerReadBatchState = {
-            index,
-            selectionGraph,
-            members: item.members.map((member) => ({ member, resultConsumed: false }))
-          }
-          yield* Ref.set(exactCausalState, { ...current, batch })
-          return batch
-        })
-      )
-    }
-  )
-
-  const advanceConcurrentTrackerReadBatch = (batch: ConcurrentTrackerReadBatchState) =>
-    Effect.gen(function* () {
-      const advanced = yield* transition.withPermits(1)(
-        Effect.gen(function* () {
-          const current = yield* Ref.get(exactCausalState)
-          if (current.batch?.index !== batch.index) return false
-          if (current.batch.members.some(({ context, resultConsumed }) => context === undefined || !resultConsumed)) {
-            return false
-          }
-          yield* Ref.set(exactCausalState, { causal: current.causal })
-          yield* SubscriptionRef.set(position, batch.index + 1)
-          return true
-        })
-      )
-      if (!advanced) return
-      const item = story[batch.index]
-      if (item !== undefined) yield* options.onOccurrence?.({ item, storyPosition: batch.index + 1 }) ?? Effect.void
-      yield* announceTerminalAssertions
-    })
-
-  const consumeConcurrentTrackerReadSelection = Effect.fn("AuthoredCassette.consumeConcurrentTrackerReadSelection")(
-    function* (operation: CassetteDecision, context: AuthoredOperationCausalContext | undefined) {
-      const batch = yield* currentConcurrentTrackerReadBatch()
-      if (batch === undefined) return Option.none<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type>()
-      type SelectionResult =
-        | { readonly _tag: "Failure"; readonly causal: boolean; readonly detail: string }
-        | {
-            readonly _tag: "Selected"
-            readonly batch: ConcurrentTrackerReadBatchState
-            readonly selection: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type
-          }
-      const candidateIndexes = (current: ConcurrentTrackerReadBatchState, state: ExactCausalCursorState) => {
-        const structural = current.members.flatMap(({ member }, index) =>
-          cassetteDecisionMatches(member.operation, operation) ? [index] : []
-        )
-        const unclaimed = structural.filter((index) => current.members[index]?.context === undefined)
-        const frontier = {
-          consumed: new Set([...state.causal.byRole.keys()].map((role) => AuthoredOccurrenceId.make(role)))
-        }
-        const matched = matchAuthoredOccurrence(
-          current.selectionGraph,
-          frontier,
-          JSON.stringify(operation),
-          (memberIndex) => {
-            const candidate = memberIndex === null ? undefined : current.members[memberIndex]
-            return (
-              candidate !== undefined &&
-              candidate.context === undefined &&
-              cassetteDecisionMatches(candidate.member.operation, operation) &&
-              causalSelectionIssue(candidate.member.causal, context, state.causal) === undefined
-            )
-          }
-        )
-        const eligible =
-          matched instanceof AuthoredOccurrenceMatchFailure || matched.occurrence.value === null
-            ? []
-            : [matched.occurrence.value]
-        const ambiguity =
-          matched instanceof AuthoredOccurrenceMatchFailure &&
-          matched.detail.startsWith("ambiguous enabled occurrences")
-            ? matched.detail
-            : undefined
-        return { ambiguity, eligible, structural, unclaimed }
-      }
-      const failedSelection = (
-        current: ConcurrentTrackerReadBatchState,
-        state: ExactCausalCursorState,
-        indexes: ReturnType<typeof candidateIndexes>
-      ): SelectionResult => {
-        const candidate = indexes.unclaimed[0] === undefined ? undefined : current.members[indexes.unclaimed[0]]
-        const causalDetail =
-          candidate === undefined ? undefined : causalSelectionIssue(candidate.member.causal, context, state.causal)
-        const detail =
-          indexes.structural.length === 0
-            ? `unlisted concurrent tracker read ${JSON.stringify(operation)}`
-            : indexes.unclaimed.length === 0
-              ? `duplicate concurrent tracker read ${JSON.stringify(operation)}`
-              : indexes.ambiguity !== undefined
-                ? indexes.ambiguity
-                : (causalDetail ?? `concurrent tracker read ${JSON.stringify(operation)} has no exact causal owner`)
-        return { _tag: "Failure", causal: causalDetail !== undefined, detail }
-      }
-      const result = yield* transition.withPermits(1)(
-        Ref.modify(exactCausalState, (state): readonly [SelectionResult, ExactCausalCursorState] => {
-          const current = state.batch
-          if (current?.index !== batch.index) {
-            return [{ _tag: "Failure", causal: false, detail: "the concurrent tracker-read batch disappeared" }, state]
-          }
-          const indexes = candidateIndexes(current, state)
-          if (indexes.eligible.length !== 1) return [failedSelection(current, state, indexes), state]
-          const memberIndex = indexes.eligible[0]
-          const member = memberIndex === undefined ? undefined : current.members[memberIndex]
-          if (member === undefined || context === undefined) {
-            return [{ _tag: "Failure", causal: true, detail: "the exact causal owner is missing" }, state]
-          }
-          const nextBatch: ConcurrentTrackerReadBatchState = {
-            ...current,
-            members: current.members.map((candidate, index) =>
-              index === memberIndex ? { ...candidate, context } : candidate
-            )
-          }
-          return [
-            {
-              _tag: "Selected",
-              batch: nextBatch,
-              selection: AuthoredCassetteStoryItem.cases.DalphSelects.make({
-                causal: member.member.causal,
-                operation: member.member.operation
-              })
-            },
-            { batch: nextBatch, causal: registerCausalSelection(member.member.causal, context, state.causal) }
-          ]
-        })
-      )
-      if (result._tag === "Failure") {
-        return yield* result.causal
-          ? new AuthoredCausalSelectionFailure({ detail: result.detail, storyPosition: batch.index })
-          : concurrentBatchFailure(result.detail, batch.index)
-      }
-      yield* advanceConcurrentTrackerReadBatch(result.batch)
-      return Option.some(result.selection)
-    }
-  )
-
-  const storyItemFromConcurrentTrackerReadResult = (result: AuthoredConcurrentTrackerReadResult): StoryItem => {
-    switch (result._tag) {
-      case "TaskWorkSpecificationReadReturned":
-        return AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make(result)
-      case "TrackerGraphReadFailed":
-        return AuthoredCassetteStoryItem.cases.TrackerGraphReadFailed.make(result)
-      case "TrackerGraphReadReturned":
-        return AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.make(result)
-    }
-  }
-
-  const consumeConcurrentTrackerReadResult = Effect.fn("AuthoredCassette.consumeConcurrentTrackerReadResult")(
-    function* (
-      context: AuthoredOperationCausalContext | undefined,
-      matches: (member: AuthoredConcurrentTrackerRead) => boolean
-    ) {
-      const batch = yield* currentConcurrentTrackerReadBatch()
-      if (batch === undefined) return Option.none<StoryItem>()
-      if (context === undefined) {
-        return yield* new AuthoredCausalSelectionFailure({
-          detail: "a concurrent tracker-read result requires its initiating operation identity",
-          storyPosition: batch.index
-        })
-      }
-      type Result =
-        | { readonly _tag: "Failure"; readonly detail: string }
-        | { readonly _tag: "Result"; readonly batch: ConcurrentTrackerReadBatchState; readonly item: StoryItem }
-      const result: Result = yield* transition.withPermits(1)(
-        Ref.modify(exactCausalState, (state): readonly [Result, ExactCausalCursorState] => {
-          const current = state.batch
-          if (current?.index !== batch.index) {
-            return [{ _tag: "Failure", detail: "the concurrent tracker-read batch disappeared" }, state]
-          }
-          const matchesByOwner = current.members.flatMap((candidate, index) =>
-            candidate.context?.operationId === context.operationId && matches(candidate.member) ? [index] : []
-          )
-          if (matchesByOwner.length !== 1) {
-            return [
-              { _tag: "Failure", detail: `missing duplicate or crossed result for operation ${context.operationId}` },
-              state
-            ]
-          }
-          const memberIndex = matchesByOwner[0]
-          const member = memberIndex === undefined ? undefined : current.members[memberIndex]
-          if (member === undefined || member.resultConsumed) {
-            return [
-              { _tag: "Failure", detail: `result for operation ${context.operationId} was already consumed` },
-              state
-            ]
-          }
-          const nextBatch: ConcurrentTrackerReadBatchState = {
-            ...current,
-            members: current.members.map((candidate, index) =>
-              index === memberIndex ? { ...candidate, resultConsumed: true } : candidate
-            )
-          }
-          return [
-            { _tag: "Result", batch: nextBatch, item: storyItemFromConcurrentTrackerReadResult(member.member.result) },
-            { ...state, batch: nextBatch }
-          ]
-        })
-      )
-      if (result._tag === "Failure") return yield* concurrentBatchFailure(result.detail, batch.index)
-      yield* advanceConcurrentTrackerReadBatch(result.batch)
-      return Option.some(result.item)
-    }
-  )
 
   const consumeStandaloneCausalSelection = Effect.fn("AuthoredCassette.consumeStandaloneCausalSelection")(function* (
     operation: CassetteDecision,
@@ -1464,8 +1196,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
     if (Option.isSome(causalWindow)) return causalWindow.value.item
     if (exactCausalStory) {
-      const concurrent = yield* consumeConcurrentTrackerReadSelection(operation, context)
-      if (Option.isSome(concurrent)) return concurrent.value
       const causal = yield* consumeStandaloneCausalSelection(operation, context)
       if (Option.isSome(causal)) return causal.value
     }
@@ -2397,15 +2127,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       context
     )
     if (Option.isSome(causal)) return causal.value.item
-    const concurrent = yield* consumeConcurrentTrackerReadResult(
-      context,
-      (member) => member.operation._tag === "ReadTaskWorkSpecification" && member.operation.taskId === taskId
-    )
-    if (Option.isSome(concurrent)) {
-      return yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned)(
-        concurrent.value
-      ).pipe(Effect.orDie)
-    }
     const result = yield* consumeTaskWorkSpecification
     if (result.taskId !== taskId) {
       return yield* new AuthoredCassetteInteractionMismatch({
@@ -2553,7 +2274,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTrackerGraph = consumeTrackerGraphLoop()
   const consumeTrackerGraphFor: StoryCursor["consumeTrackerGraphFor"] = Effect.fn(
     "AuthoredCassette.consumeTrackerGraphFor"
-  )(function* (target, context) {
+  )(function* (_target, context) {
     const causal = yield* claimCausalWindow<AuthoredTrackerGraphReadResult>(
       (item): item is AuthoredTrackerGraphReadResult =>
         item?._tag === "TrackerGraphReadFailed" ||
@@ -2562,13 +2283,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       context
     )
     if (Option.isSome(causal)) return causal.value.item
-    const concurrent = yield* consumeConcurrentTrackerReadResult(
-      context,
-      (member) => member.operation._tag === "ReadTrackerGraph" && member.operation.target === target
-    )
-    if (Option.isSome(concurrent)) {
-      return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(concurrent.value).pipe(Effect.orDie)
-    }
     return yield* consumeTrackerGraph
   })
   return {

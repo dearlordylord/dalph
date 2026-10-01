@@ -127,38 +127,6 @@ export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
  * two tracker boundaries used by the active-work G1/F2 chronology; Git and
  * claim reads keep their ordinary ordered story items.
  */
-export const AuthoredConcurrentTrackerReadResult = Schema.TaggedUnion({
-  TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
-  TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
-  TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
-})
-export type AuthoredConcurrentTrackerReadResult = typeof AuthoredConcurrentTrackerReadResult.Type
-
-const AuthoredConcurrentTrackerRead = Schema.Union([
-  Schema.Struct({
-    causal: AuthoredCausalSelection,
-    operation: AuthoredCassetteDecision.cases.ReadTaskWorkSpecification,
-    result: AuthoredConcurrentTrackerReadResult.cases.TaskWorkSpecificationReadReturned
-  }),
-  Schema.Struct({
-    causal: AuthoredCausalSelection,
-    operation: AuthoredCassetteDecision.cases.ReadTrackerGraph,
-    result: Schema.Union([
-      AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadFailed,
-      AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadReturned
-    ])
-  })
-]).check(
-  Schema.makeFilter((member) =>
-    member.operation._tag === "ReadTaskWorkSpecification" && member.result._tag === "TaskWorkSpecificationReadReturned"
-      ? member.operation.taskId === member.result.taskId
-        ? undefined
-        : "a concurrent task-work specification result must name the selected task"
-      : undefined
-  )
-)
-export type AuthoredConcurrentTrackerRead = typeof AuthoredConcurrentTrackerRead.Type
-
 /**
  * Executor reports in authored input name the attempt but never a RunId.
  * Dalph adds the RunId it created when the ordinary executor boundary is used.
@@ -861,8 +829,6 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     request: Schema.Literals(["Begin", "Resume", "Suspend"]),
     taskId: TaskId
   },
-  /** One bounded tracker-read phase whose causally named members may complete in either order. */
-  ConcurrentTrackerReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentTrackerRead) },
   DalphSelects: {
     causal: Schema.optionalKey(AuthoredCausalSelection),
     causalAnchor: Schema.optionalKey(AuthoredCausalAnchor),
@@ -1111,7 +1077,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteReleasesHeldPromotedTaskCompletionClaimRead",
     "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
   ],
-  DalphOperationTrace: ["DalphSelects", "ConcurrentTrackerReadBatch"],
+  DalphOperationTrace: ["DalphSelects"],
   Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
   OuterIntegrator: [
     "IntegratorRequestReceived",
@@ -1247,7 +1213,6 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
     ...authoredCassetteStoryItemOwners.PlannedAttemptExecutor,
     ...authoredCassetteStoryItemOwners.TaskTracker
   ])
-  allowedTags.delete("ConcurrentTrackerReadBatch")
   for (const window of cassette.causalWindows ?? []) {
     const { endIndex, occurrences, startIndex } = window
     if (startIndex < previousEnd || endIndex <= startIndex || endIndex >= cassette.story.length) {
