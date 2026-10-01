@@ -15,6 +15,7 @@ export interface AuthoredCausalBoundaryNode {
   /** The selection node whose exact operation owns this response. */
   readonly ownerRole?: AuthoredOccurrenceId
   readonly graphReadCause?: AuthoredCausalWindowType["occurrences"][number]["graphReadCause"]
+  readonly waitForSelectedPredecessor?: true
 }
 
 /** Places a declared partial order in one contiguous authored story segment. */
@@ -31,7 +32,8 @@ export const authorCausalWindow = (
       storyIndex: startIndex + offset,
       predecessorIds: predecessors,
       ...(value.ownerRole === undefined ? {} : { ownerRole: value.ownerRole }),
-      ...(value.graphReadCause === undefined ? {} : { graphReadCause: value.graphReadCause })
+      ...(value.graphReadCause === undefined ? {} : { graphReadCause: value.graphReadCause }),
+      ...(value.waitForSelectedPredecessor === undefined ? {} : { waitForSelectedPredecessor: true })
     }))
   })
   return { story: occurrences.map(({ value }) => value.item), window }

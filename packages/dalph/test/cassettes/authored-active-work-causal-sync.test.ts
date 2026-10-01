@@ -226,6 +226,36 @@ it.effect("replays opposite graph, specification, and worktree selection orders 
   })
 )
 
+it.effect("waits for an explicitly named selected predecessor without scheduler turns", () =>
+  Effect.gen(function* () {
+    const claim = { _tag: "AcquireTaskClaim" as const, taskId: TaskId.make("A") }
+    const graphOperation = readGraph
+    const graphStarted = yield* Deferred.make<void>()
+    const authored = authorCausalWindow(
+      0,
+      sequenceAuthored<AuthoredCausalBoundaryNode>(
+        authoredOccurrence(AuthoredOccurrenceId.make("claim"), { item: selection("claim", [], claim) }),
+        authoredOccurrence(AuthoredOccurrenceId.make("graph"), {
+          item: selection("graph", ["claim"], graphOperation),
+          waitForSelectedPredecessor: true
+        })
+      )
+    )
+    const cursor = yield* makeStoryCursor([...authored.story, terminal], { causalWindows: [authored.window] })
+    const waitingGraph = yield* Effect.gen(function* () {
+      yield* Deferred.succeed(graphStarted, undefined)
+      return yield* cursor.consumeDalphSelectionFor(
+        graphOperation,
+        causalContext("operation:graph", ["operation:claim"])
+      )
+    }).pipe(Effect.forkChild)
+    yield* Deferred.await(graphStarted)
+    yield* cursor.consumeDalphSelectionFor(claim, causalContext("operation:claim", []))
+    expect((yield* Fiber.join(waitingGraph)).operation).toEqual(graphOperation)
+    yield* cursor.consumeTerminalAssertions
+  })
+)
+
 it.effect("records concurrent causal claims in the same order as atomic consumption", () =>
   Effect.gen(function* () {
     const firstCaptured = yield* Deferred.make<void>()

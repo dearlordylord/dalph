@@ -22,22 +22,19 @@ const rewriteForLaterNotification = (
   }
   return [item]
 }
-const activeWorkF2Window = activeWorkF2SafelySuspendsAuthoredCassette.causalWindows?.[0]
-const activeWorkF2WindowStart = activeWorkF2Window?.startIndex ?? 0
-const explicitLaterNotificationWindowStart = activeWorkF2SafelySuspendsAuthoredCassette.story
-  .slice(0, activeWorkF2WindowStart)
-  .flatMap(rewriteForLaterNotification).length
-const windowIndexShift = explicitLaterNotificationWindowStart - activeWorkF2WindowStart
+const windowIndexShift = (startIndex: number) =>
+  activeWorkF2SafelySuspendsAuthoredCassette.story.slice(0, startIndex).flatMap(rewriteForLaterNotification).length -
+  startIndex
 const explicitLaterNotification = {
   ...activeWorkF2SafelySuspendsAuthoredCassette,
   story: activeWorkF2SafelySuspendsAuthoredCassette.story.flatMap(rewriteForLaterNotification),
   causalWindows: (activeWorkF2SafelySuspendsAuthoredCassette.causalWindows ?? []).map((window) => ({
     ...window,
-    startIndex: window.startIndex + windowIndexShift,
-    endIndex: window.endIndex + windowIndexShift,
+    startIndex: window.startIndex + windowIndexShift(window.startIndex),
+    endIndex: window.endIndex + windowIndexShift(window.startIndex),
     occurrences: window.occurrences.map((occurrence) => ({
       ...occurrence,
-      storyIndex: occurrence.storyIndex + windowIndexShift
+      storyIndex: occurrence.storyIndex + windowIndexShift(window.startIndex)
     }))
   }))
 }

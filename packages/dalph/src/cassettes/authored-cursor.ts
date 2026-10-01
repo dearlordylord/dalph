@@ -647,11 +647,13 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const compiledCausalWindows = yield* Effect.forEach(options.causalWindows ?? [], (window) =>
     Effect.gen(function* () {
       const graph = compileAuthoredOccurrenceGraph(
-        window.occurrences.map(({ graphReadCause, id, ownerRole, predecessorIds, storyIndex }) => ({
-          id,
-          predecessors: predecessorIds,
-          value: { storyIndex, ownerRole, graphReadCause }
-        }))
+        window.occurrences.map(
+          ({ graphReadCause, id, ownerRole, predecessorIds, storyIndex, waitForSelectedPredecessor }) => ({
+            id,
+            predecessors: predecessorIds,
+            value: { storyIndex, ownerRole, graphReadCause, waitForSelectedPredecessor }
+          })
+        )
       )
       if (graph instanceof AuthoredOccurrenceGraphFailure) return yield* Effect.die(graph)
       return [
@@ -665,7 +667,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     })
   )
   const causalWindows = new Map(compiledCausalWindows)
-  const causalWindowFrontiers = yield* Ref.make<ReadonlyMap<number, ReadonlySet<AuthoredOccurrenceId>>>(new Map())
+  const causalWindowFrontiers = yield* SubscriptionRef.make<ReadonlyMap<number, ReadonlySet<AuthoredOccurrenceId>>>(
+    new Map()
+  )
   const controlDirectionBeforeAdmission = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
     Option.none()
   )
@@ -890,7 +894,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             ({ endIndex, startIndex }) => startIndex <= index && index < endIndex
           )
           if (window === undefined) return { _tag: "NoWindow" as const }
-          const frontiers = yield* Ref.get(causalWindowFrontiers)
+          const frontiers = yield* SubscriptionRef.get(causalWindowFrontiers)
           const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
           const state = yield* Ref.get(exactCausalState)
           const matched = matchAuthoredOccurrence(
@@ -928,6 +932,16 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               (occurrence) => !consumed.has(occurrence.id) && predicate(story[occurrence.value.storyIndex])
             )
             if (relevant.length === 0) return { _tag: "Unrelated" as const }
+            const pending = relevant.length === 1 ? relevant[0] : undefined
+            const unmet = pending?.predecessors.filter((id) => !consumed.has(id)) ?? []
+            if (
+              pending?.value.waitForSelectedPredecessor === true &&
+              unmet.length > 0 &&
+              context !== undefined &&
+              !state.causal.byOperationId.has(String(context.operationId))
+            ) {
+              return { _tag: "AwaitPredecessors" as const, startIndex: window.startIndex, unmet }
+            }
             const wrongOwner = relevant.find(
               ({ value }) =>
                 value.ownerRole !== undefined &&
@@ -963,7 +977,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           }
           yield* Ref.set(exactCausalState, { ...state, causal })
           const nextConsumed = matched.frontier.consumed
-          yield* Ref.set(causalWindowFrontiers, new Map(frontiers).set(window.startIndex, nextConsumed))
+          yield* SubscriptionRef.set(causalWindowFrontiers, new Map(frontiers).set(window.startIndex, nextConsumed))
           let nextIndex = index
           while (nextIndex < window.endIndex) {
             const nextId = window.byIndex.get(nextIndex)
@@ -984,6 +998,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         })
       )
       if (result._tag === "NoWindow" || result._tag === "Unrelated") return Option.none()
+      if (result._tag === "AwaitPredecessors") {
+        yield* SubscriptionRef.changes(causalWindowFrontiers).pipe(
+          Stream.filter((frontiers) => {
+            const consumed = frontiers.get(result.startIndex)
+            return consumed !== undefined && result.unmet.every((id) => consumed.has(id))
+          }),
+          Stream.take(1),
+          Stream.runDrain
+        )
+        return yield* claimCausalWindow(predicate, context, ownerSelectionMatches)
+      }
       if (result._tag === "Failure") {
         return yield* new AuthoredCausalSelectionFailure({ detail: result.detail, storyPosition: result.index })
       }
@@ -2244,7 +2269,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   })
   const consumeTerminalAssertions = Effect.gen(function* () {
-    const frontiers = yield* Ref.get(causalWindowFrontiers)
+    const frontiers = yield* SubscriptionRef.get(causalWindowFrontiers)
     for (const window of causalWindows.values()) {
       const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
       const failure = finishAuthoredOccurrenceGraph(window.graph, { consumed })

@@ -10,7 +10,11 @@ import {
 } from "@dalph/orchestrator"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
-import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
+import {
+  AuthoredCassetteStoryItem,
+  AuthoredCausalWindow,
+  type AuthoredOrchestrationEvidence
+} from "./authored-domain.js"
 import {
   authorCausalWindow,
   shiftAuthoredCausalWindow,
@@ -2907,10 +2911,77 @@ const activeWorkF2CausalWindow = shiftAuthoredCausalWindow(
   activeWorkF2CausalStartIndex
 )
 
+const activeWorkF2InitialClaimIndex = activeWorkF2Unwindowed.story.findIndex(
+  (item) => item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" && item.operation.taskId === "A"
+)
+const activeWorkF2InitialClaimWindowLength = 2
+const activeWorkF2InitialClaimWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+  startIndex: activeWorkF2InitialClaimIndex,
+  endIndex: activeWorkF2InitialClaimIndex + activeWorkF2InitialClaimWindowLength,
+  occurrences: [
+    { id: "initial-A-claim", storyIndex: activeWorkF2InitialClaimIndex, predecessorIds: [] },
+    {
+      id: "initial-A-graph",
+      storyIndex: activeWorkF2InitialClaimIndex + 1,
+      predecessorIds: ["initial-A-claim"],
+      waitForSelectedPredecessor: true
+    }
+  ]
+})
+const activeWorkF2BeforeBClaimIndex = activeWorkF2Unwindowed.story.findIndex(
+  (item, index) =>
+    index > activeWorkF2InitialClaimWindow.endIndex &&
+    item._tag === "DalphSelects" &&
+    item.operation._tag === "ReadTaskWorkSpecification" &&
+    item.operation.taskId === "A"
+)
+const activeWorkF2BClaimIndex = activeWorkF2Unwindowed.story.findIndex(
+  (item, index) =>
+    index > activeWorkF2BeforeBClaimIndex &&
+    item._tag === "DalphSelects" &&
+    item.operation._tag === "AcquireTaskClaim" &&
+    item.operation.taskId === "B"
+)
+const activeWorkF2BeforeBClaimItems = activeWorkF2Unwindowed.story.slice(
+  activeWorkF2BeforeBClaimIndex,
+  activeWorkF2BClaimIndex + 1
+)
+const activeWorkF2BeforeBClaimIds = activeWorkF2BeforeBClaimItems.map((item, offset) =>
+  item._tag === "DalphSelects" && item.causalAnchor !== undefined
+    ? item.causalAnchor.occurrenceRole
+    : `before-B-${offset}`
+)
+const activeWorkF2BeforeBClaimWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+  startIndex: activeWorkF2BeforeBClaimIndex,
+  endIndex: activeWorkF2BClaimIndex + 1,
+  occurrences: activeWorkF2BeforeBClaimItems.map((item, offset) => {
+    const id = activeWorkF2BeforeBClaimIds[offset]
+    const previousId = activeWorkF2BeforeBClaimIds[offset - 1]
+    return {
+      id,
+      storyIndex: activeWorkF2BeforeBClaimIndex + offset,
+      predecessorIds:
+        offset === 0
+          ? []
+          : [
+              previousId,
+              ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" ? ["plan-A-F1"] : [])
+            ],
+      ...(item._tag === "TaskWorkSpecificationReadReturned" ? { ownerRole: previousId } : {}),
+      ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
+        ? { waitForSelectedPredecessor: true }
+        : {})
+    }
+  })
+})
+
 /** Alice's F2 edit reaches the exact active B1 refresh through a general causal boundary window. */
 export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
-)({ ...activeWorkF2Unwindowed, causalWindows: [activeWorkF2CausalWindow] })
+)({
+  ...activeWorkF2Unwindowed,
+  causalWindows: [activeWorkF2InitialClaimWindow, activeWorkF2BeforeBClaimWindow, activeWorkF2CausalWindow]
+})
 
 /** Accepted executor output remains ordered by journal position and starts integration in the next activation. */
 export const acceptedResultRestartsIntoIntegrationAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
