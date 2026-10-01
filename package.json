@@ -50,6 +50,8 @@
     "test:integration:capstone": "DALPH_RUN_INTEGRATION_CAPSTONE=1 vitest run packages/dalph/test/cassettes/capstone.execution.test.ts packages/dalph/test/cassettes/authored-delivery-status.test.ts packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts --maxWorkers=1",
     "check:lab": "pnpm --filter @dalph/reducer-lab-prototype check",
     "check:lab:browser": "pnpm --filter @dalph/reducer-lab-prototype check:browser",
+    "check:lab:browser:causal": "pnpm --filter @dalph/reducer-lab-prototype check:browser:causal",
+    "check:lab:browser:capstone": "pnpm --filter @dalph/reducer-lab-prototype check:browser:capstone",
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",
     "check:artifacts": "node scripts/workspace-artifacts.mjs",
     "check:quint": "node scripts/with-gate-slot.mjs -- node scripts/run-formal-gate.mjs",

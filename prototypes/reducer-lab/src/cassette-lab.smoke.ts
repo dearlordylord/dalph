@@ -489,7 +489,7 @@ await scenario(
       assert(run.journalTags[0] === "WorkflowRunBegan", `${key} must retain the authored Run beginning`)
       assert(promotionIndex >= 0, `${key} must retain the authored successful promotion`)
       assert(
-        JSON.stringify(run.journalTags.slice(-terminal.expected.journalTags.length)) ===
+        JSON.stringify(run.journalTags.slice(run.journalTags.length - terminal.expected.journalTags.length)) ===
           JSON.stringify(terminal.expected.journalTags),
         `${key} must retain the declared finality journal suffix`
       )

@@ -117,11 +117,17 @@ changes under `prototypes/reducer-lab` or when changed-path evidence is
 unavailable; an authored cassette or shared configuration change does not
 also require its UI/trace projection in the blocking preflight. Run
 `pnpm check:lab` explicitly when changing that projection or investigating
-it. Selection retains deleted and renamed source paths.
+it. For causal cassette authoring and matcher changes, run the focused
+`pnpm check:lab:browser:causal` browser replay. For the seven-task capstone's
+Lab presentation, run `pnpm check:lab:browser:capstone` explicitly. The
+comprehensive `pnpm check:lab:browser` checks shared Lab navigation and all
+maintained catalog entries; it is a manual diagnostic for shared Lab or browser
+harness changes, not a prerequisite for each cassette edit. Selection retains
+deleted and renamed source paths.
 The seven-task `deliveryInvariantStoryCapstone` is excluded from routine cassette
 execution and the recorded-catalog round trip. Run `pnpm test:integration:capstone`
-explicitly for its separate delivery-capstone proof. Its current fixture chronology
-is under repair, so a passing routine gate does not prove that accepted story.
+explicitly for its separate delivery-capstone proof. A passing routine gate
+does not prove that accepted story.
 During focused capstone fixture repair, use each observed mismatch to name the
 competing causes and inspect the exact boundary evidence before editing. A
 fixture-only correction supported by that evidence may be followed by another
@@ -273,6 +279,8 @@ All commands below use `pnpm`. Script definitions live in
 
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. Baseline and full preflight bound the command to seven minutes: a timed successful smoke took 330.592 seconds under shared-host contention, including 165.727 seconds in two capstone DOM scenarios. The command remains mandatory when selected. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
+| `check:lab:browser:causal` | Host an ephemeral Lab and replay the causal cassette with exact occurrence identity in Chromium. Use for causal matcher and authoring changes. |
+| `check:lab:browser:capstone` | Host an ephemeral Lab and run the seven-task capstone presentation in Chromium. Use for capstone Lab behavior; it remains separate from the routine browser catalog. |
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
 | `check:quint` | Obtains the complete required formal profile through guarded local execution or applicable recorded success. It reports which occurred and names the original evidence. `--force` requests fresh execution under the same guards. |
 | `check:secrets` | Scan Git history with gitleaks. |
