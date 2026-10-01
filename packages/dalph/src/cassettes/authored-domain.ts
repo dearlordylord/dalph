@@ -824,6 +824,17 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** Harness input: publish one current tracker notification while the real Run reactivation owner attaches. */
   CassettePublishesCurrentTrackerNotification: {},
+  /** Harness synchronization: await an actual selected-task publication at full Run capacity. */
+  CassetteAwaitsSelectedTaskCapacityPublication: {
+    capacity: TaskWorkCapacity,
+    graphRevision: TrackerRevision,
+    heldPassiveAttemptId: AttemptId,
+    priorAttemptId: AttemptId,
+    successorAttemptId: AttemptId,
+    taskId: TaskId
+  },
+  /** Harness synchronization: defer one accepted-result queue until another attempt's Begin is durable. */
+  CassetteHoldsAcceptedResultQueueUntilAttemptBegin: { queuedAttemptId: AttemptId, releasedByAttemptId: AttemptId },
   /** Harness synchronization: keep this exact executor request in flight while the next ordinary delivery fact publishes. */
   DalphHoldsExecutorRequestThroughNextDeliveryPublication: {
     attemptId: AttemptId,
@@ -1068,6 +1079,8 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   ],
   CassetteObservation: ["PauseProgressObserved", "PauseProgressObservedCancelledAndReconnected"],
   DeliverySynchronization: [
+    "CassetteAwaitsSelectedTaskCapacityPublication",
+    "CassetteHoldsAcceptedResultQueueUntilAttemptBegin",
     "CassetteAwaitsSafeContinuationRevalidationPublication",
     "DalphHoldsAdmittedContinuationBeforeExecutorIntent",
     "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",

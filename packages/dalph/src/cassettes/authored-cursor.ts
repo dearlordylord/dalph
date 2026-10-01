@@ -364,6 +364,15 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication.Type,
     CursorFailure
   >
+  readonly consumeFreshAttemptCapacityPublication: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSelectedTaskCapacityPublication.Type,
+    CursorFailure
+  >
+  readonly completeFreshAttemptCapacityPublication: (heldPassiveAttemptId: AttemptId) => Effect.Effect<void>
+  readonly consumeAcceptedResultQueueHold: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CassetteHoldsAcceptedResultQueueUntilAttemptBegin.Type,
+    CursorFailure
+  >
   readonly consumeRunReactivationHints: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type>
   >
@@ -727,6 +736,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Option.none()
   )
   const terminalAssertionsReached = yield* Deferred.make<void>()
+  const freshAttemptCapacityPublicationHolds = new Map<AttemptId, Deferred.Deferred<void>>()
+  for (const item of story) {
+    if (item._tag !== "CassetteAwaitsSelectedTaskCapacityPublication") continue
+    if (freshAttemptCapacityPublicationHolds.has(item.heldPassiveAttemptId)) {
+      return yield* Effect.die(`duplicate capacity-publication hold for ${item.heldPassiveAttemptId}`)
+    }
+    freshAttemptCapacityPublicationHolds.set(item.heldPassiveAttemptId, yield* Deferred.make<void>())
+  }
   // The marker is armed at cursor construction so a matching fresh claim
   // cannot cross the trace seam while the sequential harness driver is still
   // scheduling the marker consumer. Its story occurrence is consumed by that
@@ -1832,6 +1849,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           return enabled
         })
         if (enabled) {
+          const publicationHold = freshAttemptCapacityPublicationHolds.get(attemptId)
+          if (publicationHold !== undefined) yield* Deferred.await(publicationHold)
           const claimed = yield* consumePassiveExecutorLifecycleChangeFor(attemptId)
           if (Option.isSome(claimed)) return claimed.value
         }
@@ -2629,6 +2648,24 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         Schema.decodeUnknownEffect(
           AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication
         )
+      ),
+      Effect.orDie
+    ),
+    consumeFreshAttemptCapacityPublication: consume("CassetteAwaitsSelectedTaskCapacityPublication").pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CassetteAwaitsSelectedTaskCapacityPublication)
+      ),
+      Effect.orDie
+    ),
+    completeFreshAttemptCapacityPublication: (heldPassiveAttemptId) => {
+      const hold = freshAttemptCapacityPublicationHolds.get(heldPassiveAttemptId)
+      return hold === undefined
+        ? Effect.die(`missing capacity-publication hold for ${heldPassiveAttemptId}`)
+        : Deferred.succeed(hold, undefined).pipe(Effect.asVoid)
+    },
+    consumeAcceptedResultQueueHold: consume("CassetteHoldsAcceptedResultQueueUntilAttemptBegin").pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CassetteHoldsAcceptedResultQueueUntilAttemptBegin)
       ),
       Effect.orDie
     ),

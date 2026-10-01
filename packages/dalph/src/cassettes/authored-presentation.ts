@@ -54,6 +54,8 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: noLandmark,
       CassetteOffersRunReactivationHints: noLandmark,
       CassetteAwaitsSafeContinuationRevalidationPublication: noLandmark,
+      CassetteAwaitsSelectedTaskCapacityPublication: noLandmark,
+      CassetteHoldsAcceptedResultQueueUntilAttemptBegin: noLandmark,
       CassettePublishesCurrentTrackerNotification: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
       DalphSelects: noLandmark,
@@ -460,6 +462,10 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `The cassette parks fresh task-claim selections for ${item.taskIds.join(", ")} until terminal assertions.`,
       CassetteAwaitsSafeContinuationRevalidationPublication: (item) =>
         `Cassette awaits ${item.taskId} attempt ${item.attemptId} revalidation under graph ${item.graphRevision}.`,
+      CassetteAwaitsSelectedTaskCapacityPublication: (item) =>
+        `Cassette awaits selected task ${item.taskId} at capacity ${item.capacity} under graph ${item.graphRevision}.`,
+      CassetteHoldsAcceptedResultQueueUntilAttemptBegin: (item) =>
+        `Cassette holds accepted-result queue for attempt ${item.queuedAttemptId} until Begin for ${item.releasedByAttemptId} is durable.`,
       CassetteOffersRunReactivationHints: (item) =>
         `The cassette offers ${item.hints.length} tracker-notification or timer hints while active refresh is already running.`,
       CassettePublishesCurrentTrackerNotification: () =>

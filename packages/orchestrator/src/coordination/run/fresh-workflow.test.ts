@@ -198,6 +198,46 @@ it.effect("continues a valid restarted replacement successor without resurrectin
       Result.isFailure(freshContinuationDecisionsOf([{ ...continuation, step: { ...continuation.step } }], []))
     ).toBe(true)
 
+    const reconciliationProposal = deliveryProposalsOf({
+      acceptedOperationIds: HashSet.empty(),
+      fresh: continuations.success,
+      runId: replacementRunId,
+      transitions: decisions.map(({ transition }) => transition)
+    }).ticketDelivery[0]
+    if (reconciliationProposal === undefined) return yield* Effect.die("replacement reconciliation proposal absent")
+    const capacityOwners = ["A", "D"].map((id) =>
+      PlannedTaskAttempt.make({
+        ...replacementSuccessorAttempt,
+        taskId: TaskId.make(id),
+        attemptId: AttemptId.make(`capacity-owner-${id}`),
+        branch: TaskBranchRef.make(`refs/heads/capacity-owner-${id}`),
+        worktree: WorktreeLocator.make(`/tmp/capacity-owner-${id}`)
+      })
+    )
+    const fullCapacityBasis = yield* makeFreshTaskAdmissionBasis({
+      acceptedAt: reduction.runState.appliedThrough,
+      capacity: TaskWorkCapacity.make(2),
+      entries: capacityOwners.map((owner) => TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt: owner })),
+      runId: replacementRunId
+    })
+    for (const recovered of [false, true]) {
+      const capacityAdmission = yield* makeDeliveryRuntimeAdmissionController(
+        fullCapacityBasis,
+        yield* makeIntegrationTargetResourceController(),
+        (yield* makeApplicationExitLifecycle()).admission
+      )
+      expect(yield* capacityAdmission.tryReserve(reconciliationProposal)).toEqual({
+        _tag: "Deferred",
+        reason: "TaskWorkPositionUnavailable"
+      })
+      const ownerA = capacityOwners[0]
+      if (ownerA === undefined) return yield* Effect.die("capacity owner A absent")
+      yield* capacityAdmission.releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(ownerA))
+      const ready = yield* capacityAdmission.tryReserve(reconciliationProposal)
+      expect(ready._tag, recovered ? "reopened admission" : "initial admission").toBe("Admitted")
+      if (ready._tag === "Admitted") yield* capacityAdmission.complete(ready.reservation)
+    }
+
     const successorWorktreeOperation = makeTaskWorktreeReconciliationOperation({
       operationId: OperationId.make("fresh-workflow-replacement-successor-worktree"),
       plannedAttempt: replacementSuccessorAttempt,

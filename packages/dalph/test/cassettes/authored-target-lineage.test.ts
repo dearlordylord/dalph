@@ -8,8 +8,11 @@ import {
   IntegrationTarget,
   IntegrationTargetRef
 } from "@dalph/contracts"
-import { GitTargetLineageReadFailure, TargetLineageObservation } from "@dalph/orchestrator"
-import { makeAuthoredAttemptTargetLineage } from "../../src/cassettes/authored-target-lineage.js"
+import { GitTargetLineage, GitTargetLineageReadFailure, TargetLineageObservation } from "@dalph/orchestrator"
+import {
+  makeAuthoredAttemptTargetLineage,
+  observeAuthoredRemoteBaseline
+} from "../../src/cassettes/authored-target-lineage.js"
 
 const baseA = GitCommitSha.make("1".repeat(40))
 const baseB = GitCommitSha.make("2".repeat(40))
@@ -68,5 +71,38 @@ it.effect("keeps same-Base reads with different heads owned by their exact attem
     expect((yield* authored.forAttempt(attemptB).read(baseA, target)).targetHeadSha).toBe(headB)
     expect((yield* authored.forAttempt(attemptA).read(baseA, target)).targetHeadSha).toBe(headA)
     yield* authored.assertExhausted
+  })
+)
+
+it.effect("reads the controlled baseline at the fixture Base when a replacement owns a different Base", () =>
+  Effect.gen(function* () {
+    const fixtureBase = GitCommitSha.make("1".repeat(40))
+    const replacementBase = GitCommitSha.make("2".repeat(40))
+    const lineage = GitTargetLineage.of({
+      read: (base, readTarget) =>
+        base === fixtureBase
+          ? Effect.succeed(observation(baseA, headA))
+          : Effect.fail(
+              new GitTargetLineageReadFailure({
+                detail: "wrong fixture Base",
+                plannedBaseSha: base,
+                target: readTarget
+              })
+            )
+    })
+    expect((yield* Effect.flip(lineage.read(replacementBase, target)))._tag).toBe("GitTargetLineageReadFailure")
+    const baseline = yield* observeAuthoredRemoteBaseline(lineage, fixtureBase, target)
+    expect(baseline).toEqual({ _tag: "Aligned", localHead: headA, remoteHead: headA })
+    expect(replacementBase).not.toBe(fixtureBase)
+  })
+)
+it.effect("retains a fail-closed unreadable baseline when the pinned Git observation fails", () =>
+  Effect.gen(function* () {
+    const lineage = GitTargetLineage.of({
+      read: (base, readTarget) =>
+        Effect.fail(new GitTargetLineageReadFailure({ detail: "unreadable", plannedBaseSha: base, target: readTarget }))
+    })
+    const failure = yield* Effect.flip(observeAuthoredRemoteBaseline(lineage, baseA, target))
+    expect(failure.reason).toBe("TargetUnreadable")
   })
 )

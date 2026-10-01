@@ -252,3 +252,86 @@ it("projects worktree operation identity and rejects self-causality", () => {
     })._tag
   ).toBe("Failure")
 })
+
+it.effect("keeps replacement slot one distinct from an initial task-local B slot zero", () =>
+  Effect.gen(function* () {
+    const planner = yield* PlannedTaskAttemptPlanner
+    const a = makeTaskWorkSpecification({ taskId: TaskId.make("A"), title: "A", body: "A" })
+    const bF1 = makeTaskWorkSpecification({ taskId: TaskId.make("B"), title: "B F1", body: "B F1" })
+    const bF2 = makeTaskWorkSpecification({ taskId: TaskId.make("B"), title: "B F2", body: "B F2" })
+    yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: a }))
+    const original = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: bF1 }))
+    const request = PlannedTaskAttemptPlanRequest.ExactReplacement({
+      baseSha: GitCommitSha.make("2".repeat(40)),
+      ordinal: PlannedTaskAttemptOrdinal.make(1),
+      specification: bF2
+    })
+    const successor = yield* planner.plan(request)
+    const replay = yield* planner.plan(request)
+    expect(original.attemptId).toBe("attempt:B:0")
+    expect(successor).toMatchObject({
+      attemptId: "attempt:B:replacement:1",
+      baseSha: request.baseSha,
+      branch: "refs/heads/dalph/attempt-B-replacement-1",
+      worktree: "/worktrees/capstone/attempt-B-replacement-1",
+      taskId: "B",
+      taskRevision: bF2.fingerprint
+    })
+    expect(successor.attemptId).not.toBe(original.attemptId)
+    expect(successor.branch).not.toBe(original.branch)
+    expect(successor.worktree).not.toBe(original.worktree)
+    expect(original.taskRevision).toBe(bF1.fingerprint)
+    expect(replay).toEqual(successor)
+  }).pipe(
+    Effect.provide(
+      deterministicPlannedTaskAttemptLayer({
+        baseSha: GitCommitSha.make("1".repeat(40)),
+        executor: TaskExecutorLocator.make("executor:capstone"),
+        runId: RunId.make("run:capstone"),
+        worktreeRoot: WorktreeLocator.make("/worktrees/capstone"),
+        freshIdentity: "TaskLocal",
+        exactReplacementIdentity: "SeparateNamespace"
+      })
+    )
+  )
+)
+
+for (const order of [
+  ["B", "C"],
+  ["C", "B"]
+]) {
+  it.effect(`binds task-local Fresh identities independently of ${order.join(" then ")}`, () =>
+    Effect.gen(function* () {
+      const planner = yield* PlannedTaskAttemptPlanner
+      for (const task of order) {
+        const specification = makeTaskWorkSpecification({ taskId: TaskId.make(task), title: task, body: task })
+        const planned = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
+        expect(planned.attemptId).toBe(`attempt:${task}:0`)
+        expect(planned.branch).toBe(`refs/heads/dalph/attempt-${task}-0`)
+        expect(planned.worktree).toBe(`/worktrees/capstone/attempt-${task}-0`)
+      }
+      const specification = makeTaskWorkSpecification({ taskId: TaskId.make("B"), title: "F2", body: "F2" })
+      const request = PlannedTaskAttemptPlanRequest.ExactReplacement({
+        baseSha: GitCommitSha.make("2".repeat(40)),
+        ordinal: PlannedTaskAttemptOrdinal.make(1),
+        specification
+      })
+      const successor = yield* planner.plan(request)
+      expect(successor.attemptId).toBe("attempt:B:replacement:1")
+      expect(successor.taskRevision).toBe(specification.fingerprint)
+      expect(successor.baseSha).toBe(request.baseSha)
+      expect(yield* planner.plan(request)).toEqual(successor)
+    }).pipe(
+      Effect.provide(
+        deterministicPlannedTaskAttemptLayer({
+          baseSha: GitCommitSha.make("1".repeat(40)),
+          executor: TaskExecutorLocator.make("executor:capstone"),
+          runId: RunId.make("run:capstone"),
+          worktreeRoot: WorktreeLocator.make("/worktrees/capstone"),
+          freshIdentity: "TaskLocal",
+          exactReplacementIdentity: "SeparateNamespace"
+        })
+      )
+    )
+  )
+}

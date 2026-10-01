@@ -863,44 +863,87 @@ it.effect("replays the #268 capstone admission window with A Begin before or aft
         storyIndex: occurrence.storyIndex - window.startIndex
       }))
     })
-    const selected = (role: string) => {
-      const occurrence = window.occurrences.find(({ id }) => id === role)
-      const item =
-        occurrence === undefined ? undefined : deliveryStoryCapstoneAuthoredCassette.story[occurrence.storyIndex]
-      if (item?._tag !== "DalphSelects") throw new Error(`capstone ${role} is not a selected operation`)
-      return item.operation
-    }
+    const itemFor = (node: (typeof window.occurrences)[number]) => story[node.storyIndex - window.startIndex]
+    const bWorktree = window.occurrences.find((node) => {
+      const item = itemFor(node)
+      return (
+        item?._tag === "DalphSelects" &&
+        item.operation._tag === "ReconcileTaskWorktree" &&
+        item.operation.taskId === taskB
+      )
+    })
+    if (bWorktree === undefined) return yield* Effect.die("current B admission reconciliation is missing")
+    const selectedWorktree = itemFor(bWorktree)
+    if (selectedWorktree?._tag !== "DalphSelects") return yield* Effect.die("admission reconciliation is not selected")
     const premature = yield* makeStoryCursor(story, { causalWindows: [shifted] })
     const earlyWorktree = yield* Effect.flip(
-      premature.consumeDalphSelectionFor(selected("B-worktree"), causalContext("B-worktree:early", []))
+      premature.consumeDalphSelectionFor(selectedWorktree.operation, causalContext("B-worktree:early", []))
     )
     expect(earlyWorktree).toBeInstanceOf(AuthoredCausalSelectionFailure)
-    if (earlyWorktree instanceof AuthoredCausalSelectionFailure) {
-      expect(earlyWorktree.detail).toContain("unmet predecessors: B-plan")
+    if (earlyWorktree instanceof AuthoredCausalSelectionFailure)
+      expect(earlyWorktree.detail).toContain(`unmet predecessors: ${bWorktree.predecessorIds.join(", ")}`)
+    const taskFor = (node: (typeof window.occurrences)[number]): string => {
+      const item = itemFor(node)
+      if (item?._tag === "DalphSelects")
+        return "taskId" in item.operation
+          ? String(item.operation.taskId)
+          : String(node.graphReadExplicitTaskIds?.[0] ?? "")
+      if (item?._tag === "PlannedAttemptExecutorWorkReported")
+        return ["A", "B", "C"].find((name) => item.report.attemptId === `attempt:${name}:0`) ?? ""
+      if (node.ownerRole !== undefined) {
+        const owner = window.occurrences.find(({ id }) => id === node.ownerRole)
+        if (owner !== undefined) return taskFor(owner)
+      }
+      return ""
     }
     const play = (order: ReadonlyArray<"A" | "B" | "C">) =>
       Effect.gen(function* () {
         const cursor = yield* makeStoryCursor(story, { causalWindows: [shifted] })
-        for (const name of order) {
-          if (name === "A") {
-            yield* cursor.consumeDalphSelectionFor(selected("A-plan"), causalContext("A-plan", []))
-            yield* cursor.consumeDalphSelectionFor(selected("A-worktree"), causalContext("A-worktree", []))
-            yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make("attempt:A:0"))
-            continue
-          }
-          const claim = causalContext(`${name}-claim`, [])
-          const graph = causalContext(`${name}-graph`, [`${name}-claim`])
-          const specification = causalContext(`${name}-spec`, [`${name}-graph`])
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-claim`), claim)
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-graph`), graph)
-          yield* cursor.consumeTrackerGraphFor(FixtureTarget.make("delivery-capstone-target"), graph)
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-spec`), specification)
-          yield* cursor.consumeTaskWorkSpecificationFor(TaskId.make(name), specification)
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-plan`), causalContext(`${name}-plan`, []))
-          yield* cursor.consumeDalphSelectionFor(selected(`${name}-worktree`), causalContext(`${name}-worktree`, []))
-          yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make(name === "B" ? "attempt:B:2" : "attempt:C:1"))
+        const completed = new Set<string>()
+        const contexts = new Map<string, ReturnType<typeof causalContext>>()
+        const arrivals: Array<string> = []
+        while (completed.size < window.occurrences.length) {
+          const enabled = window.occurrences.filter(
+            (node) => !completed.has(node.id) && node.predecessorIds.every((id) => completed.has(id))
+          )
+          enabled.sort(
+            (left, right) =>
+              order.indexOf(taskFor(left) as "A" | "B" | "C") - order.indexOf(taskFor(right) as "A" | "B" | "C")
+          )
+          const node = enabled[0]
+          if (node === undefined) return yield* Effect.die("current entry window has no enabled occurrence")
+          const item = itemFor(node)
+          if (item?._tag === "DalphSelects") {
+            const context = {
+              ...causalContext(node.id, node.graphReadCause === undefined ? [] : node.predecessorIds),
+              ...(node.graphReadCause === undefined ? {} : { graphReadCause: node.graphReadCause }),
+              ...(node.graphReadExplicitTaskIds === undefined
+                ? {}
+                : { graphReadExplicitTaskIds: node.graphReadExplicitTaskIds })
+            }
+            contexts.set(node.id, context)
+            yield* cursor.consumeDalphSelectionFor(item.operation, context)
+            if (item.operation._tag === "ReconcileTaskWorktree") arrivals.push(`${item.operation.taskId}-worktree`)
+          } else if (item?._tag === "TrackerGraphReadReturned" || item?._tag === "TaskWorkSpecificationReadReturned") {
+            const context = node.ownerRole === undefined ? undefined : contexts.get(node.ownerRole)
+            if (context === undefined) return yield* Effect.die("response lacks its exact selected owner")
+            if (item._tag === "TrackerGraphReadReturned") {
+              const owner =
+                node.ownerRole === undefined ? undefined : window.occurrences.find(({ id }) => id === node.ownerRole)
+              const selection = owner === undefined ? undefined : itemFor(owner)
+              if (selection?._tag !== "DalphSelects" || selection.operation._tag !== "ReadTrackerGraph")
+                return yield* Effect.die("graph owner is not a graph selection")
+              yield* cursor.consumeTrackerGraphFor(selection.operation.target, context)
+            } else yield* cursor.consumeTaskWorkSpecificationFor(item.taskId, context)
+          } else if (item?._tag === "PlannedAttemptExecutorWorkReported") {
+            yield* cursor.consumeExecutorReportFor(item.request, item.report.attemptId)
+            if (item.report.attemptId === "attempt:A:0") arrivals.push("A-Begin")
+          } else return yield* Effect.die("unsupported current entry boundary")
+          completed.add(node.id)
         }
         yield* cursor.consumeTerminalAssertions
+        for (const name of ["B", "C"])
+          expect(arrivals.indexOf("A-Begin") < arrivals.indexOf(`${name}-worktree`)).toBe(order[0] === "A")
       })
     yield* play(["A", "C", "B"])
     yield* play(["B", "C", "A"])

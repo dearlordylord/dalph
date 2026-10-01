@@ -138,8 +138,6 @@ import {
   RemotePublicationPushResult,
   LocalTargetCatchUpResult,
   RemoteBaselineGit,
-  RemoteBaselineFailure,
-  RemoteBaselineObservation,
   TestGitTargetLineage
 } from "@dalph/orchestrator"
 import {
@@ -178,7 +176,7 @@ import {
 } from "./authored-observation-playback.js"
 import { authoredCandidateCleanupBoundaryLayer } from "./authored-candidate-cleanup.js"
 import { authoredDeliveryStatusReadOf, AuthoredDeliveryStatusRead } from "./authored-delivery-status.js"
-import { makeAuthoredAttemptTargetLineage } from "./authored-target-lineage.js"
+import { makeAuthoredAttemptTargetLineage, observeAuthoredRemoteBaseline } from "./authored-target-lineage.js"
 
 const authoredCassetteRemotePublicationTarget = RemotePublicationTarget.make({
   branch: RemotePublicationBranchRef.make("refs/heads/main"),
@@ -1592,6 +1590,9 @@ const runAuthoredScenarioCassetteWith = (request: {
     // eslint-disable-next-line complexity -- One chronological adapter owns activation, crash, candidate, and terminal story boundaries.
     Effect.gen(function* () {
       const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette, { onExcessProperty: "error" })(input)
+      const acceptedResultQueueHolds = cassette.story.filter(
+        (item) => item._tag === "CassetteHoldsAcceptedResultQueueUntilAttemptBegin"
+      )
       yield* Effect.forEach(cassette.story, (item) => assertExactlyOneAuthoredCassetteStoryItemOwner(item._tag), {
         discard: true
       })
@@ -2037,7 +2038,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                           plan.plannedAttempt.runId !== runId ||
                           plan.plannedAttempt.taskId !== binding.taskId
                         )
-                          yield* Effect.die(
+                          return yield* Effect.die(
                             "accepted replacement plan differs from its authored Run/task/attempt binding"
                           )
                         yield* cursor
@@ -2247,12 +2248,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           catchUp: (_correlation, _expectedLocalHead, remoteHead) =>
             Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead })),
           observe: (correlation) =>
-            gitTargetLineage.read(correlation.responsibility.plannedAttempt.baseSha, correlation.localTarget).pipe(
-              Effect.map(({ targetHeadSha }) =>
-                RemoteBaselineObservation.cases.Aligned.make({ localHead: targetHeadSha, remoteHead: targetHeadSha })
-              ),
-              Effect.mapError(() => new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
-            ),
+            observeAuthoredRemoteBaseline(gitTargetLineage, command.baseSha, correlation.localTarget),
           reconcileCatchUp: (_correlation, _expectedLocalHead, remoteHead) =>
             Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead }))
         })
@@ -2407,7 +2403,10 @@ const runAuthoredScenarioCassetteWith = (request: {
             baseSha: command.baseSha,
             executor: command.executor,
             runId,
-            worktreeRoot: command.worktreeRoot
+            worktreeRoot: command.worktreeRoot,
+            ...(cassette.name === "Alice completes one seven-task delivery invariant story"
+              ? { freshIdentity: "TaskLocal" as const, exactReplacementIdentity: "SeparateNamespace" as const }
+              : {})
           })
         )
       const integratorLayer = Layer.merge(
@@ -2657,6 +2656,54 @@ const runAuthoredScenarioCassetteWith = (request: {
                 })
               }
             )
+            const driveFreshAttemptCapacityPublication = Effect.fn(
+              "AuthoredCassette.awaitSelectedTaskCapacityPublication"
+            )(function* (
+              prerequisite: typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSelectedTaskCapacityPublication.Type
+            ) {
+              yield* cursor.consumeFreshAttemptCapacityPublication
+              const activation = yield* Ref.get(activeDeliveryActivation)
+              const replacement = (yield* sharedJournal.read(runId)).findLast(
+                ({ event }) =>
+                  event._tag === "PlannedAttemptReplaced" &&
+                  event.subject.plannedAttempt.attemptId === prerequisite.priorAttemptId &&
+                  event.successorPlan.plannedAttempt.attemptId === prerequisite.successorAttemptId
+              )
+              if (replacement === undefined) {
+                return yield* Effect.die(
+                  `capacity publication barrier lacks replacement ${prerequisite.priorAttemptId} -> ${prerequisite.successorAttemptId}`
+                )
+              }
+              const matches = (publication: AuthoredDeliveryPublication) =>
+                Effect.gen(function* () {
+                  const { bundle } = publication
+                  if (
+                    publication.activationOrdinal !== activation ||
+                    bundle.actionInputs.runtimeFacts.acceptedAt === null ||
+                    bundle.actionInputs.runtimeFacts.acceptedAt < replacement.position ||
+                    bundle.publication.graph._tag !== "GraphEstablished" ||
+                    bundle.publication.graph.observation.snapshot.revision !== prerequisite.graphRevision ||
+                    bundle.actionInputs.runtimeFacts.taskWork.capacity !== prerequisite.capacity ||
+                    bundle.actionInputs.runtimeFacts.taskWork.held.length !== Number(prerequisite.capacity)
+                  )
+                    return false
+                  const { consequences } = yield* evaluateDeliveryRelationAndRuntimeInputBundle(bundle)
+                  const delivery = consequences.ticketDeliveries.deliveries.find(
+                    ({ taskId }) => taskId === prerequisite.taskId
+                  )
+                  return (
+                    delivery?.placement._tag === "Selected" &&
+                    !bundle.actionInputs.runtimeFacts.taskWork.held.some(({ taskId }) => taskId === prerequisite.taskId)
+                  )
+                })
+              yield* SubscriptionRef.changes(latestDeliveryPublication).pipe(
+                Stream.filter((publication): publication is AuthoredDeliveryPublication => publication !== null),
+                Stream.filterEffect(matches),
+                Stream.runHead
+              )
+              yield* cursor.completeFreshAttemptCapacityPublication(prerequisite.heldPassiveAttemptId)
+            })
+            const driveAcceptedResultQueueHold = cursor.consumeAcceptedResultQueueHold.pipe(Effect.asVoid, Effect.orDie)
             const driveCapacityChange = Effect.gen(function* () {
               const change = yield* cursor.consumeCapacityChange
               /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
@@ -3161,6 +3208,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
                   | "CassetteOffersRunReactivationHints"
                   | "CassetteAwaitsSafeContinuationRevalidationPublication"
+                  | "CassetteAwaitsSelectedTaskCapacityPublication"
+                  | "CassetteHoldsAcceptedResultQueueUntilAttemptBegin"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
                   | "CassetteReleasesHeldPlannedAttemptSuspension"
                   | "CassetteReleasesHeldPlannedAttemptContinuation"
@@ -3193,6 +3242,8 @@ const runAuthoredScenarioCassetteWith = (request: {
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
               "CassetteOffersRunReactivationHints",
               "CassetteAwaitsSafeContinuationRevalidationPublication",
+              "CassetteAwaitsSelectedTaskCapacityPublication",
+              "CassetteHoldsAcceptedResultQueueUntilAttemptBegin",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
               "CassetteReleasesHeldPlannedAttemptSuspension",
               "CassetteReleasesHeldPlannedAttemptContinuation",
@@ -3229,6 +3280,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                   drivePlannedSuspensionExecutorBoundaryHold,
                 CassetteOffersRunReactivationHints: () => driveRunReactivationHints,
                 CassetteAwaitsSafeContinuationRevalidationPublication: driveSafeContinuationPublication,
+                CassetteAwaitsSelectedTaskCapacityPublication: driveFreshAttemptCapacityPublication,
+                CassetteHoldsAcceptedResultQueueUntilAttemptBegin: () => driveAcceptedResultQueueHold,
                 CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>
                   drivePlannedContinuationExecutorBoundaryHold,
                 CassetteReleasesHeldPlannedAttemptSuspension: () => drivePlannedSuspensionExecutorBoundaryRelease,
@@ -3347,12 +3400,43 @@ const runAuthoredScenarioCassetteWith = (request: {
             const gate = (yield* Ref.get(plannedContinuationExecutorBoundaryGate)).get(key)
             if (gate !== undefined) yield* Deferred.await(gate.release)
           })
+          const awaitAcceptedBeginBeforeResultQueue = Effect.fn("AuthoredCassette.awaitAcceptedBeginBeforeResultQueue")(
+            function* (action: ControlledDeliveryAction) {
+              if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "IdentityFreeWorkflowRoute") {
+                return
+              }
+              const transition = action.proposal.route.transition
+              if (transition._tag !== "QueueAcceptedResultIntegrationResponsibility") return
+              const hold = acceptedResultQueueHolds.find(
+                ({ queuedAttemptId }) => queuedAttemptId === transition.accepted.plannedAttempt.attemptId
+              )
+              if (hold === undefined) return
+              yield* SubscriptionRef.changes(acceptedJournalAppendVersion).pipe(
+                Stream.filterEffect(() =>
+                  sharedJournal
+                    .read(runId)
+                    .pipe(
+                      Effect.map((records) =>
+                        records.some(
+                          ({ event }) =>
+                            event._tag === "PlannedAttemptExecutorWorkReported" &&
+                            event.report._tag === "ExecutorWorkExecuting" &&
+                            event.report.correlation.attemptId === hold.releasedByAttemptId
+                        )
+                      )
+                    )
+                ),
+                Stream.runHead
+              )
+            }
+          )
           return {
             ...live,
             execute: (action, lease) =>
               Effect.gen(function* () {
                 yield* awaitAdmittedContinuationChoice(action)
                 yield* awaitPlannedContinuationExecutorBoundary(action)
+                yield* awaitAcceptedBeginBeforeResultQueue(action)
                 return yield* live.execute(action, lease)
               })
           } satisfies DeliveryActionExecutorService

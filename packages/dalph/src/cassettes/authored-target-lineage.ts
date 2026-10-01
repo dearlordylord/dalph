@@ -1,6 +1,12 @@
 import { Effect, Ref } from "effect"
-import type { AttemptId } from "@dalph/contracts"
-import { GitTargetLineage, GitTargetLineageReadFailure, type TargetLineageObservation } from "@dalph/orchestrator"
+import type { AttemptId, IntegrationTarget } from "@dalph/contracts"
+import {
+  GitTargetLineage,
+  GitTargetLineageReadFailure,
+  RemoteBaselineFailure,
+  RemoteBaselineObservation,
+  type TargetLineageObservation
+} from "@dalph/orchestrator"
 
 /** Controlled Git reads retain response order within an exact attempt, never across independent attempts. */
 export const makeAuthoredAttemptTargetLineage = Effect.fn("AuthoredCassette.makeAttemptTargetLineage")(function* (
@@ -48,3 +54,18 @@ export const makeAuthoredAttemptTargetLineage = Effect.fn("AuthoredCassette.make
   )
   return { assertExhausted, forAttempt }
 })
+
+/** The controlled baseline needs the local ref head, read through the fixture's pinned Git observation Base. */
+export const observeAuthoredRemoteBaseline = Effect.fn("AuthoredCassette.observeRemoteBaseline")(
+  (
+    lineage: Parameters<typeof GitTargetLineage.of>[0],
+    observationBase: TargetLineageObservation["plannedBaseSha"],
+    target: IntegrationTarget
+  ) =>
+    lineage.read(observationBase, target).pipe(
+      Effect.map(({ targetHeadSha }) =>
+        RemoteBaselineObservation.cases.Aligned.make({ localHead: targetHeadSha, remoteHead: targetHeadSha })
+      ),
+      Effect.mapError(() => new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
+    )
+)

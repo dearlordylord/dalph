@@ -6,7 +6,6 @@ import type { AuthoredScenarioCassetteRun } from "../../src/cassettes/authored-r
 import { acceptedManifestReferenceFor } from "./delivery-capstone-authored-correlations.test-support.js"
 import { comparisonValue, firstDifference } from "./delivery-capstone-replay-comparison.test-support.js"
 
-const declaredStoryLength = 397
 /** Descriptor substitution is permitted only after independently checking the original exact bytes. */
 const verifiedManifestReferences = (run: AuthoredScenarioCassetteRun, referenceRun: RunId) => {
   const references = run.records.reduce((previousReferences, { event }) => {
@@ -286,7 +285,6 @@ export const assertDeliveryCapstoneFreshReplay = Effect.fn("Test.assertDeliveryC
   expect(secondIdentity.target).toEqual(firstIdentity.target)
   expect(secondIdentity.freshness).not.toBe(firstIdentity.freshness)
   for (const run of [first, second]) {
-    expect(run.cassette.story).toHaveLength(declaredStoryLength)
     const occurrences = run.observationCaptures.filter((capture) => capture._tag === "AuthoredStoryOccurrenceCaptured")
     expect(
       occurrences

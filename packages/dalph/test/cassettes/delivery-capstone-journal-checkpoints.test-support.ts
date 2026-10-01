@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Accepted capstone journal barriers stay together for exact chronology review. */
 import { expect } from "vitest"
 import { Option, Result } from "effect"
 import type { PlannedTaskAttempt } from "@dalph/contracts"
@@ -18,29 +19,22 @@ import {
   type AuthoredScenarioCassetteRun
 } from "../../src/cassettes/authored-runner.js"
 import { normalizeDeclaredIntegratorSession } from "./delivery-capstone-authored-correlations.test-support.js"
+import { attempts, attemptForBeat, type Task } from "./delivery-capstone-checkpoint-boundaries.test-support.js"
+
+const gitCommitShaWidth = 40
 
 const transient = {
   suspendB: 4,
   lowered: 7,
   suspendC: 10,
-  resumedB: 13,
+  restartedB: 12,
+  startedB: 13,
   fixedA: 14,
   reopenedC: 18,
   startedSuccessors: 21
 } as const
 type JournalBeat = (typeof transient)[keyof typeof transient]
 type Occurrence = Extract<AuthoredObservationCapture, { readonly _tag: "AuthoredStoryOccurrenceCaptured" }>
-const attempts = {
-  A: "attempt:A:0",
-  B: "attempt:B:2",
-  C: "attempt:C:1",
-  D: "attempt:D:0",
-  E: "attempt:E:0",
-  F: "attempt:F:1",
-  G: "attempt:G:2"
-} as const
-type Task = keyof typeof attempts
-
 export const isDeliveryCapstoneJournalBeat = (beat: number): beat is JournalBeat =>
   Object.values(transient).some((value) => value === beat)
 
@@ -84,8 +78,8 @@ const pair = (attempt: PlannedTaskAttempt) => ({
 })
 const ordered = <A extends { readonly taskId: string }>(values: ReadonlyArray<A>) =>
   values.toSorted((a, b) => a.taskId.localeCompare(b.taskId))
-const expected = (run: AuthoredScenarioCassetteRun, tasks: ReadonlyArray<Task>) =>
-  tasks.map((taskId) => ({ attemptId: attempts[taskId], runId: run.runId, taskId }))
+const expected = (run: AuthoredScenarioCassetteRun, tasks: ReadonlyArray<Task>, beat: JournalBeat) =>
+  tasks.map((taskId) => ({ attemptId: attemptForBeat(taskId, beat), runId: run.runId, taskId }))
 
 /** A durable replacement owns its successor before any executor command admits that attempt. */
 const pendingReplacementSuccessors = (prefix: ReadonlyArray<JournalRecord>): ReadonlyArray<PlannedTaskAttempt> =>
@@ -104,12 +98,18 @@ const pendingReplacementSuccessors = (prefix: ReadonlyArray<JournalRecord>): Rea
         )
     )
 
-const assertSuspension = (prefix: ReadonlyArray<JournalRecord>, lower: JournalRecord, task: Task) => {
+const assertSuspension = (
+  prefix: ReadonlyArray<JournalRecord>,
+  lower: JournalRecord,
+  task: Task,
+  attemptId: string
+) => {
   if (lower.event._tag !== "PlannedAttemptExecutorCommandIntended")
     return expect.fail("transient suspension has no exact intent")
   const intended = lower.event
   expect(intended.command).toBe("Suspend")
-  expect(intended.plannedAttempt.attemptId).toBe(attempts[task])
+  expect(intended.plannedAttempt.taskId).toBe(task)
+  expect(intended.plannedAttempt.attemptId).toBe(attemptId)
   const pending = required(
     latestUnsettledPlannedAttemptExecutorCommand(prefix, intended.plannedAttempt),
     "suspension is not unresolved at its intent cursor"
@@ -122,40 +122,130 @@ const assertSuspension = (prefix: ReadonlyArray<JournalRecord>, lower: JournalRe
   expect(accepted.report._tag).toBe("ExecutorWorkExecuting")
 }
 
-const assertResumedB = (
+const assertRestartedB = (prefix: ReadonlyArray<JournalRecord>, lower: JournalRecord) => {
+  if (lower.event._tag !== "PlannedAttemptReplaced")
+    return expect.fail("DS12 lower fence is not the exact P1-to-P2 replacement")
+  const replacement = lower.event
+  const prior = replacement.subject.plannedAttempt
+  const successor = replacement.successorPlan.plannedAttempt
+  const choice = required(
+    prefix.find(
+      ({ event }) =>
+        event._tag === "AttemptChoiceApplied" &&
+        event.choice === "RestartTaskImplementation" &&
+        event.subject.plannedAttempt.attemptId === attempts.B1
+    ),
+    "DS12 exact Restart choice missing"
+  )
+  if (choice.event._tag !== "AttemptChoiceApplied") return expect.fail("DS12 choice anchor changed")
+  expect(prior).toMatchObject({
+    attemptId: attempts.B1,
+    baseSha: "1".repeat(gitCommitShaWidth),
+    branch: "refs/heads/dalph/attempt-B-0",
+    taskId: "B",
+    worktree: "/dalph/cassettes/delivery-capstone/attempt-B-0"
+  })
+  expect(prior.taskRevision).not.toBe(choice.event.subject.observedTaskRevision)
+  expect(successor).toMatchObject({
+    attemptId: attempts.B2,
+    baseSha: "2".repeat(gitCommitShaWidth),
+    branch: "refs/heads/dalph/attempt-B-replacement-1",
+    executor: prior.executor,
+    taskId: "B",
+    taskRevision: choice.event.subject.observedTaskRevision,
+    worktree: "/dalph/cassettes/delivery-capstone/attempt-B-replacement-1"
+  })
+  expect(successor.branch).not.toBe(prior.branch)
+  expect(successor.worktree).not.toBe(prior.worktree)
+  expect(replacement.witness.expectedClaim.taskId).toBe("B")
+  expect(replacement.witness.oldWorktreeProof).toMatchObject({
+    baseSha: prior.baseSha,
+    branch: prior.branch,
+    worktree: prior.worktree
+  })
+  expect(replacement.witness.targetHeadSha).toBe(successor.baseSha)
+  expect(latestAcceptedPlannedAttemptExecutorEvidence(prefix, prior)?.report._tag).toBe("ExecutorWorkSafelySuspended")
+  expect(prefix.filter(({ event }) => event._tag === "PlannedAttemptReplaced")).toHaveLength(1)
+  expect(
+    prefix.some(
+      ({ event }) => event._tag === "TaskClaimReleaseIntended" && event.operation.release.claim.taskId === "B"
+    )
+  ).toBe(false)
+  expect(
+    prefix.some(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandIntended" &&
+        event.plannedAttempt.attemptId === attempts.B1 &&
+        event.command === "Resume"
+    )
+  ).toBe(false)
+}
+
+const assertStartedB2 = (
   prefix: ReadonlyArray<JournalRecord>,
   lower: JournalRecord,
   run: AuthoredScenarioCassetteRun
 ) => {
   if (lower.event._tag !== "PlannedAttemptExecutorWorkReported")
-    return expect.fail("DS13 lower fence is not accepted lifecycle")
+    return expect.fail("DS13 lower fence is not accepted P2 lifecycle")
   const report = lower.event.report
   expect(report).toMatchObject({
     _tag: "ExecutorWorkExecuting",
-    correlation: { attemptId: attempts.B, runId: run.runId }
+    correlation: { attemptId: attempts.B2, runId: run.runId }
   })
   const response = required(
     prefix.findLast(
       ({ event }) =>
-        event._tag === "PlannedAttemptExecutorCommandResponseObserved" && event.plannedAttempt.attemptId === attempts.B
+        event._tag === "PlannedAttemptExecutorCommandResponseObserved" && event.plannedAttempt.attemptId === attempts.B2
     ),
-    "DS13 exact Resume response missing"
+    "DS13 exact P2 Begin response missing"
   )
   if (response.event._tag !== "PlannedAttemptExecutorCommandResponseObserved")
     return expect.fail("DS13 response anchor changed")
-  expect(response.event.report).toEqual(report)
+  const responseEvent = response.event
+  expect(responseEvent.report).toEqual(report)
   expect(response.position).toBeLessThan(lower.position)
-  const ordinal = response.event.commandOrdinal
   const intended = required(
     prefix.find(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorCommandIntended" &&
-        event.plannedAttempt.attemptId === attempts.B &&
-        event.ordinal === ordinal
+        event.plannedAttempt.attemptId === attempts.B2 &&
+        event.ordinal === responseEvent.commandOrdinal
     ),
-    "DS13 exact Resume intent missing"
+    "DS13 exact P2 Begin intent missing"
   )
-  expect(intended.event).toMatchObject({ _tag: "PlannedAttemptExecutorCommandIntended", command: "Resume" })
+  expect(intended.event).toMatchObject({ _tag: "PlannedAttemptExecutorCommandIntended", command: "Begin" })
+  const reconciliations = prefix.filter(
+    ({ event }) =>
+      event._tag === "TaskWorktreeReconciliationIntended" && event.operation.plannedAttempt.attemptId === attempts.B2
+  )
+  expect(reconciliations).toHaveLength(1)
+  if (reconciliations[0]?.event._tag !== "TaskWorktreeReconciliationIntended")
+    return expect.fail("DS13 P2 worktree reconciliation changed")
+  const reconciliation = reconciliations[0].event
+  const ready = required(
+    prefix.find(
+      ({ event }) => event._tag === "TaskWorktreeReady" && event.operationId === reconciliation.operation.operationId
+    ),
+    "DS13 exact P2 worktree readiness missing"
+  )
+  expect(ready.event).toMatchObject({
+    _tag: "TaskWorktreeReady",
+    proof: {
+      baseSha: "2".repeat(gitCommitShaWidth),
+      branch: "refs/heads/dalph/attempt-B-replacement-1",
+      headSha: "2".repeat(gitCommitShaWidth),
+      worktree: "/dalph/cassettes/delivery-capstone/attempt-B-replacement-1"
+    }
+  })
+  expect(
+    prefix.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandIntended" &&
+        event.plannedAttempt.attemptId === attempts.B2 &&
+        event.command === "Begin"
+    )
+  ).toHaveLength(1)
   expect(
     prefix.some(
       ({ event }) => event._tag === "IntegrationResponsibilityBegan" && event.plannedAttempt.attemptId === attempts.A
@@ -218,7 +308,7 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
   const capacity = Option.getOrUndefined(history.runState.controlPolicy)?.taskExecutionCapacity
   if (capacity === undefined) return expect.fail(`DS${row.beat}: reconstructed capacity unavailable`)
   expect(capacity).toBe(row.capacity)
-  expect(ordered(projection.heldAttempts.map(pair))).toEqual(ordered(expected(run, row.held)))
+  expect(ordered(projection.heldAttempts.map(pair))).toEqual(ordered(expected(run, row.held, row.beat)))
   const allAttempts = [
     ...pendingReplacementSuccessors(prefix),
     ...journalRetainedExecutorResponsibilitySubjects(history.prefix, run.runId).map(
@@ -239,10 +329,11 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
         .map((attempt) => [attempt.attemptId, attempt])
     ).values()
   ]
-  expect(ordered(retainedAttempts.map(pair))).toEqual(ordered(expected(run, row.retained)))
+  expect(ordered(retainedAttempts.map(pair))).toEqual(ordered(expected(run, row.retained, row.beat)))
   for (const task of [...row.held, ...row.retained]) {
+    if (row.beat === transient.restartedB && task === "B") continue
     const attempt = required(
-      allAttempts.find((attempt) => attempt.attemptId === attempts[task]),
+      allAttempts.find((attempt) => attempt.attemptId === attemptForBeat(task, row.beat)),
       "exact checkpoint attempt absent"
     )
     const accepted = required(
@@ -277,7 +368,7 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
     )
   for (const task of row.alice) {
     const attempt = required(
-      allAttempts.find((attempt) => attempt.attemptId === attempts[task]),
+      allAttempts.find((attempt) => attempt.attemptId === attemptForBeat(task, row.beat)),
       "exact choice attempt absent"
     )
     expect(
@@ -308,7 +399,12 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
   }
   if (row.before.kind === "Journal") expect(lower.position).toBeLessThan(row.before.record.position)
   if (row.beat === transient.suspendB || row.beat === transient.suspendC) {
-    assertSuspension(prefix, lower, row.beat === transient.suspendB ? "B" : "C")
+    assertSuspension(
+      prefix,
+      lower,
+      row.beat === transient.suspendB ? "B" : "C",
+      row.beat === transient.suspendB ? attempts.B1 : attempts.C
+    )
     if (row.before.kind !== "Occurrence" || row.before.capture.occurrence._tag !== "PlannedAttemptExecutorWorkReported")
       return expect.fail("suspension upper fence is not actual executor response occurrence")
     const occurrence = row.before.capture.occurrence
@@ -333,13 +429,14 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
       }
     })
   }
-  if (row.beat === transient.resumedB) assertResumedB(prefix, lower, run)
+  if (row.beat === transient.restartedB) assertRestartedB(prefix, lower)
+  if (row.beat === transient.startedB) assertStartedB2(prefix, lower, run)
   if (row.beat === transient.fixedA) assertFixedA(prefix, lower, row)
   if (row.beat === transient.startedSuccessors) {
     const settled = prefix.flatMap(({ event }) =>
       event._tag === "IntegrationFinalitySettled" ? [pair(event.claim.plannedAttempt)] : []
     )
-    expect(ordered(settled)).toEqual(ordered(expected(run, ["A", "B", "C", "D"])))
+    expect(ordered(settled)).toEqual(ordered(expected(run, ["A", "B", "C", "D"], row.beat)))
     if (
       row.before.kind !== "Occurrence" ||
       row.before.capture.occurrence._tag !== "PlannedAttemptExecutorPassiveLifecycleChanged"
@@ -351,7 +448,7 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
         prefix.find(
           ({ event }) =>
             event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
-            event.plannedAttempt.attemptId === attempts[task]
+            event.plannedAttempt.attemptId === attemptForBeat(task, row.beat)
         ),
         "DS21 exact Begin response absent"
       )
@@ -363,7 +460,7 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
           prefix.find(
             ({ event }) =>
               event._tag === "PlannedAttemptExecutorCommandIntended" &&
-              event.plannedAttempt.attemptId === attempts[task] &&
+              event.plannedAttempt.attemptId === attemptForBeat(task, row.beat) &&
               event.ordinal === ordinal
           ),
           "DS21 exact Begin intent absent"
@@ -372,7 +469,8 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
       const accepted = required(
         prefix.find(
           ({ event }) =>
-            event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === attempts[task]
+            event._tag === "PlannedAttemptExecutorWorkReported" &&
+            event.report.correlation.attemptId === attemptForBeat(task, row.beat)
         ),
         "DS21 accepted Begin lifecycle absent"
       )
