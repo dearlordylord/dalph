@@ -386,6 +386,76 @@ const twoEligibleBAdmissionStory: ReadonlyArray<AuthoredCassetteStoryItem> = [
   })
 ]
 const twoEligiblePlannedStoryBeforeExecutingExecutorReport = twoEligibleStoryBeforeExecutingExecutorReport
+const initialAClaimGraphWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
+  const claimIndex = story.findIndex(
+    (item) =>
+      item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" && item.operation.taskId === "A"
+  )
+  const graphIndex = claimIndex + 1
+  Schema.decodeUnknownSync(Schema.Literal(true))(
+    claimIndex >= 0 &&
+      story[graphIndex]?._tag === "DalphSelects" &&
+      story[graphIndex].operation._tag === "ReadTrackerGraph"
+  )
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex: claimIndex,
+    endIndex: graphIndex + 1,
+    occurrences: [
+      { id: "initial-A-claim", storyIndex: claimIndex, predecessorIds: [] },
+      {
+        id: "initial-A-graph",
+        storyIndex: graphIndex,
+        predecessorIds: ["initial-A-claim"],
+        waitForSelectedPredecessor: true
+      }
+    ]
+  })
+}
+const beforeBClaimWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => {
+  const startIndex = story.findIndex(
+    (item) =>
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTaskWorkSpecification" &&
+      item.operation.taskId === "A"
+  )
+  const claimIndex = story.findIndex(
+    (item, index) =>
+      index > startIndex &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "AcquireTaskClaim" &&
+      item.operation.taskId === "B"
+  )
+  Schema.decodeUnknownSync(Schema.Literal(true))(startIndex >= 0 && claimIndex >= 0)
+  const items = story.slice(startIndex, claimIndex + 1)
+  const ids = items.map((item, offset) =>
+    item._tag === "DalphSelects" && item.causalAnchor !== undefined
+      ? item.causalAnchor.occurrenceRole
+      : `before-B-${offset}`
+  )
+  const selectedPredecessorOffset = items.findLastIndex(
+    (item, offset) => offset < items.length - 1 && item._tag === "DalphSelects"
+  )
+  Schema.decodeUnknownSync(Schema.Literal(true))(selectedPredecessorOffset >= 0)
+  const selectedPredecessorId = ids[selectedPredecessorOffset]
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex,
+    endIndex: claimIndex + 1,
+    occurrences: items.map((item, offset) => {
+      const previousId = ids[offset - 1]
+      const isBClaim = offset === items.length - 1
+      return {
+        id: ids[offset],
+        storyIndex: startIndex + offset,
+        predecessorIds:
+          offset === 0
+            ? []
+            : [previousId, ...(isBClaim && previousId !== selectedPredecessorId ? [selectedPredecessorId] : [])],
+        ...(item._tag === "TaskWorkSpecificationReadReturned" ? { ownerRole: previousId } : {}),
+        ...(isBClaim ? { waitForSelectedPredecessor: true } : {})
+      }
+    })
+  })
+}
 const runPauseStoryBeforeExecutingExecutorReport = singletonStoryBeforeExecutingExecutorReport.map((item) =>
   item._tag === "TrackerGraphReadReturned" ? { ...item, graph: twoEligibleTasksGraph } : item
 )
@@ -788,6 +858,10 @@ export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Sc
   ...runPauseSafelySuspendsAuthoredCassette,
   name: "Alice pauses task A and current grouping child B",
   startingFacts: { ...runPauseSafelySuspendsAuthoredCassette.startingFacts, trackerGraph: groupingChildTasksGraph },
+  causalWindows: [
+    initialAClaimGraphWindow(taskPauseStoryBeforeExecutingExecutorReports),
+    beforeBClaimWindow(taskPauseStoryBeforeExecutingExecutorReports)
+  ],
   story: [
     ...taskPauseStoryBeforeExecutingExecutorReports,
     {
@@ -2678,12 +2752,27 @@ const contractedCapacityRecoveredExecutorReports = [
     report: { _tag: "ExecutorWorkTerminal" as const, attemptId: "attempt:B:1", result: { _tag: "Completed" as const } }
   }
 ]
+const contractedCapacityInitialAdmissionStory: ReadonlyArray<AuthoredCassetteStoryItem> = [
+  ...twoEligiblePlannedStoryBeforeExecutingExecutorReport.map((item) =>
+    item._tag === "InitialControlPolicy" ? decodeStoryItem({ ...item, policy: { taskExecutionCapacity: 2 } }) : item
+  ),
+  decodeStoryItem({
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+    request: "Begin"
+  }),
+  ...twoEligibleBAdmissionStory
+]
 
 export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...singletonTaskCompletesAuthoredCassette,
   name: "capacity contraction retains A and B until terminal observations release C",
+  causalWindows: [
+    initialAClaimGraphWindow(contractedCapacityInitialAdmissionStory),
+    beforeBClaimWindow(contractedCapacityInitialAdmissionStory)
+  ],
   startingFacts: {
     ...singletonTaskCompletesAuthoredCassette.startingFacts,
     taskWorkSpecifications: [
@@ -2694,15 +2783,7 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
     trackerGraph: twoEligibleTasksGraph
   },
   story: [
-    ...twoEligiblePlannedStoryBeforeExecutingExecutorReport.map((item) =>
-      item._tag === "InitialControlPolicy" ? { ...item, policy: { taskExecutionCapacity: 2 } } : item
-    ),
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
-      request: "Begin"
-    },
-    ...twoEligibleBAdmissionStory,
+    ...contractedCapacityInitialAdmissionStory,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
@@ -2911,69 +2992,8 @@ const activeWorkF2CausalWindow = shiftAuthoredCausalWindow(
   activeWorkF2CausalStartIndex
 )
 
-const activeWorkF2InitialClaimIndex = activeWorkF2Unwindowed.story.findIndex(
-  (item) => item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" && item.operation.taskId === "A"
-)
-const activeWorkF2InitialClaimWindowLength = 2
-const activeWorkF2InitialClaimWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
-  startIndex: activeWorkF2InitialClaimIndex,
-  endIndex: activeWorkF2InitialClaimIndex + activeWorkF2InitialClaimWindowLength,
-  occurrences: [
-    { id: "initial-A-claim", storyIndex: activeWorkF2InitialClaimIndex, predecessorIds: [] },
-    {
-      id: "initial-A-graph",
-      storyIndex: activeWorkF2InitialClaimIndex + 1,
-      predecessorIds: ["initial-A-claim"],
-      waitForSelectedPredecessor: true
-    }
-  ]
-})
-const activeWorkF2BeforeBClaimIndex = activeWorkF2Unwindowed.story.findIndex(
-  (item, index) =>
-    index > activeWorkF2InitialClaimWindow.endIndex &&
-    item._tag === "DalphSelects" &&
-    item.operation._tag === "ReadTaskWorkSpecification" &&
-    item.operation.taskId === "A"
-)
-const activeWorkF2BClaimIndex = activeWorkF2Unwindowed.story.findIndex(
-  (item, index) =>
-    index > activeWorkF2BeforeBClaimIndex &&
-    item._tag === "DalphSelects" &&
-    item.operation._tag === "AcquireTaskClaim" &&
-    item.operation.taskId === "B"
-)
-const activeWorkF2BeforeBClaimItems = activeWorkF2Unwindowed.story.slice(
-  activeWorkF2BeforeBClaimIndex,
-  activeWorkF2BClaimIndex + 1
-)
-const activeWorkF2BeforeBClaimIds = activeWorkF2BeforeBClaimItems.map((item, offset) =>
-  item._tag === "DalphSelects" && item.causalAnchor !== undefined
-    ? item.causalAnchor.occurrenceRole
-    : `before-B-${offset}`
-)
-const activeWorkF2BeforeBClaimWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
-  startIndex: activeWorkF2BeforeBClaimIndex,
-  endIndex: activeWorkF2BClaimIndex + 1,
-  occurrences: activeWorkF2BeforeBClaimItems.map((item, offset) => {
-    const id = activeWorkF2BeforeBClaimIds[offset]
-    const previousId = activeWorkF2BeforeBClaimIds[offset - 1]
-    return {
-      id,
-      storyIndex: activeWorkF2BeforeBClaimIndex + offset,
-      predecessorIds:
-        offset === 0
-          ? []
-          : [
-              previousId,
-              ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim" ? ["plan-A-F1"] : [])
-            ],
-      ...(item._tag === "TaskWorkSpecificationReadReturned" ? { ownerRole: previousId } : {}),
-      ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
-        ? { waitForSelectedPredecessor: true }
-        : {})
-    }
-  })
-})
+const activeWorkF2InitialClaimWindow = initialAClaimGraphWindow(activeWorkF2Unwindowed.story)
+const activeWorkF2BeforeBClaimWindow = beforeBClaimWindow(activeWorkF2Unwindowed.story)
 
 /** Alice's F2 edit reaches the exact active B1 refresh through a general causal boundary window. */
 export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
