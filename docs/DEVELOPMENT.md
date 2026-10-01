@@ -204,7 +204,11 @@ of reporting the remote jobs as passed. Remote CI can continue in the
 background after a locally qualified push; investigate its result only when it
 provides new failure evidence or the repository requires its status for merge.
 This makes the local result the development decision and preserves the hosted
-run as a separate deployment and platform check.
+run as a separate deployment and platform check. The shared quality command
+selection is checked by `quality-gate-stage-plan.test.mjs`; the local and hosted
+formal profiles have identical commands, steps, and execution obligations as
+checked by `quint-effective-profile.test.mjs`, with different time budgets and
+hosted shard resource policy.
 
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
