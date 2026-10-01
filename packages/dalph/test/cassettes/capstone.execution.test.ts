@@ -1,4 +1,3 @@
-import { env as processEnvironment } from "node:process"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "@effect/vitest"
 import { Effect } from "effect"
@@ -10,9 +9,9 @@ import {
   assertDeliveryCapstonePredecessorCleanup
 } from "./delivery-capstone-cleanup.test-support.js"
 import { assertDeliveryCapstoneFreshReplay } from "./delivery-capstone-replay.test-support.js"
+import { runIntegrationCapstone } from "./integration-capstone-opt-in.test-support.js"
 
 const capstoneTimeout = 600_000
-const runIntegrationCapstone = processEnvironment.DALPH_RUN_INTEGRATION_CAPSTONE === "1"
 // Acceptance assertions share one completed run; replay still executes a second fresh journal.
 const cachedCapstoneRun = Effect.runSync(
   Effect.cached(

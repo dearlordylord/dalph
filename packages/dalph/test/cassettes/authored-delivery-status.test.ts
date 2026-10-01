@@ -1,4 +1,3 @@
-import { env as processEnvironment } from "node:process"
 import { AttemptId, GitCommitSha, RunId } from "@dalph/contracts"
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -20,9 +19,9 @@ import { comparisonValue } from "./delivery-capstone-replay-comparison.test-supp
 import { canonicalIdentity } from "../../../orchestrator/src/coordination/delivery/delivery-status-order.js"
 import { acceptedManifestReferenceFor } from "./delivery-capstone-authored-correlations.test-support.js"
 import { restartPredecessorCleanupAfterRemoval } from "./delivery-predecessor-cleanup-restart.test-support.js"
+import { runIntegrationCapstone } from "./integration-capstone-opt-in.test-support.js"
 
 const capstoneTimeout = 600_000
-const runIntegrationCapstone = processEnvironment.DALPH_RUN_INTEGRATION_CAPSTONE === "1"
 
 const cachedCapstoneRun = Effect.runSync(
   Effect.cached(

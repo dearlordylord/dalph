@@ -1,4 +1,3 @@
-import { env as processEnvironment } from "node:process"
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
@@ -14,9 +13,9 @@ import {
   runAuthoredScenarioCassette,
   verifyRecordedCassetteRoundTrip
 } from "../../src/cassettes/index.js"
+import { runIntegrationCapstone } from "./integration-capstone-opt-in.test-support.js"
 
 const allMaintainedCassetteRoundTripTimeout = 600_000
-const runIntegrationCapstone = processEnvironment.DALPH_RUN_INTEGRATION_CAPSTONE === "1"
 const removedIntegrationSurfacePrefixes = [
   "IntegrationCandidate",
   "IntegratorCandidateGitObserved",
