@@ -21,6 +21,17 @@ export const completeSingletonDeliveryCassette = (() => {
           ? [item._tag === "TrackerGraphReadReturned" ? { ...item, graph: { ...item.graph, rootTaskId: "A" } } : item]
           : [
               { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+              { _tag: "TrackerGraphReadReturned", graph: { ...promoted.startingFacts.trackerGraph, rootTaskId: "A" } },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+              {
+                _tag: "TaskWorkSpecificationReadReturned",
+                body: "Produce an accepted commit.",
+                taskId: "A",
+                title: "Produce accepted result"
+              },
+              { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+              { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
               { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
               {
                 _tag: "CompletionTaskFocusedReadReturned",

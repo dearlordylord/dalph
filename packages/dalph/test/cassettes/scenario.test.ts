@@ -8216,7 +8216,7 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
       initialClaim: "Completion",
       name: "definite deletion rejection",
       story: [
-        { _tag: "RunReplacement" },
+        { _tag: "RestartReplacement" },
         { _tag: "ObserveFocusedTaskCompletionSuccess" },
         { _tag: "RunDeletion" },
         {

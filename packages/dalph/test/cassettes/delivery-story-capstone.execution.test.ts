@@ -858,6 +858,20 @@ const deliveryStoryWithRestartAfter = (
     })
   } else {
     const insertionAt = deliveryStoryFinalityRestartInsertionAt(story, afterJournalEvent)
+    // Reopening after exact claim replacement supplies authority at activation entry;
+    // the happy-path scheduler's later graph pair is not a second recovery prerequisite.
+    if (afterJournalEvent === "CompletionClaimReplaced") {
+      const copiedRead = story[insertionAt + 1]
+      const copiedResult = story[insertionAt + 2]
+      if (
+        copiedRead?._tag !== "DalphSelects" ||
+        copiedRead.operation._tag !== "ReadTrackerGraph" ||
+        copiedResult?._tag !== "TrackerGraphReadReturned"
+      ) {
+        return { ...base, name: `${base.name}; missing copied post-replacement graph pair`, story: [] }
+      }
+      story.splice(insertionAt + 1, 2)
+    }
     const taskAlreadyCompleted =
       afterJournalEvent === "CompletionTaskAcknowledged" ||
       afterJournalEvent === "CompletionClaimDeleted" ||
@@ -945,12 +959,12 @@ it.effect(
         const paidG2BeforeFinality = checkpoint === "IntegrationQuarantined"
         expect(run.activationOrdinals).toEqual(paidG2BeforeFinality ? [1, 2, 3, 4] : [1, 2, 3])
         const expectedReadPositions = {
-          TargetPromotionAttemptIntended: [46, 54, 92],
-          TargetPromotionStale: [47, 53, 91],
-          IntegrationQuarantined: [48, 53, 91, 93],
-          IntegrationQuarantineDirectionApplied: [49, 53, 91],
-          TargetLineageObserved: [51, 55, 93],
-          IntegratorSuccessorSessionFixed: [52, 56, 93]
+          TargetPromotionAttemptIntended: [46, 54, 69, 78, 100],
+          TargetPromotionStale: [47, 53, 68, 77, 99],
+          IntegrationQuarantined: [48, 53, 68, 77, 99, 101],
+          IntegrationQuarantineDirectionApplied: [49, 53, 68, 77, 99],
+          TargetLineageObserved: [51, 55, 70, 79, 101],
+          IntegratorSuccessorSessionFixed: [52, 56, 70, 79, 101]
         } as const
         const graphReads = new Map<JournalPosition, { activationOrdinal: number; cause: string }>()
         for (const capture of run.observationCaptures) {
@@ -968,11 +982,15 @@ it.effect(
             ? [
                 { activationOrdinal: 3, cause: "WorkflowEstablishment" },
                 { activationOrdinal: 3, cause: "PostQuiescenceReconfirmation" },
+                { activationOrdinal: 3, cause: "PostPromotionFinalityCheck" },
+                { activationOrdinal: 3, cause: "AttemptContinuation" },
                 { activationOrdinal: 4, cause: "WorkflowEstablishment" },
                 { activationOrdinal: 4, cause: "PostQuiescenceReconfirmation" }
               ]
             : [
                 { activationOrdinal: 3, cause: "WorkflowEstablishment" },
+                { activationOrdinal: 3, cause: "AttemptContinuation" },
+                { activationOrdinal: 3, cause: "PostPromotionFinalityCheck" },
                 { activationOrdinal: 3, cause: "AttemptContinuation" },
                 { activationOrdinal: 3, cause: "PostQuiescenceReconfirmation" }
               ]

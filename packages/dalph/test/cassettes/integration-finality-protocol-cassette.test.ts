@@ -72,7 +72,8 @@ const replacementPromotedAuthoredCassette = Schema.decodeUnknownSync(AuthoredSce
     ...replacementBase.startingFacts,
     targetLineageObservation: {
       plannedBaseIsAncestorOfTargetHead: true,
-      plannedBaseSha: expectedHead,
+      // The shared baseline observes the invocation Base; successor lineage stays keyed to H2 below.
+      plannedBaseSha: replacementBase.startingFacts.targetLineageObservation?.plannedBaseSha,
       targetHeadSha: expectedHead
     },
     targetLineageObservations: [
