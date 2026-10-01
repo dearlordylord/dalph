@@ -4234,6 +4234,8 @@ it.effect("retains a completed read when one relation publication also includes 
       const storage = Context.get(journalContext, JournalStore)
       const observerCapture = yield* Deferred.make<DeliveryRelationPublicationObservation>()
       const publications = yield* Ref.make<ReadonlyArray<AcceptedRunFactPublication>>([])
+      const completedCallbackEntered = yield* Deferred.make<void>()
+      const releaseCompletedCallback = yield* Deferred.make<void>()
       const bootstrap = yield* buildBootstrap(
         runId,
         storage,
@@ -4250,7 +4252,14 @@ it.effect("retains a completed read when one relation publication also includes 
       )
       yield* bootstrap.registerAcceptedRunReactivationObservers({
         control: () => Effect.void,
-        acceptedFactPublication: (publication) => Ref.update(publications, (current) => [...current, publication])
+        acceptedFactPublication: (publication) =>
+          Effect.gen(function* () {
+            if (publication._tag === "ReadObserved" && publication.operationId === pending.operationId) {
+              yield* Deferred.succeed(completedCallbackEntered, undefined)
+              yield* Deferred.await(releaseCompletedCallback)
+            }
+            yield* Ref.update(publications, (current) => [...current, publication])
+          })
       })
       const completed = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
@@ -4291,6 +4300,46 @@ it.effect("retains a completed read when one relation publication also includes 
           yield* journal.append(runId, intentRecordKey(pending.operationId), taskTrackerReadIntent(pending))
           const observer = yield* Deferred.await(observerCapture)
           yield* observer.observe(publicationBundle(runId, JournalPosition.make(4)))
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(pending.operationId),
+            TaskTrackerFactsObservedEvent.make({
+              observation: makeCompleteTaskTrackerFactsObserved(
+                pending,
+                validSnapshot({
+                  revision: "coalesced-pending-revision",
+                  rootTaskId: TaskId.make("B"),
+                  tasks: [
+                    { id: TaskId.make("B"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+                  ]
+                })
+              ),
+              operationId: pending.operationId,
+              version: workflowJournalEventVersion
+            })
+          )
+          const later = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            OperationId.make("coalesced-later-read"),
+            target
+          )
+          yield* journal.append(runId, intentRecordKey(later.operationId), taskTrackerReadIntent(later))
+          const firstPublication = yield* observer
+            .observe(publicationBundle(runId, JournalPosition.make(5)))
+            .pipe(Effect.forkChild)
+          yield* Deferred.await(completedCallbackEntered)
+          const laterPublication = yield* observer
+            .observe(publicationBundle(runId, JournalPosition.make(6)))
+            .pipe(Effect.forkChild)
+          yield* Effect.yieldNow
+          expect(yield* Ref.get(publications)).toEqual([
+            AcceptedRunFactPublication.ReadPending({ operationId: completed.operationId }),
+            AcceptedRunFactPublication.ReadObserved({ operationId: completed.operationId }),
+            AcceptedRunFactPublication.ReadPending({ operationId: pending.operationId })
+          ])
+          yield* Deferred.succeed(releaseCompletedCallback, undefined)
+          yield* Fiber.join(firstPublication)
+          yield* Fiber.join(laterPublication)
           return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
         })
       )
@@ -4298,7 +4347,9 @@ it.effect("retains a completed read when one relation publication also includes 
       expect(yield* Ref.get(publications)).toEqual([
         AcceptedRunFactPublication.ReadPending({ operationId: completed.operationId }),
         AcceptedRunFactPublication.ReadObserved({ operationId: completed.operationId }),
-        AcceptedRunFactPublication.ReadPending({ operationId: pending.operationId })
+        AcceptedRunFactPublication.ReadPending({ operationId: pending.operationId }),
+        AcceptedRunFactPublication.ReadObserved({ operationId: pending.operationId }),
+        AcceptedRunFactPublication.ReadPending({ operationId: OperationId.make("coalesced-later-read") })
       ])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))

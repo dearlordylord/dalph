@@ -673,6 +673,7 @@ export const journaledRunBootstrapLayer = (
             Effect.gen(function* () {
               const reactivationObservers = yield* Ref.get(acceptedRunReactivationObservers)
               const acceptedPublicationWatermark = yield* Ref.make<JournalPosition | null>(initialState.position)
+              const acceptedPublicationOrder = yield* Semaphore.make(1)
               const ambientPublicationObserver = yield* DeliveryRelationPublicationObserver
               const publicationObserver = DeliveryRelationPublicationObserver.of({
                 observe: (bundle) =>
@@ -681,21 +682,24 @@ export const journaledRunBootstrapLayer = (
                     const runtimeFacts = bundle.actionInputs.runtimeFacts
                     const acceptedAt = runtimeFacts.acceptedAt
                     if (acceptedAt === null) return
-                    const after = yield* Ref.modify(acceptedPublicationWatermark, (current) =>
-                      current !== null && acceptedAt <= current ? [null, current] : [current, acceptedAt]
+                    yield* acceptedPublicationOrder.withPermit(
+                      Effect.gen(function* () {
+                        const after = yield* Ref.get(acceptedPublicationWatermark)
+                        if (after === null || acceptedAt <= after) return
+                        const accepted = yield* processJournal.journal.state.get.pipe(Effect.orDie)
+                        const publications = yield* acceptedRunFactPublicationsBetween(
+                          after,
+                          acceptedAt,
+                          accepted.prefix
+                        ).pipe(Effect.orDie)
+                        yield* Option.match(reactivationObservers, {
+                          onNone: () => Effect.void,
+                          onSome: ({ acceptedFactPublication }) =>
+                            Effect.forEach(publications, acceptedFactPublication, { discard: true })
+                        })
+                        yield* Ref.set(acceptedPublicationWatermark, acceptedAt)
+                      })
                     )
-                    if (after === null) return
-                    const accepted = yield* processJournal.journal.state.get.pipe(Effect.orDie)
-                    const publications = yield* acceptedRunFactPublicationsBetween(
-                      after,
-                      acceptedAt,
-                      accepted.prefix
-                    ).pipe(Effect.orDie)
-                    yield* Option.match(reactivationObservers, {
-                      onNone: () => Effect.void,
-                      onSome: ({ acceptedFactPublication }) =>
-                        Effect.forEach(publications, acceptedFactPublication, { discard: true })
-                    })
                   })
               })
               const downstream = runtimeLayer({ runId, opportunity }).pipe(
