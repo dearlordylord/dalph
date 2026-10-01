@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { makeTaskWorkSpecification } from "@dalph/contracts"
-import { AuthoredScenarioCassette } from "./authored-domain.js"
+import { AuthoredCassetteStoryItem, AuthoredScenarioCassette } from "./authored-domain.js"
 import {
   acceptedCommit,
   admission,
@@ -84,7 +84,7 @@ const { absent: gCleanupAbsentObservation, revision: gCleanupRevision } = cleanu
   gPositions
 )
 /** Alice's single five-to-seven task Run; all boundary results are interpreted by the ordinary authored runner. */
-export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+const deliveryStoryCapstoneInput = {
   _tag: "AuthoredScenarioCassette",
   schemaVersion: 1,
   name: "Alice completes one seven-task delivery invariant story",
@@ -320,4 +320,58 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
       }
     }
   ]
+}
+
+// The first three admitted pipelines share no cross-task arrival order. In
+// particular A's Begin may cross B or C's worktree reconciliation while each
+// task keeps its own claim, read, plan, worktree, and executor predecessors.
+const firstAdmissionCausalWindow = {
+  startIndex: 15,
+  endIndex: 34,
+  occurrences: [
+    { id: "A-plan", storyIndex: 15, predecessorIds: [] },
+    { id: "A-worktree", storyIndex: 16, predecessorIds: ["A-plan"] },
+    { id: "C-claim", storyIndex: 17, predecessorIds: [] },
+    { id: "C-graph", storyIndex: 18, predecessorIds: ["C-claim"] },
+    { id: "C-graph-result", storyIndex: 19, predecessorIds: ["C-graph"], ownerRole: "C-graph" },
+    { id: "A-begin", storyIndex: 20, predecessorIds: ["A-worktree"] },
+    { id: "B-claim", storyIndex: 21, predecessorIds: [] },
+    { id: "B-graph", storyIndex: 22, predecessorIds: ["B-claim"] },
+    { id: "B-graph-result", storyIndex: 23, predecessorIds: ["B-graph"], ownerRole: "B-graph" },
+    { id: "C-spec", storyIndex: 24, predecessorIds: ["C-graph-result"] },
+    { id: "C-spec-result", storyIndex: 25, predecessorIds: ["C-spec"], ownerRole: "C-spec" },
+    { id: "B-spec", storyIndex: 26, predecessorIds: ["B-graph-result"] },
+    { id: "B-spec-result", storyIndex: 27, predecessorIds: ["B-spec"], ownerRole: "B-spec" },
+    { id: "C-plan", storyIndex: 28, predecessorIds: ["C-spec-result"] },
+    { id: "C-worktree", storyIndex: 29, predecessorIds: ["C-plan"] },
+    { id: "C-begin", storyIndex: 30, predecessorIds: ["C-worktree"] },
+    { id: "B-plan", storyIndex: 31, predecessorIds: ["B-spec-result"] },
+    { id: "B-worktree", storyIndex: 32, predecessorIds: ["B-plan"] },
+    { id: "B-begin", storyIndex: 33, predecessorIds: ["B-worktree"] }
+  ]
+} as const
+
+const firstAdmissionRolePredecessors = new Map<string, ReadonlyArray<string>>([
+  ["C-claim", []],
+  ["C-graph", ["C-claim"]],
+  ["B-claim", []],
+  ["B-graph", ["B-claim"]]
+])
+const firstAdmissionCausalSelection = new Map<
+  number,
+  { readonly occurrenceRole: string; readonly predecessorRoles: ReadonlyArray<string> }
+>()
+for (const { id, storyIndex } of firstAdmissionCausalWindow.occurrences) {
+  const predecessorRoles = firstAdmissionRolePredecessors.get(id)
+  if (predecessorRoles !== undefined)
+    firstAdmissionCausalSelection.set(storyIndex, { occurrenceRole: id, predecessorRoles })
+}
+
+export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...deliveryStoryCapstoneInput,
+  story: deliveryStoryCapstoneInput.story.map((item, index) => {
+    const causal = firstAdmissionCausalSelection.get(index)
+    return causal === undefined ? item : { ...Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(item), causal }
+  }),
+  causalWindows: [firstAdmissionCausalWindow]
 })

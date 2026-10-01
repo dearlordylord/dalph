@@ -40,6 +40,7 @@ import {
   sequenceAuthored
 } from "../../src/cassettes/authored-causal-graph.js"
 import { controlledExecutorLayer, controlledTrace } from "../../src/cassettes/authored-adapters.js"
+import { deliveryStoryCapstoneAuthoredCassette } from "../../src/cassettes/delivery-story-capstone.js"
 import {
   consumeControlledTaskWorkSpecification,
   consumeControlledTrackerGraph
@@ -414,6 +415,63 @@ it.effect("replays independent A-E boundary chains in opposite valid interleavin
       })
     yield* play(names.flatMap((name) => stages.map((stage) => [name, stage] as const)))
     yield* play(stages.flatMap((stage) => [...names].reverse().map((name) => [name, stage] as const)))
+  })
+)
+
+it.effect("replays the #268 capstone admission window with A Begin before or after B and C worktrees", () =>
+  Effect.gen(function* () {
+    const window = deliveryStoryCapstoneAuthoredCassette.causalWindows?.[0]
+    if (window === undefined) return yield* Effect.die("the capstone admission window is missing")
+    const story = [...deliveryStoryCapstoneAuthoredCassette.story.slice(window.startIndex, window.endIndex), terminal]
+    const shifted = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: window.endIndex - window.startIndex,
+      occurrences: window.occurrences.map((occurrence) => ({
+        ...occurrence,
+        storyIndex: occurrence.storyIndex - window.startIndex
+      }))
+    })
+    const selected = (role: string) => {
+      const occurrence = window.occurrences.find(({ id }) => id === role)
+      const item =
+        occurrence === undefined ? undefined : deliveryStoryCapstoneAuthoredCassette.story[occurrence.storyIndex]
+      if (item?._tag !== "DalphSelects") throw new Error(`capstone ${role} is not a selected operation`)
+      return item.operation
+    }
+    const premature = yield* makeStoryCursor(story, { causalWindows: [shifted] })
+    const earlyWorktree = yield* Effect.flip(
+      premature.consumeDalphSelectionFor(selected("B-worktree"), causalContext("B-worktree:early", []))
+    )
+    expect(earlyWorktree).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    if (earlyWorktree instanceof AuthoredCausalSelectionFailure) {
+      expect(earlyWorktree.detail).toContain("unmet predecessors: B-plan")
+    }
+    const play = (order: ReadonlyArray<"A" | "B" | "C">) =>
+      Effect.gen(function* () {
+        const cursor = yield* makeStoryCursor(story, { causalWindows: [shifted] })
+        for (const name of order) {
+          if (name === "A") {
+            yield* cursor.consumeDalphSelectionFor(selected("A-plan"), causalContext("A-plan", []))
+            yield* cursor.consumeDalphSelectionFor(selected("A-worktree"), causalContext("A-worktree", []))
+            yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make("attempt:A:0"))
+            continue
+          }
+          const claim = causalContext(`${name}-claim`, [])
+          const graph = causalContext(`${name}-graph`, [`${name}-claim`])
+          const specification = causalContext(`${name}-spec`, [`${name}-graph`])
+          yield* cursor.consumeDalphSelectionFor(selected(`${name}-claim`), claim)
+          yield* cursor.consumeDalphSelectionFor(selected(`${name}-graph`), graph)
+          yield* cursor.consumeTrackerGraphFor(FixtureTarget.make("delivery-capstone-target"), graph)
+          yield* cursor.consumeDalphSelectionFor(selected(`${name}-spec`), specification)
+          yield* cursor.consumeTaskWorkSpecificationFor(TaskId.make(name), specification)
+          yield* cursor.consumeDalphSelectionFor(selected(`${name}-plan`), causalContext(`${name}-plan`, []))
+          yield* cursor.consumeDalphSelectionFor(selected(`${name}-worktree`), causalContext(`${name}-worktree`, []))
+          yield* cursor.consumeExecutorReportFor("Begin", AttemptId.make(name === "B" ? "attempt:B:2" : "attempt:C:1"))
+        }
+        yield* cursor.consumeTerminalAssertions
+      })
+    yield* play(["A", "C", "B"])
+    yield* play(["B", "C", "A"])
   })
 )
 

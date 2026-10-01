@@ -28,15 +28,21 @@ it.effect.skipIf(!runIntegrationCapstone)(
       yield* assertDeliveryCapstoneCheckpoints(run)
       const occurrences = run.observationCaptures.flatMap((capture) =>
         capture._tag === "AuthoredStoryOccurrenceCaptured"
-          ? [{ storyPosition: capture.storyPosition, occurrence: capture.occurrence }]
+          ? [
+              {
+                authoredStoryIndex: capture.authoredStoryIndex ?? capture.storyPosition - 1,
+                occurrence: capture.occurrence
+              }
+            ]
           : []
       )
       // The maintained chronology includes the cleanup reactivation reads and
       // evidence observations that occur after the terminal G claim.
       expect(deliveryStoryCapstoneAuthoredCassette.story).toHaveLength(397)
-      expect(occurrences).toEqual(
-        deliveryStoryCapstoneAuthoredCassette.story.map((occurrence, index) => ({
-          storyPosition: index + 1,
+      expect(occurrences).toHaveLength(deliveryStoryCapstoneAuthoredCassette.story.length)
+      expect([...occurrences].sort((left, right) => left.authoredStoryIndex - right.authoredStoryIndex)).toEqual(
+        deliveryStoryCapstoneAuthoredCassette.story.map((occurrence, authoredStoryIndex) => ({
+          authoredStoryIndex,
           occurrence
         }))
       )
