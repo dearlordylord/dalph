@@ -543,6 +543,11 @@ export interface StoryCursor {
       | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
     >
   >
+  /** Correlate a task-claim response to the exact initiating workflow read. */
+  readonly consumeTaskClaimReadFor: (
+    taskId: TaskId,
+    context?: AuthoredOperationCausalContext
+  ) => Effect.Effect<Option.Option<AuthoredTaskClaimReadItem>, AuthoredCausalSelectionFailure>
   readonly consumeTaskClaimAcquisitionConflictReturned: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type>
   >
@@ -2416,6 +2421,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
   })
+  const consumeTaskClaimReadFor: StoryCursor["consumeTaskClaimReadFor"] = Effect.fn(
+    "AuthoredCassette.consumeTaskClaimReadFor"
+  )(function* (taskId, context) {
+    const causal = yield* claimCausalWindow(
+      (item): item is AuthoredTaskClaimReadItem =>
+        isTaskClaimReadItem(item) &&
+        (item._tag === "TaskClaimReadReturned" ? item.observation.taskId : item.taskId) === taskId,
+      context
+    )
+    if (Option.isSome(causal)) return Option.some(causal.value.item)
+    return yield* consumeTaskClaimRead
+  })
   const consumeTaskClaimAcquisitionConflictReturned = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type =>
@@ -2654,6 +2671,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTargetPromotionGitRead,
     consumeRunCoordinator,
     consumeTaskClaimRead,
+    consumeTaskClaimReadFor,
     consumeTaskClaimAcquisitionConflictReturned,
     consumeTaskClaimAcquisitionRejected,
     consumeTaskClaimReleaseResponseLost,

@@ -163,8 +163,9 @@ export const controlledTrackerAuthorityLayer = (
             })
           )
         )
-      const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
-        cursor.consumeTaskClaimRead.pipe(
+      const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId, causalContext) =>
+        cursor.consumeTaskClaimReadFor(taskId, causalContext).pipe(
+          Effect.orDie,
           Effect.flatMap(
             Option.match({
               onNone: () => currentObservation(taskId),

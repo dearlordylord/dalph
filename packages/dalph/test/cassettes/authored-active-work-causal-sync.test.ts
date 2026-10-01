@@ -240,6 +240,35 @@ it.effect("distinguishes equal-shaped graph reads by cause and exact response ow
   })
 )
 
+it.effect("rejects a claim response from a different selected operation", () =>
+  Effect.gen(function* () {
+    const readClaim = { _tag: "ReadTaskClaim" as const, taskId: taskB }
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "claim-selection", storyIndex: 0, predecessorIds: [] },
+        { id: "claim-result", storyIndex: 1, predecessorIds: ["claim-selection"], ownerRole: "claim-selection" }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(
+      [
+        AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readClaim }),
+        AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: taskB }),
+        terminal
+      ],
+      { causalWindows: [window] }
+    )
+    const owner = causalContext("operation:claim-owner", [])
+    yield* cursor.consumeDalphSelectionFor(readClaim, owner)
+    const wrongOwner = yield* Effect.flip(cursor.consumeTaskClaimReadFor(taskB, causalContext("operation:other", [])))
+    expect(wrongOwner.detail).toContain("requires exact selected owner claim-selection")
+    const result = yield* cursor.consumeTaskClaimReadFor(taskB, owner)
+    expect(Option.isSome(result) && result.value._tag === "TaskClaimCurrentReadReturned").toBe(true)
+    yield* cursor.consumeTerminalAssertions
+  })
+)
+
 it.effect("validates concurrent read roles before the first boundary call", () =>
   Effect.gen(function* () {
     const duplicateRoles = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({

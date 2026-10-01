@@ -74,6 +74,12 @@ export class TaskClaimReleaseFailure extends Schema.TaggedError<TaskClaimRelease
   { release: TaskClaimRelease, detail: Schema.String }
 ) {}
 
+/** Optional workflow identity carried to controlled readers; real providers read only task facts. */
+export interface TrackerClaimReadCausalContext {
+  readonly operationId: typeof OperationId.Type
+  readonly predecessorOperationIds: ReadonlyArray<typeof OperationId.Type>
+}
+
 export interface TrackerMutationService {
   readonly acquireTaskClaim: (
     acquisition: TaskClaimAcquisition
@@ -85,7 +91,10 @@ export interface TrackerMutationService {
     | TaskClaimRequestFailure
     | TaskTrackerMutationThrottled
   >
-  readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
+  readonly readTaskClaim: (
+    taskId: TaskId,
+    causalContext?: TrackerClaimReadCausalContext
+  ) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
   readonly releaseTaskClaim: (
     release: TaskClaimRelease
   ) => Effect.Effect<

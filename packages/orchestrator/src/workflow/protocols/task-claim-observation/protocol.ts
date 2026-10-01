@@ -15,10 +15,11 @@ export class TaskClaimObservationDidNotConverge extends Schema.TaggedError<TaskC
  */
 export const observeTaskClaim = Effect.fn("TrackerMutation.observeTaskClaim")(function* (
   tracker: TrackerMutationService,
-  taskId: TaskId
+  taskId: TaskId,
+  causalContext?: Parameters<TrackerMutationService["readTaskClaim"]>[1]
 ): Effect.fn.Return<TaskClaimObservation, TaskClaimObservationDidNotConverge> {
   const result = yield* tracker
-    .readTaskClaim(taskId)
+    .readTaskClaim(taskId, causalContext)
     .pipe(Effect.retry(Schedule.recurs(taskClaimObservationAttemptBound - 1)), Effect.result)
   return result._tag === "Success"
     ? result.success
