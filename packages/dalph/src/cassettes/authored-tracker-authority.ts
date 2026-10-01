@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- One controlled tracker authority keeps ordinary and finality claim observations coherent. */
 import { Context, Effect, Layer, Match, Option, Ref } from "effect"
-import type { TaskId } from "@dalph/contracts"
+import type { RunId, TaskId } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
   CompletionClaimMarkerAbsent,
@@ -71,6 +71,8 @@ const authoredCompletionClaimIsExact = (
 }
 
 interface ControlledTrackerAuthorityOptions {
+  /** Normalizes concrete Run identities in authored cleanup-call correlation. */
+  readonly runId?: RunId
   readonly reportInteractionMismatch?: AuthoredInteractionMismatchReporter
   readonly lookupAcquisitionOperationTask?: AuthoredAcquisitionOperationLookup
   /**
@@ -80,6 +82,21 @@ interface ControlledTrackerAuthorityOptions {
    * completion response itself changed the graph.
    */
   readonly beforeCompleteTask?: AuthoredBeforeCompletionTask
+}
+
+/** Preserve the exact cleanup call while replacing only its concrete Run identity. */
+export const authoredCleanupReadForRun = (
+  read: CompletionOriginalClaimCleanupRead,
+  runId: RunId
+): CompletionOriginalClaimCleanupRead => {
+  const authoredId = (id: OperationId) => OperationId.make(id.replaceAll(String(runId), "$authored-run"))
+  return read.call === "ReleaseOriginalClaimRead"
+    ? {
+        ...read,
+        deletionOperationId: authoredId(read.deletionOperationId),
+        releaseOperationId: authoredId(read.releaseOperationId)
+      }
+    : { ...read, deletionOperationId: authoredId(read.deletionOperationId) }
 }
 
 /** Owns one coherent authored tracker-claim authority across ordinary and completion-finality protocols. */
@@ -185,32 +202,40 @@ export const controlledTrackerAuthorityLayer = (
         causalContext?: AuthoredOperationCausalContext,
         cleanupRead?: CompletionOriginalClaimCleanupRead
       ) =>
-        cursor.consumeTaskClaimReadFor(taskId, causalContext, cleanupRead).pipe(
-          Effect.orDie,
-          Effect.flatMap(
-            Option.match({
-              onNone: () => currentObservation(taskId),
-              onSome: (item) => {
-                if (item._tag === "TaskClaimCurrentReadReturned") {
-                  return item.taskId === taskId
-                    ? currentObservation(taskId)
-                    : /* v8 ignore next -- @preserve Decoded authored claim reads must name the requested task. */
-                      Effect.die(`authored cassette returned current claim ${item.taskId} for ${taskId}`)
-                }
-                if (item._tag === "TaskClaimReadFailed") {
-                  return item.taskId === taskId
-                    ? Effect.fail(new TaskClaimReadFailure({ detail: item.reason, taskId }))
-                    : /* v8 ignore next -- @preserve Decoded authored failures must name the requested task. */
-                      Effect.die(`authored cassette returned unreadable claim ${item.taskId} for ${taskId}`)
-                }
-                return item.observation.taskId === taskId
-                  ? applyAuthoredObservation(item.observation)
-                  : /* v8 ignore next -- @preserve Decoded authored observations must name the requested task. */
-                    Effect.die(`authored cassette returned task claim ${item.observation.taskId} for ${taskId}`)
-              }
-            })
+        cursor
+          .consumeTaskClaimReadFor(
+            taskId,
+            causalContext,
+            cleanupRead === undefined || options.runId === undefined
+              ? cleanupRead
+              : authoredCleanupReadForRun(cleanupRead, options.runId)
           )
-        )
+          .pipe(
+            Effect.orDie,
+            Effect.flatMap(
+              Option.match({
+                onNone: () => currentObservation(taskId),
+                onSome: (item) => {
+                  if (item._tag === "TaskClaimCurrentReadReturned") {
+                    return item.taskId === taskId
+                      ? currentObservation(taskId)
+                      : /* v8 ignore next -- @preserve Decoded authored claim reads must name the requested task. */
+                        Effect.die(`authored cassette returned current claim ${item.taskId} for ${taskId}`)
+                  }
+                  if (item._tag === "TaskClaimReadFailed") {
+                    return item.taskId === taskId
+                      ? Effect.fail(new TaskClaimReadFailure({ detail: item.reason, taskId }))
+                      : /* v8 ignore next -- @preserve Decoded authored failures must name the requested task. */
+                        Effect.die(`authored cassette returned unreadable claim ${item.taskId} for ${taskId}`)
+                  }
+                  return item.observation.taskId === taskId
+                    ? applyAuthoredObservation(item.observation)
+                    : /* v8 ignore next -- @preserve Decoded authored observations must name the requested task. */
+                      Effect.die(`authored cassette returned task claim ${item.observation.taskId} for ${taskId}`)
+                }
+              })
+            )
+          )
       const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) => readTaskClaimFor(taskId)
       const trackerMutation = TrackerMutation.of({
         acquireTaskClaim: (acquisition) =>

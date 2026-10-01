@@ -45,6 +45,7 @@ import {
   sequenceAuthored
 } from "../../src/cassettes/authored-causal-graph.js"
 import { controlledExecutorLayer, controlledTrace } from "../../src/cassettes/authored-adapters.js"
+import { authoredCleanupReadForRun } from "../../src/cassettes/authored-tracker-authority.js"
 import { deliveryStoryCapstoneAuthoredCassette } from "../../src/cassettes/delivery-story-capstone.js"
 import {
   consumeControlledTaskWorkSpecification,
@@ -92,6 +93,21 @@ const anchorSelection = (occurrenceRole: string, operation: AuthoredCassetteDeci
 
 const graphResult = (revision: string) =>
   AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.make({ graph: graph(revision) })
+
+it("normalizes both cleanup operation IDs for an authored Run", () => {
+  const runId = RunId.make("run:actual")
+  const read = {
+    deletionOperationId: OperationId.make("delete:run:actual:C"),
+    call: "ReleaseOriginalClaimRead" as const,
+    releaseOperationId: OperationId.make("release:run:actual:C"),
+    readOrdinal: TaskClaimReleaseReadOrdinal.make(1)
+  }
+  expect(authoredCleanupReadForRun(read, runId)).toEqual({
+    ...read,
+    deletionOperationId: OperationId.make("delete:$authored-run:C"),
+    releaseOperationId: OperationId.make("release:$authored-run:C")
+  })
+})
 
 it.effect("binds unselected cleanup claim reads to their exact journaled calls", () =>
   Effect.gen(function* () {

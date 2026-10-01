@@ -2201,6 +2201,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       )
       const trackerAuthority = yield* Layer.build(
         controlledTrackerAuthorityLayer(cursor, Context.get(sharedContext, TrackerMutation), {
+          runId,
           reportInteractionMismatch: (failure) => Ref.set(authoredInteractionFailure, failure),
           lookupAcquisitionOperationTask: (operationId) =>
             Ref.get(acquisitionTaskIds).pipe(
