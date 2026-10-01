@@ -1754,6 +1754,50 @@ const changedAttemptRestartAuthorityWindow = (startIndex: number) =>
     ]
   })
 
+/** Changed specification ends the direct authority branch before any claim or successor effect. */
+const changedAttemptRestartChangedFactsWindow = (startIndex: number) => {
+  const full = changedAttemptRestartAuthorityWindow(startIndex)
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    ...full,
+    endIndex: startIndex + restartAuthorityOffsets.directClaim,
+    occurrences: full.occurrences.slice(0, restartAuthorityOffsets.directClaim)
+  })
+}
+
+const restartUnavailableClaimReadOffsets = [
+  restartAuthorityOffsets.directClaim,
+  restartAuthorityOffsets.successorWorktree,
+  restartAuthorityOffsets.successorBegin
+] as const
+/** Three claim boundary attempts share one journaled read operation and its exact authority. */
+const changedAttemptRestartClaimUnavailableWindow = (startIndex: number) => {
+  const full = changedAttemptRestartAuthorityWindow(startIndex)
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    ...full,
+    endIndex: startIndex + restartAuthorityOffsets.successorProjection,
+    occurrences: [
+      ...full.occurrences.slice(0, restartAuthorityOffsets.directClaim),
+      ...restartUnavailableClaimReadOffsets.map((offset, index) => ({
+        id: `restart-unreadable-claim-${index + 1}`,
+        storyIndex: startIndex + offset,
+        predecessorIds: [index === 0 ? "restart-direct-authority-specification" : `restart-unreadable-claim-${index}`],
+        ...(index === 0
+          ? {
+              directFocusedRead: {
+                role: "restart-unreadable-claim-1",
+                kind: "ReadTaskClaim",
+                taskId: "A",
+                predecessorRoles: ["restart-direct-authority-graph", "restart-direct-authority-specification"]
+              }
+            }
+          : {
+              repeatedFocusedRead: { operationRole: "restart-unreadable-claim-1", kind: "ReadTaskClaim", taskId: "A" }
+            })
+      }))
+    ]
+  })
+}
+
 const changedAttemptRestartAuthorityReadsBeforeFinalReconfirmation = [
   changedAttemptRestartAuthorityReads[1],
   changedAttemptRestartAuthorityReads[3],
@@ -1835,6 +1879,7 @@ export const changedAttemptRestartFactsChangedAuthoredCassette: ScenarioCassette
 )({
   ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Alice sees changed-again task facts prevent the recorded Restart from planning P2",
+  causalWindows: [changedAttemptRestartChangedFactsWindow(changedAttemptRestartStoryThroughChoice.length)],
   story: [
     ...changedAttemptRestartStoryThroughChoice,
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -1851,6 +1896,7 @@ export const changedAttemptRestartClaimUnavailableAuthoredCassette: ScenarioCass
 )({
   ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Alice sees Restart wait after three unreadable exact-claim reads",
+  causalWindows: [changedAttemptRestartClaimUnavailableWindow(changedAttemptRestartStoryThroughChoice.length)],
   story: [
     ...changedAttemptRestartStoryThroughChoice,
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -1913,10 +1959,12 @@ export const changedAgainAttemptRequiresNewChoiceAuthoredCassette: ScenarioCasse
 })
 
 /** Alice's exact Stop claim disposition is independent of the coordinator's post-quiescence G2. */
-const changedAttemptStopClaimWindow = (startIndex: number) =>
+const changedAttemptStopClaimWindow = (startIndex: number, releasesClaim: boolean) =>
   Schema.decodeUnknownSync(AuthoredCausalWindow)({
     startIndex,
-    endIndex: startIndex + changedAttemptStopClaimOffsets.length,
+    endIndex:
+      startIndex +
+      (releasesClaim ? changedAttemptStopClaimOffsets.releasingLength : changedAttemptStopClaimOffsets.readOnlyLength),
     occurrences: [
       {
         id: "stop-post-quiescence-G2-selection",
@@ -1941,15 +1989,20 @@ const changedAttemptStopClaimWindow = (startIndex: number) =>
         predecessorIds: ["stop-exact-claim-selection"],
         ownerRole: "stop-exact-claim-selection"
       },
-      {
-        id: "stop-exact-claim-release",
-        storyIndex: startIndex + changedAttemptStopClaimOffsets.selectedRelease,
-        predecessorIds: ["stop-exact-claim-result"]
-      }
+      ...(releasesClaim
+        ? [
+            {
+              id: "stop-exact-claim-release",
+              storyIndex: startIndex + changedAttemptStopClaimOffsets.selectedRelease,
+              predecessorIds: ["stop-exact-claim-result"]
+            }
+          ]
+        : [])
     ]
   })
 const changedAttemptStopClaimOffsets = {
-  length: 5,
+  readOnlyLength: 4,
+  releasingLength: 5,
   returnedG2: 1,
   selectedClaim: 2,
   returnedClaim: 3,
@@ -2005,7 +2058,7 @@ export const changedAttemptStopsAndReleasesAuthoredCassette: ScenarioCassette = 
   AuthoredScenarioCassette
 )({
   ...changedAttemptStopsAndReleasesUnwindowed,
-  causalWindows: [changedAttemptStopClaimWindow(changedAttemptStopAppliedAt + 1)]
+  causalWindows: [changedAttemptStopClaimWindow(changedAttemptStopAppliedAt + 1, true)]
 })
 
 const changedAttemptStopStoryThroughApplication = changedAttemptStopsAndReleasesUnwindowed.story.slice(
@@ -2060,6 +2113,7 @@ const stoppedAttemptWithoutClaimMutationCassette = (
   Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...changedAttemptStopsAndReleasesUnwindowed,
     name,
+    causalWindows: [changedAttemptStopClaimWindow(changedAttemptStopStoryThroughApplication.length, false)],
     story: [
       ...changedAttemptStopStoryThroughApplication.map((item) =>
         item._tag === "OperatorStopsAttempt" ? { ...item, requestNonce } : item

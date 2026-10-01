@@ -341,6 +341,44 @@ it.effect("binds direct Restart specification and claim only at their exact resp
   })
 )
 
+it.effect("binds bounded claim attempts to one exact focused operation", () =>
+  Effect.gen(function* () {
+    const story = [
+      AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.make({ taskId: taskB, reason: "Unreadable" }),
+      AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.make({ taskId: taskB, reason: "Unreadable" }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        {
+          id: "claim-first",
+          storyIndex: 0,
+          predecessorIds: [],
+          directFocusedRead: { role: "claim-operation", kind: "ReadTaskClaim", taskId: "B", predecessorRoles: [] }
+        },
+        {
+          id: "claim-second",
+          storyIndex: 1,
+          predecessorIds: ["claim-first"],
+          repeatedFocusedRead: { operationRole: "claim-operation", kind: "ReadTaskClaim", taskId: "B" }
+        }
+      ]
+    })
+    const context = { ...causalContext("operation:claim", []), operationKind: "ReadTaskClaim" as const, taskId: taskB }
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, context)).toMatchObject({ value: { taskId: taskB } })
+    expect(
+      yield* Effect.flip(
+        cursor.consumeTaskClaimReadFor(taskB, { ...context, operationId: OperationId.make("operation:other") })
+      )
+    ).toBeInstanceOf(AuthoredCausalSelectionFailure)
+    expect(yield* cursor.consumeTaskClaimReadFor(taskB, context)).toMatchObject({ value: { taskId: taskB } })
+    yield* cursor.consumeTerminalAssertions
+  })
+)
+
 it.effect("binds direct Git reads only after matching their actual results", () =>
   Effect.gen(function* () {
     const attemptId = AttemptId.make("attempt:B:0")

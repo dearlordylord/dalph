@@ -1223,6 +1223,14 @@ export const AuthoredCausalWindow = Schema.Struct({
           predecessorRoles: Schema.Array(AuthoredCausalRole).check(Schema.isUnique())
         })
       ),
+      /** A later boundary attempt within one already-bound focused read operation. */
+      repeatedFocusedRead: Schema.optionalKey(
+        Schema.Struct({
+          operationRole: AuthoredCausalRole,
+          kind: Schema.Literals(["ReadTaskWorkSpecification", "ReadTaskClaim"]),
+          taskId: TaskId
+        })
+      ),
       /** A cleanup read is initiated by its journaled call, without a selected workflow read. */
       directCleanupClaimRead: Schema.optionalKey(
         Schema.Union([
@@ -1370,6 +1378,26 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         if (!exactResult || occurrence.ownerRole !== undefined)
           return `direct focused read ${occurrence.id} requires its exact kind, task, and no selected owner`
       }
+      if (occurrence.repeatedFocusedRead !== undefined) {
+        const repeat = occurrence.repeatedFocusedRead
+        const first = occurrences.find(({ directFocusedRead }) => directFocusedRead?.role === repeat.operationRole)
+        if (
+          first === undefined ||
+          first.storyIndex >= occurrence.storyIndex ||
+          first.directFocusedRead?.kind !== repeat.kind ||
+          first.directFocusedRead.taskId !== repeat.taskId
+        )
+          return `repeated focused read ${occurrence.id} requires an earlier exact focused operation`
+        const exactResult =
+          repeat.kind === "ReadTaskWorkSpecification"
+            ? item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === repeat.taskId
+            : (item._tag === "TaskClaimCurrentReadReturned" ||
+                item._tag === "TaskClaimReadFailed" ||
+                item._tag === "TaskClaimReadReturned") &&
+              (item._tag === "TaskClaimReadReturned" ? item.observation.taskId : item.taskId) === repeat.taskId
+        if (!exactResult || occurrence.ownerRole !== undefined)
+          return `repeated focused read ${occurrence.id} requires its exact kind, task, and no selected owner`
+      }
       if (occurrence.directGitRead !== undefined) {
         const direct = occurrence.directGitRead
         const exactResult =
@@ -1401,6 +1429,7 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         [
           occurrence.directGraphRole,
           occurrence.directFocusedRead,
+          occurrence.repeatedFocusedRead,
           occurrence.directGitRead,
           occurrence.directCleanupClaimRead
         ].filter((value) => value !== undefined).length > 1
@@ -1423,7 +1452,11 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
           return `causal graph result ${occurrence.id} requires its selected graph read owner`
         }
       }
-      if (item._tag === "TaskWorkSpecificationReadReturned" && occurrence.directFocusedRead === undefined) {
+      if (
+        item._tag === "TaskWorkSpecificationReadReturned" &&
+        occurrence.directFocusedRead === undefined &&
+        occurrence.repeatedFocusedRead === undefined
+      ) {
         if (
           ownerItem?._tag !== "DalphSelects" ||
           ownerItem.operation._tag !== "ReadTaskWorkSpecification" ||
@@ -1434,6 +1467,7 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
       }
       if (
         occurrence.directFocusedRead === undefined &&
+        occurrence.repeatedFocusedRead === undefined &&
         occurrence.directCleanupClaimRead === undefined &&
         (item._tag === "TaskClaimReadFailed" ||
           item._tag === "TaskClaimReadReturned" ||

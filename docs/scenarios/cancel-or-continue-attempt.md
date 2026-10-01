@@ -158,6 +158,13 @@ logs, and evidence remain readable resources, not disposable cleanup targets.
    integration, tracker-completion, generic cleanup, or replacement-attempt
    operation.
 
+The coordinator's post-quiescence graph read is independent of Stop's exact
+claim read. Either may finish first. If the claim read has already proved the
+claim absent or foreign when Alice repeats D2, that response reports the
+recorded `SettledNoRelease` result immediately; an intermediate pending result
+is not required. The graph read cannot turn an absent or foreign claim into
+permission to release it.
+
 If Dalph crashes after the claim-release intent, restart checks the tracker
 boundary before repeating the same exact request. A lost response is not
 evidence that claim release did not happen. If implementation abandonment is

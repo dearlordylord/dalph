@@ -693,6 +693,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             id,
             ownerRole,
             predecessorIds,
+            repeatedFocusedRead,
             storyIndex,
             waitForPredecessors
           }) => ({
@@ -702,6 +703,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               acceptedPlanPredecessorRoles,
               directCleanupClaimRead,
               directFocusedRead,
+              repeatedFocusedRead,
               directGitRead,
               storyIndex,
               ownerRole,
@@ -982,6 +984,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               graphReadCause,
               graphReadExplicitTaskIds,
               ownerRole,
+              repeatedFocusedRead,
               storyIndex
             }) => {
               const item = story[storyIndex]
@@ -1025,6 +1028,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
                     context,
                     state.causal
                   ) !== undefined
+                )
+                  return false
+              }
+              if (repeatedFocusedRead !== undefined) {
+                const original = state.causal.byRole.get(String(repeatedFocusedRead.operationRole))
+                if (
+                  context === undefined ||
+                  context.operationKind !== repeatedFocusedRead.kind ||
+                  context.taskId !== repeatedFocusedRead.taskId ||
+                  original?.operationId !== context.operationId ||
+                  JSON.stringify(original.predecessorOperationIds) !== JSON.stringify(context.predecessorOperationIds)
                 )
                   return false
               }
