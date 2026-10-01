@@ -566,6 +566,10 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
   )
   return [
     `Scenario: ${cassette.name}.`,
+    ...(cassette.acceptedReplacementPlanRoles ?? []).map(
+      ({ occurrenceRole, successorAttemptId, taskId }) =>
+        `After PlannedAttemptReplaced is accepted, successor plan role ${occurrenceRole} binds task ${taskId} attempt ${successorAttemptId}.`
+    ),
     ...cassette.story.map((item, index) => {
       const lyric = renderAuthoredStoryItemLyric(item)
       const causal = causalByIndex.get(index)
@@ -573,9 +577,14 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
         causal?.graphReadExplicitTaskIds === undefined
           ? ""
           : `; graph read covers ${causal.graphReadExplicitTaskIds.length === 0 ? "no explicit tasks" : causal.graphReadExplicitTaskIds.join(", ")}`
+      const directGraphRole =
+        causal?.directGraphRole === undefined
+          ? ""
+          : `; direct graph operation ${causal.directGraphRole} follows ${causal.directGraphPredecessorRoles?.join(", ") || "no operation predecessor"}`
+      const graphReadCause = causal?.graphReadCause === undefined ? "" : `; graph read cause ${causal.graphReadCause}`
       return causal === undefined
         ? lyric
-        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${graphReadCoverage}.`
+        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${graphReadCause}${graphReadCoverage}.`
     })
   ].join("\n")
 }

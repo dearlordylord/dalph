@@ -80,7 +80,15 @@ it("validates a causal boundary window against the decoded story before playback
       }
     ]
   }
-  expect(Schema.decodeUnknownSync(AuthoredScenarioCassette)(direct).causalWindows).toHaveLength(1)
+  const decodedDirect = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...direct,
+    acceptedReplacementPlanRoles: [{ occurrenceRole: "B-successor", taskId: "B", successorAttemptId: "attempt:B:1" }]
+  })
+  expect(decodedDirect.causalWindows).toHaveLength(1)
+  expect(renderAuthoredCassetteLyrics(decodedDirect)).toContain("direct graph operation restart-graph")
+  expect(renderAuthoredCassetteLyrics(decodedDirect)).toContain(
+    "successor plan role B-successor binds task B attempt attempt:B:1"
+  )
   const [directWindow] = direct.causalWindows
   const [directOccurrence] = directWindow?.occurrences ?? []
   if (directWindow === undefined || directOccurrence === undefined) throw new Error("Expected a direct graph window")
