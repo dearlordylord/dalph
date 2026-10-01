@@ -191,6 +191,14 @@ installed workspace dependencies, run
 `pnpm check:all --candidate=<exact Base SHA>` for the exact
 committed HEAD. This runs the preflight and delivery, recorded-catalog, and
 coverage commands selected from the same stage algebra as hosted quality CI.
+For a PR, read its current `baseRefOid` and `headRefOid` (for example with
+`gh pr view <number> --json baseRefOid,headRefOid`) immediately before the
+local run. Verify that the local HEAD equals `headRefOid`, pass `baseRefOid`
+to `--candidate`, and set `DALPH_DIAGNOSTICS_BASE` to that same Base for earlier
+changed-file diagnostics. A local `origin/master` may lag the PR Base; do not
+infer the exact Base from it. If hosted CI checks a synthetic merge commit,
+compare that commit's tree with the reviewed head tree before counting the
+local result as evidence for the same source bytes.
 If model inputs changed, run `pnpm check:quint --force` on that unchanged HEAD
 for the complete formal command profile. `check:submit` is a cheaper prepush
 diagnostic and never claims full CI coverage.
