@@ -56,12 +56,18 @@ export const makeAuthoredAttemptTargetLineage = Effect.fn("AuthoredCassette.make
 })
 
 /** The controlled baseline needs the local ref head, read through the fixture's pinned Git observation Base. */
-export const observeAuthoredRemoteBaseline = Effect.fn("AuthoredCassette.observeRemoteBaseline")(
+export const observeAuthoredRemoteBaseline: (
+  lineage: typeof GitTargetLineage.Service,
+  observationBase: TargetLineageObservation["plannedBaseSha"],
+  target: IntegrationTarget
+) => Effect.Effect<RemoteBaselineObservation, RemoteBaselineFailure> = Effect.fn(
+  "AuthoredCassette.observeRemoteBaseline"
+)(
   (
-    lineage: Parameters<typeof GitTargetLineage.of>[0],
+    lineage: typeof GitTargetLineage.Service,
     observationBase: TargetLineageObservation["plannedBaseSha"],
     target: IntegrationTarget
-  ) =>
+  ): Effect.Effect<RemoteBaselineObservation, RemoteBaselineFailure> =>
     lineage.read(observationBase, target).pipe(
       Effect.map(({ targetHeadSha }) =>
         RemoteBaselineObservation.cases.Aligned.make({ localHead: targetHeadSha, remoteHead: targetHeadSha })
