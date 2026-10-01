@@ -82,7 +82,10 @@ it.effect("consumes each idle-boundary process death once before installing the 
     const restartReconfirmationItemOffset = 3
     const cassette = {
       ...explicitLaterNotification,
-      causalWindows: [],
+      causalWindows: explicitLaterNotification.causalWindows.filter(
+        (window) =>
+          window.endIndex <= startingCassette.story.findIndex((item) => item._tag === "CoordinatorActivationReturned")
+      ),
       story: [
         ...startingCassette.story.slice(
           0,

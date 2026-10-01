@@ -485,7 +485,11 @@ it("rejects concurrent distinct Integrator correlations that alias one CAS reque
 
   expect(targetPromotionGitRequestAliasIssue(aliased)).toMatch(/aliases/u)
   expect(() =>
-    Schema.decodeUnknownSync(AuthoredScenarioCassette)({ ...deliveryInvariantStoryAuthoredCassette, story: aliased })
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...deliveryInvariantStoryAuthoredCassette,
+      story: aliased,
+      causalWindows: []
+    })
   ).toThrow(/aliases/u)
 })
 
