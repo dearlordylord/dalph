@@ -223,7 +223,8 @@ const emitControlledDecision = (
     const expected = yield* cursor
       .consumeDalphSelectionFor(actual, {
         operationId: workflowOperationId(item.operation),
-        predecessorOperationIds: item.operation.predecessorOperationIds
+        predecessorOperationIds: item.operation.predecessorOperationIds,
+        graphReadCause: item.operation._tag === "ReadTrackerGraph" ? item.operation.cause._tag : undefined
       })
       .pipe(
         Effect.mapError(

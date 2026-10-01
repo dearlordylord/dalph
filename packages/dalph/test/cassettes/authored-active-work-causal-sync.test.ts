@@ -177,6 +177,46 @@ it.effect("replays opposite graph, specification, and worktree selection orders 
   })
 )
 
+it.effect("distinguishes equal-shaped graph reads by cause and exact response owner", () =>
+  Effect.gen(function* () {
+    const story = [
+      AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph }),
+      graphResult("restart"),
+      AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: readGraph }),
+      graphResult("activation"),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 4,
+      occurrences: [
+        { id: "restart", storyIndex: 0, predecessorIds: [], graphReadCause: "AttemptRestartAuthorityCheck" },
+        { id: "restart-result", storyIndex: 1, predecessorIds: ["restart"], ownerRole: "restart" },
+        { id: "activation", storyIndex: 2, predecessorIds: [], graphReadCause: "WorkflowEstablishment" },
+        { id: "activation-result", storyIndex: 3, predecessorIds: ["activation"], ownerRole: "activation" }
+      ]
+    })
+    for (const order of [
+      ["restart", "activation"],
+      ["activation", "restart"]
+    ]) {
+      const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+      const contexts = {
+        restart: { ...causalContext("operation:restart", []), graphReadCause: "AttemptRestartAuthorityCheck" as const },
+        activation: { ...causalContext("operation:activation", []), graphReadCause: "WorkflowEstablishment" as const }
+      }
+      for (const role of order) {
+        const context = contexts[role as keyof typeof contexts]
+        yield* cursor.consumeDalphSelectionFor(readGraph, context)
+        const returned = yield* cursor.consumeTrackerGraphFor(target, context)
+        expect(returned._tag).toBe("TrackerGraphReadReturned")
+        if (returned._tag === "TrackerGraphReadReturned") expect(returned.graph.revision).toBe(role)
+      }
+      yield* cursor.consumeTerminalAssertions
+    }
+  })
+)
+
 it.effect("validates concurrent read roles before the first boundary call", () =>
   Effect.gen(function* () {
     const duplicateRoles = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({

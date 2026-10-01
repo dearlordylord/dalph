@@ -79,6 +79,7 @@ class AuthoredConcurrentReadBatchFailure extends Schema.TaggedError<AuthoredConc
 export interface AuthoredOperationCausalContext {
   readonly operationId: OperationId
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
+  readonly graphReadCause?: Extract<import("@dalph/orchestrator").WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>["cause"]["_tag"] | undefined
 }
 
 /**
@@ -659,10 +660,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const compiledCausalWindows = yield* Effect.forEach(options.causalWindows ?? [], (window) =>
     Effect.gen(function* () {
       const graph = compileAuthoredOccurrenceGraph(
-        window.occurrences.map(({ id, ownerRole, predecessorIds, storyIndex }) => ({
+        window.occurrences.map(({ id, ownerRole, predecessorIds, storyIndex, graphReadCause }) => ({
           id,
           predecessors: predecessorIds,
-          value: { storyIndex, ownerRole }
+          value: { storyIndex, ownerRole, graphReadCause }
         }))
       )
       if (graph instanceof AuthoredOccurrenceGraphFailure) return yield* Effect.die(graph)
@@ -1151,9 +1152,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             window.graph,
             { consumed },
             String(index),
-            ({ ownerRole, storyIndex }) => {
+            ({ ownerRole, storyIndex, graphReadCause }) => {
               const item = story[storyIndex]
               if (!predicate(item)) return false
+              if (graphReadCause !== undefined && graphReadCause !== context?.graphReadCause) return false
               const selected = story[storyIndex]
               if (
                 ownerRole !== undefined &&

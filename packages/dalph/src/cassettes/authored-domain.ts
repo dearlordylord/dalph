@@ -1198,6 +1198,16 @@ export const AuthoredCausalWindow = Schema.Struct({
       id: AuthoredOccurrenceId,
       storyIndex: AuthoredCausalStoryIndex,
       predecessorIds: Schema.Array(AuthoredOccurrenceId).check(Schema.isUnique()),
+      /** Distinguishes equal-shaped graph selections by their production cause. */
+      graphReadCause: Schema.optionalKey(Schema.Literals([
+        "WorkflowEstablishment",
+        "AttemptContinuation",
+        "AttemptRestartAuthorityCheck",
+        "ExecutingWorkAuthorityCheck",
+        "PostQuiescenceReconfirmation",
+        "PostPromotionFinalityCheck",
+        "TaskControlMembershipCheck"
+      ])),
       /** Exact selected operation whose boundary result this node returns, when applicable. */
       ownerRole: Schema.optionalKey(AuthoredOccurrenceId)
     })
@@ -1257,6 +1267,10 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
       if (item === undefined || !allowedTags.has(item._tag)) {
         return `causal occurrence ${occurrence.id} must name a controlled boundary item`
       }
+      if (
+        occurrence.graphReadCause !== undefined &&
+        (item._tag !== "DalphSelects" || item.operation._tag !== "ReadTrackerGraph")
+      ) return `causal occurrence ${occurrence.id} assigns a graph cause to a non-graph selection`
       if (occurrence.ownerRole !== undefined) {
         const owner = graph.byId.get(occurrence.ownerRole)
         if (
