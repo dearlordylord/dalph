@@ -1,4 +1,4 @@
-import { Effect, Layer, Match, Option, Ref } from "effect"
+import { Context, Effect, Layer, Match, Option, Ref } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
@@ -22,7 +22,22 @@ import {
   TrackerMutation,
   UnclaimedTask
 } from "@dalph/orchestrator"
-import { AuthoredCassetteInteractionMismatch, type StoryCursor } from "./authored-cursor.js"
+import {
+  AuthoredCassetteInteractionMismatch,
+  type AuthoredOperationCausalContext,
+  type StoryCursor
+} from "./authored-cursor.js"
+
+/** Cassette-local correlation for a claim read selected by one workflow operation. */
+export class AuthoredTaskClaimReader extends Context.Service<
+  AuthoredTaskClaimReader,
+  {
+    readonly readFor: (
+      taskId: TaskId,
+      causalContext: AuthoredOperationCausalContext
+    ) => ReturnType<TrackerMutation["Service"]["readTaskClaim"]>
+  }
+>()("@dalph/AuthoredTaskClaimReader") {}
 
 type AuthoredInteractionMismatchReporter = (failure: AuthoredCassetteInteractionMismatch) => Effect.Effect<void>
 type AuthoredAcquisitionOperationLookup = (operationId: OperationId) => Effect.Effect<Option.Option<TaskId>>
@@ -163,7 +178,7 @@ export const controlledTrackerAuthorityLayer = (
             })
           )
         )
-      const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId, causalContext) =>
+      const readTaskClaimFor = (taskId: TaskId, causalContext?: AuthoredOperationCausalContext) =>
         cursor.consumeTaskClaimReadFor(taskId, causalContext).pipe(
           Effect.orDie,
           Effect.flatMap(
@@ -190,6 +205,7 @@ export const controlledTrackerAuthorityLayer = (
             })
           )
         )
+      const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) => readTaskClaimFor(taskId)
       const trackerMutation = TrackerMutation.of({
         acquireTaskClaim: (acquisition) =>
           Ref.get(authoredObservations).pipe(
@@ -422,6 +438,7 @@ export const controlledTrackerAuthorityLayer = (
       })
       return Layer.mergeAll(
         Layer.succeed(TrackerMutation, trackerMutation),
+        Layer.succeed(AuthoredTaskClaimReader, AuthoredTaskClaimReader.of({ readFor: readTaskClaimFor })),
         Layer.succeed(CompletionClaimBoundary, completionClaimBoundary),
         Layer.succeed(CompletionTaskBoundary, completionTaskBoundary)
       )

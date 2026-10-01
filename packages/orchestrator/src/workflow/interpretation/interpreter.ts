@@ -257,7 +257,7 @@ export const observeTaskClaimThrough = (
   tracker: TrackerMutationService,
   operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
 ) =>
-  observeTaskClaim(tracker, operation.taskId, operation).pipe(
+  observeTaskClaim(tracker, operation.taskId).pipe(
     Effect.match({
       onFailure: ({ attempts, taskId }) => TaskClaimObservationUnreadable.make({ attempts, taskId }),
       onSuccess: (observation) => AuthoritativeTaskClaimObserved.make({ observation })

@@ -96,6 +96,7 @@ import {
   makeLiveDeliveryActionExecutor,
   memoryJournalStoreLayer,
   observePlannedAttemptWorktreeThrough,
+  observeTaskClaimThrough,
   observeTargetLineageThrough,
   reduceWorkflowJournalHistory,
   runGitWorktreeReconciliation,
@@ -170,7 +171,7 @@ import {
   makeAuthoredRunReactivationHintFifo,
   type AuthoredRunReactivationHint
 } from "./authored-reactivation-hint-fifo.js"
-import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
+import { AuthoredTaskClaimReader, controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 import {
   makeAuthoredObservationPlayback,
   type AuthoredObservationPlaybackWork
@@ -2187,6 +2188,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         })
       )
       const trackerMutationLayer = Layer.succeed(TrackerMutation, Context.get(trackerAuthority, TrackerMutation))
+      const authoredTaskClaimReader = Context.get(trackerAuthority, AuthoredTaskClaimReader)
       const completionClaimBoundary = Context.get(trackerAuthority, CompletionClaimBoundary)
       const completionTaskBoundary = Context.get(trackerAuthority, CompletionTaskBoundary)
       const completionFinalityConfigured = cassette.story.some(
@@ -2287,7 +2289,19 @@ const runAuthoredScenarioCassetteWith = (request: {
                     consumeControlledTaskWorkSpecification(cursor, operation.taskId, {
                       operationId: operation.operationId,
                       predecessorOperationIds: operation.predecessorOperationIds
-                    })
+                    }),
+                  readTaskClaim: (operation) =>
+                    observeTaskClaimThrough(
+                      TrackerMutation.of({
+                        ...Context.get(trackerAuthority, TrackerMutation),
+                        readTaskClaim: (taskId) =>
+                          authoredTaskClaimReader.readFor(taskId, {
+                            operationId: operation.operationId,
+                            predecessorOperationIds: operation.predecessorOperationIds
+                          })
+                      }),
+                      operation
+                    )
                 }
               : {}),
             readTaskWorktree: (operation) =>

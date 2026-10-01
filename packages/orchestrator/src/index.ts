@@ -1050,6 +1050,7 @@ export {
   CompletionClaimCleanupSequenceId,
   InterruptibleWorkflowBoundaryIntent,
   observePlannedAttemptWorktreeThrough,
+  observeTaskClaimThrough,
   observeTargetLineageThrough,
   TraceItem,
   type TaskClaimAcquisitionResult,
