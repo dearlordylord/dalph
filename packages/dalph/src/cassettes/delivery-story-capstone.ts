@@ -877,7 +877,7 @@ for (const [integratingTask, admittedTask] of [
                     }
             }
           ]
-        }).occurrences[0]
+        }).occurrences.at(0)
         if (cleanupOccurrence?.directCleanupClaimRead === undefined) {
           failInvalidAuthoredPremise(`missing exact cleanup claim identity at story ${index}`)
         }

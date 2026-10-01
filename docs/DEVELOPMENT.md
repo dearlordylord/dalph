@@ -690,6 +690,11 @@ The browser runner owns its host; no manual Vite or `REDUCER_LAB_URL` is needed.
 `CODEX_HOME`, serves a deterministic local Responses endpoint, and uses temporary
 Git repositories/worktrees. It is outside `check:all`; the same contract runs
 on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-server-qualification.yml).
+That workflow starts automatically for Codex integration source and scenario
+changes. A shared `package.json` or qualification-workflow edit alone uses
+`workflow_dispatch` when its Codex qualification contract needs checking; it
+does not start real Codex processes for unrelated script changes. This narrows
+gate selection and cannot alter Dalph runtime behavior.
 
 For shared-host gate failures, dispatch [Candidate qualification](../.github/workflows/quint-qualification.yml)
 once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
