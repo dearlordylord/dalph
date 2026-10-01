@@ -222,6 +222,8 @@ export type AuthoredOrchestrationEvidence = typeof AuthoredOrchestrationEvidence
 const AuthoredExpectedBehaviorShape = Schema.Struct({
   orchestration: Schema.NullOr(Schema.Array(AuthoredOrchestrationEvidence)),
   protocol: Schema.NullOr(Schema.Array(AuthoredProtocolEvidence)),
+  /** The active coordinator may be cut only after its asserted journal history is accepted. */
+  terminalSettlement: Schema.optionalKey(Schema.Literals(["ActivationExit", "AcceptedHistoryCut"])),
   taskWork: Schema.Struct({
     absences: Schema.Array(AuthoredTaskWorkAbsence),
     results: Schema.Array(AuthoredTaskWorkResult)

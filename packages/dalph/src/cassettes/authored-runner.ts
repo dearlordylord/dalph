@@ -19,7 +19,8 @@ import {
   type Result,
   Schema,
   Semaphore,
-  Stream
+  Stream,
+  SubscriptionRef
 } from "effect"
 import {
   AcceptedResultEvidenceManifest,
@@ -1299,7 +1300,7 @@ export const evaluateAuthoredObservationStatus = Effect.fn("AuthoredCassette.eva
     } satisfies AuthoredObservationStatus)
 )
 
-const authoredSettlementYieldTurns = 10
+const terminalAssertionItemOffset = -1
 
 const operatorControlFailureMatches = (
   failure: unknown,
@@ -1778,6 +1779,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         )
       )
       const sharedJournal = Context.get(sharedContext, JournalStore)
+      const acceptedJournalAppendVersion = yield* SubscriptionRef.make(0)
       const testGitTargetLineage = Context.get(sharedContext, TestGitTargetLineage)
       const setControlledTargetHead = (targetHeadSha: GitCommitSha) =>
         testGitTargetLineage.setObservation(
@@ -2026,6 +2028,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                       yield* Deferred.succeed(promotionStaleQuarantineDurable, undefined)
                     }
                     yield* pauseAfterJournalAppend(key, event)
+                    yield* SubscriptionRef.update(acceptedJournalAppendVersion, (version) => version + 1)
                   })
                 )
               )
@@ -3503,7 +3506,27 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           )
         )
-        for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
+        const terminal = cassette.story.at(terminalAssertionItemOffset)
+        if (terminal?._tag !== "ExpectedBehavior") {
+          return yield* Effect.die("a decoded authored cassette must end in terminal assertions")
+        }
+        if (terminal.terminalSettlement === "AcceptedHistoryCut") {
+          const acceptedHistoryCut = SubscriptionRef.changes(acceptedJournalAppendVersion).pipe(
+            Stream.mapEffect(() =>
+              Effect.gen(function* () {
+                const records = yield* sharedJournal.read(runId)
+                if (reduceWorkflowJournalHistory(runId, records)._tag !== "ValidWorkflowJournalHistory") return false
+                return Exit.isSuccess(yield* Effect.exit(assertAuthoredExpectedBehavior(records, terminal)))
+              })
+            ),
+            Stream.filter((accepted) => accepted),
+            Stream.take(1),
+            Stream.runDrain
+          )
+          yield* Effect.raceFirst(Fiber.await(coordinator), acceptedHistoryCut)
+        } else {
+          yield* Fiber.await(coordinator)
+        }
         const coordinatorExitAtAssertions = coordinator.pollUnsafe()
         yield* Fiber.interrupt(coordinator)
         return {

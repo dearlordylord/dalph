@@ -1826,7 +1826,7 @@ export const changedAgainAttemptRequiresNewChoiceAuthoredCassette: ScenarioCasse
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    attemptChoiceExpectedBehavior
+    { ...attemptChoiceExpectedBehavior, terminalSettlement: "AcceptedHistoryCut" }
   ]
 })
 
@@ -3847,7 +3847,7 @@ export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.deco
             { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
             { _tag: "TrackerGraphReadReturned", graph: prePromotionBlockerGraph },
             { _tag: "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions", taskIds: ["B", "C"] },
-            item
+            { ...item, terminalSettlement: "AcceptedHistoryCut" }
           ]
     })
   }
@@ -4063,7 +4063,7 @@ export const blockersAroundPromotionAuthoredCassette: ScenarioCassette = Schema.
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
           { _tag: "TrackerGraphReadReturned", graph: postPromotionBlockerGraph },
           { _tag: "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions", taskIds: ["B", "C"] },
-          item
+          { ...item, terminalSettlement: "AcceptedHistoryCut" }
         ]
   })
 })
