@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { completeSingletonDeliveryCassette } from "../../test-support/complete-singleton-delivery.js"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Crypto, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
+import { Cause, Crypto, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -594,11 +594,14 @@ it.effect("holds a delivery claim until the earlier operator control boundary co
       subject: { _tag: "Task" as const, taskId }
     }
     const claimRead = { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
-    const cursor = yield* makeStoryCursor([direction, claimRead])
+    const claimantWaiting = yield* Deferred.make<void>()
+    const cursor = yield* makeStoryCursor([direction, claimRead], {
+      onControlBoundaryWait: Deferred.succeed(claimantWaiting, undefined)
+    })
 
     expect(yield* cursor.consumeControlDirection(direction)).toEqual(Option.some(direction))
     const claimant = yield* cursor.consumeTaskClaimRead.pipe(Effect.forkScoped)
-    yield* Effect.yieldNow
+    yield* Deferred.await(claimantWaiting)
     expect(claimant.pollUnsafe()).toBeUndefined()
 
     yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission

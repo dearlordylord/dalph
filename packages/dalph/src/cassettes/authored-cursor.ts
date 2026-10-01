@@ -571,6 +571,8 @@ export interface AuthoredStoryOccurrenceObserved {
 
 interface StoryCursorOptions {
   readonly onOccurrence?: (occurrence: AuthoredStoryOccurrenceObserved) => Effect.Effect<void>
+  /** Observes an actual blocked control-boundary caller before its release wait. */
+  readonly onControlBoundaryWait?: Effect.Effect<void>
   readonly causalWindows?: ReadonlyArray<AuthoredCausalWindow>
 }
 
@@ -740,6 +742,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (Option.isNone(activeControl)) return false
     const index = yield* SubscriptionRef.get(position)
     if (isControlBoundaryRead(story[index])) return false
+    yield* options.onControlBoundaryWait ?? Effect.void
     yield* Deferred.await(activeControl.value)
     return true
   })
