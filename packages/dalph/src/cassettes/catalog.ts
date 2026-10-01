@@ -1912,10 +1912,52 @@ export const changedAgainAttemptRequiresNewChoiceAuthoredCassette: ScenarioCasse
   ]
 })
 
+/** Alice's exact Stop claim disposition is independent of the coordinator's post-quiescence G2. */
+const changedAttemptStopClaimWindow = (startIndex: number) =>
+  Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    startIndex,
+    endIndex: startIndex + changedAttemptStopClaimOffsets.length,
+    occurrences: [
+      {
+        id: "stop-post-quiescence-G2-selection",
+        storyIndex: startIndex,
+        predecessorIds: [],
+        graphReadCause: "PostQuiescenceReconfirmation"
+      },
+      {
+        id: "stop-post-quiescence-G2-result",
+        storyIndex: startIndex + changedAttemptStopClaimOffsets.returnedG2,
+        predecessorIds: ["stop-post-quiescence-G2-selection"],
+        ownerRole: "stop-post-quiescence-G2-selection"
+      },
+      {
+        id: "stop-exact-claim-selection",
+        storyIndex: startIndex + changedAttemptStopClaimOffsets.selectedClaim,
+        predecessorIds: []
+      },
+      {
+        id: "stop-exact-claim-result",
+        storyIndex: startIndex + changedAttemptStopClaimOffsets.returnedClaim,
+        predecessorIds: ["stop-exact-claim-selection"],
+        ownerRole: "stop-exact-claim-selection"
+      },
+      {
+        id: "stop-exact-claim-release",
+        storyIndex: startIndex + changedAttemptStopClaimOffsets.selectedRelease,
+        predecessorIds: ["stop-exact-claim-result"]
+      }
+    ]
+  })
+const changedAttemptStopClaimOffsets = {
+  length: 5,
+  returnedG2: 1,
+  selectedClaim: 2,
+  returnedClaim: 3,
+  selectedRelease: 4
+} as const
+
 /** Alice stops P after its exact safe report and Dalph releases only the freshly reread exact claim. */
-export const changedAttemptStopsAndReleasesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
+const changedAttemptStopsAndReleasesUnwindowed: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice stops the exact changed attempt and releases only its current exact claim",
   startingFacts: attemptChoiceStartingFacts,
@@ -1955,10 +1997,18 @@ export const changedAttemptStopsAndReleasesAuthoredCassette: ScenarioCassette = 
   ]
 })
 
-const changedAttemptStopAppliedAt = changedAttemptStopsAndReleasesAuthoredCassette.story.findIndex(
+const changedAttemptStopAppliedAt = changedAttemptStopsAndReleasesUnwindowed.story.findIndex(
   (item) => item._tag === "OperatorStopsAttempt"
 )
-const changedAttemptStopStoryThroughApplication = changedAttemptStopsAndReleasesAuthoredCassette.story.slice(
+
+export const changedAttemptStopsAndReleasesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...changedAttemptStopsAndReleasesUnwindowed,
+  causalWindows: [changedAttemptStopClaimWindow(changedAttemptStopAppliedAt + 1)]
+})
+
+const changedAttemptStopStoryThroughApplication = changedAttemptStopsAndReleasesUnwindowed.story.slice(
   0,
   changedAttemptStopAppliedAt + 1
 )
@@ -1967,10 +2017,10 @@ const changedAttemptStopStoryThroughApplication = changedAttemptStopsAndReleases
 export const changedAttemptChoiceRaceAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...changedAttemptStopsAndReleasesAuthoredCassette,
+  ...changedAttemptStopsAndReleasesUnwindowed,
   name: "Alice races Continue and Stop for the same exposed F1 and F2 choice",
   story: [
-    ...changedAttemptStopsAndReleasesAuthoredCassette.story.slice(0, changedAttemptStopAppliedAt),
+    ...changedAttemptStopsAndReleasesUnwindowed.story.slice(0, changedAttemptStopAppliedAt),
     {
       _tag: "OperatorRacesContinueAndStop",
       attemptId: "attempt:A:0",
@@ -2008,7 +2058,7 @@ const stoppedAttemptWithoutClaimMutationCassette = (
       }
 ) =>
   Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-    ...changedAttemptStopsAndReleasesAuthoredCassette,
+    ...changedAttemptStopsAndReleasesUnwindowed,
     name,
     story: [
       ...changedAttemptStopStoryThroughApplication.map((item) =>
@@ -2128,10 +2178,10 @@ const stoppedAttemptReleaseSelectedAt = changedAttemptStopsAndReleasesAuthoredCa
 export const changedAttemptStopReleaseResponseLostAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...changedAttemptStopsAndReleasesAuthoredCassette,
+  ...changedAttemptStopsAndReleasesUnwindowed,
   name: "Alice sees Stop settle after Dalph loses the exact claim-release response",
   story: [
-    ...changedAttemptStopsAndReleasesAuthoredCassette.story.slice(0, stoppedAttemptReleaseSelectedAt + 1),
+    ...changedAttemptStopsAndReleasesUnwindowed.story.slice(0, stoppedAttemptReleaseSelectedAt + 1),
     {
       _tag: "TaskClaimReleaseResponseLost",
       detail: "tracker removed K1 but the coordinator did not receive the response",
