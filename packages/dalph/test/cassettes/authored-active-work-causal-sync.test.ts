@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Result, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -1273,6 +1273,45 @@ it.effect("wakes a passive terminal report only after its causal graph predecess
     expect(yield* cursor.storyPosition).toBe(0)
     yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("required-graph-operation", []))
     expect(Option.getOrUndefined(yield* Fiber.join(report))?.report.attemptId).toBe(attemptId)
+    expect(yield* cursor.storyPosition).toBe(2)
+  })
+)
+
+it.effect("holds a passive terminal report until the exact successor plan is accepted", () =>
+  Effect.gen(function* () {
+    const attemptId = AttemptId.make("attempt:A:after-B-plan")
+    const story = [
+      selection("independent-graph", []),
+      AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.make({
+        report: { _tag: "ExecutorWorkTerminal", attemptId, result: { _tag: "Completed" } }
+      }),
+      terminal
+    ]
+    const window = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+      startIndex: 0,
+      endIndex: 2,
+      occurrences: [
+        { id: "independent-graph", storyIndex: 0, predecessorIds: [] },
+        { id: "A-terminal", storyIndex: 1, predecessorIds: [], acceptedPlanPredecessorRoles: ["B-successor-plan"] }
+      ]
+    })
+    const cursor = yield* makeStoryCursor(story, { causalWindows: [window] })
+    const premature = yield* Effect.exit(cursor.consumePassiveExecutorLifecycleChangeFor(attemptId))
+    expect(Exit.isFailure(premature)).toBe(true)
+    if (Exit.isFailure(premature)) {
+      expect(Cause.pretty(premature.cause)).toContain(AuthoredCausalSelectionFailure.name)
+      expect(Result.getOrThrow(Cause.findDefect(premature.cause))).toMatchObject({
+        detail: expect.stringContaining("B-successor-plan")
+      })
+    }
+    const report = yield* Stream.runHead(cursor.passiveExecutorLifecycleChangesFor(attemptId)).pipe(Effect.forkChild)
+    yield* cursor.registerAcceptedReplacementPlan(
+      causal({ occurrenceRole: "B-successor-plan", predecessorRoles: [] }).occurrenceRole,
+      causalContext("accepted-B-plan", [])
+    )
+    expect(Option.getOrUndefined(yield* Fiber.join(report))?.report.attemptId).toBe(attemptId)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("independent-graph-operation", []))
     expect(yield* cursor.storyPosition).toBe(2)
   })
 )

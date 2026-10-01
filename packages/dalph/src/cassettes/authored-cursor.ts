@@ -671,6 +671,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       const graph = compileAuthoredOccurrenceGraph(
         window.occurrences.map(
           ({
+            acceptedPlanPredecessorRoles,
             directFocusedRead,
             directGitRead,
             directGraphPredecessorRoles,
@@ -686,6 +687,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             id,
             predecessors: predecessorIds,
             value: {
+              acceptedPlanPredecessorRoles,
               directFocusedRead,
               directGitRead,
               storyIndex,
@@ -949,6 +951,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             { consumed },
             String(index),
             ({
+              acceptedPlanPredecessorRoles,
               directFocusedRead,
               directGitRead,
               directGraphPredecessorRoles,
@@ -960,6 +963,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             }) => {
               const item = story[storyIndex]
               if (!predicate(item)) return false
+              if (acceptedPlanPredecessorRoles?.some((role) => !state.causal.byRole.has(String(role)))) return false
               if (graphReadCause !== undefined && graphReadCause !== context?.graphReadCause) return false
               if (
                 graphReadExplicitTaskIds !== undefined &&
@@ -1084,12 +1088,19 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               const ownerItem = owner === undefined ? undefined : story[owner.value.storyIndex]
               return ownerItem?._tag !== "DalphSelects" || !ownerSelectionMatches(ownerItem)
             })
+            const missingAcceptedPlans = relevant.flatMap(({ id, value }) =>
+              (value.acceptedPlanPredecessorRoles ?? [])
+                .filter((role) => !state.causal.byRole.has(String(role)))
+                .map((role) => `${id}: ${role}`)
+            )
             const detail =
               wrongOwner !== undefined
                 ? `occurrence ${wrongOwner.id} requires exact selected owner ${wrongOwner.value.ownerRole}; received ${context?.operationId ?? "no operation identity"}`
                 : wrongBoundaryOwner !== undefined
                   ? `occurrence ${wrongBoundaryOwner.id} has a selected owner for a different boundary request`
-                  : matched.detail
+                  : missingAcceptedPlans.length > 0
+                    ? `unmet accepted successor plan predecessors: ${missingAcceptedPlans.join(", ")}`
+                    : matched.detail
             return { _tag: "Failure" as const, detail, index }
           }
           const { id, value } = matched.occurrence
@@ -1779,11 +1790,13 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           }
           const frontiers = yield* SubscriptionRef.get(causalWindowFrontiers)
           const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
+          const causal = (yield* Ref.get(exactCausalState)).causal
           const enabled = window.graph.occurrences.some(({ id, predecessors, value }) => {
             const item = story[value.storyIndex]
             return (
               !consumed.has(id) &&
               predecessors.every((predecessor) => consumed.has(predecessor)) &&
+              (value.acceptedPlanPredecessorRoles?.every((role) => causal.byRole.has(String(role))) ?? true) &&
               item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
               item.report.attemptId === attemptId
             )
@@ -2509,6 +2522,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           ...state,
           causal: registerCausalSelection({ occurrenceRole: role }, context, state.causal)
         })
+        yield* SubscriptionRef.update(storyProgress, (version) => version + 1)
         return undefined
       })
     )

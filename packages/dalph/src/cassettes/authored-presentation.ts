@@ -596,9 +596,13 @@ export const renderAuthoredCassetteLyrics = (cassette: AuthoredScenarioCassette)
           ? ""
           : `; direct ${causal.directGitRead.kind} for task ${causal.directGitRead.taskId} attempt ${causal.directGitRead.attemptId} binds ${causal.directGitRead.role} after ${causal.directGitRead.predecessorRoles.join(", ") || "no operation predecessor"}`
       const graphReadCause = causal?.graphReadCause === undefined ? "" : `; graph read cause ${causal.graphReadCause}`
+      const acceptedPlanPredecessors =
+        causal?.acceptedPlanPredecessorRoles === undefined
+          ? ""
+          : `; follows accepted successor plan ${causal.acceptedPlanPredecessorRoles.join(", ")}`
       return causal === undefined
         ? lyric
-        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${directFocusedRead}${directGitRead}${graphReadCause}${graphReadCoverage}.`
+        : `${lyric} Causal occurrence ${causal.id} follows ${causal.predecessorIds.length === 0 ? "no prior occurrence" : causal.predecessorIds.join(", ")}${acceptedPlanPredecessors}${causal.ownerRole === undefined ? "" : `; response owner ${causal.ownerRole}`}${directGraphRole}${directFocusedRead}${directGitRead}${graphReadCause}${graphReadCoverage}.`
     })
   ].join("\n")
 }

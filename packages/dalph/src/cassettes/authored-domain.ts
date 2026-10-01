@@ -1193,6 +1193,8 @@ export const AuthoredCausalWindow = Schema.Struct({
       graphReadExplicitTaskIds: Schema.optionalKey(Schema.Array(TaskId).check(Schema.isUnique())),
       /** Exact selected operation whose boundary result this node returns, when applicable. */
       ownerRole: Schema.optionalKey(AuthoredOccurrenceId),
+      /** Accepted replacement plans that must be durable before this boundary may occur. */
+      acceptedPlanPredecessorRoles: Schema.optionalKey(Schema.Array(AuthoredCausalRole).check(Schema.isUnique())),
       /** A direct interpreter graph read has no selection trace; bind its raw operation at this result. */
       directGraphRole: Schema.optionalKey(AuthoredCausalRole),
       directGraphPredecessorRoles: Schema.optionalKey(Schema.Array(AuthoredCausalRole).check(Schema.isUnique())),
@@ -1389,6 +1391,13 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
     return "accepted replacement plan roles must be unique"
   if (new Set(replacementRoles.map(({ successorAttemptId }) => successorAttemptId)).size !== replacementRoles.length)
     return "accepted replacement successor attempts must be unique"
+  const acceptedPlanRoles = new Set(replacementRoles.map(({ occurrenceRole }) => occurrenceRole))
+  for (const window of cassette.causalWindows ?? []) {
+    for (const occurrence of window.occurrences) {
+      if (occurrence.acceptedPlanPredecessorRoles?.some((role) => !acceptedPlanRoles.has(role)))
+        return `causal occurrence ${occurrence.id} requires a declared accepted replacement plan role`
+    }
+  }
   const selectedRoles = cassette.story.flatMap((item) =>
     item._tag === "DalphSelects" ? [item.causal?.occurrenceRole ?? item.causalAnchor?.occurrenceRole] : []
   )

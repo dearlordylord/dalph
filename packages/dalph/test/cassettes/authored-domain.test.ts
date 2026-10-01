@@ -92,6 +92,17 @@ it("validates a causal boundary window against the decoded story before playback
   const [directWindow] = direct.causalWindows
   const [directOccurrence] = directWindow?.occurrences ?? []
   if (directWindow === undefined || directOccurrence === undefined) throw new Error("Expected a direct graph window")
+  const afterAcceptedPlan = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...direct,
+    acceptedReplacementPlanRoles: [{ occurrenceRole: "B-successor", taskId: "B", successorAttemptId: "attempt:B:1" }],
+    causalWindows: [
+      { ...directWindow, occurrences: [{ ...directOccurrence, acceptedPlanPredecessorRoles: ["B-successor"] }] }
+    ]
+  })
+  expect(renderAuthoredCassetteLyrics(afterAcceptedPlan)).toContain("follows accepted successor plan B-successor")
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({ ...afterAcceptedPlan, acceptedReplacementPlanRoles: [] })
+  ).toThrow("requires a declared accepted replacement plan role")
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)({
       ...direct,
