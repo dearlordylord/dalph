@@ -402,12 +402,7 @@ const initialAClaimGraphWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem
     endIndex: graphIndex + 1,
     occurrences: [
       { id: "initial-A-claim", storyIndex: claimIndex, predecessorIds: [] },
-      {
-        id: "initial-A-graph",
-        storyIndex: graphIndex,
-        predecessorIds: ["initial-A-claim"],
-        waitForSelectedPredecessor: true
-      }
+      { id: "initial-A-graph", storyIndex: graphIndex, predecessorIds: ["initial-A-claim"], waitForPredecessors: true }
     ]
   })
 }
@@ -451,7 +446,7 @@ const beforeBClaimWindow = (story: ReadonlyArray<AuthoredCassetteStoryItem>) => 
             ? []
             : [previousId, ...(isBClaim && previousId !== selectedPredecessorId ? [selectedPredecessorId] : [])],
         ...(item._tag === "TaskWorkSpecificationReadReturned" ? { ownerRole: previousId } : {}),
-        ...(isBClaim ? { waitForSelectedPredecessor: true } : {})
+        ...(isBClaim ? { waitForPredecessors: true } : {})
       }
     })
   })
@@ -1232,7 +1227,7 @@ const unpauseRefreshWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
       ...(item._tag === "TaskWorkSpecificationReadReturned" || item._tag === "TaskClaimCurrentReadReturned"
         ? { ownerRole: previousId }
         : {}),
-      ...(isARead ? { waitForSelectedPredecessor: true } : {})
+      ...(isARead ? { waitForPredecessors: true } : {})
     }
   })
 })
@@ -5543,7 +5538,7 @@ const initialDiamondClaimGraphWindow = (story: ReadonlyArray<AuthoredCassetteSto
         id: `diamond-${taskId}-graph`,
         storyIndex: graphIndex,
         predecessorIds: [`diamond-${taskId}-claim`],
-        waitForSelectedPredecessor: true
+        waitForPredecessors: true
       }
     ]
   })
@@ -5646,7 +5641,7 @@ const doubleDiamondClaimRefreshWindow = (story: ReadonlyArray<AuthoredCassetteSt
         id: "diamond-B-claim-refresh",
         storyIndex: bClaimIndex,
         predecessorIds: ["diamond-claim-refresh-graph", "diamond-claim-refresh-graph-result"],
-        waitForSelectedPredecessor: true
+        waitForPredecessors: true
       },
       {
         id: "diamond-B-claim-refresh-result",
@@ -5658,7 +5653,7 @@ const doubleDiamondClaimRefreshWindow = (story: ReadonlyArray<AuthoredCassetteSt
         id: "diamond-C-claim-refresh",
         storyIndex: cClaimIndex,
         predecessorIds: ["diamond-claim-refresh-graph", "diamond-claim-refresh-graph-result"],
-        waitForSelectedPredecessor: true
+        waitForPredecessors: true
       },
       {
         id: "diamond-C-claim-refresh-result",
@@ -5704,7 +5699,7 @@ const doubleDiamondFAdmissionBeforeELineageWindow = (story: ReadonlyArray<Author
         predecessorIds:
           offset === 0 ? [] : [previousId, ...(isLineage ? [`before-E-lineage-${selectedPredecessorOffset}`] : [])],
         ...(item._tag === "TaskWorkSpecificationReadReturned" ? { ownerRole: previousId } : {}),
-        ...(isLineage ? { waitForSelectedPredecessor: true } : {})
+        ...(isLineage ? { waitForPredecessors: true } : {})
       }
     })
   })
@@ -5957,7 +5952,7 @@ const fiveTaskDiamondPromotionPredecessorWindow = (story: ReadonlyArray<Authored
         id: "diamond-B-lineage",
         storyIndex: bLineageIndex,
         predecessorIds: ["diamond-E-plan", "diamond-B-completion-hold"],
-        waitForSelectedPredecessor: true
+        waitForPredecessors: true
       }
     ]
   })

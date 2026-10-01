@@ -32,6 +32,7 @@ import {
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { AuthoredCausalWindow } from "../../src/cassettes/authored-domain.js"
 import { controlledTrace } from "../../src/cassettes/authored-adapters.js"
 import {
   renderAuthoredStoryItemLandmark,
@@ -376,7 +377,6 @@ it("parks every marked fresh claim before selection while A, Operator reacquisit
       )
       const bFiber = yield* trace.emit({ _tag: "OperationSelected", operation: bOperation }).pipe(Effect.forkChild)
       const cFiber = yield* trace.emit({ _tag: "OperationSelected", operation: cOperation }).pipe(Effect.forkChild)
-      for (let turn = 0; turn < 16; turn += 1) yield* Effect.yieldNow
       expect(bFiber.pollUnsafe()).toBeUndefined()
       expect(cFiber.pollUnsafe()).toBeUndefined()
       expect(yield* cursor.storyPosition).toBe(1)
@@ -471,8 +471,7 @@ it("keeps authored promotion Git, control, and executor outcomes correlated at t
       const nonDeathAfterDirection = yield* makeStoryCursor([integrationDirection, findStoryItem("ExpectedBehavior")])
       expect(Option.isSome(yield* nonDeathAfterDirection.consumeIntegrationQuarantineDirection)).toBe(true)
       const nonDeathProbe = yield* nonDeathAfterDirection.pauseAtCoordinatorProcessDeath.pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      expect(nonDeathProbe.pollUnsafe()).not.toBeUndefined()
+      expect(Exit.isSuccess(yield* Fiber.await(nonDeathProbe))).toBe(true)
       yield* nonDeathAfterDirection.completeIntegrationQuarantineDirection
 
       const deathAfterDirection = yield* makeStoryCursor([
@@ -481,7 +480,6 @@ it("keeps authored promotion Git, control, and executor outcomes correlated at t
       ])
       expect(Option.isSome(yield* deathAfterDirection.consumeIntegrationQuarantineDirection)).toBe(true)
       const heldDeath = yield* deathAfterDirection.pauseAtCoordinatorProcessDeath.pipe(Effect.forkChild)
-      yield* Effect.yieldNow
       expect(heldDeath.pollUnsafe()).toBeUndefined()
       yield* deathAfterDirection.completeIntegrationQuarantineDirection
       const heldDeathExit = yield* Fiber.await(heldDeath)
@@ -541,12 +539,30 @@ it("correlates concurrent operation selections before advancing the authored sto
       if (cSelection?._tag !== "DalphSelects" || aSelection?._tag !== "DalphSelects") {
         return yield* Effect.die("missing concurrent task-work specification selections")
       }
-      const cursor = yield* makeStoryCursor([cSelection, aSelection])
-      const arrivedFirst = yield* cursor.consumeDalphSelectionFor(aSelection.operation).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-
-      expect(yield* cursor.consumeDalphSelectionFor(cSelection.operation)).toEqual(cSelection)
-      expect(yield* Fiber.join(arrivedFirst)).toEqual(aSelection)
+      const cursor = yield* makeStoryCursor([cSelection, aSelection], {
+        causalWindows: [
+          Schema.decodeUnknownSync(AuthoredCausalWindow)({
+            startIndex: 0,
+            endIndex: 2,
+            occurrences: [
+              { id: "C-specification", storyIndex: 0, predecessorIds: [] },
+              { id: "A-specification", storyIndex: 1, predecessorIds: [] }
+            ]
+          })
+        ]
+      })
+      expect(
+        yield* cursor.consumeDalphSelectionFor(aSelection.operation, {
+          operationId: OperationId.make("A-specification"),
+          predecessorOperationIds: []
+        })
+      ).toEqual(aSelection)
+      expect(
+        yield* cursor.consumeDalphSelectionFor(cSelection.operation, {
+          operationId: OperationId.make("C-specification"),
+          predecessorOperationIds: []
+        })
+      ).toEqual(cSelection)
     })
   )
 })
@@ -575,12 +591,39 @@ it("lets fresh claim selections wait for an actively owned lineage selection and
       if (hold?._tag !== "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary") {
         return yield* Effect.die("missing target-promotion lineage hold")
       }
-      const cursor = yield* makeStoryCursor([lineage, hold, a, c])
-      const aSelection = yield* cursor.consumeDalphSelectionFor(a.operation).pipe(Effect.forkChild)
-      const cSelection = yield* cursor.consumeDalphSelectionFor(c.operation).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
+      const cursor = yield* makeStoryCursor([lineage, hold, a, c], {
+        causalWindows: [
+          Schema.decodeUnknownSync(AuthoredCausalWindow)({
+            startIndex: 0,
+            endIndex: 4,
+            occurrences: [
+              { id: "lineage", storyIndex: 0, predecessorIds: [] },
+              { id: "lineage-hold", storyIndex: 1, predecessorIds: ["lineage"] },
+              { id: "claim-A", storyIndex: 2, predecessorIds: ["lineage-hold"], waitForPredecessors: true },
+              { id: "claim-C", storyIndex: 3, predecessorIds: ["lineage-hold"], waitForPredecessors: true }
+            ]
+          })
+        ]
+      })
+      const aSelection = yield* cursor
+        .consumeDalphSelectionFor(a.operation, {
+          operationId: OperationId.make("claim-A"),
+          predecessorOperationIds: []
+        })
+        .pipe(Effect.forkChild)
+      const cSelection = yield* cursor
+        .consumeDalphSelectionFor(c.operation, {
+          operationId: OperationId.make("claim-C"),
+          predecessorOperationIds: []
+        })
+        .pipe(Effect.forkChild)
 
-      expect(yield* cursor.consumeDalphSelectionFor(lineage.operation)).toEqual(lineage)
+      expect(
+        yield* cursor.consumeDalphSelectionFor(lineage.operation, {
+          operationId: OperationId.make("lineage"),
+          predecessorOperationIds: []
+        })
+      ).toEqual(lineage)
       expect(Option.isSome(yield* cursor.consumeTargetPromotionReconciliationReadBoundaryHold)).toBe(true)
       expect(yield* Fiber.join(aSelection)).toEqual(a)
       expect(yield* Fiber.join(cSelection)).toEqual(c)
@@ -635,14 +678,20 @@ it("correlates concurrent executor reports when the later request arrives first"
       if (first === undefined || second === undefined) {
         return yield* Effect.die("missing independently correlated executor reports")
       }
-      const cursor = yield* makeStoryCursor([first, second])
-      const laterRequest = yield* cursor
-        .consumeExecutorReportFor(second.request, second.report.attemptId)
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-
+      const cursor = yield* makeStoryCursor([first, second], {
+        causalWindows: [
+          Schema.decodeUnknownSync(AuthoredCausalWindow)({
+            startIndex: 0,
+            endIndex: 2,
+            occurrences: [
+              { id: "first-report", storyIndex: 0, predecessorIds: [] },
+              { id: "second-report", storyIndex: 1, predecessorIds: [] }
+            ]
+          })
+        ]
+      })
+      expect(yield* cursor.consumeExecutorReportFor(second.request, second.report.attemptId)).toEqual(second)
       expect(yield* cursor.consumeExecutorReportFor(first.request, first.report.attemptId)).toEqual(first)
-      expect(yield* Fiber.join(laterRequest)).toEqual(second)
     })
   )
 })
@@ -657,12 +706,26 @@ it("registers exact executor ownership after a sibling selection is already wait
       if (report?._tag !== "PlannedAttemptExecutorWorkReported" || selection?._tag !== "DalphSelects") {
         return yield* Effect.die("missing executor outcome and later worktree selection")
       }
-      const cursor = yield* makeStoryCursor([report, selection])
-      const waitingSelection = yield* cursor.consumeDalphSelectionFor(selection.operation).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
+      const cursor = yield* makeStoryCursor([report, selection], {
+        causalWindows: [
+          Schema.decodeUnknownSync(AuthoredCausalWindow)({
+            startIndex: 0,
+            endIndex: 2,
+            occurrences: [
+              { id: "executor-report", storyIndex: 0, predecessorIds: [] },
+              { id: "sibling-worktree", storyIndex: 1, predecessorIds: ["executor-report"], waitForPredecessors: true }
+            ]
+          })
+        ]
+      })
+      const waitingSelection = yield* cursor
+        .consumeDalphSelectionFor(selection.operation, {
+          operationId: OperationId.make("sibling-worktree"),
+          predecessorOperationIds: []
+        })
+        .pipe(Effect.forkChild)
 
       yield* cursor.beginExecutorReportRequest(report.request, report.report.attemptId)
-      yield* Effect.yieldNow
       expect(waitingSelection.pollUnsafe()).toBeUndefined()
 
       expect(yield* cursor.consumeExecutorReportFor(report.request, report.report.attemptId)).toEqual(report)
@@ -672,7 +735,7 @@ it("registers exact executor ownership after a sibling selection is already wait
   )
 })
 
-it("retains a pre-registered executor owner after the registration window closes", async () => {
+it("keeps a pre-registered executor owner when another exact report arrives first", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const reports = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
@@ -683,17 +746,21 @@ it("retains a pre-registered executor owner after the registration window closes
       if (first === undefined || second === undefined) {
         return yield* Effect.die("missing independently correlated executor reports")
       }
-      const cursor = yield* makeStoryCursor([first, second])
+      const cursor = yield* makeStoryCursor([first, second], {
+        causalWindows: [
+          Schema.decodeUnknownSync(AuthoredCausalWindow)({
+            startIndex: 0,
+            endIndex: 2,
+            occurrences: [
+              { id: "registered-report", storyIndex: 0, predecessorIds: [] },
+              { id: "independent-report", storyIndex: 1, predecessorIds: [] }
+            ]
+          })
+        ]
+      })
       yield* cursor.beginExecutorReportRequest(first.request, first.report.attemptId)
-      const waitingLaterReport = yield* cursor
-        .consumeExecutorReportFor(second.request, second.report.attemptId)
-        .pipe(Effect.forkChild)
-
-      for (let turn = 0; turn < 16; turn += 1) yield* Effect.yieldNow
-      expect(waitingLaterReport.pollUnsafe()).toBeUndefined()
-
+      expect(yield* cursor.consumeExecutorReportFor(second.request, second.report.attemptId)).toEqual(second)
       expect(yield* cursor.consumeExecutorReportFor(first.request, first.report.attemptId)).toEqual(first)
-      expect(yield* Fiber.join(waitingLaterReport)).toEqual(second)
       yield* cursor.endExecutorReportRequest(first.request, first.report.attemptId)
     })
   )
@@ -814,17 +881,33 @@ it("lets an exact operation selection wait for an actively owned sibling executo
       if (report?._tag !== "PlannedAttemptExecutorWorkReported" || selection?._tag !== "DalphSelects") {
         return yield* Effect.die("missing executor outcome and later worktree selection")
       }
-      const cursor = yield* makeStoryCursor([report, selection])
+      const cursor = yield* makeStoryCursor([report, selection], {
+        causalWindows: [
+          Schema.decodeUnknownSync(AuthoredCausalWindow)({
+            startIndex: 0,
+            endIndex: 2,
+            occurrences: [
+              { id: "pre-registered-report", storyIndex: 0, predecessorIds: [] },
+              {
+                id: "dependent-worktree",
+                storyIndex: 1,
+                predecessorIds: ["pre-registered-report"],
+                waitForPredecessors: true
+              }
+            ]
+          })
+        ]
+      })
       yield* Effect.acquireUseRelease(
         cursor.beginExecutorReportRequest(report.request, report.report.attemptId),
         () =>
           Effect.gen(function* () {
-            const operation = yield* cursor.consumeDalphSelectionFor(selection.operation).pipe(Effect.forkChild)
-            yield* Effect.yieldNow
-
-            // Let the cursor's bounded registration window close while the exact
-            // executor request remains registered but has not advanced the story.
-            for (let turn = 0; turn < 16; turn += 1) yield* Effect.yieldNow
+            const operation = yield* cursor
+              .consumeDalphSelectionFor(selection.operation, {
+                operationId: OperationId.make("dependent-worktree"),
+                predecessorOperationIds: []
+              })
+              .pipe(Effect.forkChild)
             expect(operation.pollUnsafe()).toBeUndefined()
             expect(yield* cursor.consumeExecutorReportFor(report.request, report.report.attemptId)).toEqual(report)
             expect(yield* Fiber.join(operation)).toEqual(selection)

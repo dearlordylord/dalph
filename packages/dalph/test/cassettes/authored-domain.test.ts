@@ -56,11 +56,11 @@ it("validates a causal boundary window against the decoded story before playback
       causalWindows: [
         {
           ...validWindow,
-          occurrences: [{ ...validWindow.occurrences[0], waitForSelectedPredecessor: true }, validWindow.occurrences[1]]
+          occurrences: [{ ...validWindow.occurrences[0], waitForPredecessors: true }, validWindow.occurrences[1]]
         }
       ]
     })
-  ).toThrow("can await only an exact selected predecessor")
+  ).toThrow("can await only a named predecessor")
   for (const occurrences of [
     [{ id: "graph", storyIndex: startIndex, predecessorIds: [] }],
     [

@@ -648,10 +648,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Effect.gen(function* () {
       const graph = compileAuthoredOccurrenceGraph(
         window.occurrences.map(
-          ({ graphReadCause, id, ownerRole, predecessorIds, storyIndex, waitForSelectedPredecessor }) => ({
+          ({ graphReadCause, id, ownerRole, predecessorIds, storyIndex, waitForPredecessors }) => ({
             id,
             predecessors: predecessorIds,
-            value: { storyIndex, ownerRole, graphReadCause, waitForSelectedPredecessor }
+            value: { storyIndex, ownerRole, graphReadCause, waitForPredecessors }
           })
         )
       )
@@ -935,7 +935,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
             const pending = relevant.length === 1 ? relevant[0] : undefined
             const unmet = pending?.predecessors.filter((id) => !consumed.has(id)) ?? []
             if (
-              pending?.value.waitForSelectedPredecessor === true &&
+              pending?.value.waitForPredecessors === true &&
               unmet.length > 0 &&
               (context === undefined || !state.causal.byOperationId.has(String(context.operationId)))
             ) {

@@ -143,7 +143,7 @@ it.effect("waits for an actively owned recovery selection before consuming the o
               id: "integrator-git-observation",
               storyIndex: 1,
               predecessorIds: ["recovery-graph"],
-              waitForSelectedPredecessor: true
+              waitForPredecessors: true
             }
           ]
         })

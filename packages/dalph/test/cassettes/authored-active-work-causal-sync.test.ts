@@ -237,7 +237,7 @@ it.effect("waits for an explicitly named selected predecessor without scheduler 
         authoredOccurrence(AuthoredOccurrenceId.make("claim"), { item: selection("claim", [], claim) }),
         authoredOccurrence(AuthoredOccurrenceId.make("graph"), {
           item: selection("graph", ["claim"], graphOperation),
-          waitForSelectedPredecessor: true
+          waitForPredecessors: true
         })
       )
     )

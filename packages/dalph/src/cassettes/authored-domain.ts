@@ -1159,8 +1159,8 @@ export const AuthoredCausalWindow = Schema.Struct({
       id: AuthoredOccurrenceId,
       storyIndex: AuthoredCausalStoryIndex,
       predecessorIds: Schema.Array(AuthoredOccurrenceId).check(Schema.isUnique()),
-      /** This boundary may wait for a named selected predecessor to enter the cursor. */
-      waitForSelectedPredecessor: Schema.optionalKey(Schema.Literal(true)),
+      /** This boundary may wait for its explicitly named predecessors to enter the cursor. */
+      waitForPredecessors: Schema.optionalKey(Schema.Literal(true)),
       /** Distinguishes equal-shaped graph selections by their production cause. */
       graphReadCause: Schema.optionalKey(
         Schema.Literals([
@@ -1232,14 +1232,8 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
       if (item === undefined || !allowedTags.has(item._tag)) {
         return `causal occurrence ${occurrence.id} must name a controlled boundary item`
       }
-      if (
-        occurrence.waitForSelectedPredecessor === true &&
-        !occurrence.predecessorIds.some((id) => {
-          const predecessor = graph.byId.get(id)
-          return predecessor !== undefined && cassette.story[predecessor.value]?._tag === "DalphSelects"
-        })
-      ) {
-        return `causal occurrence ${occurrence.id} can await only an exact selected predecessor`
+      if (occurrence.waitForPredecessors === true && occurrence.predecessorIds.length === 0) {
+        return `causal occurrence ${occurrence.id} can await only a named predecessor`
       }
       if (
         occurrence.graphReadCause !== undefined &&
