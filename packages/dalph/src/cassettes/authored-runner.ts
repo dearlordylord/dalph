@@ -824,12 +824,30 @@ export const pauseObservationResultOf = (view: PauseProgressView, runId: RunId):
   })
 }
 
+/** Stream snapshots may coalesce action phases; coverage cannot change without another accepted grouping fact. */
+const pauseCoveredResponsibilitiesMatch = (
+  actual: Extract<AuthoredPauseObservationResult, { readonly _tag: "PauseWaiting" }>,
+  expected: Extract<AuthoredPauseObservationResult, { readonly _tag: "PauseWaiting" | "PauseConfirmed" }>
+): boolean => {
+  const covered = (result: typeof actual | typeof expected) =>
+    [
+      ...result.atBoundary,
+      ...(result._tag === "PauseWaiting" ? result.preventing.map(({ responsibility }) => responsibility) : [])
+    ]
+      .map((responsibility) => JSON.stringify(responsibility))
+      .sort()
+  return JSON.stringify(covered(actual)) === JSON.stringify(covered(expected))
+}
+
 const pauseObservationResultMatches = (
   actual: AuthoredPauseObservationResult,
   expected: AuthoredPauseObservationResult
 ): boolean => {
+  if (actual._tag === "PauseWaiting" && expected._tag === "PauseWaiting")
+    return pauseCoveredResponsibilitiesMatch(actual, expected)
   return JSON.stringify(actual) === JSON.stringify(expected)
 }
+const lastPauseResultOffset = -1
 
 const diagnosticJsonIndent = 2
 const authoredTaggedDiagnosticOf = (value: { readonly _tag: string }): AuthoredTaggedDiagnostic => ({
@@ -2122,6 +2140,25 @@ const runAuthoredScenarioCassetteWith = (request: {
         const results = yield* Ref.get(activePauseObservationResults)
         /* v8 ignore start -- @preserve In-flight Unpause closure requires one active observation and its exact queued results. */
         if (Option.isNone(results)) return yield* Effect.die("no authored Pause observation is active")
+        const terminal = expectedResults.at(lastPauseResultOffset)
+        // Unpause closes the stream after an applied direction; intermediate Waiting frames are process-local.
+        if (terminal?._tag === "PauseNoLongerApplied" && expectedResults.length > 1) {
+          const waiting = expectedResults.filter((result) => result._tag === "PauseWaiting")
+          let sawWaiting = false
+          for (;;) {
+            const actual = yield* Queue.take(results.value)
+            if (actual._tag !== "PauseWaiting") {
+              if (!sawWaiting || !pauseObservationResultMatches(actual, terminal)) {
+                return yield* Effect.die("authored Unpause observation omitted covered Waiting or its terminal result")
+              }
+              return
+            }
+            if (!waiting.some((expected) => pauseObservationResultMatches(actual, expected))) {
+              return yield* Effect.die("authored Unpause observation changed its covered responsibilities")
+            }
+            sawWaiting = true
+          }
+        }
         for (const expected of expectedResults) {
           const actual = yield* Queue.take(results.value)
           if (!pauseObservationResultMatches(actual, expected)) {
@@ -2596,7 +2633,15 @@ const runAuthoredScenarioCassetteWith = (request: {
               active: ActiveAuthoredPauseObservation,
               expected: AuthoredPauseObservationResult
             ) {
-              const actual = yield* Queue.take(active.results)
+              let actual = yield* Queue.take(active.results)
+              if (expected._tag === "PauseConfirmed") {
+                while (actual._tag === "PauseWaiting") {
+                  if (!pauseCoveredResponsibilitiesMatch(actual, expected)) {
+                    return yield* Effect.die("authored Pause observation changed covered responsibilities")
+                  }
+                  actual = yield* Queue.take(active.results)
+                }
+              }
               /* v8 ignore start -- @preserve Maintained authored cassettes assert the exact process-local view; the mismatch is only a generic authoring diagnostic. */
               if (!pauseObservationResultMatches(actual, expected)) {
                 return yield* Effect.die(

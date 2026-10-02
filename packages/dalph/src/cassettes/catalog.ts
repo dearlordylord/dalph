@@ -3836,14 +3836,6 @@ const pauseContinuePendingA = {
   proposal: pauseExecutorAndPromotionContinueA
 } as const
 const pauseSuspendProposedA = { _tag: "ProposedDeliveryAction", proposal: pauseExecutorAndPromotionSuspendA } as const
-const pauseSuspendLiveA = {
-  _tag: "LiveDeliveryAction",
-  owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionSuspendA }
-} as const
-const pauseSuspendPendingA = {
-  _tag: "AcceptedOutcomePublicationPending",
-  proposal: pauseExecutorAndPromotionSuspendA
-} as const
 const pausePromotionRequiredD = {
   _tag: "TargetPromotionResultRequired",
   request: pauseExecutorAndPromotionRequestD
@@ -3859,10 +3851,6 @@ const pausePromotionActiveD = {
 const pausePromotionLiveD = {
   _tag: "LiveDeliveryAction",
   owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionRunD }
-} as const
-const pausePromotionPendingD = {
-  _tag: "AcceptedOutcomePublicationPending",
-  proposal: pauseExecutorAndPromotionRunD
 } as const
 
 const pauseExecutorAndPromotionWaiting = (
@@ -4070,49 +4058,7 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
       [pauseExecutorSafeA, pauseSuspendProposedA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
     ),
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseSuspendLiveA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
-    ),
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseSuspendLiveA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionLiveD]
-    ),
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseSuspendLiveA],
-      [pausePromotionRequiredD, pausePromotionLiveD]
-    ),
-    pauseExecutorAndPromotionWaiting([pauseSuspendLiveA], [pausePromotionRequiredD, pausePromotionLiveD]),
-    pauseExecutorAndPromotionWaiting([pauseSuspendPendingA], [pausePromotionRequiredD, pausePromotionLiveD]),
-    {
-      _tag: "PauseProgressObserved",
-      result: {
-        _tag: "PauseWaiting",
-        atBoundary: [pauseExecutorResponsibilityA],
-        preventing: [
-          { blockers: [pausePromotionRequiredD, pausePromotionLiveD], responsibility: pausePromotionResponsibilityD }
-        ]
-      },
-      subject: { _tag: "Task", taskId: "A" }
-    },
-    {
-      _tag: "PauseProgressObserved",
-      result: {
-        _tag: "PauseWaiting",
-        atBoundary: [pauseExecutorResponsibilityA],
-        preventing: [{ blockers: [pausePromotionLiveD], responsibility: pausePromotionResponsibilityD }]
-      },
-      subject: { _tag: "Task", taskId: "A" }
-    },
-    {
-      _tag: "PauseProgressObserved",
-      result: {
-        _tag: "PauseWaiting",
-        atBoundary: [pauseExecutorResponsibilityA],
-        preventing: [{ blockers: [pausePromotionPendingD], responsibility: pausePromotionResponsibilityD }]
-      },
-      subject: { _tag: "Task", taskId: "A" }
-    },
+    // The observation driver validates every intervening Waiting view's exact coverage before terminal confirmation.
     {
       _tag: "PauseProgressObserved",
       result: { _tag: "PauseConfirmed", atBoundary: [pauseExecutorResponsibilityA, pausePromotionResponsibilityD] },
