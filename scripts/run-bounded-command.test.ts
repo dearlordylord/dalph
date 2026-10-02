@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -358,7 +358,7 @@ test("runs a bounded child in the requested working directory", async () => {
       timeoutMilliseconds: 2000
     })
 
-    expect(result).toMatchObject({ exitCode: 0, output: directory, outputLineCount: 1 })
+    expect(result).toMatchObject({ exitCode: 0, output: await realpath(directory), outputLineCount: 1 })
   } finally {
     await rm(directory, { force: true, recursive: true })
   }
