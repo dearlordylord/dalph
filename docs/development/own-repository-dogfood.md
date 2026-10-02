@@ -138,7 +138,7 @@ const configuration = {
   codexClientName: "dalph-own-repository-dogfood",
   codexClientVersion: "1.0.0",
   codexToolEffectPolicy: {
-    defaultLimitMilliseconds: 60000,
+    defaultLimitMilliseconds: 420000,
     longCommands: [
       { command: "pnpm check:lab", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 420000 },
       { command: "pnpm check:submit", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 600000 }
@@ -157,10 +157,14 @@ NODE
 The CLI injects the target and environment-only `GITHUB_TOKEN`; do not add
 `target` or `githubToken` to JSON. Do not copy Codex authentication into the
 root.
-The two declared check allowances bind to each generated task worktree before
-Codex starts its turn. They apply only to those exact command strings; other
-tool items retain the one-minute limit. Adjust the declared check list for a
-different repository only after choosing its actual checks and deadlines.
+The ordinary seven-minute item limit is chosen before Codex starts its turn.
+It covers opaque `functions.exec` calls, which do not expose the nested shell
+command for exact matching. Every item, including edits, receives that bound;
+Dalph retains it across restart and stops an item that reaches it. The two
+declared check allowances bind to each generated task worktree and apply only
+to exact `commandExecution` items; they do not extend `functions.exec`.
+Adjust the ordinary limit and check list for a different repository only after
+choosing its actual checks and deadlines.
 
 Check the selected issue and no-other-coordinator preconditions again,
 and verify the hosted Base before launch:

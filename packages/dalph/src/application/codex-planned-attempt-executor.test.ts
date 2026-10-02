@@ -1581,6 +1581,64 @@ it.effect("allows the exact configured quiet check past the default item deadlin
   )
 )
 
+it.effect("allows a configured opaque tool past the old one-minute boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const itemWritten = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      const configured = codexPlannedAttemptExecutorLayerWithOptions({
+        toolEffectPolicy: CodexToolEffectPolicy.make({
+          defaultLimitMilliseconds: CodexToolEffectLimitMilliseconds.make(420_000),
+          longCommands: []
+        })
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+        yield* PubSub.publish(notifications, {
+          phase: "Started",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "opaque-check-1",
+          kind: "dynamicToolCall",
+          observedAtMilliseconds: now
+        })
+        yield* Deferred.await(itemWritten)
+        yield* TestClock.adjust(Duration.seconds(61))
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Started", deadlineMilliseconds: now + 420_000 }])
+        expect(waiting.pollUnsafe()).toBeUndefined()
+        expect(harness.closeCount()).toBe(0)
+        yield* PubSub.publish(notifications, {
+          phase: "Completed",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "opaque-check-1",
+          kind: "dynamicToolCall",
+          observedAtMilliseconds: now + 61_000
+        })
+        yield* Effect.yieldNow
+        expect(harness.closeCount()).toBe(0)
+        yield* attachment.close
+      }).pipe(Effect.provide(layerForImplementation(configured)(harness)))
+    })
+  )
+)
+
 it.effect("keeps the admitted command allowance after executor restart with a different configuration", () =>
   Effect.scoped(
     Effect.gen(function* () {

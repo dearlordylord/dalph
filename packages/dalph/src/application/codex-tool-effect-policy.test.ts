@@ -83,6 +83,21 @@ describe("Codex tool-effect allowance", () => {
     ).toBe(60_000)
   })
 
+  it("allows a configured opaque tool past the old one-minute boundary", () => {
+    const configured = Schema.decodeUnknownSync(CodexToolEffectPolicy)({
+      defaultLimitMilliseconds: 420_000,
+      longCommands: [{ command: "pnpm check:submit", cwd: "/repo/task", limitMilliseconds: 600_000 }]
+    })
+    const admitted = bindCodexToolEffectPolicy(configured, "/repo/task")
+    expect(codexToolEffectLimit(admitted, { kind: "dynamicToolCall" })).toBe(420_000)
+    expect(
+      codexToolEffectLimit(admitted, { kind: "commandExecution", command: "pnpm check:submit", cwd: "/repo/task" })
+    ).toBe(600_000)
+    expect(
+      codexToolEffectLimit(admitted, { kind: "commandExecution", command: "pnpm check:submit", cwd: "/other" })
+    ).toBe(420_000)
+  })
+
   it("rejects duplicate and unbounded configuration", () => {
     expect(() =>
       Schema.decodeUnknownSync(CodexToolEffectPolicy)({
@@ -96,5 +111,6 @@ describe("Codex tool-effect allowance", () => {
       Schema.decodeUnknownSync(CodexToolEffectPolicy)({ defaultLimitMilliseconds: Number.POSITIVE_INFINITY })
     ).toThrow()
     expect(() => Schema.decodeUnknownSync(CodexToolEffectPolicy)({ defaultLimitMilliseconds: 0 })).toThrow()
+    expect(() => Schema.decodeUnknownSync(CodexToolEffectPolicy)({ defaultLimitMilliseconds: 600_001 })).toThrow()
   })
 })

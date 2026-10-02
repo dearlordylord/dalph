@@ -43,7 +43,13 @@ so restart can reconstruct an elapsed bound without resetting the timer; an
 unreadable or reversed clock fails closed.
 
 The default maximum for an individual tool item is **60 seconds**. Before
-`turn/start`, a production configuration may name an exact command profile
+`turn/start`, a production configuration may raise its ordinary item limit to
+at most **10 minutes** for a run whose tool surface reports long checks as
+opaque `dynamicToolCall` items. That declared ordinary limit applies to every
+item in the attempt, including edits; it is a deliberate wider exposure, not
+evidence that the hidden command is safe. Dalph retains the chosen limit with
+the attempt, so a restart cannot revert or extend it. A production
+configuration may also name an exact command profile
 with a larger maximum, up to **90 minutes**, for known long checks. App-server
 exposes a command string and working directory, not a guaranteed executable
 and argument array. A profile therefore matches the complete, canonical
@@ -53,7 +59,8 @@ Run; the executor binds that locator to the attempt's exact worktree before
 the first `turn/start` intent and retains the bound profile across restart.
 A shell script, JavaScript
 tool call, substring match, or an item whose command cannot be decoded
-receives the default. The profile is frozen for the attempt. An active item
+receives the configured ordinary limit, never the exact-command allowance.
+The profile is frozen for the attempt. An active item
 cannot ask for an extension. The implementation
 must reject nonpositive, unbounded, or over-maximum values at configuration
 admission. A check that cannot be represented by an exact command item can be
@@ -136,6 +143,30 @@ Acceptance seams: positive `allows the exact configured quiet check past the
 default item deadline`; independent negative `rejects a wrapper and a
 lookalike command from the long-check allowance`.
 
+## An opaque tool carries a known check past one minute
+
+Alice starts a Dogfood Run with an ordinary item limit of seven minutes and a
+clean exact task worktree. This is selected before Codex starts its turn.
+Codex uses `functions.exec` to start a Reducer Lab smoke check, then waits for
+the running command through another `functions.exec` item. App-server reports
+each as an opaque `dynamicToolCall`, without the nested command or working
+directory. At one minute, the second item remains active. Dalph retains its
+original seven-minute deadline and does not interrupt it merely for crossing
+one minute. If the check completes before that deadline, the matching
+`item/completed` settles the item and Codex continues. If it remains active at
+seven minutes, Dalph writes stop intent and proves stopped writers as above;
+output or process liveness alone does not extend the deadline.
+
+If Dalph restarts during the check, it recovers the same configured limit and
+original start time. Alice may see the continuing check or a retained stop
+disposition. Dalph must not infer a nested command from arbitrary JavaScript,
+grant the separate exact-command allowance to the wrapper, restart the check,
+or accept an ordinary limit above ten minutes.
+
+Acceptance seams: positive `allows a configured opaque tool past the old
+one-minute boundary`; negative `rejects an overlong ordinary item limit`;
+existing retained-policy restart coverage applies to the configured limit.
+
 ## A generated worktree receives the declared check allowance
 
 Alice configures the exact `pnpm check:lab` command for `PlannedWorktree`
@@ -217,7 +248,7 @@ absence or reuse as stopped-writer proof`.
 
 1. Add a private item identity, immutable per-attempt limit policy, and
    durable stop-intent/observation records to the Codex executor store. Prove
-   the six scenarios above with a controlled clock, app-server notifications,
+   the seven scenarios above with a controlled clock, app-server notifications,
    and a replaceable execution-substrate census.
 2. Wire item notifications and exact profile decoding through the Codex
    app-server adapter. A lost or malformed notification must fail closed.
@@ -237,6 +268,7 @@ absence or reuse as stopped-writer proof`.
 | --- | --- | --- |
 | Self-matching edit | `codex-planned-attempt-executor.test.ts`: `cuts a self-matching Codex item at its exact default deadline and retains dirty evidence` | `does not reset an active item's deadline on an unrelated completion`; provider heartbeat and text notifications are excluded by `codex-app-server-protocol.test.ts`'s exact item lifecycle decoding |
 | Quiet long check | `codex-planned-attempt-executor.test.ts`: `allows the exact configured quiet check past the default item deadline`; `keeps the admitted command allowance after executor restart with a different configuration` | `codex-tool-effect-policy.test.ts`: `does not give a wrapper, lookalike, or unknown tool the long allowance`; `rejects duplicate and unbounded configuration` |
+| Opaque long check | `codex-tool-effect-policy.test.ts`: `allows a configured opaque tool past the old one-minute boundary`; retained-policy restart is covered by `codex-planned-attempt-executor.test.ts`: `keeps the admitted command allowance after executor restart with a different configuration` | `codex-tool-effect-policy.test.ts`: `rejects duplicate and unbounded configuration` rejects an ordinary limit over ten minutes; wrapper receives only the ordinary allowance, not the exact-command allowance |
 | Finite generator | `codex-planned-attempt-executor.test.ts`: `settles a finite file-change item before its deadline without stopping its worktree`; completion is the only settlement signal and the implementation has no byte or write-count predicate | `does not reset an active item's deadline on an unrelated completion`; `uses monotonic elapsed time when a late completion has an earlier wall timestamp` |
 | Resistant descendant | `codex-app-server-public.test.ts`: `escalates a real resistant writer and recovers after its leader exits before close` uses a disposable process and checks SIGKILL, absent membership, and stopped writes | `codex-planned-attempt-executor.test.ts`: `retains responsibility when a tool writer survives containment close` |
 | Crash after stop intent | `codex-planned-attempt-executor.test.ts`: `reopens a durable item stop intent and finishes exact containment close without another Begin`; `reconciles a retained old app-server launch after a real incarnation change`; `codex-attempt-store.test.ts` reopens the retained node store | The old/new incarnation test asserts one turn and zero close calls on the replacement app-server; the real process probe proves the old leader can already be absent |

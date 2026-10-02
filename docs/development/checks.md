@@ -45,7 +45,10 @@ changes under `prototypes/reducer-lab` or when changed-path evidence is
 unavailable; an authored cassette or shared configuration change does not
 also require its UI/trace projection in the blocking preflight. Run
 `pnpm check:lab` explicitly when changing that projection or investigating
-it. For causal cassette authoring and matcher changes, run the focused
+it. During development, run the focused Lab scenario for the changed behavior;
+run the selected `check:lab` once on the coherent candidate, since its smoke
+replays the maintained catalog and can take several minutes. For causal
+cassette authoring and matcher changes, run the focused
 `pnpm check:lab:browser:causal` browser replay. For the seven-task capstone's
 Lab presentation, run `pnpm check:lab:browser:capstone` explicitly. The
 comprehensive `pnpm check:lab:browser` checks shared Lab navigation and all
