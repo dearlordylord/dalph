@@ -22,6 +22,9 @@ const canonicalAbsoluteLocator = (subject: string) =>
     )
   )
 
+/** Selects a separate process-observation file only for the protected launch probe. */
+export const productionLiveCodexPreflightEnvironmentName = "DALPH_LIVE_CODEX_PREFLIGHT"
+
 /** Locates the already-built shipped Dalph entry invoked by the protected controller. */
 export const ProductionLiveBuiltEntry = canonicalAbsoluteLocator("live qualification built entry").pipe(
   Schema.brand("ProductionLiveBuiltEntry")
@@ -49,6 +52,7 @@ export type ProductionLiveQualificationProcessId = typeof ProductionLiveQualific
 /** Completed local observation boundaries; these never certify workflow success or authorize cleanup. */
 export const ProductionLiveQualificationProgress = Schema.TaggedUnion({
   BuildMeasured: {},
+  LaunchPreflightClosed: {},
   ChildSpawned: { processId: ProductionLiveQualificationProcessId },
   FirstCanonicalRecord: {},
   RunSelected: { runId: RunId },
@@ -192,6 +196,7 @@ export const productionLiveQualificationChildRequest = (
   ],
   environment: {
     CODEX_HOME: invocation.codexHome,
+    [productionLiveCodexPreflightEnvironmentName]: "0",
     GITHUB_TOKEN: Redacted.value(invocation.githubToken),
     DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: Redacted.value(invocation.controlledProviderCredential),
     GIT_OPTIONAL_LOCKS: "0"

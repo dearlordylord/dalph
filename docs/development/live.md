@@ -103,9 +103,19 @@ after pnpm's ordinary shim would have replaced that identity with `node`. The
 outer validator requires that derived locked JavaScript entry to be a readable
 nonempty file before it launches the controller, and the generated wrapper
 rereads it immediately before `exec`.
-A failed or ambiguous provider boundary therefore leaves the
-Run and exact retained locators for manual inspection rather than launching a
-second command.
+A failed or ambiguous provider boundary therefore leaves the Run and exact
+retained locators for manual inspection rather than launching a second command.
+
+The controller records the complete local fixture checkpoint, measures the
+build, then runs the [accepted exact-launch probe](../scenarios/protected-live-launch-preflight.md)
+through the existing Codex app-server owner. It uses the generated wrapper and
+the fixture's `CODEX_HOME`, observes the effective argv and process identity,
+and requires exact close before admitting the shipped child. The probe gets a
+minimal environment without the controller's GitHub secret. It has a
+15-second local bound inside the protected job's existing deadline. Its process
+start is recorded separately inside the private fixture directory; the task
+app-server count remains one. A failed or uncertain probe leaves the exact
+fixture locators retained and admits no shipped child.
 
 After the live command settles or the hosted job cancels it, an `if: always()`
 step reads the latest retention checkpoint. It writes `diagnostics.json` with

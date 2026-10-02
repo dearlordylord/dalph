@@ -2382,11 +2382,13 @@ export interface CodexAppServerLayerConfig {
   readonly clientName?: string
   readonly clientVersion?: string
   /**
-   * Process-local environment additions for an explicitly isolated host.
-   * Production supplies none; qualification fixtures use this field to bind
-   * one isolated Codex home and controlled provider environment.
+   * Process-local environment for an explicitly isolated host. It augments
+   * the parent by default; a qualification probe may supply it completely.
+   * Production supplies none, while fixtures bind one isolated Codex home.
    */
   readonly environment?: Readonly<Record<string, string>>
+  /** A qualification probe can supply a complete environment without inheriting controller secrets. */
+  readonly extendEnvironment?: boolean
   /** Fail initialization unless config/read proves Dalph's required unattended policy. */
   readonly requireUnattendedPolicy?: boolean
 }
@@ -3315,7 +3317,7 @@ export const codexAppServerLayer = (
             stderr: "pipe",
             detached: true,
             env: { ...selected.environment, [codexServerIncarnationEnvironment]: durableIncarnationToken(incarnation) },
-            extendEnv: true
+            extendEnv: selected.extendEnvironment ?? true
           })
         )
         .pipe(Effect.mapError(initializeUnavailableFailure))

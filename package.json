@@ -59,6 +59,7 @@
     "check:quint": "node scripts/with-gate-slot.mjs -- node scripts/run-formal-gate.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "qualify:codex": "node scripts/qualify-codex-app-server.mjs",
+    "test:live-launch-preflight": "DALPH_RUN_QUALIFICATION_TESTS=1 vitest run packages/dalph/test/qualification/production-live-launch-preflight.integration.test.ts --maxWorkers=1",
     "qualify:production-live": "node scripts/run-production-live-qualification.mjs",
     "test:codex-integrator-qualification": "pnpm --filter @dalph/dalph... build && DALPH_RUN_REAL_CODEX_QUALIFICATION=1 vitest run packages/dalph/src/application/codex-integrator-real-qualification.test.ts --pool=forks",
     "test": "node scripts/run-tests.mjs",

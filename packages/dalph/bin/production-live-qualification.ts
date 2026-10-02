@@ -5,6 +5,7 @@ import { Config, Effect, FileSystem, Layer, Schema } from "effect"
 import { runDalphNodeMain } from "../src/application/node-main.js"
 import {
   decodeProductionLiveQualificationManifest,
+  productionLiveLaunchPreflightLayer,
   ProductionLiveQualificationManifestLocator,
   runProductionLiveQualificationRuntime
 } from "../src/qualification/live-qualification-runtime.js"
@@ -24,6 +25,7 @@ const application = Effect.scoped(
       .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
     const manifest = yield* decodeProductionLiveQualificationManifest(input)
     const outcome = yield* runProductionLiveQualificationRuntime(manifest, { githubToken }).pipe(
+      Effect.provide(productionLiveLaunchPreflightLayer),
       Effect.provide(githubGraphqlClientLayer({ token: githubToken }).pipe(Layer.provide(NodeHttpClient.layerUndici)))
     )
     return outcome._tag === "Qualified" ? outcome : yield* Effect.fail(outcome)

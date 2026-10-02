@@ -2,6 +2,7 @@ import { remotePublicationTargetForTest } from "../../orchestrator/test/support/
 /* eslint-disable import/no-nodejs-modules -- This qualification test executes and observes the real Node process boundary. */
 import { spawn } from "node:child_process"
 import { readFile } from "node:fs/promises"
+import nodeOs from "node:os"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import * as nodeTimers from "node:timers"
@@ -73,6 +74,7 @@ import {
   type WorkflowJournalEvent
 } from "@dalph/orchestrator"
 import { ProductionLiveFixtureCleanup } from "../src/qualification/live-fixture-cleanup.js"
+import { qualificationFailed } from "../src/qualification/live-qualification-evidence.js"
 import { formalCommandCount, formalShardByPosition } from "../src/qualification/formal-command-inventory.generated.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -94,6 +96,7 @@ import {
   decodeProductionLiveQualificationRetentionReport,
   deriveProductionLiveQualificationEvidenceObservations,
   generateProductionLiveControlledProviderCredential,
+  ProductionLiveLaunchPreflight,
   productionLiveQualificationBoundaryObservations,
   productionLiveQualificationChronologyIsExact,
   productionLiveQualificationOperationCounts,
@@ -651,7 +654,7 @@ describe("#307 production live qualification runtime", () => {
     ).toBe(true)
   })
 
-  it("runtime retains build measurement and child progress through its real checkpoint writer", async () => {
+  it("runtime admits a child only after probe close and retains a failed probe without a child", async () => {
     const client = githubGraphqlTestClient((request) =>
       Effect.succeed({
         body:
@@ -701,13 +704,25 @@ describe("#307 production live qualification runtime", () => {
           })
           const result = yield* runProductionLiveQualificationRuntime(manifest, {
             githubToken: Redacted.make("github-secret")
-          })
+          }).pipe(
+            Effect.provideService(ProductionLiveLaunchPreflight, {
+              run: (fixture) =>
+                Effect.sync(() => {
+                  expect(fixture.configuration.codexExecutable).toContain("codex-app-server-observer")
+                  expect(fixture.codexHome).not.toBe(fixture.launchPreflight.stateDirectory)
+                  expect(fixture.launchPreflight.processObservationPath).not.toBe(
+                    fixture.launchPreflight.launchObservationPath
+                  )
+                })
+            })
+          )
           expect(result).toMatchObject({ _tag: "QualificationFailed", phase: "Execution" })
           const source = yield* fs.readFileString(manifest.retentionReport)
           const report = yield* decodeProductionLiveQualificationRetentionReport(JSON.parse(source))
           expect(report.progress?.map(({ _tag }) => _tag)).toEqual(
             expect.arrayContaining([
               "BuildMeasured",
+              "LaunchPreflightClosed",
               "ChildSpawned",
               "FirstCanonicalRecord",
               "RunSelected",
@@ -716,16 +731,44 @@ describe("#307 production live qualification runtime", () => {
               "ProcessCompleted"
             ])
           )
-          expect(report.progress).toHaveLength(7)
+          expect(report.progress).toHaveLength(8)
           expect(report.progress?.[0]).toEqual({ _tag: "BuildMeasured" })
-          expect(report.progress?.[1]).toMatchObject({ _tag: "ChildSpawned" })
+          expect(report.progress?.[1]).toEqual({ _tag: "LaunchPreflightClosed" })
+          expect(report.progress?.[2]).toMatchObject({ _tag: "ChildSpawned" })
           expect(report.progress).toContainEqual({ _tag: "RunSelected", runId: "run-progress" })
           expect(report.progress).toContainEqual({ _tag: "ProcessCompleted", exitCode: 1 })
           expect(source).not.toContain("github-secret")
           expect(yield* fs.exists(manifest.artifact)).toBe(false)
           const fixtureContainer = report.local[0]?.locator
-          expect(fixtureContainer).toMatch(/^\/tmp\/dalph-live-live-q-307-/u)
+          expect(fixtureContainer?.startsWith(nodePath.join(nodeOs.tmpdir(), "dalph-live-live-q-307-"))).toBe(true)
           if (fixtureContainer !== undefined) yield* fs.remove(fixtureContainer, { recursive: true })
+
+          let failedProbeStateDirectory: string | undefined
+          const failedProbe = yield* runProductionLiveQualificationRuntime(manifest, {
+            githubToken: Redacted.make("github-secret")
+          }).pipe(
+            Effect.provideService(ProductionLiveLaunchPreflight, {
+              run: (fixture) =>
+                Effect.sync(() => {
+                  failedProbeStateDirectory = fixture.launchPreflight.stateDirectory
+                }).pipe(Effect.flatMap(() => Effect.fail(qualificationFailed("Setup"))))
+            })
+          )
+          expect(failedProbe).toMatchObject({ _tag: "QualificationFailed", phase: "Setup" })
+          const failedSource = yield* fs.readFileString(manifest.retentionReport)
+          const failedReport = yield* decodeProductionLiveQualificationRetentionReport(JSON.parse(failedSource))
+          expect(failedReport.progress).toEqual([{ _tag: "BuildMeasured" }])
+          expect(failedReport.local.some(({ disposition }) => disposition === "Retained")).toBe(true)
+          if (failedProbeStateDirectory === undefined)
+            throw new Error("failed preflight did not receive its private state")
+          expect(yield* fs.exists(failedProbeStateDirectory)).toBe(true)
+          expect(failedReport.local).toContainEqual(
+            expect.objectContaining({ locator: nodePath.dirname(failedProbeStateDirectory), disposition: "Retained" })
+          )
+          expect(failedSource).not.toContain("github-secret")
+          expect(yield* fs.exists(manifest.artifact)).toBe(false)
+          const failedContainer = failedReport.local[0]?.locator
+          if (failedContainer !== undefined) yield* fs.remove(failedContainer, { recursive: true })
         })
       ).pipe(Effect.provide(layer), Effect.provideService(GithubGraphqlClient, client))
     )
@@ -835,97 +878,100 @@ describe("#307 production live qualification runtime", () => {
     )
   })
 
-  it("production live qualification fixture separates Codex home from executor private state", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const codexExecutable = nodePath.join(nodeProcess.cwd(), "node_modules/.bin/codex")
-        const codexJavaScriptEntry = nodePath.join(nodeProcess.cwd(), "node_modules/@openai/codex/bin/codex.js")
-        const fixture = yield* createProductionLiveLocalFixture(
-          yield* decodeProductionLiveQualificationManifest({ ...input, codexExecutable, codexJavaScriptEntry }),
-          { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
-          ProductionLiveResponsesEndpointLocator.make("http://127.0.0.1:4307/v1"),
-          "http://127.0.0.1:4308/graphql",
-          Redacted.make("github-secret")
-        )
-        const fs = yield* FileSystem.FileSystem
-        expect(fixture.configuration.plannedAttemptBaseSha).toBe(fixture.initialTargetCommit)
-        expect(fixture.configuration.claimOwner).toBe("dalph:q:9d733827aa1df60e")
-        expect(fixture.localManifest.resources).toHaveLength(12)
-        expect(fixture.publicationRepository).not.toBe(fixture.configuration.repository)
-        expect(fixture.configuration.remotePublicationTarget).toEqual({
-          branch: "refs/heads/master",
-          endpoint: fixture.publicationRepository
-        })
-        expect(JSON.parse(yield* fs.readFileString(fixture.configurationPath)).remotePublicationTarget).toEqual({
-          branch: "refs/heads/master",
-          endpoint: fixture.publicationRepository
-        })
-        expect(fixture.codexHome).not.toBe(fixture.configuration.codexExecutorPrivateStateDirectory)
-        const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)
-        expect(config).toContain('base_url = "http://127.0.0.1:4307/v1"')
-        expect(config).toContain('env_key = "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"')
-        expect(config.match(/^\[model_providers\./gmu)).toHaveLength(1)
-        expect(config).toContain('model_provider = "dalph-live-qualification"')
-        expect(config).toContain("request_max_retries = 0")
-        expect(config).toContain("stream_max_retries = 0")
-        expect(config.toLowerCase()).not.toContain("openai")
-        expect(config).not.toContain("DALPH_CODEX_PROVIDER_CREDENTIAL")
-        expect(fixture.configuration.codexExecutable).not.toBe(input.codexExecutable)
-        const wrapper = yield* fs.readFileString(fixture.configuration.codexExecutable)
-        expect(wrapper).toContain("#!/usr/bin/env bash")
-        expect(wrapper).toContain('exec -a "$0"')
-        expect(wrapper).toContain(codexJavaScriptEntry)
-        expect(wrapper).toContain(`test -r '${codexJavaScriptEntry}'`)
-        expect(wrapper).toContain('test "${1-}" = "app-server"')
-        expect(
-          launchExecutableMatches(fixture.configuration.codexExecutable, [
-            fixture.configuration.codexExecutable,
-            codexJavaScriptEntry,
-            "app-server"
-          ])
-        ).toBe(true)
-        expect(
-          launchExecutableMatches(fixture.configuration.codexExecutable, [
-            "node",
-            "/workspace/dalph/node_modules/@openai/codex/bin/codex.js",
-            "app-server"
-          ])
-        ).toBe(false)
-        const child = spawn(fixture.configuration.codexExecutable, ["app-server"], {
-          detached: true,
-          env: { ...nodeProcess.env, CODEX_HOME: fixture.codexHome },
-          stdio: "ignore"
-        })
-        try {
-          const observed = yield* Effect.promise(() =>
-            waitFor(async () => {
-              const source = await readFile(fixture.applicationServerObservationPath, "utf8")
-              const match = /^linux:([^:]+):pid:(\d+)$/u.exec(source.trim())
-              return match === null ? undefined : { startIdentity: match[1], pid: Number(match[2]) }
-            })
+  it.skipIf(nodeProcess.platform !== "linux")(
+    "production live qualification fixture separates Codex home from executor private state",
+    async () => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const codexExecutable = nodePath.join(nodeProcess.cwd(), "node_modules/.bin/codex")
+          const codexJavaScriptEntry = nodePath.join(nodeProcess.cwd(), "node_modules/@openai/codex/bin/codex.js")
+          const fixture = yield* createProductionLiveLocalFixture(
+            yield* decodeProductionLiveQualificationManifest({ ...input, codexExecutable, codexJavaScriptEntry }),
+            { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
+            ProductionLiveResponsesEndpointLocator.make("http://127.0.0.1:4307/v1"),
+            "http://127.0.0.1:4308/graphql",
+            Redacted.make("github-secret")
           )
-          expect(observed.pid).toBe(child.pid)
-          const commandLine = yield* Effect.promise(() =>
-            waitFor(async () => {
-              const values = (await readFile(`/proc/${observed.pid}/cmdline`, "utf8")).split("\0").filter(Boolean)
-              return values[0] === fixture.configuration.codexExecutable && values.includes("app-server")
-                ? values
-                : undefined
-            })
-          )
-          const stat = (yield* Effect.promise(() => readFile(`/proc/${observed.pid}/stat`, "utf8"))).split(" ")
-          expect(stat[21]).toBe(observed.startIdentity)
-          expect(commandLine).toContain(codexJavaScriptEntry)
-          expect(launchExecutableMatches(fixture.configuration.codexExecutable, commandLine)).toBe(true)
-        } finally {
-          yield* Effect.promise(() => stopChild(child))
-        }
-        const document = yield* fs.readFileString(fixture.configurationPath)
-        expect(document).not.toContain("github-secret")
-        yield* fs.remove(fixture.localManifest.container.locator, { recursive: true })
-      }).pipe(Effect.provide(layer))
-    )
-  })
+          const fs = yield* FileSystem.FileSystem
+          expect(fixture.configuration.plannedAttemptBaseSha).toBe(fixture.initialTargetCommit)
+          expect(fixture.configuration.claimOwner).toBe("dalph:q:9d733827aa1df60e")
+          expect(fixture.localManifest.resources).toHaveLength(12)
+          expect(fixture.publicationRepository).not.toBe(fixture.configuration.repository)
+          expect(fixture.configuration.remotePublicationTarget).toEqual({
+            branch: "refs/heads/master",
+            endpoint: fixture.publicationRepository
+          })
+          expect(JSON.parse(yield* fs.readFileString(fixture.configurationPath)).remotePublicationTarget).toEqual({
+            branch: "refs/heads/master",
+            endpoint: fixture.publicationRepository
+          })
+          expect(fixture.codexHome).not.toBe(fixture.configuration.codexExecutorPrivateStateDirectory)
+          const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)
+          expect(config).toContain('base_url = "http://127.0.0.1:4307/v1"')
+          expect(config).toContain('env_key = "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"')
+          expect(config.match(/^\[model_providers\./gmu)).toHaveLength(1)
+          expect(config).toContain('model_provider = "dalph-live-qualification"')
+          expect(config).toContain("request_max_retries = 0")
+          expect(config).toContain("stream_max_retries = 0")
+          expect(config.toLowerCase()).not.toContain("openai")
+          expect(config).not.toContain("DALPH_CODEX_PROVIDER_CREDENTIAL")
+          expect(fixture.configuration.codexExecutable).not.toBe(input.codexExecutable)
+          const wrapper = yield* fs.readFileString(fixture.configuration.codexExecutable)
+          expect(wrapper).toContain("#!/usr/bin/env bash")
+          expect(wrapper).toContain('exec -a "$0"')
+          expect(wrapper).toContain(codexJavaScriptEntry)
+          expect(wrapper).toContain(`test -r '${codexJavaScriptEntry}'`)
+          expect(wrapper).toContain('test "${@: -1}" = "app-server"')
+          expect(
+            launchExecutableMatches(fixture.configuration.codexExecutable, [
+              fixture.configuration.codexExecutable,
+              codexJavaScriptEntry,
+              "app-server"
+            ])
+          ).toBe(true)
+          expect(
+            launchExecutableMatches(fixture.configuration.codexExecutable, [
+              "node",
+              "/workspace/dalph/node_modules/@openai/codex/bin/codex.js",
+              "app-server"
+            ])
+          ).toBe(false)
+          const child = spawn(fixture.configuration.codexExecutable, ["app-server"], {
+            detached: true,
+            env: { ...nodeProcess.env, CODEX_HOME: fixture.codexHome },
+            stdio: "ignore"
+          })
+          try {
+            const observed = yield* Effect.promise(() =>
+              waitFor(async () => {
+                const source = await readFile(fixture.applicationServerObservationPath, "utf8")
+                const match = /^linux:([^:]+):pid:(\d+)$/u.exec(source.trim())
+                return match === null ? undefined : { startIdentity: match[1], pid: Number(match[2]) }
+              })
+            )
+            expect(observed.pid).toBe(child.pid)
+            const commandLine = yield* Effect.promise(() =>
+              waitFor(async () => {
+                const values = (await readFile(`/proc/${observed.pid}/cmdline`, "utf8")).split("\0").filter(Boolean)
+                return values[0] === fixture.configuration.codexExecutable && values.includes("app-server")
+                  ? values
+                  : undefined
+              })
+            )
+            const stat = (yield* Effect.promise(() => readFile(`/proc/${observed.pid}/stat`, "utf8"))).split(" ")
+            expect(stat[21]).toBe(observed.startIdentity)
+            expect(commandLine).toContain(codexJavaScriptEntry)
+            expect(launchExecutableMatches(fixture.configuration.codexExecutable, commandLine)).toBe(true)
+          } finally {
+            yield* Effect.promise(() => stopChild(child))
+          }
+          const document = yield* fs.readFileString(fixture.configurationPath)
+          expect(document).not.toContain("github-secret")
+          yield* fs.remove(fixture.localManifest.container.locator, { recursive: true })
+        }).pipe(Effect.provide(layer))
+      )
+    }
+  )
 
   it("the generated wrapper fails before process observation when its locked entry is missing", async () => {
     await Effect.runPromise(

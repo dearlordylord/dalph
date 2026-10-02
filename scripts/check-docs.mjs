@@ -57,7 +57,7 @@ export const checkDocumentation = async (root) => {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     process.exitCode = await checkDocumentation(process.cwd())
   } catch (error) {

@@ -15,6 +15,8 @@ const publicRecoveryProcessBoundaryTestPattern =
 const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
 const publicationIntegrationTestPattern =
   "packages/dalph/test/integration/direct-remote-publication.integration.test.ts"
+const liveLaunchPreflightIntegrationTestPattern =
+  "packages/dalph/test/qualification/production-live-launch-preflight.integration.test.ts"
 // These process-heavy files passed focused coverage but crossed their own
 // deadlines when competing with other files in a broad coverage run.
 const lateCoverageTestPatterns = ["packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"]
@@ -55,6 +57,7 @@ const selectedTestExcludes = (mode: string) => [
   "**/dist/**",
   ...(mode === "mbt" ? [] : [mbtTestPattern]),
   ...(runPublicationIntegration ? [] : [publicationIntegrationTestPattern]),
+  ...(runQualificationTests ? [] : [liveLaunchPreflightIntegrationTestPattern]),
   ...(runQualificationTests || runDeliveryRepeatability
     ? []
     : [deliveryRepeatabilityTestPattern, capabilityRegistrationTestPattern]),

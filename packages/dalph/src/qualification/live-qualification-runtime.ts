@@ -29,6 +29,7 @@ import { NodeCrypto } from "@effect/platform-node"
 import { Context, Crypto, DateTime, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema, Semaphore } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { ProductionConfigurationLocator } from "../application/production-cli.js"
+import { codexLaunchPreflight } from "./codex-launch-preflight.js"
 import {
   decodeProductionRepositoryHostConfiguration,
   type ProductionRepositoryHostConfiguration
@@ -73,6 +74,7 @@ import {
   ProductionLiveBuiltEntry,
   ProductionLiveCodexHome,
   ProductionLiveQualificationProgress,
+  productionLiveCodexPreflightEnvironmentName,
   runProductionLiveQualification,
   type ProductionLiveQualificationBoundary,
   type ProductionLiveQualificationCallbacks,
@@ -111,6 +113,7 @@ const canonicalAbsolute = (subject: string) =>
     )
   )
 const privateDirectoryMode = 0o700
+const liveCodexPreflightTimeout = "15 seconds"
 const expectedExecutorTurns = 2
 const expectedIntegratorTurns = 2
 const expectedTotalTurns = 4
@@ -202,8 +205,48 @@ export interface ProductionLiveLocalFixture {
   readonly initialTargetCommit: GitCommitSha
   readonly publicationRepository: GitRepositoryLocator
   readonly applicationServerObservationPath: ProductionLiveLocalResourceLocator
+  readonly launchPreflight: {
+    readonly processObservationPath: ProductionLiveLocalResourceLocator
+    readonly launchObservationPath: ProductionLiveLocalResourceLocator
+    readonly stateDirectory: ProductionLiveLocalResourceLocator
+  }
   readonly localManifest: ProductionLiveLocalFixtureManifest
 }
+
+type ProductionLiveLaunchPreflightFixture = Pick<ProductionLiveLocalFixture, "codexHome" | "launchPreflight"> & {
+  readonly configuration: Pick<ProductionRepositoryHostConfiguration, "codexExecutable">
+}
+
+interface ProductionLiveLaunchPreflightService {
+  readonly run: (fixture: ProductionLiveLaunchPreflightFixture) => Effect.Effect<void, QualificationFailed>
+}
+
+/** The protected controller admits its shipped child only after this exact launch-and-close boundary. */
+export class ProductionLiveLaunchPreflight extends Context.Service<
+  ProductionLiveLaunchPreflight,
+  ProductionLiveLaunchPreflightService
+>()("@dalph/ProductionLiveLaunchPreflight") {}
+
+/** Production uses the existing Codex owner; controlled runtime tests replace only this Effect service. */
+export const productionLiveLaunchPreflightLayer = Layer.succeed(ProductionLiveLaunchPreflight, {
+  run: (fixture: ProductionLiveLaunchPreflightFixture) =>
+    codexLaunchPreflight({
+      executable: fixture.configuration.codexExecutable,
+      codexHome: fixture.codexHome,
+      observationPath: fixture.launchPreflight.launchObservationPath,
+      stateDirectory: fixture.launchPreflight.stateDirectory,
+      environment: {
+        PATH: "/usr/bin:/bin",
+        HOME: fixture.codexHome,
+        [productionLiveCodexPreflightEnvironmentName]: "1"
+      },
+      inheritEnvironment: false
+    }).pipe(
+      Effect.timeoutOption(liveCodexPreflightTimeout),
+      Effect.flatMap((result) => (Option.isSome(result) ? Effect.void : Effect.fail(qualificationFailed("Setup")))),
+      Effect.mapError(() => qualificationFailed("Setup"))
+    )
+})
 
 class ProductionLiveLocalSetupFailure extends Schema.TaggedError<ProductionLiveLocalSetupFailure>()(
   "ProductionLiveLocalSetupFailure",
@@ -232,15 +275,25 @@ const codexConfiguration = (baseUrl: string, container: string) =>
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
-const codexAppServerObservationWrapper = (codexEntry: string, nodeExecutable: string, observationPath: string) =>
+export const codexAppServerObservationWrapper = (
+  codexEntry: string,
+  nodeExecutable: string,
+  observationPath: string,
+  preflightObservationPath: string
+) =>
   [
     "#!/usr/bin/env bash",
     "set -eu",
-    'test "${1-}" = "app-server"',
+    'test "${@: -1}" = "app-server"',
     `test -r ${shellQuote(codexEntry)}`,
     "test -r /proc/self/stat",
     "start_identity=$(awk '{ print $22 }' /proc/$$/stat)",
-    `printf 'linux:%s:pid:%s\\n' "$start_identity" "$$" >> ${shellQuote(observationPath)}`,
+    `if [[ "\${${productionLiveCodexPreflightEnvironmentName}-}" = "1" ]]; then`,
+    `  observation_path=${shellQuote(preflightObservationPath)}`,
+    "else",
+    `  observation_path=${shellQuote(observationPath)}`,
+    "fi",
+    'printf \'linux:%s:pid:%s\\n\' "$start_identity" "$$" >> "$observation_path"',
     // pnpm's .bin shim replaces argv[0] with `node .../codex.js`, which makes
     // the process cease matching this exact owned wrapper before cleanup can
     // signal it. Launch the same locked Codex entry explicitly while retaining
@@ -274,6 +327,15 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   const codexExecutorPrivateStateDirectory = at("codex-executor-private")
   const codexAppServerObservationPath = ProductionLiveLocalResourceLocator.make(
     nodePath.join(codexExecutorPrivateStateDirectory, "app-server-processes")
+  )
+  const preflightProcessObservationPath = ProductionLiveLocalResourceLocator.make(
+    nodePath.join(codexExecutorPrivateStateDirectory, "preflight-app-server-processes")
+  )
+  const preflightLaunchObservationPath = ProductionLiveLocalResourceLocator.make(
+    nodePath.join(codexExecutorPrivateStateDirectory, "preflight-launch-observation.json")
+  )
+  const preflightStateDirectory = ProductionLiveLocalResourceLocator.make(
+    nodePath.join(codexExecutorPrivateStateDirectory, "preflight-process-state")
   )
   const codexAppServerWrapper = nodePath.join(codexExecutorPrivateStateDirectory, "codex-app-server-observer")
   const integratorCandidateWorktreeRoot = at("candidates")
@@ -318,9 +380,17 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* fs.chmod(codexHome, privateDirectoryMode)
   yield* fs.chmod(codexExecutorPrivateStateDirectory, privateDirectoryMode)
   yield* fs.writeFileString(codexAppServerObservationPath, "")
+  yield* fs.writeFileString(preflightProcessObservationPath, "")
+  yield* fs.makeDirectory(preflightStateDirectory)
+  yield* fs.chmod(preflightStateDirectory, privateDirectoryMode)
   yield* fs.writeFileString(
     codexAppServerWrapper,
-    codexAppServerObservationWrapper(manifest.codexJavaScriptEntry, nodeProcess.execPath, codexAppServerObservationPath)
+    codexAppServerObservationWrapper(
+      manifest.codexJavaScriptEntry,
+      nodeProcess.execPath,
+      codexAppServerObservationPath,
+      preflightProcessObservationPath
+    )
   )
   yield* fs.chmod(codexAppServerWrapper, privateDirectoryMode)
   yield* fs.writeFileString(journalDatabase, "")
@@ -404,6 +474,11 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     initialTargetCommit,
     publicationRepository,
     applicationServerObservationPath: codexAppServerObservationPath,
+    launchPreflight: {
+      processObservationPath: preflightProcessObservationPath,
+      launchObservationPath: preflightLaunchObservationPath,
+      stateDirectory: preflightStateDirectory
+    },
     localManifest
   } satisfies ProductionLiveLocalFixture
 })
@@ -1107,6 +1182,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   const crypto = yield* Crypto.Crypto
   const githubClient = yield* GithubGraphqlClient
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const launchPreflight = yield* ProductionLiveLaunchPreflight
   const progress = yield* Ref.make<ReadonlyArray<ProductionLiveQualificationProgress>>([])
   const progressWrites = yield* Semaphore.make(1)
   const writeCheckpoint = (phase: QualificationFailed["phase"]) =>
@@ -1179,6 +1255,11 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       configuration: fixture.configurationPath
     }).pipe(Effect.mapError(() => qualificationFailed("Setup")))
     yield* observeProgress({ _tag: "BuildMeasured" })
+    // The existing owner records Launching before spawn and proves its exact
+    // descendant group absent on close. Timeout interrupts that same owner;
+    // an unresolved close leaves the fixture and private launch state retained.
+    yield* launchPreflight.run(fixture)
+    yield* observeProgress({ _tag: "LaunchPreflightClosed" })
     const qualified = yield* Ref.make<ProductionLiveQualificationOutcome>(qualificationFailed("Execution"))
     const githubAuthorities = yield* Layer.build(
       githubDeliveryAuthorityLayer.pipe(
