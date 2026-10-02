@@ -67,6 +67,11 @@ import {
   UnqueuedAcceptedResult,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
+  RemotePublicationResumeReceipt,
+  RemotePublicationResumeRequestId,
+  RemotePublicationRequestId,
+  RemotePublicationBatchGrantReceipt,
+  RemotePublicationBatchGrantRequestId,
   RunTerminationDisposition,
   StartupRecoveryBlocked,
   statusEntryIdentity,
@@ -1561,6 +1566,45 @@ it.effect("cold public production command reports one allocated Run after its be
   })
 )
 
+it.effect(
+  "bounded history output keeps the exact cursor without rereading a full snapshot after budget exhaustion",
+  () =>
+    Effect.gen(function* () {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      let reads = 0
+      yield* presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination: completedRunTermination(),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: {
+            readAt: () =>
+              Effect.sync(() => {
+                reads += 1
+                return snapshot
+              })
+          }
+        },
+        (line) => Ref.update(lines, (current) => [...current, line]),
+        Effect.void,
+        undefined,
+        0
+      )
+      expect(reads).toBe(0)
+      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+        { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+        {
+          _tag: "CurrentStatus",
+          status: { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } },
+          version: 1
+        },
+        { _tag: "HistoryAdvanced", cursor, version: 1 },
+        { _tag: "RunDisposition", disposition: "Completed", runId, version: 1 }
+      ])
+    })
+)
+
 it.effect("normal Run termination closes an open history attachment after its final snapshot and returns", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
@@ -2782,7 +2826,11 @@ it("production status rendering has no tracker Git executor Integrator Journal m
     current: currentSignalOf({ _tag: "NotReady" }),
     runTermination: completedRunTermination(),
     selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-    traceReader: { readAt: () => Effect.succeed(snapshot) }
+    traceReader: { readAt: () => Effect.succeed(snapshot) },
+    remotePublicationControl: {
+      applyRemotePublicationResume: () => Effect.die("passive status must not call publication control"),
+      applyRemotePublicationBatchGrant: () => Effect.die("passive status must not call publication control")
+    }
   }
 
   const presented = productionCliHostObservationOf(observation)
@@ -2825,14 +2873,17 @@ const liveCliLayer = (
   lines: Ref.Ref<ReadonlyArray<string>>,
   chronology: Ref.Ref<ReadonlyArray<string>>,
   configuration = JSON.stringify(validProductionDocument),
-  onLine: (line: string) => Effect.Effect<void, TraceOutputError> = () => Effect.void
+  onLine: (line: string) => Effect.Effect<void, TraceOutputError> = () => Effect.void,
+  requestText?: string
 ) =>
   Layer.mergeAll(
     Layer.succeed(
       FileSystem.FileSystem,
       FileSystem.makeNoop({
-        readFileString: () =>
-          Ref.update(chronology, (current) => [...current, "configuration-read"]).pipe(Effect.as(configuration))
+        readFileString: (path) =>
+          Ref.update(chronology, (current) => [...current, "configuration-read"]).pipe(
+            Effect.as(path.endsWith("request.json") && requestText !== undefined ? requestText : configuration)
+          )
       })
     ),
     Layer.succeed(
@@ -2850,6 +2901,95 @@ const liveCliLayer = (
     memoryJournalTestLayer,
     deterministicOperationIdAllocatorLayer("production-cli-test")
   )
+
+it.effect("public publication commands report exact control receipts before ordinary Run disposition", () =>
+  Effect.gen(function* () {
+    const request = { requestId: "operator-request-1", runId }
+    for (const kind of ["publication-resume", "publication-grant"] as const) {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const received = yield* Ref.make<ReadonlyArray<unknown>>([])
+      const resume = RemotePublicationResumeReceipt.make({
+        acceptedAt: JournalPosition.make(2),
+        publicationRequestId: RemotePublicationRequestId.make("publication-1"),
+        requestId: RemotePublicationResumeRequestId.make("operator-request-1")
+      })
+      const grant = RemotePublicationBatchGrantReceipt.make({
+        acceptedAt: JournalPosition.make(2),
+        exhaustionAt: JournalPosition.make(1),
+        requestId: RemotePublicationBatchGrantRequestId.make("operator-request-1")
+      })
+      const application = runProductionCli((_input, use) =>
+        use(
+          {
+            acceptedHistory: currentSignalOf(cursor),
+            current: currentSignalOf({ _tag: "NotReady" as const }),
+            runTermination: completedRunTermination(),
+            selection: ProductionRunSelection.cases.Recovered.make({ runId }),
+            traceReader: { readAt: () => Effect.succeed(snapshot) }
+          },
+          inactiveApplicationExitRequestBoundary,
+          {
+            applyRemotePublicationResume: (input) =>
+              Ref.update(received, (values) => [...values, input]).pipe(Effect.as(resume)),
+            applyRemotePublicationBatchGrant: (input) =>
+              Ref.update(received, (values) => [...values, input]).pipe(Effect.as(grant))
+          }
+        )
+      )
+      yield* application([
+        kind,
+        "github:octo/dalph#42",
+        "--config",
+        "/tmp/production.json",
+        "--request",
+        "/tmp/request.json"
+      ]).pipe(
+        Effect.provide(
+          liveCliLayer(
+            lines,
+            chronology,
+            JSON.stringify(validProductionDocument),
+            () => Effect.void,
+            JSON.stringify(request)
+          )
+        ),
+        Effect.provide(NodeServices.layer),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" })))
+      )
+      expect(yield* Ref.get(received)).toEqual([request])
+      const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+      expect(records.map(({ _tag }) => _tag)).toEqual([
+        "RunSelected",
+        kind === "publication-resume" ? "PublicationResumeResult" : "PublicationGrantResult",
+        "CurrentStatus",
+        "HistoricalSnapshot",
+        "RunDisposition"
+      ])
+      expect(records[1]?.result).toEqual(kind === "publication-resume" ? resume : grant)
+    }
+  })
+)
+
+it.effect("public publication subject inspection does not start the delivery host", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const application = runProductionCli(
+      () => Effect.die("read-only inspection started delivery"),
+      undefined,
+      () => Effect.succeed({ runId, subjects: [] })
+    )
+    yield* application(["publication-subjects", "github:octo/dalph#42", "--config", "/tmp/production.json"]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" })))
+    )
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      { _tag: "PublicationSubjects", runId, subjects: [], version: 1 }
+    ])
+  })
+)
 
 const controlledApplicationExitSignals = Effect.fn("ProductionCli.Test.controlledApplicationExitSignals")(function* () {
   const listeners = new Map<ApplicationExitSignal, () => void>()

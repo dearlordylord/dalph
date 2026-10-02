@@ -164,6 +164,8 @@ The [public output and Exit reference](walkthrough.md#4-run-and-read-the-public-
 defines version-1 records: `RunSelected` supplies the exact RunId and
 `Allocated`/`Recovered` selection; `CurrentStatus` is passive current status;
 `HistoricalSnapshot` carries an immutable snapshot and Journal cursor;
+`HistoryAdvanced` carries only the exact cursor once the invocation's bounded
+snapshot output budget is spent;
 `RunDisposition` reports proven Run termination. Preserve all records, including
 `Failure`. Empty/closed status or a process exit alone does not prove delivery.
 

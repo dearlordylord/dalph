@@ -460,6 +460,7 @@ export {
   RemotePublicationResumeStatus,
   type RemotePublicationResumeControlResult
 } from "./workflow/protocols/direct-publication/resume-control.js"
+export { RemotePublicationBatchGrantReceipt } from "./workflow/protocols/direct-publication/batch-grant-control.js"
 export { RemotePublicationAdmissionRejected } from "./workflow/protocols/direct-publication/admission.js"
 export {
   RemotePublicationBatchGrantRequestConflict,

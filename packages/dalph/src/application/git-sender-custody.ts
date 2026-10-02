@@ -30,6 +30,29 @@ const SenderRecord = Schema.Struct({
   phase: Schema.Literals(["Reserved", "Launching", "Spawned", "Stopped"])
 })
 type SenderRecord = typeof SenderRecord.Type
+const darwinStat = (
+  line: string
+): { pid: number; processGroupId: number; state: string; startIdentity: CodexProcessStartIdentity } | undefined => {
+  const match = /^\s*(\d+)\s+\d+\s+(\d+)\s+(\S+)\s+(.+?)\s*$/u.exec(line)
+  if (match === null) return undefined
+  const pid = Number(match[1])
+  const processGroupId = Number(match[2])
+  const state = match[3]
+  const started = match[4]
+  if (
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 0 ||
+    state === undefined ||
+    started === undefined ||
+    started.length === 0
+  )
+    return undefined
+  return { pid, processGroupId, state, startIdentity: CodexProcessStartIdentity.make(`darwin:${started}`) }
+}
+const darwinToken = (command: string, token: GitSenderToken): boolean =>
+  command.split(/\s+/u).includes(`${gitSenderTokenEnvironment}=${token}`)
 const absent = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "code" in error && (error.code === "ENOENT" || error.code === "ESRCH")
 
@@ -72,6 +95,45 @@ export const fileGitSenderCustodyLayer = (
     }
   }
   const census = async (record: SenderRecord) => {
+    if (native.platform === "darwin") {
+      const { stdout: commandsText } = await native.execFile("ps", ["eww", "-axo", "pid=,command="])
+      const commandRows = commandsText.split("\n").filter((line) => line.trim().length > 0)
+      if (commandRows.length === 0) return Promise.reject(new GitSenderCustodyFailure())
+      const tokenPids = new Set<number>()
+      for (const row of commandRows) {
+        const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(row)
+        if (match === null) return Promise.reject(new GitSenderCustodyFailure())
+        const pid = Number(match[1])
+        if (!Number.isSafeInteger(pid) || pid <= 0) return Promise.reject(new GitSenderCustodyFailure())
+        if (darwinToken(match[2] ?? "", record.token)) tokenPids.add(pid)
+      }
+      const { stdout: statsText } = await native.execFile("ps", ["-axo", "pid=,ppid=,pgid=,stat=,lstart="])
+      const statRows = statsText.split("\n").filter((line) => line.trim().length > 0)
+      if (statRows.length === 0) return Promise.reject(new GitSenderCustodyFailure())
+      const stats = new Map<number, NonNullable<ReturnType<typeof darwinStat>>>()
+      for (const row of statRows) {
+        const stat = darwinStat(row)
+        if (stat === undefined || stats.has(stat.pid)) return Promise.reject(new GitSenderCustodyFailure())
+        stats.set(stat.pid, stat)
+      }
+      const members: Array<SenderIdentity> = []
+      for (const pid of tokenPids) {
+        const stat = stats.get(pid)
+        if (stat === undefined) return Promise.reject(new GitSenderCustodyFailure())
+        if (!stat.state.startsWith("Z"))
+          members.push({ pid: GitSenderProcessId.make(pid), startIdentity: stat.startIdentity })
+      }
+      if (record.identity !== null) {
+        const root = stats.get(record.identity.pid)
+        if (
+          root?.startIdentity === record.identity.startIdentity &&
+          !root.state.startsWith("Z") &&
+          !tokenPids.has(record.identity.pid)
+        )
+          return Promise.reject(new GitSenderCustodyFailure())
+      }
+      return members
+    }
     if (native.platform !== "linux") return Promise.reject(new GitSenderCustodyFailure())
     const ownerUid = linuxProcessEffectiveUid(await native.readFile("/proc/self/status"))
     if (ownerUid === undefined) return Promise.reject(new GitSenderCustodyFailure())
@@ -132,6 +194,12 @@ export const fileGitSenderCustodyLayer = (
             const record = await read(subject)
             if (record.token !== token || record.phase !== "Launching")
               return Promise.reject(new GitSenderCustodyFailure())
+            if (native.platform === "darwin") {
+              // The durable token, rather than Darwin's second-resolution PID identity,
+              // owns the sender and any helper even when Git exits before acknowledgement.
+              return
+            }
+            if (native.platform !== "linux") return Promise.reject(new GitSenderCustodyFailure())
             let text: string
             try {
               text = await native.readFile(`/proc/${pid}/stat`)
@@ -164,8 +232,29 @@ export const fileGitSenderCustodyLayer = (
               yield* boundary(async () => {
                 for (const member of members) {
                   try {
-                    const current = parseLinuxProcessStat(member.pid, await native.readFile(`/proc/${member.pid}/stat`))
-                    if (current?.startIdentity !== member.startIdentity) continue
+                    if (native.platform === "darwin") {
+                      const { stdout } = await native.execFile("ps", ["-axo", "pid=,ppid=,pgid=,stat=,lstart="])
+                      const current = stdout
+                        .split("\n")
+                        .map(darwinStat)
+                        .find((stat) => stat?.pid === member.pid)
+                      if (current?.startIdentity !== member.startIdentity) continue
+                      const { stdout: command } = await native.execFile("ps", [
+                        "eww",
+                        "-o",
+                        "command=",
+                        "-p",
+                        String(member.pid)
+                      ])
+                      if (!darwinToken(command.trim(), record.token))
+                        return Promise.reject(new GitSenderCustodyFailure())
+                    } else {
+                      const current = parseLinuxProcessStat(
+                        member.pid,
+                        await native.readFile(`/proc/${member.pid}/stat`)
+                      )
+                      if (current?.startIdentity !== member.startIdentity) continue
+                    }
                     native.kill(member.pid, "SIGKILL")
                   } catch (error: unknown) {
                     if (!absent(error)) return Promise.reject(error)

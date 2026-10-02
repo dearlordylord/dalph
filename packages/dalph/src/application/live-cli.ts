@@ -1,11 +1,10 @@
+/* eslint-disable max-lines -- One public command surface keeps production request and result paths together. */
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import type { RunId } from "@dalph/contracts"
 import {
   type ApplicationExitRequestBoundaryService,
   fixtureReaderFileLayer,
-  type JournalStoreError,
   TraceOutputError,
-  type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
 import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
@@ -22,9 +21,9 @@ import {
   productionCliFailureRecord,
   productionCliFailureForSelectedRun,
   ProductionCliOutputError,
-  type ProductionCliHostObservation,
-  type ProductionCliLifecycleError,
-  type ProductionCliStatusError
+  ProductionCliPublicationError,
+  ProductionCliUsageError,
+  type ProductionCliHostObservation
 } from "./production-cli.js"
 import {
   type ApplicationExitSignalBoundary,
@@ -35,6 +34,8 @@ import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import {
   productionRepositoryHostGraph,
+  inspectProductionPublicationSubjects,
+  type ProductionPublicationSubject,
   type ProductionRepositoryHostAdapters,
   type ProductionHostObservation,
   withDecodedProductionRepositoryHost
@@ -44,23 +45,25 @@ import { traceOutputStdioLayer } from "../presentation/stdio-trace-output.js"
 import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
 
 /** Host callback consumed by the public command after all CLI/configuration validation. */
-export type ProductionCliHostRunner<E, R> = (
+export type ProductionCliHostRunner<E, R> = <EUse>(
   input: ProductionRepositoryHostConfiguration,
   use: (
     observation: ProductionCliHostObservation,
-    applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
-  ) => Effect.Effect<
-    void,
-    ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
-  >,
+    applicationExitRequestBoundary: ApplicationExitRequestBoundaryService,
+    remotePublicationControl?: ProductionHostObservation["remotePublicationControl"]
+  ) => Effect.Effect<void, EUse>,
   operation?: "Run" | "Cancel"
-) => Effect.Effect<
-  void,
-  E | ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError,
-  R
->
+) => Effect.Effect<void, E | EUse, R>
 
 const runConfiguration = { version: "0.0.0" }
+
+type ProductionPublicationInspector<E, R> = (
+  configuration: ProductionRepositoryHostConfiguration
+) => Effect.Effect<
+  { readonly runId: RunId | null; readonly subjects: ReadonlyArray<ProductionPublicationSubject> },
+  E,
+  R
+>
 
 /** Redacts only the typed production stdout failure while preserving every other failure identity. */
 const mapProductionOutputFailure = <E>(failure: E): E | ProductionCliOutputError => {
@@ -69,9 +72,10 @@ const mapProductionOutputFailure = <E>(failure: E): E | ProductionCliOutputError
 }
 
 /** Builds the explicit dry/production command over one injected production host. */
-export const makeProductionCli = <EHost, RHost>(
+export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = never>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
-  signals: ApplicationExitSignalBoundary = nodeApplicationExitSignalBoundary
+  signals: ApplicationExitSignalBoundary = nodeApplicationExitSignalBoundary,
+  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>
 ) => {
   const cancel = Command.make(
     "cancel",
@@ -208,36 +212,191 @@ export const makeProductionCli = <EHost, RHost>(
       "Run Dalph explicitly in dry or production mode. Production requires GITHUB_TOKEN and uses the installed Codex CLI's existing authentication and configuration; it may change GitHub, Git, executor, and Journal state."
     )
   )
-  return Command.make("dalph").pipe(Command.withSubcommands([run, cancel]))
+  const publicationCommand = (name: "publication-resume" | "publication-grant") =>
+    Command.make(
+      name,
+      { config: Flag.string("config"), request: Flag.string("request"), target: Argument.string("target") },
+      ({ config, request, target }) =>
+        Effect.gen(function* () {
+          const output = yield* TraceOutput
+          const fileSystem = yield* FileSystem.FileSystem
+          const invocation = yield* decodeRunInvocation({ config, dry: false, production: true, target })
+          if (invocation._tag !== "Production") return yield* Effect.die("publication command selected dry Run")
+          const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
+            fileSystem.readFileString(locator)
+          )
+          const subject = `dalph ${name}` as const
+          const requestText = yield* fileSystem
+            .readFileString(request)
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new ProductionCliUsageError({
+                    code: "usage.invalid",
+                    detail: "publication request file is unreadable",
+                    subject
+                  })
+              )
+            )
+          const parsed: unknown = yield* Effect.try({
+            try: () => JSON.parse(requestText),
+            catch: () =>
+              new ProductionCliUsageError({ code: "usage.invalid", detail: "publication request is not JSON", subject })
+          })
+          yield* runProductionHost(
+            loaded,
+            (observation, applicationExitRequestBoundary, remotePublicationControl) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const signalAdapter = yield* installApplicationExitSignalAdapter(
+                    applicationExitRequestBoundary,
+                    signals,
+                    ["SIGINT", "SIGTERM"]
+                  )
+                  yield* presentSelectedProductionRun(
+                    observation,
+                    output.writeLine,
+                    Effect.gen(function* () {
+                      const control = remotePublicationControl
+                      if (control === undefined)
+                        return yield* new ProductionCliPublicationError({
+                          code: "publication.rejected",
+                          detail: "the publication request was not accepted for the selected Run",
+                          subject: observation.selection.runId
+                        })
+                      const rejected = () =>
+                        new ProductionCliPublicationError({
+                          code: "publication.rejected",
+                          detail: "the publication request was not accepted for the selected Run",
+                          subject: observation.selection.runId
+                        })
+                      if (name === "publication-resume") {
+                        const result = yield* control
+                          .applyRemotePublicationResume(parsed)
+                          .pipe(Effect.mapError(rejected))
+                        yield* output.writeLine(
+                          encodeProductionCliRecord({ _tag: "PublicationResumeResult", result, version: 1 })
+                        )
+                      } else {
+                        const result = yield* control
+                          .applyRemotePublicationBatchGrant(parsed)
+                          .pipe(Effect.mapError(rejected))
+                        yield* output.writeLine(
+                          encodeProductionCliRecord({ _tag: "PublicationGrantResult", result, version: 1 })
+                        )
+                      }
+                    }),
+                    {
+                      awaitRequest: signalAdapter.awaitRequest,
+                      awaitResult: signalAdapter.awaitResult,
+                      presentResult: (result) =>
+                        presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
+                    }
+                  )
+                })
+              ),
+            "Run"
+          ).pipe(Effect.mapError(mapProductionOutputFailure))
+        }).pipe(
+          Effect.tapError((failure) => {
+            const known = knownProductionCliFailure(failure)
+            return known === undefined || known instanceof ProductionCliOutputError
+              ? Effect.void
+              : TraceOutput.pipe(
+                  Effect.flatMap((output) =>
+                    output
+                      .writeLine(encodeProductionCliRecord(productionCliFailureRecord(known)))
+                      .pipe(Effect.mapError(mapProductionOutputFailure))
+                  )
+                )
+          })
+        )
+    )
+  const publicationSubjects = Command.make(
+    "publication-subjects",
+    { config: Flag.string("config"), target: Argument.string("target") },
+    ({ config, target }) =>
+      Effect.gen(function* () {
+        const output = yield* TraceOutput
+        const fileSystem = yield* FileSystem.FileSystem
+        const invocation = yield* decodeRunInvocation({ config, dry: false, production: true, target })
+        if (invocation._tag !== "Production") return yield* Effect.die("publication inspection selected dry Run")
+        const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
+          fileSystem.readFileString(locator)
+        )
+        if (inspectPublicationSubjects === undefined)
+          return yield* new ProductionCliUsageError({
+            code: "usage.invalid",
+            detail: "publication inspection is unavailable",
+            subject: "dalph publication-subjects"
+          })
+        const result = yield* inspectPublicationSubjects(loaded)
+        yield* output.writeLine(
+          encodeProductionCliRecord({
+            _tag: "PublicationSubjects",
+            runId: result.runId,
+            subjects: [...result.subjects],
+            version: 1
+          })
+        )
+      }).pipe(
+        Effect.tapError((failure) => {
+          const known = knownProductionCliFailure(failure)
+          return known === undefined || known instanceof ProductionCliOutputError
+            ? Effect.void
+            : TraceOutput.pipe(
+                Effect.flatMap((output) =>
+                  output
+                    .writeLine(encodeProductionCliRecord(productionCliFailureRecord(known)))
+                    .pipe(Effect.mapError(mapProductionOutputFailure))
+                )
+              )
+        })
+      )
+  )
+  return Command.make("dalph").pipe(
+    Command.withSubcommands([
+      run,
+      cancel,
+      publicationCommand("publication-resume"),
+      publicationCommand("publication-grant"),
+      publicationSubjects
+    ])
+  )
 }
 
-export const runProductionCli = <EHost, RHost>(
+export const runProductionCli = <EHost, RHost, EInspect = never, RInspect = never>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
-  signals?: ApplicationExitSignalBoundary
-) => Command.runWith(makeProductionCli(runProductionHost, signals), runConfiguration)
+  signals?: ApplicationExitSignalBoundary,
+  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>
+) => Command.runWith(makeProductionCli(runProductionHost, signals, inspectPublicationSubjects), runConfiguration)
 
-export const productionCliFromStdio = <EHost, RHost>(
+export const productionCliFromStdio = <EHost, RHost, EInspect = never, RInspect = never>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
-  signals?: ApplicationExitSignalBoundary
-) => Command.run(makeProductionCli(runProductionHost, signals), runConfiguration)
+  signals?: ApplicationExitSignalBoundary,
+  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>
+) => Command.run(makeProductionCli(runProductionHost, signals, inspectPublicationSubjects), runConfiguration)
 
 export const makeProductionCliHostRunner =
   <ECodex, EGithub, ETrace>(adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>) =>
-  (
+  <EUse>(
     input: ProductionRepositoryHostConfiguration,
     use: (
       observation: ProductionCliHostObservation,
-      applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
-    ) => Effect.Effect<
-      void,
-      ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
-    >,
+      applicationExitRequestBoundary: ApplicationExitRequestBoundaryService,
+      remotePublicationControl?: ProductionHostObservation["remotePublicationControl"]
+    ) => Effect.Effect<void, EUse>,
     operation: "Run" | "Cancel" = "Run"
   ) =>
     withDecodedProductionRepositoryHost(
       input,
       productionRepositoryHostGraph(adapters),
-      (observation) => use(productionCliHostObservationOf(observation), observation.applicationExitRequestBoundary),
+      (observation) =>
+        use(
+          productionCliHostObservationOf(observation),
+          observation.applicationExitRequestBoundary,
+          observation.remotePublicationControl
+        ),
       operation
     )
 
@@ -253,10 +412,11 @@ export const productionCliHostObservationOf = (
 })
 
 /** One shipped command composition; qualification supplies only the host's named boundary Layers. */
-export const makeProductionCliApplicationFromHost = <EHost, RHost>(
-  runProductionHost: ProductionCliHostRunner<EHost, RHost>
+export const makeProductionCliApplicationFromHost = <EHost, RHost, EInspect = never, RInspect = never>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>,
+  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>
 ) =>
-  productionCliFromStdio(runProductionHost).pipe(
+  productionCliFromStdio(runProductionHost, undefined, inspectPublicationSubjects).pipe(
     Effect.provide(
       Layer.mergeAll(
         makeDryRunTrackerGraphReaderLayer(fixtureReaderFileLayer),
@@ -271,7 +431,10 @@ export const makeProductionCliApplicationFromHost = <EHost, RHost>(
 /** Ordinary defaults and qualification share the same parser and application Layers. */
 export const makeProductionCliApplication = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
-) => makeProductionCliApplicationFromHost(makeProductionCliHostRunner(adapters))
+) =>
+  makeProductionCliApplicationFromHost(makeProductionCliHostRunner(adapters), (configuration) =>
+    inspectProductionPublicationSubjects(configuration, adapters)
+  )
 
 /** The shipped binary selects live defaults at every external boundary. */
 export const productionCliApplication = makeProductionCliApplication()

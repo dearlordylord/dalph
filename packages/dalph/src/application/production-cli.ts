@@ -2,7 +2,7 @@
 /* eslint-disable max-lines -- The public CLI keeps one exhaustive versioned wire and failure mapper auditable. */
 
 import nodePath from "node:path"
-import { RunId } from "@dalph/contracts"
+import { GitCommitSha, RunId } from "@dalph/contracts"
 import {
   type ApplicationExitResult,
   CoordinatorLockHeld,
@@ -31,12 +31,19 @@ import {
   type ProductionRunSelection,
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
+  IntegrationResponsibilityIdentity,
+  JournalPosition,
+  RemotePublicationRetainedCause,
+  RemotePublicationRequestId,
+  RemotePublicationResumeReceipt,
+  RemotePublicationResumeStatus,
+  RemotePublicationBatchGrantReceipt,
   StartupRecoveryBlocked,
   TraceAtCursor,
   TraceCausalPredecessorContradiction,
   TraceCausalPredecessorMissing,
   TraceCausalPredecessorNotProjected,
-  type TraceCursor,
+  TraceCursor,
   TraceCursorNotCommitted,
   TraceJournalPrefixInvalid,
   TraceOutputError,
@@ -81,8 +88,24 @@ export const productionCliWireVersion = 1 as const // eslint-disable-line no-mag
 export class ProductionCliUsageError extends Schema.TaggedError<ProductionCliUsageError>()("ProductionCliUsageError", {
   code: Schema.Literal("usage.invalid"),
   detail: Schema.NonEmptyString,
-  subject: Schema.Literals(["dalph run", "dalph cancel"])
+  subject: Schema.Literals([
+    "dalph run",
+    "dalph cancel",
+    "dalph publication-resume",
+    "dalph publication-grant",
+    "dalph publication-subjects"
+  ])
 }) {}
+
+/** A selected Run rejected one exact public publication control request. */
+export class ProductionCliPublicationError extends Schema.TaggedError<ProductionCliPublicationError>()(
+  "ProductionCliPublicationError",
+  {
+    code: Schema.Literal("publication.rejected"),
+    detail: Schema.Literal("the publication request was not accepted for the selected Run"),
+    subject: RunId
+  }
+) {}
 
 export class ProductionCliConfigurationError extends Schema.TaggedError<ProductionCliConfigurationError>()(
   "ProductionCliConfigurationError",
@@ -332,6 +355,16 @@ export type ProductionCliApplicationExitDisposition = typeof ProductionCliApplic
 const PublicRunTerminationDisposition: Schema.Codec<RunTerminationDisposition, unknown, never, never> =
   RunTerminationDisposition
 const PublicTraceAtCursor: Schema.Codec<TraceAtCursor, unknown, never, never> = TraceAtCursor
+const historySnapshotTotalByteLimit = 8 * 1024 * 1024 // eslint-disable-line no-magic-numbers -- bounded public snapshot output
+const historySnapshotRecordByteLimit = 1024 * 1024
+const PublicProductionPublicationSubject = Schema.Struct({
+  runId: RunId,
+  responsibility: IntegrationResponsibilityIdentity,
+  retainedAt: JournalPosition,
+  cause: RemotePublicationRetainedCause,
+  candidateCommit: GitCommitSha,
+  publicationRequestId: RemotePublicationRequestId
+})
 
 const ProductionCliNonFailureRecord = Schema.TaggedUnion({
   ApplicationExitDisposition: {
@@ -340,6 +373,20 @@ const ProductionCliNonFailureRecord = Schema.TaggedUnion({
     version: Schema.Literal(productionCliWireVersion)
   },
   HistoricalSnapshot: { snapshot: PublicTraceAtCursor, version: Schema.Literal(productionCliWireVersion) },
+  HistoryAdvanced: { cursor: TraceCursor, version: Schema.Literal(productionCliWireVersion) },
+  PublicationResumeResult: {
+    result: Schema.Union([RemotePublicationResumeReceipt, RemotePublicationResumeStatus]),
+    version: Schema.Literal(productionCliWireVersion)
+  },
+  PublicationGrantResult: {
+    result: RemotePublicationBatchGrantReceipt,
+    version: Schema.Literal(productionCliWireVersion)
+  },
+  PublicationSubjects: {
+    runId: Schema.NullOr(RunId),
+    subjects: Schema.Array(PublicProductionPublicationSubject),
+    version: Schema.Literal(productionCliWireVersion)
+  },
   CurrentStatus: { status: ProductionCliCurrentDeliveryStatus, version: Schema.Literal(productionCliWireVersion) },
   RunDisposition: {
     disposition: PublicRunTerminationDisposition,
@@ -366,6 +413,7 @@ const ProductionCliOrdinaryFailureRecord = Schema.TaggedStruct("Failure", {
     "startup.recovery_blocked",
     "startup.run_not_found",
     "startup.run_selection_conflict",
+    "publication.rejected",
     "output.write_failed",
     ...productionCliStatusFailureCodes,
     "usage.invalid"
@@ -474,14 +522,15 @@ export type ProductionCliApplicationExitObservation<EOutput> = {
  * current-first, and keeps later status, history, and disposition facts distinct.
  * No current-status or disposition fact is inferred from historical snapshots.
  */
-export const presentSelectedProductionRun = <EOutput>(
+export const presentSelectedProductionRun = <EOutput, ESelected = never>(
   observation: ProductionCliHostObservation,
   writeLine: (line: string) => Effect.Effect<void, EOutput>,
-  onSelected: Effect.Effect<void> = Effect.void,
-  applicationExit?: ProductionCliApplicationExitObservation<EOutput>
+  onSelected: Effect.Effect<void, ESelected> = Effect.void,
+  applicationExit?: ProductionCliApplicationExitObservation<EOutput>,
+  historySnapshotByteBudget = historySnapshotTotalByteLimit
 ): Effect.Effect<
   void,
-  EOutput | TraceReaderError | JournalStoreError | ProductionCliLifecycleError | ProductionCliStatusError
+  EOutput | ESelected | TraceReaderError | JournalStoreError | ProductionCliLifecycleError | ProductionCliStatusError
 > =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -518,14 +567,32 @@ export const presentSelectedProductionRun = <EOutput>(
         writeStatus
       )
       const publishedHistoryCursor = yield* Ref.make<TraceCursor | undefined>(undefined)
+      const remainingHistorySnapshotBytes = yield* Ref.make(historySnapshotByteBudget)
       const writeHistory = (cursor: TraceCursor, terminal = false) =>
         publicationGate.withPermit(
           Effect.gen(function* () {
             if (!terminal && !(yield* Ref.get(ordinaryPublicationOpen))) return false
             const published = yield* Ref.get(publishedHistoryCursor)
             if (published !== undefined && sameTraceCursor(published, cursor)) return false
-            const snapshot = yield* observation.traceReader.readAt(cursor)
-            yield* writeLine(encodeProductionCliRecord(historicalRecord(snapshot)))
+            const remaining = yield* Ref.get(remainingHistorySnapshotBytes)
+            if (remaining > 0) {
+              const snapshot = yield* observation.traceReader.readAt(cursor)
+              const line = encodeProductionCliRecord(historicalRecord(snapshot))
+              const bytes = new TextEncoder().encode(line).byteLength
+              if (bytes <= historySnapshotRecordByteLimit && bytes <= remaining) {
+                yield* writeLine(line)
+                yield* Ref.set(remainingHistorySnapshotBytes, remaining - bytes)
+              } else {
+                yield* writeLine(
+                  encodeProductionCliRecord({ _tag: "HistoryAdvanced", cursor, version: productionCliWireVersion })
+                )
+                yield* Ref.set(remainingHistorySnapshotBytes, 0)
+              }
+            } else {
+              yield* writeLine(
+                encodeProductionCliRecord({ _tag: "HistoryAdvanced", cursor, version: productionCliWireVersion })
+              )
+            }
             yield* Ref.set(publishedHistoryCursor, cursor)
             return true
           })
@@ -698,6 +765,7 @@ export type ProductionCliKnownFailure =
   | ProductionCliJournalError
   | ProductionCliLifecycleError
   | ProductionCliOutputError
+  | ProductionCliPublicationError
   | ProductionCliStartupError
   | ProductionCliStatusError
   | ProductionCliUsageError
@@ -711,6 +779,7 @@ type ProductionCliBoundaryFailure =
   | JournalStoreError
   | ProductionCliConfigurationError
   | ProductionCliLifecycleError
+  | ProductionCliPublicationError
   | ProductionCliOutputError
   | TraceOutputError
   | ProductionCliStatusError
@@ -750,6 +819,7 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     JournalStorageUnavailable,
     ProductionCliConfigurationError,
     ProductionCliLifecycleError,
+    ProductionCliPublicationError,
     ProductionCliOutputError,
     ProductionCliStatusError,
     ProductionCliUsageError,
@@ -805,6 +875,7 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
   switch (failure._tag) {
     case "ProductionCliConfigurationError":
     case "ProductionCliLifecycleError":
+    case "ProductionCliPublicationError":
     case "ProductionCliOutputError":
     case "ProductionCliStatusError":
     case "ProductionCliUsageError":

@@ -242,6 +242,9 @@ has `_tag: "RunSelected"`, `selection: "Allocated"`, an exact `runId`, and
   `Blocked`, `Settled`, or `Relinquished`;
 - `HistoricalSnapshot`, containing one whole immutable `snapshot` and its exact
   Journal cursor;
+- `HistoryAdvanced`, containing the exact Journal cursor after this invocation's
+  bounded snapshot output budget is spent; the complete history remains in the
+  Journal and is available through the read-only trace reader;
 - `RunDisposition`, with `Completed`, `Blocked`, or `Cancelled`, after the host
   independently proves Run termination;
 - `ApplicationExitDisposition`, with `Succeeded` and status 0 or `Failed` /
@@ -265,6 +268,34 @@ An unexpected defect is reported through stderr and a nonzero process result;
 it does not invent an `internal.unexpected` NDJSON record. Historical snapshots,
 current status, Run disposition, and application Exit are distinct facts. An
 empty or closed status stream alone is never terminal success.
+
+### Resume a retained remote publication
+
+The Operator first reads the exact retained subject without starting delivery:
+
+```bash
+dalph publication-subjects github:OWNER/REPOSITORY#ISSUE --config /absolute/production.json > /absolute/subjects.json
+```
+
+For a resumable retained cause, form one durable request with a stable request
+ID. Keep the same request file for redelivery:
+
+```bash
+jq --arg requestId 'operator-resume-1' \
+  '{requestId:$requestId, responsibility:.subjects[0].responsibility, runId, schemaVersion:1}' \
+  /absolute/subjects.json > /absolute/resume-request.json
+dalph publication-resume github:OWNER/REPOSITORY#ISSUE \
+  --config /absolute/production.json --request /absolute/resume-request.json
+```
+
+An exhausted publication instead needs an exact grant request with
+`exhaustionAt` from `.subjects[0].retainedAt`, submitted through
+`publication-grant` using the same flags. `PublicationResumeResult` or
+`PublicationGrantResult` reports a durable control result. Only a later
+`RunDisposition` and independent Git/tracker observations prove delivery.
+Reusing the same request ID and body after response loss replays the same
+receipt; a changed body is rejected. The command continues the selected Run
+after a receipt and accepts the ordinary graceful Exit signals.
 
 The run can change each owning system:
 

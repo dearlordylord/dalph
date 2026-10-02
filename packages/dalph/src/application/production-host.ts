@@ -1,6 +1,12 @@
 /* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
-import { IntegrationTarget, PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation } from "@dalph/contracts"
+import {
+  type GitCommitSha,
+  IntegrationTarget,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  type RunId
+} from "@dalph/contracts"
 import {
   GithubGraphqlClient,
   type GithubGraphqlExecution,
@@ -23,12 +29,17 @@ import {
   type EvidenceStoreService,
   GitCommonDirectoryTarget,
   GitCommand,
+  IntegrationResponsibilityIdentity,
+  JournalPosition,
+  type RemotePublicationRetainedCause,
+  type RemotePublicationRequestId,
   type GitCommandService,
   InitialControlPolicy,
   Integrator,
   IntegratorCandidateProviderAuthority,
   type JournaledRunTerminationSource,
   JournaledRunObservationSource,
+  JournaledRunBootstrap,
   JournalStore,
   RunLifecycleJournal,
   type RemoteBaselineGit,
@@ -51,6 +62,7 @@ import {
   taskClaimAcquisitionPlannerLayer,
   type ProductionRunSelection,
   type TraceCursor,
+  type JournalRecord,
   TraceReader,
   TraceReaderLayer,
   type TraceReaderService,
@@ -61,7 +73,7 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Schema, type Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Option, Schema, type Scope } from "effect"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -117,7 +129,73 @@ export interface ProductionHostObservation {
   readonly traceReader: Pick<TraceReaderService, "readAt">
   /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
   readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
+  /** Exact Run control, serialized by the established Journal and coordinator owner. */
+  readonly remotePublicationControl?: Pick<
+    JournaledRunBootstrap["Service"]["operatorControl"],
+    "applyRemotePublicationResume" | "applyRemotePublicationBatchGrant"
+  >
 }
+
+/** The exact retained publication address available to an Operator without starting delivery. */
+export interface ProductionPublicationSubject {
+  readonly runId: RunId
+  readonly responsibility: IntegrationResponsibilityIdentity
+  readonly retainedAt: JournalPosition
+  readonly cause: RemotePublicationRetainedCause
+  readonly candidateCommit: GitCommitSha
+  readonly publicationRequestId: RemotePublicationRequestId
+}
+
+const laterPublicationBoundary = (record: JournalRecord, retained: JournalRecord): boolean => {
+  if (retained.event._tag !== "RemotePublicationRetained" || record.position <= retained.position) return false
+  const publicationId = retained.event.correlation.requestId
+  if (
+    record.event._tag === "RemotePublicationAttemptIntended" ||
+    record.event._tag === "RemotePublicationRetained" ||
+    record.event._tag === "RemotePublicationResumeRequested" ||
+    record.event._tag === "RemotePublicationSucceeded"
+  )
+    return record.event.correlation.requestId === publicationId
+  if (record.event._tag === "RemotePublicationBatchGrantApplied")
+    return (
+      record.event.request.responsibility.queuedAt ===
+      retained.event.correlation.qualifiedCandidate.run.session.queuedAt
+    )
+  return false
+}
+
+/** Reads only validated Hot history under coordinator ownership; no Run owner or provider is acquired. */
+export const inspectProductionPublicationSubjects = <ECodex = never, EGithub = never, ETrace = never>(
+  configuration: ProductionRepositoryHostConfiguration,
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const foundation = yield* Layer.build(productionRepositoryHostGraph(adapters).foundation(configuration))
+      const discovery = yield* discoverProductionRun(configuration.target).pipe(Effect.provide(foundation))
+      if (discovery._tag === "Fresh") {
+        const subjects: ReadonlyArray<ProductionPublicationSubject> = []
+        return { runId: null, subjects }
+      }
+      const records = yield* Context.get(foundation, JournalStore).read(discovery.runId)
+      const subjects = records.flatMap((record): ReadonlyArray<ProductionPublicationSubject> => {
+        if (record.event._tag !== "RemotePublicationRetained") return []
+        if (records.some((later) => laterPublicationBoundary(later, record))) return []
+        const session = record.event.correlation.qualifiedCandidate.run.session
+        return [
+          {
+            runId: record.runId,
+            responsibility: IntegrationResponsibilityIdentity.make({ runId: record.runId, queuedAt: session.queuedAt }),
+            retainedAt: JournalPosition.make(record.position),
+            cause: record.event.cause,
+            candidateCommit: record.event.correlation.qualifiedCandidate.candidateCommit,
+            publicationRequestId: record.event.correlation.requestId
+          }
+        ]
+      })
+      return { runId: discovery.runId, subjects }
+    })
+  )
 
 /** The offline cancellation command found no unfinished Run for its exact target. */
 export class ProductionCancellationRunNotFound extends Schema.TaggedError<ProductionCancellationRunNotFound>()(
@@ -948,6 +1026,7 @@ export const withDecodedProductionRepositoryHost = <
         )
       ).pipe(Effect.provide(foundation))
       const source = Context.get(run, JournaledRunObservationSource)
+      const bootstrap = Context.getOption(run, JournaledRunBootstrap)
       yield* Effect.raceFirst(source.awaitEstablished, Deferred.await(activationFailure))
       const observation = {
         acceptedHistory: source.acceptedHistory,
@@ -955,7 +1034,8 @@ export const withDecodedProductionRepositoryHost = <
         runTermination: source.runTermination,
         selection,
         traceReader,
-        applicationExitRequestBoundary: applicationExit.requestBoundary
+        applicationExitRequestBoundary: applicationExit.requestBoundary,
+        ...(Option.isSome(bootstrap) ? { remotePublicationControl: bootstrap.value.operatorControl } : {})
       } satisfies ProductionHostObservation
       // The caller reports the exact lifecycle result and returns from this
       // callback; normal Effect.scoped finalization then closes the Run and

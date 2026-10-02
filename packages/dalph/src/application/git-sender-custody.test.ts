@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- fixture owns a disposable execution-substrate directory. */
+import { execFile } from "node:child_process"
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -130,6 +131,66 @@ it("replacement host stops a token-owned escaped sender before releasing custody
   }
 })
 
+it("reconciles a macOS sender that exited before PID acknowledgement", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dalph-sender-darwin-gone-"))
+  const native: CodexProcessNativeService = {
+    ...nodeCodexProcessNativeService,
+    platform: "darwin",
+    execFile: async (_file, arguments_) => ({
+      stdout: arguments_.includes("pid=,command=") ? "1 launchd\n" : "1 0 1 Ss Mon Oct  1 10:00:00 2026\n"
+    })
+  }
+  try {
+    await Effect.runPromise(
+      Effect.flatMap(GitSenderCustody, (custody) =>
+        custody
+          .reserve(subject)
+          .pipe(Effect.andThen(custody.begin(subject)), Effect.andThen(custody.reconcile(subject)))
+      ).pipe(Effect.provide(fileGitSenderCustodyLayer(directory, native)))
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it("stops a macOS token-bearing escaped helper before releasing custody", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dalph-sender-darwin-helper-"))
+  let token = ""
+  let live = true
+  const signals: Array<number> = []
+  const native: CodexProcessNativeService = {
+    ...nodeCodexProcessNativeService,
+    platform: "darwin",
+    execFile: async (_file, arguments_) => ({
+      stdout: arguments_.includes("pid=,command=")
+        ? `1 launchd\n${live ? `22 git ${gitSenderTokenEnvironment}=${token}\n` : ""}`
+        : arguments_.includes("command=")
+          ? `git ${gitSenderTokenEnvironment}=${token}\n`
+          : `1 0 1 Ss Mon Oct  1 10:00:00 2026\n${live ? "22 1 22 S Mon Oct  1 10:01:00 2026\n" : ""}`
+    }),
+    kill: (pid) => {
+      signals.push(pid)
+      live = false
+    },
+    wait: () => Effect.void
+  }
+  try {
+    token = await Effect.runPromise(
+      Effect.flatMap(GitSenderCustody, (custody) =>
+        custody.reserve(subject).pipe(Effect.andThen(custody.begin(subject)))
+      ).pipe(Effect.provide(fileGitSenderCustodyLayer(directory, native)))
+    )
+    await Effect.runPromise(
+      Effect.flatMap(GitSenderCustody, (custody) => custody.reconcile(subject)).pipe(
+        Effect.provide(fileGitSenderCustodyLayer(directory, native))
+      )
+    )
+    expect(signals).toEqual([22])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 it("replacement host fails closed when pending sender custody is missing or unreadable", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dalph-sender-missing-"))
   try {
@@ -172,6 +233,56 @@ it("records and reconciles custody for a real bounded Git process", async () => 
   }
 })
 
+it("publishes once to a disposable bare repository with macOS sender custody", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dalph-sender-real-push-"))
+  const worktree = join(directory, "source")
+  const remote = join(directory, "remote.git")
+  const git = (args: ReadonlyArray<string>) =>
+    new Promise<string>((resolve, reject) =>
+      execFile("git", [...args], (error, stdout) => (error === null ? resolve(stdout.trim()) : reject(error)))
+    )
+  try {
+    await git(["init", "-b", "main", worktree])
+    await git(["init", "--bare", remote])
+    await writeFile(join(worktree, "README.md"), "one exact publication\n")
+    await git(["-C", worktree, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "add", "README.md"])
+    await git([
+      "-C",
+      worktree,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "-m",
+      "candidate"
+    ])
+    const candidate = await git(["-C", worktree, "rev-parse", "HEAD"])
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const commands = yield* GitCommand
+        if (commands.prepareSenderCustody === undefined || commands.runBoundedInRepository === undefined)
+          return yield* Effect.die("bounded Git custody missing")
+        yield* commands.prepareSenderCustody(subject)
+        return yield* commands.runBoundedInRepository(
+          join(worktree, ".git"),
+          ["push", remote, "HEAD:refs/heads/main"],
+          "10 seconds",
+          subject
+        )
+      }).pipe(
+        Effect.provide(nodeGitCommandLayer),
+        Effect.provide(fileGitSenderCustodyLayer(directory)),
+        Effect.provide(NodeServices.layer)
+      )
+    )
+    expect(result.exitCode).toBe(0)
+    expect(await git(["--git-dir", remote, "rev-parse", "refs/heads/main"])).toBe(candidate)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 it("reopens a durable unsent reservation after numbered intent commits without inspecting processes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dalph-sender-unsent-"))
   let inspections = 0
@@ -206,7 +317,7 @@ it("fails closed for unavailable and ambiguous process census evidence", async (
     readonly native: (base: CodexProcessNativeService) => CodexProcessNativeService
     readonly succeeds?: boolean
   }> = [
-    { name: "non-linux host", native: (base) => ({ ...base, platform: "darwin" }) },
+    { name: "unsupported host", native: (base) => ({ ...base, platform: "win32" }) },
     { name: "missing owner uid", native: (base) => ({ ...base, readFile: async () => "Name:\tself\n" }) },
     {
       name: "missing child uid",
@@ -267,7 +378,7 @@ it("fails closed for unavailable and ambiguous process census evidence", async (
   for (const scenario of scenarios) {
     const directory = await mkdtemp(join(tmpdir(), `dalph-sender-census-${scenario.name.replaceAll(" ", "-")}-`))
     try {
-      const native = scenario.native(nodeCodexProcessNativeService)
+      const native = scenario.native({ ...nodeCodexProcessNativeService, platform: "linux" })
       await prepareSpawnedRecord(directory, native)
       const result = await Effect.runPromise(
         Effect.flatMap(GitSenderCustody, (custody) => custody.reconcile(subject)).pipe(

@@ -1257,3 +1257,32 @@ current policy. At the time of this earlier implementation checkpoint, the
 required fresh supervised hosted S1 remained unproven; the 2026-10-01 hosted S1
 is documented in the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance--2026-10-01).
 No GitHub issue closure is claimed by this scenario document.
+
+## Public retained-publication control (#389)
+
+The Operator observes an unfinished Run whose exact candidate and publication
+attempt are retained. `publication-subjects` acquires only coordinator and
+Journal custody, validates Hot history, and returns the current retained
+subject's RunId, responsibility `queuedAt`, retained position, cause, and
+candidate. It starts no provider, executor, Integrator, or delivery Run. An
+earlier retained occurrence superseded by a later attempt, receipt, grant, or
+success is not offered as current. A fresh target returns an empty subject
+list and never allocates a Run.
+
+The Operator copies that exact subject into a versioned JSON request and adds
+a stable request ID. `publication-resume` or `publication-grant` establishes
+the same unfinished Run, applies the existing core control contract, emits
+the durable receipt or current status separately from delivery status, and
+continues ordinary activation. Lost output or restart permits redelivery of
+the same body and ID; changed body fails closed. The core checks pause,
+retained cause, grant allowance, sender custody, and the pinned candidate
+before any renewed external effect. A receipt does not assert publication,
+promotion, tracker closure, or Run termination.
+
+Focused mapping: `production-cli.test.ts::public publication commands report
+exact control receipts before ordinary Run disposition` proves the public
+transport and ordering. Core `direct-publication/resume.test.ts`,
+`batch-grant.test.ts`, and `journaled-run-bootstrap.test.ts` retain the exact
+duplicate, restart, exhausted, and no-hidden-retry cuts. The #418 macOS
+same-Run recovery is the production-backed retained push cut. The read-only
+subject command is checked against that retained Journal before submission.
