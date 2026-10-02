@@ -1754,6 +1754,22 @@ const changedAttemptRestartAuthorityWindow = (startIndex: number) =>
     ]
   })
 
+/** The atomic replacement can kill this process while its independent G2 is still in flight. */
+const changedAttemptRestartBeforeReplacementDeathWindow = (startIndex: number) => {
+  const full = changedAttemptRestartAuthorityWindow(startIndex)
+  return Schema.decodeUnknownSync(AuthoredCausalWindow)({
+    ...full,
+    endIndex: startIndex + changedAttemptRestartAuthorityReads.length,
+    occurrences: full.occurrences
+      .slice(0, changedAttemptRestartAuthorityReads.length)
+      .map((occurrence) =>
+        occurrence.id.startsWith("restart-post-quiescence-G2-")
+          ? { ...occurrence, abortableOnProcessDeath: true as const }
+          : occurrence
+      )
+  })
+}
+
 /** Changed specification ends the direct authority branch before any claim or successor effect. */
 const changedAttemptRestartChangedFactsWindow = (startIndex: number) => {
   const full = changedAttemptRestartAuthorityWindow(startIndex)
@@ -1874,10 +1890,11 @@ export const changedAttemptRestartAfterSupersessionCrashAuthoredCassette: Scenar
 )({
   ...changedAttemptRestartsCleanlyUnwindowed,
   name: "Dalph reconstructs the exact replacement successor after process loss",
+  causalWindows: [changedAttemptRestartBeforeReplacementDeathWindow(changedAttemptRestartStoryThroughChoice.length)],
   story: [
     ...changedAttemptRestartStoryThroughChoice,
     ...changedAttemptRestartAuthorityReads,
-    { _tag: "CoordinatorProcessDies" },
+    { _tag: "CoordinatorProcessDiesAfterJournalEvent", afterJournalEvent: "PlannedAttemptReplaced" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     ...changedAttemptSuccessorStory,

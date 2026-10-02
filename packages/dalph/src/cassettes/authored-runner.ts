@@ -1918,6 +1918,15 @@ const runAuthoredScenarioCassetteWith = (request: {
       type AuthoredTargetedDeathJournalEvent =
         typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDiesAfterJournalEvent.Type.afterJournalEvent
       const targetedDeathAllowedPrefixSequences = {
+        PlannedAttemptReplaced: [
+          [
+            "TaskTrackerFactsObserved",
+            "GitReadIntentRecorded",
+            "PlannedAttemptWorktreeObserved",
+            "GitReadIntentRecorded",
+            "TargetLineageObserved"
+          ]
+        ],
         TargetPromotionAttemptIntended: [[]],
         TargetPromotionStale: [[]],
         IntegrationQuarantined: [["TargetPromotionStale"]],
@@ -1965,6 +1974,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           : cursor.pauseAtCoordinatorProcessDeathAfterJournalEvent
       const pauseAtAuthoredJournalBoundary = (event: AuthoredJournalAppendEvent): Effect.Effect<void> =>
         Effect.gen(function* () {
+          yield* cursor.pauseAtCoordinatorProcessDeathAfterCausalJournalEvent(event._tag)
           const next = yield* cursor.currentStoryItem
           if (next?._tag === "CoordinatorProcessDiesAfterJournalEvent") {
             const storyPosition = yield* cursor.storyPosition

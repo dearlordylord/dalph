@@ -693,6 +693,7 @@ const AuthoredPauseObservationReconnectFields = {
 
 /** One exact durable journal event after which the cassette kills the owning coordinator process. */
 const AuthoredCoordinatorDeathJournalEvent = Schema.Literals([
+  "PlannedAttemptReplaced",
   "TargetPromotionAttemptIntended",
   "TargetPromotionStale",
   "IntegrationQuarantined",
@@ -1469,13 +1470,15 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
             ownerItem?._tag === "DalphSelects" &&
             ownerItem.operation._tag === "ReadTrackerGraph" &&
             ownerOccurrence?.graphReadCause === "PostQuiescenceReconfirmation")
-        if (
-          !abortableG2 ||
-          cassette.story[endIndex]?._tag !== "CoordinatorProcessDies" ||
-          !occurrences.some(({ storyIndex }) => cassette.story[storyIndex]?._tag === "TaskClaimReleaseResponseLost")
-        ) {
-          return `causal occurrence ${occurrence.id} may be abandoned only as a lost-response G2 during process death`
-        }
+        const followingDeath = cassette.story[endIndex]
+        const lostResponseDeath =
+          followingDeath?._tag === "CoordinatorProcessDies" &&
+          occurrences.some(({ storyIndex }) => cassette.story[storyIndex]?._tag === "TaskClaimReleaseResponseLost")
+        const replacementDeath =
+          followingDeath?._tag === "CoordinatorProcessDiesAfterJournalEvent" &&
+          followingDeath.afterJournalEvent === "PlannedAttemptReplaced"
+        if (!abortableG2 || (!lostResponseDeath && !replacementDeath))
+          return `causal occurrence ${occurrence.id} may be abandoned only as G2 at a required process death`
       }
       if (
         occurrence.ownerRole !== undefined &&
