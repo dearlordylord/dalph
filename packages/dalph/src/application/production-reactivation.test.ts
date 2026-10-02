@@ -2450,7 +2450,9 @@ it.effect(
 
         const records = yield* Context.get(journalContext, JournalStore).read(runId)
         const rejected = records.filter(({ event }) => event._tag === "TaskClaimAcquisitionRejected")
-        expect(yield* Ref.get(activationCount), JSON.stringify(records.map(({ event }) => event._tag))).toBe(1)
+        // The accepted graph reads retain one #413 completion wake. Its entry
+        // must settle without a third activation or another authority call.
+        expect(yield* Ref.get(activationCount), JSON.stringify(records.map(({ event }) => event._tag))).toBe(2)
         expect(rejected).toHaveLength(1)
         expect(rejected[0]?.event).toMatchObject({
           _tag: "TaskClaimAcquisitionRejected",

@@ -511,6 +511,7 @@ it.effect("a failed accepted graph read creates no trailing activation until an 
           Effect.gen(function* () {
             yield* Deferred.await(firstStarted)
             const publish = yield* Deferred.await(publicationObserver)
+            yield* publish(AcceptedRunFactPublication.WorkflowProgress())
             yield* publish(AcceptedRunFactPublication.ReadPending({ operationId: operation.operationId }))
             yield* publish(failedReadPublication)
             yield* Deferred.succeed(releaseFirst, undefined)

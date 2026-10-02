@@ -313,9 +313,9 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const acceptedFactPublication = Effect.fn("RunReactivationOwner.acceptedFactPublication")(function* (
         publication: AcceptedRunFactPublication
       ) {
-        // A read intent has no authority result; its failed outcome cannot
-        // retract another operation's completed-fact wake.
-        if (publication._tag === "ReadPending" || publication._tag === "ReadFailed") return
+        // A read intent has no authority result. A failed result retracts
+        // publication-owned progress unless another read has completed.
+        if (publication._tag === "ReadPending") return
         if (publication._tag === "WorkflowProgress" || publication._tag === "ReadObserved") {
           const arrivalPhase = yield* Ref.get(activationPhase)
           yield* commandGate.withPermit(
