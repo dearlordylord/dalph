@@ -289,17 +289,21 @@ export const controlledTrackerAuthorityLayer = (
                 : Effect.fail(new TaskClaimOwnershipConflict({ attempted: release.claim, observed }))
             })
           )
-          return cursor.consumeTaskClaimReleaseResponseLost.pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => applyRelease,
-                onSome: (lost) =>
-                  lost.taskId !== release.claim.taskId
-                    ? Effect.die(
-                        `authored cassette lost claim-release response for ${lost.taskId} while releasing ${release.claim.taskId}`
-                      )
-                    : applyRelease.pipe(Effect.andThen(cursor.pauseAtCoordinatorProcessDeath))
-              })
+          return applyRelease.pipe(
+            Effect.flatMap((released) =>
+              cursor.consumeTaskClaimReleaseResponseLost.pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.succeed(released),
+                    onSome: (lost) =>
+                      lost.taskId !== release.claim.taskId
+                        ? Effect.die(
+                            `authored cassette lost claim-release response for ${lost.taskId} while releasing ${release.claim.taskId}`
+                          )
+                        : cursor.requireCoordinatorProcessDeathAfterLostResponse
+                  })
+                )
+              )
             )
           )
         }

@@ -2392,6 +2392,24 @@ export const changedAttemptReacquisitionForeignConflictAuthoredCassette: Scenari
 const stoppedAttemptReleaseSelectedAt = changedAttemptStopsAndReleasesAuthoredCassette.story.findIndex(
   (item) => item._tag === "DalphSelects" && item.operation._tag === "ReleaseTaskClaim"
 )
+const lostReleaseDeathOffset = 2
+const lostReleaseClaimWindow = changedAttemptStopClaimWindow(changedAttemptStopAppliedAt + 1, true)
+const lostReleaseWindow = Schema.decodeUnknownSync(AuthoredCausalWindow)({
+  ...lostReleaseClaimWindow,
+  endIndex: stoppedAttemptReleaseSelectedAt + lostReleaseDeathOffset,
+  occurrences: [
+    ...lostReleaseClaimWindow.occurrences.map((occurrence) =>
+      occurrence.id.startsWith("stop-post-quiescence-G2-")
+        ? { ...occurrence, abortableOnProcessDeath: true as const }
+        : occurrence
+    ),
+    {
+      id: "stop-exact-claim-release-response-lost",
+      storyIndex: stoppedAttemptReleaseSelectedAt + 1,
+      predecessorIds: ["stop-exact-claim-release"]
+    }
+  ]
+})
 
 /** The tracker applies K1's release, loses the response, survives an unreadable activation, then settles absent. */
 export const changedAttemptStopReleaseResponseLostAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
@@ -2399,6 +2417,7 @@ export const changedAttemptStopReleaseResponseLostAuthoredCassette: ScenarioCass
 )({
   ...changedAttemptStopsAndReleasesUnwindowed,
   name: "Alice sees Stop settle after Dalph loses the exact claim-release response",
+  causalWindows: [lostReleaseWindow],
   story: [
     ...changedAttemptStopsAndReleasesUnwindowed.story.slice(0, stoppedAttemptReleaseSelectedAt + 1),
     {

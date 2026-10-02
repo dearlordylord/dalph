@@ -591,6 +591,8 @@ export interface StoryCursor {
   /** Consume a targeted death only after its required journal event has become durable. */
   readonly pauseAtCoordinatorProcessDeathAfterJournalEvent: Effect.Effect<void>
   readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
+  /** A consumed lost response requires the following death, even while its causal window is still draining. */
+  readonly requireCoordinatorProcessDeathAfterLostResponse: Effect.Effect<never>
   /** Test-driver view of the next authored boundary; observing it never advances the story. */
   readonly storyItems: Stream.Stream<StoryItem | undefined>
 }
@@ -684,6 +686,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       const graph = compileAuthoredOccurrenceGraph(
         window.occurrences.map(
           ({
+            abortableOnProcessDeath,
             acceptedPlanPredecessorRoles,
             directAcquisitionClaimRead,
             directCleanupClaimRead,
@@ -714,6 +717,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               graphReadCause,
               graphReadExplicitTaskIds,
               waitForPredecessors,
+              abortableOnProcessDeath,
               directGraphRole,
               directGraphPredecessorRoles
             }
@@ -2351,6 +2355,51 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (Option.isSome(activeIntegrationDirection)) yield* Deferred.await(activeIntegrationDirection.value)
     return yield* dieAtCoordinatorProcessDeath
   })
+  const requireCoordinatorProcessDeathAfterLostResponse = Effect.gen(function* () {
+    const deathIndex = yield* transition.withPermits(1)(
+      Effect.gen(function* () {
+        const index = yield* SubscriptionRef.get(position)
+        const window = [...causalWindows.values()].find(
+          ({ endIndex, startIndex }) => startIndex <= index && index < endIndex
+        )
+        if (window === undefined) return undefined
+        const frontiers = yield* SubscriptionRef.get(causalWindowFrontiers)
+        const consumed = frontiers.get(window.startIndex) ?? new Set<AuthoredOccurrenceId>()
+        const lostResponse = window.graph.occurrences.find(
+          ({ value }) => story[value.storyIndex]?._tag === "TaskClaimReleaseResponseLost"
+        )
+        if (lostResponse === undefined || !consumed.has(lostResponse.id)) {
+          return yield* Effect.die("authored process death requires a consumed lost claim-release response")
+        }
+        const remaining = window.graph.occurrences.filter(({ id }) => !consumed.has(id))
+        if (remaining.some(({ value }) => value.abortableOnProcessDeath !== true)) {
+          return yield* Effect.die(
+            `authored process death would abandon required causal occurrences ${remaining
+              .filter(({ value }) => value.abortableOnProcessDeath !== true)
+              .map(({ id }) => id)
+              .join(", ")}`
+          )
+        }
+        const death = story[window.endIndex]
+        if (death?._tag !== "CoordinatorProcessDies") {
+          return yield* Effect.die("authored lost response must lead to coordinator process death")
+        }
+        yield* SubscriptionRef.set(
+          causalWindowFrontiers,
+          new Map(frontiers).set(window.startIndex, new Set(window.graph.occurrences.map(({ id }) => id)))
+        )
+        yield* SubscriptionRef.set(position, window.endIndex + 1)
+        yield* SubscriptionRef.update(storyProgress, (version) => version + 1)
+        yield* options.onOccurrence?.({ item: death, storyPosition: window.endIndex + 1 }) ?? Effect.void
+        return window.endIndex
+      })
+    )
+    if (deathIndex === undefined) {
+      yield* dieAtCoordinatorProcessDeath
+      return yield* Effect.die("authored lost response was not followed by coordinator process death")
+    }
+    return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: deathIndex }))
+  })
   const pauseAtCoordinatorProcessDeathAfterJournalEvent = Effect.gen(function* () {
     const activeIntegrationDirection = yield* SubscriptionRef.get(integrationQuarantineDirectionInFlight)
     if (Option.isSome(activeIntegrationDirection)) yield* Deferred.await(activeIntegrationDirection.value)
@@ -2631,6 +2680,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }),
     pauseAfterIntegrationQuarantineDirectionAppend,
     pauseAtCoordinatorProcessDeathAfterJournalEvent,
+    requireCoordinatorProcessDeathAfterLostResponse,
     storyPosition: SubscriptionRef.get(position),
     storyPositionUnsafe: () => SubscriptionRef.getUnsafe(position),
     currentStoryItem: SubscriptionRef.get(position).pipe(Effect.map((index) => story[index])),

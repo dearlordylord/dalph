@@ -1194,6 +1194,8 @@ export const AuthoredCausalWindow = Schema.Struct({
       predecessorIds: Schema.Array(AuthoredOccurrenceId).check(Schema.isUnique()),
       /** This boundary may wait for its explicitly named predecessors to enter the cursor. */
       waitForPredecessors: Schema.optionalKey(Schema.Literal(true)),
+      /** An in-flight boundary of this process may be abandoned by a required authored death. */
+      abortableOnProcessDeath: Schema.optionalKey(Schema.Literal(true)),
       /** Distinguishes equal-shaped graph selections by their production cause. */
       graphReadCause: Schema.optionalKey(
         Schema.Literals([
@@ -1459,6 +1461,22 @@ const causalWindowsAreValid = Schema.makeFilter((cassette: typeof AuthoredScenar
         return `causal occurrence ${occurrence.id} names more than one direct operation`
       const owner = occurrence.ownerRole === undefined ? undefined : graph.byId.get(occurrence.ownerRole)
       const ownerItem = owner === undefined ? undefined : cassette.story[owner.value]
+      if (occurrence.abortableOnProcessDeath === true) {
+        const ownerOccurrence = occurrences.find(({ id }) => id === occurrence.ownerRole)
+        const abortableG2 =
+          (selectedGraph && occurrence.graphReadCause === "PostQuiescenceReconfirmation") ||
+          (returnedGraph &&
+            ownerItem?._tag === "DalphSelects" &&
+            ownerItem.operation._tag === "ReadTrackerGraph" &&
+            ownerOccurrence?.graphReadCause === "PostQuiescenceReconfirmation")
+        if (
+          !abortableG2 ||
+          cassette.story[endIndex]?._tag !== "CoordinatorProcessDies" ||
+          !occurrences.some(({ storyIndex }) => cassette.story[storyIndex]?._tag === "TaskClaimReleaseResponseLost")
+        ) {
+          return `causal occurrence ${occurrence.id} may be abandoned only as a lost-response G2 during process death`
+        }
+      }
       if (
         occurrence.ownerRole !== undefined &&
         (ownerItem?._tag !== "DalphSelects" || !occurrence.predecessorIds.includes(occurrence.ownerRole))
