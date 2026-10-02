@@ -119,7 +119,14 @@ const configuration = {
   failureCooldown: "5 seconds",
   codexExecutable: env.DALPH_CODEX_EXECUTABLE,
   codexClientName: "dalph-own-repository-dogfood",
-  codexClientVersion: "1.0.0"
+  codexClientVersion: "1.0.0",
+  codexToolEffectPolicy: {
+    defaultLimitMilliseconds: 60000,
+    longCommands: [
+      { command: "pnpm check:lab", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 420000 },
+      { command: "pnpm check:submit", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 600000 }
+    ]
+  }
 }
 writeFileSync(env.DALPH_CONFIG, `${JSON.stringify(configuration, null, 2)}\n`, { mode: 0o600 })
 writeFileSync(`${root}/pins.json`, `${JSON.stringify({
@@ -132,7 +139,13 @@ NODE
 
 The CLI injects the target and environment-only `GITHUB_TOKEN`; do not add
 `target` or `githubToken` to JSON. Do not copy Codex authentication into the
-root. Check the selected issue and no-other-coordinator preconditions again,
+root.
+The two declared check allowances bind to each generated task worktree before
+Codex starts its turn. They apply only to those exact command strings; other
+tool items retain the one-minute limit. Adjust the declared check list for a
+different repository only after choosing its actual checks and deadlines.
+
+Check the selected issue and no-other-coordinator preconditions again,
 and verify the hosted Base before launch:
 
 ```bash

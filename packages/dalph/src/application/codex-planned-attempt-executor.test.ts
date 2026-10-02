@@ -126,7 +126,11 @@ import {
   codexPlannedAttemptExecutorLayerWithOptions,
   defaultCodexTaskInstructions
 } from "./codex-planned-attempt-executor.js"
-import { CodexToolEffectLimitMilliseconds, CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
+import {
+  CodexToolEffectLimitMilliseconds,
+  CodexToolEffectPolicy,
+  PlannedCodexWorktree
+} from "./codex-tool-effect-policy.js"
 
 interface CodexCompletionHintTestControlService {
   readonly publishIfTerminal: () => Effect.Effect<boolean>
@@ -1600,7 +1604,7 @@ it.effect("keeps the admitted command allowance after executor restart with a di
           longCommands: [
             {
               command: checkCommand,
-              cwd: worktree,
+              cwd: PlannedCodexWorktree.make({ _tag: "PlannedWorktree" }),
               limitMilliseconds: CodexToolEffectLimitMilliseconds.make(3_900_000)
             }
           ]
@@ -1612,7 +1616,7 @@ it.effect("keeps the admitted command allowance after executor restart with a di
           yield* executor.begin(request, { _tag: "InitialDelivery" })
           expect(harness.currentRecord()).toMatchObject({
             _tag: "Running",
-            toolEffectPolicy: { longCommands: [{ command: checkCommand, limitMilliseconds: 3_900_000 }] }
+            toolEffectPolicy: { longCommands: [{ command: checkCommand, cwd: worktree, limitMilliseconds: 3_900_000 }] }
           })
         }).pipe(Effect.provide(layerForImplementation(admitted)(harness)))
       )

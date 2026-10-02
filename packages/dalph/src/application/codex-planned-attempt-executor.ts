@@ -88,7 +88,7 @@ import {
   CodexToolEffectRecord,
   CodexToolItemId
 } from "./codex-attempt-store.js"
-import { CodexToolEffectPolicy, codexToolEffectLimit } from "./codex-tool-effect-policy.js"
+import { bindCodexToolEffectPolicy, CodexToolEffectPolicy, codexToolEffectLimit } from "./codex-tool-effect-policy.js"
 
 /** A terminal Codex message must contain one unambiguous 40-character commit. */
 const commitPattern = /(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/g
@@ -1652,7 +1652,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       const turnStartedAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
       const retainedToolEffectPolicy = hasOwnedTurnRecord(record)
         ? (record.toolEffectPolicy ?? toolEffectPolicy)
-        : toolEffectPolicy
+        : bindCodexToolEffectPolicy(toolEffectPolicy, attempt.worktree)
       // Persist the crossing intent before turn/start. A lost response can
       // therefore be reconciled without sending a second turn.
       const intent = intentRecordFor(

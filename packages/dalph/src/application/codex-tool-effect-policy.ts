@@ -14,10 +14,14 @@ export const CodexToolEffectLimitMilliseconds = Schema.Int.check(
 export type CodexToolEffectLimitMilliseconds = typeof CodexToolEffectLimitMilliseconds.Type
 const ordinaryLimit = CodexToolEffectLimitMilliseconds.make(defaultLimitMilliseconds)
 
+/** Configuration locator resolved to the exact owned worktree before turn/start. */
+export const PlannedCodexWorktree = Schema.Struct({ _tag: Schema.Literal("PlannedWorktree") })
+export type PlannedCodexWorktree = typeof PlannedCodexWorktree.Type
+
 /** An exact command item admitted to run longer than the ordinary item limit. */
 export const CodexLongCommandAllowance = Schema.Struct({
   command: Schema.NonEmptyString,
-  cwd: Schema.NonEmptyString,
+  cwd: Schema.Union([Schema.NonEmptyString, PlannedCodexWorktree]),
   limitMilliseconds: CodexToolEffectLimitMilliseconds
 })
 export type CodexLongCommandAllowance = typeof CodexLongCommandAllowance.Type
@@ -35,6 +39,16 @@ export const CodexToolEffectPolicy = Schema.Struct({
   })
 )
 export type CodexToolEffectPolicy = typeof CodexToolEffectPolicy.Type
+
+/** Freeze a reusable command profile to this attempt's exact worktree. */
+export const bindCodexToolEffectPolicy = (policy: CodexToolEffectPolicy, worktree: string): CodexToolEffectPolicy =>
+  CodexToolEffectPolicy.make({
+    defaultLimitMilliseconds: policy.defaultLimitMilliseconds,
+    longCommands: policy.longCommands.map((profile) => ({
+      ...profile,
+      cwd: typeof profile.cwd === "string" ? profile.cwd : worktree
+    }))
+  })
 
 /** Only a decoded command-execution item may use a larger declared allowance. */
 export interface CodexToolEffectStart {

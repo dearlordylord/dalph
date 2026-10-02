@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 import { Schema } from "effect"
-import { CodexToolEffectPolicy, codexToolEffectLimit } from "./codex-tool-effect-policy.js"
+import {
+  bindCodexToolEffectPolicy,
+  CodexToolEffectPolicy,
+  codexToolEffectLimit,
+  PlannedCodexWorktree
+} from "./codex-tool-effect-policy.js"
 
 const policy = Schema.decodeUnknownSync(CodexToolEffectPolicy)({
   longCommands: [
@@ -13,6 +18,37 @@ const policy = Schema.decodeUnknownSync(CodexToolEffectPolicy)({
 })
 
 describe("Codex tool-effect allowance", () => {
+  it("binds a declared long check to the owned worktree before turn start", () => {
+    const configured = Schema.decodeUnknownSync(CodexToolEffectPolicy)({
+      longCommands: [
+        {
+          command: "pnpm check:lab",
+          cwd: PlannedCodexWorktree.make({ _tag: "PlannedWorktree" }),
+          limitMilliseconds: 420_000
+        }
+      ]
+    })
+    const admitted = bindCodexToolEffectPolicy(configured, "/repo/generated-task")
+    expect(admitted.longCommands[0]?.cwd).toBe("/repo/generated-task")
+    expect(
+      codexToolEffectLimit(admitted, {
+        kind: "commandExecution",
+        command: "pnpm check:lab",
+        cwd: "/repo/generated-task"
+      })
+    ).toBe(420_000)
+    expect(
+      codexToolEffectLimit(admitted, { kind: "commandExecution", command: "pnpm check:lab", cwd: "/repo/other-task" })
+    ).toBe(60_000)
+    expect(
+      codexToolEffectLimit(admitted, {
+        kind: "commandExecution",
+        command: "pnpm check:lab && echo done",
+        cwd: "/repo/generated-task"
+      })
+    ).toBe(60_000)
+  })
+
   it("gives the exact configured quiet command a longer allowance", () => {
     expect(
       codexToolEffectLimit(policy, {

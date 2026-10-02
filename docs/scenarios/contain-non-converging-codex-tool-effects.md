@@ -47,7 +47,11 @@ The default maximum for an individual tool item is **60 seconds**. Before
 with a larger maximum, up to **90 minutes**, for known long checks. App-server
 exposes a command string and working directory, not a guaranteed executable
 and argument array. A profile therefore matches the complete, canonical
-command text and exact planned working directory. A shell script, JavaScript
+command text and exact planned working directory. Configuration may use the
+`{ "_tag": "PlannedWorktree" }` locator for a worktree whose path is generated during the
+Run; the executor binds that locator to the attempt's exact worktree before
+the first `turn/start` intent and retains the bound profile across restart.
+A shell script, JavaScript
 tool call, substring match, or an item whose command cannot be decoded
 receives the default. The profile is frozen for the attempt. An active item
 cannot ask for an extension. The implementation
@@ -131,6 +135,25 @@ arguments cannot be decoded. It must not infer check success from quietness.
 Acceptance seams: positive `allows the exact configured quiet check past the
 default item deadline`; independent negative `rejects a wrapper and a
 lookalike command from the long-check allowance`.
+
+## A generated worktree receives the declared check allowance
+
+Alice configures the exact `pnpm check:lab` command for `PlannedWorktree`
+with a seven-minute limit. Dalph plans an attempt with a fresh worktree path,
+then binds and durably records that exact path and command before calling
+Codex `turn/start`. Codex starts `pnpm check:lab` in that worktree, and the
+item remains active past 60 seconds. The executor keeps observing until the
+same item's completion or its seven-minute deadline. If Dalph restarts, it
+uses the retained bound profile and original item start time; it does not
+start a new timer or widen the allowance. A command in another worktree, a
+wrapped command, and an unknown tool item retain the 60-second limit. If the
+seven-minute deadline expires, the ordinary durable stop and stopped-writer
+proof apply, preserving the dirty worktree.
+
+Acceptance seams: positive `binds a declared long check to the owned worktree
+before turn start`; negative `does not grant the allowance to another
+worktree or command`. The policy helper test covers exact binding; the
+executor's retained-policy restart test covers recovery.
 
 ## A finite generator writes many bytes
 

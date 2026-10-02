@@ -86,6 +86,18 @@ describe("production repository host configuration", () => {
     expect(rejected._tag).toBe("Failure")
   })
 
+  it("admits a planned-worktree check profile for a generated attempt path", async () => {
+    const admitted = await Effect.runPromise(
+      decodeProductionRepositoryHostConfiguration({
+        ...validRawConfiguration(),
+        codexToolEffectPolicy: {
+          longCommands: [{ command: "pnpm check:lab", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 420_000 }]
+        }
+      })
+    )
+    expect(admitted.codexToolEffectPolicy?.longCommands[0]?.cwd).toEqual({ _tag: "PlannedWorktree" })
+  })
+
   it("decodes configured executor profiles and a host default", async () => {
     const decoded = await Effect.runPromise(
       decodeProductionRepositoryHostConfiguration({
