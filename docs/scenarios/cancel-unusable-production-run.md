@@ -65,6 +65,24 @@ typed blocker and exits the process-local owner. It performs no release,
 cleanup, integration, replacement, Run termination, or automatic retry. Only
 another explicit command can re-enter the same proof.
 
+## A failed terminal report still needs cancellation settlement
+
+Run R has a planned attempt, an exact acquired task claim, and a retained
+`ExecutorWorkTerminal(Failed)` report. The task is still open; no integration
+was admitted. Alice invokes the exact production `cancel` command. Dalph
+records `RunCancellationApplied`, reads the already accepted terminal report
+as stopped-work proof, then records `CancelledAttemptImplementationAbandoned`.
+It freshly reads and settles the exact claim before marking R `Cancelled`.
+The terminal report alone must not hide cancellation disposition or leave the
+claim pending. A crash after `RunCancellationApplied` reconstructs the same
+terminal proof and continues once; a repeated cancel after terminal Run
+settlement makes no second abandonment or claim mutation.
+
+Acceptance tests: `failed terminal executor work still abandons after Run
+cancellation` in `recovery-activation.test.ts` checks the disposition and
+frontier transition; the existing exact-claim cancellation tests above own
+the subsequent release and retry boundaries.
+
 ## Claim settlement remains unavailable or foreign
 
 After abandonment, an unreadable claim keeps the separate claim responsibility

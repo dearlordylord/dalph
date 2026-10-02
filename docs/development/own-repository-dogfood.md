@@ -34,6 +34,9 @@ Before invoking Dalph, the Operator confirms:
 - The Operator is present, has ordinary Codex login, authorized GitHub issue
   read/write access, and Git authentication with permission to publish to
   `dearlordylord/dalph` `master`. Branch rules and normal checks still apply.
+- The selected Codex model completes one minimal inference with this same
+  ChatGPT account before any Run is claimed. A displayed model catalog alone
+  does not prove account access.
 
 ## Pin source, target, and non-secret configuration
 
@@ -49,6 +52,7 @@ set -euo pipefail
 export DALPH_SOURCE=/absolute/path/to/pinned/dalph
 export DALPH_SOURCE_SHA=REPLACE_WITH_40_HEX_SOURCE_SHA
 export DALPH_ISSUE=REPLACE_WITH_FRESH_ISSUE_NUMBER
+export DALPH_CODEX_MODEL=gpt-5.6-sol
 read -r -s -p "Dalph GitHub issue token: " GITHUB_TOKEN
 printf '\n'
 export GITHUB_TOKEN
@@ -76,6 +80,10 @@ export DALPH_EXECUTABLE="${DALPH_SOURCE}/packages/dalph/dist/bin/dalph.js"
 export DALPH_CODEX_EXECUTABLE="${DALPH_SOURCE}/node_modules/.bin/codex"
 test -f "${DALPH_EXECUTABLE}"
 test -x "${DALPH_CODEX_EXECUTABLE}"
+"${DALPH_CODEX_EXECUTABLE}" exec --ephemeral \
+  --ignore-user-config --model "${DALPH_CODEX_MODEL}" \
+  --skip-git-repo-check -C "${DALPH_DOGFOOD_ROOT}" \
+  'Reply exactly OK. Do not use tools.' </dev/null
 ```
 
 Configure Git commit identity in the dedicated target clone if it is not
@@ -88,7 +96,7 @@ retain evidence, and identify the next diagnostic before another invocation.
 The following outline uses the shipped
 [production-host schema](../../packages/dalph/src/application/production-configuration.ts)
 and [CLI configuration loader](../../packages/dalph/src/application/production-cli.ts).
-It preserves the ordinary executor selection and supplies no model override.
+It selects an explicit Codex executor profile using the model proved above.
 
 ```bash
 export DALPH_CONFIG="${DALPH_DOGFOOD_ROOT}/production.json"
@@ -107,7 +115,15 @@ const configuration = {
     branch: "refs/heads/master"
   },
   plannedAttemptBaseSha: env.DALPH_BASE_SHA,
-  plannedAttemptExecutor: "codex:production",
+  plannedAttemptExecutor: "executor:codex/dogfood",
+  executorProfiles: [{
+    adapter: "codex-app-server",
+    executable: env.DALPH_CODEX_EXECUTABLE,
+    id: "codex/dogfood",
+    model: env.DALPH_CODEX_MODEL,
+    permissionPolicy: "unattended",
+    provider: "codex"
+  }],
   claimOwner: "dalph:dogfood",
   taskWorkCapacity: 1,
   journalDatabase: `${root}/journal.sqlite`,

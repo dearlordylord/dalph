@@ -128,6 +128,27 @@ describe("production repository host configuration", () => {
     expect(productionExecutorLocator(decoded)).toBe("codex:production")
   })
 
+  it("decodes an explicitly selected Codex model profile", async () => {
+    const decoded = await Effect.runPromise(
+      decodeProductionRepositoryHostConfiguration({
+        ...validRawConfiguration(),
+        plannedAttemptExecutor: "executor:codex/dogfood",
+        executorProfiles: [
+          {
+            adapter: "codex-app-server",
+            executable: "/usr/local/bin/codex",
+            id: "codex/dogfood",
+            model: "gpt-5.6-sol",
+            permissionPolicy: "unattended",
+            provider: "codex"
+          }
+        ]
+      })
+    )
+    expect(productionExecutorLocator(decoded)).toBe("executor:codex/dogfood")
+    expect(decoded.executorProfiles?.[0]?.model).toBe("gpt-5.6-sol")
+  })
+
   it("production keeps Codex CLI state separate from Dalph executor private state", async () => {
     const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
     expect(decoded.codexExecutorPrivateStateDirectory).toBe("/var/lib/dalph/executor-private")

@@ -9,7 +9,8 @@ The first concrete `PlannedAttemptExecutor` implementation launches the
 user-installed Codex CLI in app-server mode. It uses the user's existing Codex
 authentication, configuration, instructions, skills, MCP servers, and other
 ambient harness choices. Dalph does not inject a skill, review loop, subagent
-topology, model, or provider policy.
+topology or provider policy. The default executor leaves model choice to
+Codex; an explicitly selected Codex executor profile may pin one model alias.
 
 Generic Dalph still sees only one exact planned attempt and its normalized
 `ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, or terminal report.
@@ -48,6 +49,7 @@ starts the shipped production command.
    `OPENAI_API_KEY`, or `CODEX_HOME` addition. The child process inherits the
    invoking environment, so Codex performs its own normal authentication and
    configuration selection.
+
 4. The executor and Integrator share that one application-scoped app server as
    in the existing chronologies below.
 
@@ -80,6 +82,28 @@ subscription use into API-key billing, or persist authentication material.
 - `production keeps Codex CLI state separate from Dalph executor private state`
 - `production host composition keeps ambient Codex home separate from executor private state`
 - `production help names only the GitHub credential required by the ordinary path`
+
+## Alice pins an available model for one production executor profile
+
+Alice's installed Codex CLI has a default model that her ChatGPT account
+rejects during inference. She has proved a different model alias with one
+completed, minimal Codex turn. Before another Run begins, she configures a
+named `codex-app-server` executor profile with that model and selects the
+profile for the attempt. Dalph decodes the non-secret alias before opening a
+live boundary. It records the exact app-server launch command with a
+process-local `-c model=...` argument while leaving authentication, provider,
+approval, sandbox, and `CODEX_HOME` ownership at their existing boundaries.
+Codex starts a thread using that pinned process model. A failed model request
+produces a failed executor result; Dalph does not silently substitute another
+model or retry the failed turn. Restart uses the retained launch/attempt
+identity, and a new model choice requires a new attempt after the prior Run is
+settled. The default profile still launches without a model argument.
+
+Acceptance tests: `launches a selected Codex model without changing provider
+or credentials` in `codex-app-server.test.ts` checks the exact child command
+and environment; `decodes an explicitly selected Codex model profile` in
+`production-configuration.test.ts` checks profile admission. The default
+launch test proves the absence of an unsolicited model override.
 
 The following implementation-private names make the chronology precise:
 

@@ -1973,6 +1973,9 @@ export const deriveJournalResponsibilityFacts = (
       return externalSuccessDisposition()
     }
     const taskStateDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
+      // Cancellation owns abandonment and claim settlement even when the
+      // executor had already reported a failed terminal result.
+      if (cancellationDisposition !== undefined) return cancellationDisposition
       if (report?.report._tag === "ExecutorWorkTerminal") {
         return terminalTaskStateDisposition(
           report.report,
@@ -1982,8 +1985,6 @@ export const deriveJournalResponsibilityFacts = (
       }
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition
-      /** Cancellation must retry the exact stop boundary even when an earlier passive read was unavailable. */
-      if (cancellationDisposition !== undefined) return cancellationDisposition
       if (projectionWait) {
         return ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: projectionIssue.reason })
       }

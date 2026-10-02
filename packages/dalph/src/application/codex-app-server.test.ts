@@ -35,6 +35,7 @@ import {
 } from "./codex-attempt-store.js"
 import { controlledCodexProcessNativeLayer, nodeCodexProcessNativeService } from "./codex-process-native.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
+import { ExecutorModelAlias } from "./executor-profile.js"
 
 const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
   rawCodexAppServerLayer(config).pipe(
@@ -77,7 +78,7 @@ const onMessage = (message) => {
       userAgent: "fixture-codex/58",
       codexHome: "/tmp/fixture-codex-home",
       platformFamily: "unix",
-      platformOs: "linux"
+      platformOs: process.platform === "darwin" ? "macos" : "linux"
     })
   if (message.method === "thread/start") {
     thread = { ...thread, cwd: message.params.cwd, status: "idle", turns: [] }
@@ -492,6 +493,54 @@ it.effect("starts codex app-server without provider credential or CODEX_HOME ove
         expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env["OPENAI_API_KEY"] !== undefined)
         expect(captured.hasProviderCredential).toBe(nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined)
         expect(captured.path).toBe(nodeProcess.env["PATH"])
+        yield* app.close
+      }).pipe(Effect.provide(Layer.merge(storeLayer, appLayer)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("launches a selected Codex model without changing provider or credentials", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-codex-model-profile-" })
+      const executable = path.join(root, "fixture-codex")
+      const capture = path.join(root, "model-environment.json")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      const storeLayer = memoryCodexAttemptStoreLayer()
+      const appLayer = codexAppServerNodeLayer(
+        {
+          executable,
+          model: ExecutorModelAlias.make("gpt-5.6-sol"),
+          environment: { DALPH_QUALIFICATION_ENV_CAPTURE: capture }
+        },
+        isolatedCodexProcessNativeService
+      ).pipe(Layer.provide(storeLayer))
+      yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        const store = yield* CodexAttemptStore
+        const launch = yield* store.readServerLaunch()
+        const expectedArguments = [
+          "-c",
+          'approval_policy="never"',
+          "-c",
+          'sandbox_mode="danger-full-access"',
+          "-c",
+          'model="gpt-5.6-sol"',
+          "app-server"
+        ]
+        expect(Option.isSome(launch)).toBe(true)
+        if (Option.isNone(launch)) return
+        expect(launch.value.command).toEqual([executable, ...expectedArguments])
+        const captured = yield* Schema.decodeUnknownEffect(QualificationEnvironmentCapture)(
+          JSON.parse(yield* fileSystem.readFileString(capture))
+        )
+        expect(captured.arguments).toEqual(expectedArguments)
+        expect(captured.codexHome).toBe(nodeProcess.env["CODEX_HOME"])
+        expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env["OPENAI_API_KEY"] !== undefined)
+        expect(captured.hasProviderCredential).toBe(nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined)
         yield* app.close
       }).pipe(Effect.provide(Layer.merge(storeLayer, appLayer)))
     }).pipe(Effect.provide(NodeServices.layer))

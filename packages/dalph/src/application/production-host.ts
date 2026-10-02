@@ -443,13 +443,15 @@ const guardedCodexAppServerLayer = <E, R>(
 
 const defaultCodexAppServerLayer = (
   configuration: ProductionRepositoryHostConfiguration,
+  profile: ExecutorProfile,
   attemptStore: Layer.Layer<CodexAttemptStore>,
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   requestBoundary: CodexAppServerRequestBoundary
 ) => {
   return codexAppServerNodeLayer(
     {
-      executable: configuration.codexExecutable,
+      executable: profile.adapter === "codex-app-server" ? profile.executable : configuration.codexExecutable,
+      ...(profile.adapter === "codex-app-server" ? { model: profile.model } : {}),
       clientName: configuration.codexClientName,
       clientVersion: configuration.codexClientVersion,
       requireUnattendedPolicy: true
@@ -660,7 +662,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         ApplicationExitShell
       > =
         supplied ??
-        defaultCodexAppServerLayer(selectedConfiguration, attemptStoreLayer, codexProcessNative, requestBoundary)
+        defaultCodexAppServerLayer(
+          selectedConfiguration,
+          selectedProfile,
+          attemptStoreLayer,
+          codexProcessNative,
+          requestBoundary
+        )
       const appLayerWithoutCircuit = appLayerWithoutApplicationExit.pipe(
         Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
       )

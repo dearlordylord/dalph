@@ -50,6 +50,7 @@ import {
   type CodexProcessNativeService
 } from "./codex-process-native.js"
 import { logCodexCompletionTrace } from "./codex-completion-trace.js"
+import type { ExecutorModelAlias } from "./executor-profile.js"
 
 /** The process-owned status projection returned by one Codex thread read. */
 const CodexThreadStatus = Schema.Literals(["active", "idle", "notLoaded", "systemError"])
@@ -2489,6 +2490,8 @@ export const normalizeInitializeResponse = (
 /** Default app-server executable and ambient Codex CLI protocol options. */
 export interface CodexAppServerLayerConfig {
   readonly executable?: string
+  /** Explicit profile model; absent or `default` retains the installed Codex choice. */
+  readonly model?: ExecutorModelAlias
   readonly clientName?: string
   readonly clientVersion?: string
   /**
@@ -2508,13 +2511,18 @@ export interface CodexAppServerLayerConfig {
  * overrides are explicit in the durable command; production also proves them
  * through config/read before admitting a Run.
  */
-export const codexAppServerLaunchArguments = [
+const codexAppServerPolicyArguments = [
   "-c",
   'approval_policy="never"',
   "-c",
-  'sandbox_mode="danger-full-access"',
-  "app-server"
+  'sandbox_mode="danger-full-access"'
 ] as const
+export const codexAppServerLaunchArguments = [...codexAppServerPolicyArguments, "app-server"] as const
+
+const codexAppServerArgumentsForModel = (model: ExecutorModelAlias | undefined): ReadonlyArray<string> =>
+  model === undefined || model === "default"
+    ? codexAppServerLaunchArguments
+    : [...codexAppServerPolicyArguments, "-c", `model=${JSON.stringify(model)}`, "app-server"]
 
 const defaultConfig: Required<Pick<CodexAppServerLayerConfig, "clientName" | "clientVersion" | "executable">> &
   Pick<CodexAppServerLayerConfig, "environment"> = {
@@ -3509,12 +3517,13 @@ export const codexAppServerLayer = (
       const applicationExit = yield* Effect.serviceOption(ApplicationExitShell)
       const processGroupCensus = yield* Effect.serviceOption(CodexProcessGroupCensus)
       const selected = { ...defaultConfig, ...config }
-      const command = [selected.executable, ...codexAppServerLaunchArguments] as const
+      const launchArguments = codexAppServerArgumentsForModel(selected.model)
+      const command = [selected.executable, ...launchArguments] as const
       const incarnation = yield* newIncarnation(crypto)
       const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command, crypto, native)
       const handle = yield* spawner
         .spawn(
-          ChildProcess.make(selected.executable, [...codexAppServerLaunchArguments], {
+          ChildProcess.make(selected.executable, [...launchArguments], {
             stdin: { stream: "pipe", endOnDone: false },
             stdout: "pipe",
             stderr: "pipe",

@@ -3435,6 +3435,44 @@ effectIt.effect("lets durable Run cancellation override an unreadable executor p
   })
 )
 
+it("failed terminal executor work still abandons after Run cancellation", () => {
+  const cancellationPosition = JournalPosition.make(6)
+  const terminal = executorReport(
+    5,
+    PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation: plannedAttemptExecutorCorrelation(coverageAttempt),
+      result: { _tag: "Failed" }
+    })
+  )
+  const cancellation = coverageRecord(
+    Number(cancellationPosition),
+    RunCancellationAppliedEvent.make({
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    })
+  )
+  const [facts] = deriveJournalResponsibilityFacts(
+    coverageRunState([...coveragePlanRecords(), terminal, cancellation], [coverageResponsibility])
+  )
+  expect(facts).toMatchObject({
+    disposition: { _tag: "CancelledAttemptAbandonmentRequired", proof: { _tag: "AcceptedReport", reportOrdinal: 5 } }
+  })
+  if (facts === undefined) return
+  expect(
+    deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: { entries: [coverageResponsibility] },
+      responsibilityFacts: [facts]
+    }).transitions
+  ).toEqual([
+    RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
+      plannedAttempt: coverageAttempt,
+      proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(5) }
+    })
+  ])
+})
+
 it("derives cancellation abandonment, exact claim release, and typed no-release settlement", () => {
   const cancellationPosition = JournalPosition.make(6)
   const cancellation = coverageRecord(
