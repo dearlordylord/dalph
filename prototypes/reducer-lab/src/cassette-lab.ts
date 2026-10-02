@@ -1,4 +1,4 @@
-import { Cause, Crypto, Effect, Exit, Layer, Match, Option } from "effect"
+import { Cause, Crypto, Duration, Effect, Exit, Layer, Match, Option } from "effect"
 import * as TestConsole from "effect/testing/TestConsole"
 import * as TestClock from "effect/testing/TestClock"
 import { sha1 } from "@noble/hashes/legacy.js"
@@ -131,7 +131,7 @@ const cassetteCategoryMetadata = {
   }
 } as const satisfies Record<CassetteCategory, CassetteCategoryMetadata>
 
-interface CassetteExecution {
+export interface CassetteExecution {
   readonly activationOrdinals: ReadonlyArray<number>
   readonly rawEvidenceSource: CassetteRawEvidenceSource
   readonly observationCaptures: ReadonlyArray<AuthoredObservationCapture>
@@ -161,7 +161,7 @@ const authoredCassetteExecution = (run: AuthoredScenarioCassetteRun): CassetteEx
 interface MaintainedCassetteDescriptor {
   readonly catalogKey: MaintainedCassetteKey
   readonly category: CassetteCategory
-  readonly execute: (observer?: CassetteRunObserver) => Promise<Exit.Exit<CassetteExecution, unknown>>
+  readonly execute: (observer?: CassetteRunObserver) => Effect.Effect<CassetteExecution, unknown>
   readonly input: unknown
   readonly surface: CassetteDeliverySurface
   readonly story: ReadonlyArray<{ readonly _tag: string }>
@@ -173,6 +173,7 @@ interface MaintainedCassetteDescriptor {
 /** Read-only progress from one selected cassette; it never feeds state back into production. */
 export interface CassetteRunObserver {
   readonly onDeliveryFrame?: (frame: AuthoredDeliveryFrame) => void
+  readonly onObservationCapture?: (capture: AuthoredObservationCapture) => void
   readonly onObservationMoment?: (moment: AuthoredObservationMoment) => void
 }
 
@@ -226,11 +227,27 @@ export type CassetteLabResult =
       readonly catalogKey: MaintainedCassetteKey
       readonly category: CassetteCategory
       readonly detail: string
+      readonly watchdog: CassetteWatchdogDiagnostic | null
       readonly location: CassetteFailureLocation
       readonly runnerName: string
       readonly storyName: string
       readonly totalItemCount: number
     }
+
+export interface CassetteWatchdogDiagnostic {
+  readonly elapsedMs: number
+  readonly latestActivation: number | null
+  readonly latestStoryItemTag: string | null
+  readonly latestStoryPosition: number | null
+  readonly lastObservationCheckpoint: string
+}
+
+export interface CassetteRunProgress {
+  readonly _tag: "Started" | "Settled"
+  readonly catalogKey: MaintainedCassetteKey
+  readonly elapsedMs: number
+  readonly resultTag?: CassetteLabResult["_tag"]
+}
 
 /** Computes the Effect Crypto digest contract without requiring a secure browser origin. */
 export const browserDigest = (algorithm: Crypto.DigestAlgorithm, data: Uint8Array): Uint8Array => {
@@ -258,20 +275,17 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
 ).map(([key, cassette]) => ({
   catalogKey: `authored:${key}` as AuthoredCassetteKey,
   category: "Authored",
-  execute: async (observer) => {
+  execute: (observer) => {
     const onObservationMoment = observer === undefined
       ? undefined
       : (moment: AuthoredObservationMoment) => Effect.sync(() => {
             observer.onObservationMoment?.(moment)
             if (moment._tag === "DeliveryPublicationMoment") observer.onDeliveryFrame?.(moment.deliveryFrame)
         })
-    const exit = await Effect.runPromiseExit(
-      runAuthoredScenarioCassette(
-        cassette,
-        onObservationMoment === undefined ? {} : { onObservationMoment }
-      ).pipe(Effect.provide(cassetteRuntimeLayer))
-    )
-    return Exit.map(exit, authoredCassetteExecution)
+    return runAuthoredScenarioCassette(cassette, {
+      ...(onObservationMoment === undefined ? {} : { onObservationMoment }),
+      ...(observer?.onObservationCapture === undefined ? {} : { onObservationCapture: observer.onObservationCapture })
+    }).pipe(Effect.provide(cassetteRuntimeLayer), Effect.map(authoredCassetteExecution))
   },
   input: cassette,
   surface: {
@@ -299,11 +313,8 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
 ).map(([key, cassette]) => ({
   catalogKey: `target-promotion:${key}` as TargetPromotionCassetteKey,
   category: "TargetPromotion",
-  execute: async () => {
-    const exit = await Effect.runPromiseExit(
-      runTargetPromotionProtocolCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer))
-    )
-    return Exit.map(exit, (run) => ({
+  execute: () =>
+    runTargetPromotionProtocolCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer), Effect.map((run) => ({
       activationOrdinals: [],
       observationCaptures: [],
       deliveryFrames: null,
@@ -313,8 +324,7 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
       rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: run.records,
       runId: null
-    }))
-  },
+    }))),
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
@@ -328,13 +338,10 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
 ).map(([key, cassette]) => ({
   catalogKey: `integration-finality:${key}` as IntegrationFinalityCassetteKey,
   category: "IntegrationFinality",
-  execute: async () => {
-    const exit = await Effect.runPromiseExit(
-      useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+  execute: () =>
+    useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
         runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.runId)
-      ).pipe(Effect.provide(cassetteRuntimeLayer))
-    )
-    return Exit.map(exit, (run) => ({
+      ).pipe(Effect.provide(cassetteRuntimeLayer), Effect.map((run) => ({
       activationOrdinals: [],
       observationCaptures: [],
       deliveryFrames: null,
@@ -344,8 +351,7 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
       rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: run.records,
       runId: null
-    }))
-  },
+    }))),
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
@@ -359,11 +365,8 @@ const applicationExitDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
 ).map(([key, cassette]) => ({
   catalogKey: `application-exit:${key}` as ApplicationExitCassetteKey,
   category: "ApplicationExit",
-  execute: async () => {
-    const exit = await Effect.runPromiseExit(
-      Effect.scoped(runApplicationExitProtocolCassette(cassette)).pipe(Effect.provide(cassetteRuntimeLayer))
-    )
-    return Exit.map(exit, (run) => ({
+  execute: () =>
+    Effect.scoped(runApplicationExitProtocolCassette(cassette)).pipe(Effect.provide(cassetteRuntimeLayer), Effect.map((run) => ({
       activationOrdinals: [],
       observationCaptures: [],
       deliveryFrames: null,
@@ -373,8 +376,7 @@ const applicationExitDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
       rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: [],
       runId: null
-    }))
-  },
+    }))),
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
@@ -388,11 +390,8 @@ const codexExecutorDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Ob
 ).map(([key, cassette]) => ({
   catalogKey: `codex-executor:${key}` as CodexExecutorCassetteKey,
   category: "CodexExecutor",
-  execute: async () => {
-    const exit = await Effect.runPromiseExit(
-      runCodexPlannedAttemptExecutorCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer))
-    )
-    return Exit.map(exit, (run) => ({
+  execute: () =>
+    runCodexPlannedAttemptExecutorCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer), Effect.map((run) => ({
       activationOrdinals: [],
       observationCaptures: [],
       deliveryFrames: null,
@@ -402,8 +401,7 @@ const codexExecutorDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Ob
       rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: [],
       runId: null
-    }))
-  },
+    }))),
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story,
@@ -417,9 +415,8 @@ const dispositionCleanupDescriptors: ReadonlyArray<MaintainedCassetteDescriptor>
 ).map(([key, cassette]) => ({
   catalogKey: `disposition-cleanup:${key}` as DispositionCleanupCassetteKey,
   category: "DispositionCleanup",
-  execute: async () => {
-    const exit = await Effect.runPromiseExit(runDispositionCleanupCassette(cassette))
-    return Exit.map(exit, (run) => ({
+  execute: () =>
+    runDispositionCleanupCassette(cassette).pipe(Effect.map((run) => ({
       activationOrdinals: [],
       observationCaptures: [],
       deliveryFrames: null,
@@ -429,8 +426,7 @@ const dispositionCleanupDescriptors: ReadonlyArray<MaintainedCassetteDescriptor>
       rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: run.records,
       runId: run.records[0]?.runId ?? null
-    }))
-  },
+    }))),
   input: cassette,
   surface: { _tag: "DirectProtocolSurface" },
   story: cassette.story.map((text) => ({ _tag: "CleanupScenarioStep", text })),
@@ -537,6 +533,7 @@ const failedResult = (
     catalogKey: descriptor.catalogKey,
     category: descriptor.category,
     detail: typeof errorDetail === "string" ? `${Cause.pretty(cause)}\n${errorDetail}` : Cause.pretty(cause),
+    watchdog: null,
     location,
     runnerName: cassetteCategoryMetadata[descriptor.category].runnerName,
     storyName: descriptor.storyName,
@@ -567,6 +564,78 @@ const completedResult = (
   totalItemCount: descriptor.story.length
 })
 
+const defaultCassetteWatchdogDuration = Duration.minutes(4)
+
+const timedOutResult = (
+  descriptor: MaintainedCassetteDescriptor,
+  diagnostic: CassetteWatchdogDiagnostic
+): CassetteLabResult => {
+  const position = diagnostic.latestStoryPosition
+  const itemTag = diagnostic.latestStoryItemTag
+  return {
+    _tag: "Failed",
+    catalogKey: descriptor.catalogKey,
+    category: descriptor.category,
+    detail: `Cassette watchdog interrupted ${descriptor.catalogKey} after ${diagnostic.elapsedMs}ms; latest activation ${diagnostic.latestActivation ?? "unavailable"}; story position ${position ?? "unavailable"}; item ${itemTag ?? "unavailable"}; last observation checkpoint ${diagnostic.lastObservationCheckpoint}`,
+    location: position === null || itemTag === null
+      ? { _tag: "Unknown" }
+      : { _tag: "Known", consumedItemCount: position, failedItemTag: itemTag, storyPosition: position },
+    runnerName: cassetteCategoryMetadata[descriptor.category].runnerName,
+    storyName: descriptor.storyName,
+    totalItemCount: descriptor.story.length,
+    watchdog: diagnostic
+  }
+}
+
+const runCassetteDescriptor = async (
+  descriptor: MaintainedCassetteDescriptor,
+  observer?: CassetteRunObserver,
+  duration: Duration.Duration = defaultCassetteWatchdogDuration,
+  execution?: (observer: CassetteRunObserver) => Effect.Effect<CassetteExecution, unknown>
+): Promise<CassetteLabResult> => {
+  const startedAt = Date.now()
+  let latestCapture: AuthoredObservationCapture | null = null
+  let latestMoment: AuthoredObservationMoment | null = null
+  const progressObserver: CassetteRunObserver = {
+    ...observer,
+    onObservationCapture: (capture) => {
+      latestCapture = capture
+      observer?.onObservationCapture?.(capture)
+    },
+    onObservationMoment: (moment) => {
+      latestMoment = moment
+      observer?.onObservationMoment?.(moment)
+    }
+  }
+  const selectedExecution = execution?.(progressObserver) ?? descriptor.execute(progressObserver)
+  const settled = await Effect.runPromise(Effect.timeoutOption(Effect.exit(selectedExecution), duration))
+  if (Option.isSome(settled)) {
+    return Exit.isFailure(settled.value)
+      ? failedResult(descriptor, settled.value.cause)
+      : completedResult(descriptor, settled.value.value)
+  }
+  const moment = latestMoment as AuthoredObservationMoment | null
+  const capture = latestCapture as AuthoredObservationCapture | null
+  const storyPosition = moment?.storyPosition ?? capture?.storyPosition ?? null
+  const latestStoryItemTag = moment?._tag === "AuthoredStoryOccurrenceMoment"
+    ? moment.occurrence._tag
+    : capture?._tag === "AuthoredStoryOccurrenceCaptured"
+      ? capture.occurrence._tag
+      : storyPosition === null ? null : descriptor.story[storyPosition]?._tag ?? null
+  const frame = moment?.deliveryFrame ?? null
+  return timedOutResult(descriptor, {
+    elapsedMs: Date.now() - startedAt,
+    latestActivation: moment?.activationOrdinal ?? capture?.activationOrdinal ?? null,
+    latestStoryItemTag,
+    latestStoryPosition: storyPosition,
+    lastObservationCheckpoint: moment === null
+      ? capture === null
+        ? "journal=unavailable; projection=unavailable; observation=none"
+        : `journal=unavailable; projection=unavailable; observation=${capture._tag}#${capture.captureOrder}`
+      : `${moment._tag}#${moment.captureOrder}; journal=${frame?.acceptedAt ?? "unavailable"}; projection=${frame?.graph._tag ?? "unavailable"}`
+  })
+}
+
 /** Runs one exact checked-in cassette through the production runner that owns its catalog. */
 export const runMaintainedCassette = async (
   catalogKey: MaintainedCassetteKey,
@@ -574,8 +643,18 @@ export const runMaintainedCassette = async (
 ): Promise<CassetteLabResult> => {
   const descriptor = descriptorByKey.get(catalogKey)
   if (descriptor === undefined) throw new Error(`Unknown maintained cassette: ${catalogKey}`)
-  const exit = await descriptor.execute(observer)
-  return Exit.isFailure(exit) ? failedResult(descriptor, exit.cause) : completedResult(descriptor, exit.value)
+  return runCassetteDescriptor(descriptor, observer)
+}
+
+/** Controlled acceptance seam: the supplied Effect is interrupted by the same maintained-cassette watchdog. */
+export const runMaintainedCassetteExecution = async (
+  catalogKey: MaintainedCassetteKey,
+  execution: (observer: CassetteRunObserver) => Effect.Effect<CassetteExecution, unknown>,
+  duration: Duration.Duration
+): Promise<CassetteLabResult> => {
+  const descriptor = descriptorByKey.get(catalogKey)
+  if (descriptor === undefined) throw new Error(`Unknown maintained cassette: ${catalogKey}`)
+  return runCassetteDescriptor(descriptor, undefined, duration, execution)
 }
 
 /** Test seam for proving that an authored interaction mismatch reports its exact cursor position. */
@@ -622,6 +701,18 @@ export const runBoundedCassetteBatch = <Key, Value>(
 
 /** Runs all maintained catalogs independently; one failure never becomes a passing summary. */
 export const runEveryMaintainedCassette = (
-  onSettled?: (catalogKey: MaintainedCassetteKey, result: CassetteLabResult) => void
+  onSettled?: (catalogKey: MaintainedCassetteKey, result: CassetteLabResult) => void,
+  onProgress?: (progress: CassetteRunProgress) => void
 ): Promise<ReadonlyArray<CassetteLabResult>> =>
-  runBoundedCassetteBatch(maintainedCassetteKeys, runMaintainedCassette, onSettled)
+  runBoundedCassetteBatch(
+    maintainedCassetteKeys,
+    (catalogKey) => {
+      const startedAt = Date.now()
+      onProgress?.({ _tag: "Started", catalogKey, elapsedMs: 0 })
+      return runMaintainedCassette(catalogKey).then((result) => {
+        onProgress?.({ _tag: "Settled", catalogKey, elapsedMs: Date.now() - startedAt, resultTag: result._tag })
+        return result
+      })
+    },
+    onSettled
+  )
