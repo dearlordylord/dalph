@@ -28,6 +28,7 @@ scenario and test links. Reuse guidance already read unless its owner changed.
 | Install browsers and prepare real-host checks | [Browser setup](development/browser.md#browser-and-real-host-setup) |
 | Run protected live qualification | [Live qualification](development/live.md#protected-disposable-live-qualification) |
 | Create and dispose of a production walkthrough | [Walkthrough](development/walkthrough.md#disposable-production-repository-walkthrough) |
+| Supervise the first Dalph-on-Dalph delivery | [Own-repository Dogfood](development/own-repository-dogfood.md) |
 | Interpret coverage and retained output | [Coverage](development/coverage.md#coverage-and-output-budgets) |
 | Request formal proof or inspect its applicability | [Formal verification](development/formal.md#formal-reuse-and-handoff) |
 | Change CI, lint, supply-chain, or check-selection policy | [Harness policy](development/harness.md#safety-and-supply-chain) |
