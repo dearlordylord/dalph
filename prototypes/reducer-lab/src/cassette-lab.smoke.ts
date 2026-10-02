@@ -279,6 +279,8 @@ const expectedCatalogSize =
 
 let everyResult = await runEveryMaintainedCassette((catalogKey, result) => {
   console.log(`✓ maintained cassette ${catalogKey} settled ${result._tag}`)
+}, (progress) => {
+  console.log(`… maintained cassette ${progress.catalogKey} ${progress._tag.toLowerCase()} ${progress.elapsedMs}ms`)
 })
 let mismatchedResult: Awaited<ReturnType<typeof runAuthoredCassetteInput>> | undefined
 

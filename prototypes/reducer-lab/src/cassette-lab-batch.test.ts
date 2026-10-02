@@ -1,5 +1,18 @@
 import assert from "node:assert/strict"
-import { maintainedCassetteBatchConcurrency, runBoundedCassetteBatch } from "./cassette-lab.ts"
+import { Duration, Effect } from "effect"
+import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
+import {
+  AuthoredObservationCaptureOrder,
+  AuthoredStoryPosition
+} from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import { AuthoredRunActivationOrdinal } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
+import {
+  type CassetteExecution,
+  maintainedCassetteBatchConcurrency,
+  runBoundedCassetteBatch,
+  runMaintainedCassetteExecution,
+  selectCassetteWatchdogCursor
+} from "./cassette-lab.ts"
 
 const keys = Array.from({ length: maintainedCassetteBatchConcurrency * 2 + 1 }, (_, index) => index)
 const started: Array<number> = []
@@ -43,3 +56,42 @@ assert.equal(new Set(settled).size, keys.length, "progress has no duplicate keys
 assert.deepEqual(settled.toSorted((left, right) => left - right), keys, "progress has no omitted keys")
 
 console.log("✓ bounds maintained cassette work while preserving ordered results and exact progress")
+
+assert.deepEqual(
+  selectCassetteWatchdogCursor(
+    { activation: 1, captureOrder: 6, itemTag: "OlderProjectedItem", storyPosition: 3 },
+    { activation: 2, captureOrder: 7, itemTag: "LatestCapturedItem", storyPosition: 4 }
+  ),
+  { activation: 2, captureOrder: 7, itemTag: "LatestCapturedItem", storyPosition: 4 },
+  "a newer raw capture owns timeout cursor diagnostics while projection trails"
+)
+
+let interrupted = false
+const stalledKey = "authored:singletonTaskCompletes" as const
+const firstStoryItem = maintainedAuthoredCassetteCatalog.singletonTaskCompletes.story[0]
+if (firstStoryItem === undefined) throw new Error("controlled stalled cassette requires one story item")
+const stalled = await runMaintainedCassetteExecution(
+  stalledKey,
+  (observer) =>
+    Effect.sync(() => observer.onObservationCapture?.({
+      _tag: "AuthoredStoryOccurrenceCaptured",
+      activationOrdinal: AuthoredRunActivationOrdinal.make(2),
+      captureOrder: AuthoredObservationCaptureOrder.make(7),
+      occurrence: firstStoryItem,
+      storyPosition: AuthoredStoryPosition.make(1)
+    })).pipe(
+      Effect.andThen(Effect.callback<CassetteExecution>(() => Effect.sync(() => { interrupted = true })))
+    ),
+  Duration.millis(20)
+)
+assert.equal(interrupted, true, "watchdog interrupts the non-settling Effect before returning")
+assert.equal(stalled._tag, "Failed")
+if (stalled._tag !== "Failed") throw new Error("watchdog must fail the stalled cassette")
+assert.equal(stalled.catalogKey, stalledKey)
+assert.equal(stalled.watchdog?.latestActivation, 2)
+assert.equal(stalled.watchdog?.latestStoryPosition, 1)
+assert.equal(stalled.watchdog?.latestStoryItemTag, firstStoryItem._tag)
+assert.match(stalled.watchdog?.lastObservationCheckpoint ?? "", /AuthoredStoryOccurrenceCaptured#7/u)
+assert.match(stalled.detail, /authored:singletonTaskCompletes/u)
+assert.match(stalled.detail, /after \d+ms/u)
+console.log("✓ interrupts a stalled cassette and reports its exact key and latest checkpoint")
