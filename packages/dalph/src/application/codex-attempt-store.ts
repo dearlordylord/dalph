@@ -20,6 +20,7 @@ import {
   nodeCodexAttemptStoreNativeService,
   type CodexAttemptStoreNativeService
 } from "./codex-attempt-store-native.js"
+import { CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
 
 /** The opaque identity returned by one persisted Codex app-server thread. */
 export const CodexThreadId = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadId"))
@@ -433,6 +434,10 @@ const invalidCodexTerminalEvidence = (
   return undefined
 }
 
+const turnStartedAtMilliseconds = Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))
+const turnStartIncarnation = Schema.optionalKey(CodexServerIncarnation)
+const retainedToolEffectPolicy = Schema.optionalKey(CodexToolEffectPolicy)
+
 /**
  * Exact durable attempt/thread state. Each tag carries only the fields that
  * are valid at that boundary, so an unresolved turn always retains its fresh
@@ -460,6 +465,9 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     correlationAttemptId: AttemptId,
     correlationRunId: RunId,
     currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
     worktree: WorktreeLocator
@@ -470,6 +478,9 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     correlationAttemptId: AttemptId,
     correlationRunId: RunId,
     currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -481,6 +492,9 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     correlationAttemptId: AttemptId,
     correlationRunId: RunId,
     currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -492,6 +506,9 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     correlationAttemptId: AttemptId,
     correlationRunId: RunId,
     currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -503,6 +520,9 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     correlationAttemptId: AttemptId,
     correlationRunId: RunId,
     currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -514,6 +534,9 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     correlationAttemptId: AttemptId,
     correlationRunId: RunId,
     currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
     evidenceManifest: Schema.NullOr(EvidenceReference),
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
@@ -533,6 +556,106 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
 export type CodexAttemptRecord = typeof CodexAttemptRecord.Type
 
 const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${attemptId}`
+
+/** Private item identity; it never enters the generic workflow Journal. */
+export const CodexToolItemId = Schema.NonEmptyString.pipe(Schema.brand("CodexToolItemId"))
+export type CodexToolItemId = typeof CodexToolItemId.Type
+
+const CodexToolEffectFields = {
+  runId: RunId,
+  attemptId: AttemptId,
+  threadId: CodexThreadId,
+  turnId: CodexTurnId,
+  itemId: CodexToolItemId,
+  incarnation: CodexServerIncarnation,
+  worktree: WorktreeLocator,
+  startedAtMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  deadlineMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+}
+
+/** Item observation and stop effects remain in executor-private durable state. */
+export const CodexToolEffectRecord = Schema.TaggedUnion({
+  Started: CodexToolEffectFields,
+  Completed: { ...CodexToolEffectFields, completedAtMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) },
+  StopIntended: {
+    ...CodexToolEffectFields,
+    serverLaunch: Schema.optionalKey(Schema.suspend(() => CodexServerLaunchRecord)),
+    reason: Schema.Literals(["Elapsed", "Malformed", "MissingStart", "ClockReversed"]),
+    stopIntentAtMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+  },
+  LimitReached: {
+    ...CodexToolEffectFields,
+    serverLaunch: Schema.optionalKey(Schema.suspend(() => CodexServerLaunchRecord)),
+    reason: Schema.Literals(["Elapsed", "Malformed", "MissingStart", "ClockReversed"]),
+    stopIntentAtMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    stoppedAtMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+  }
+}).check(
+  Schema.makeFilter((record) => {
+    if (record.deadlineMilliseconds <= record.startedAtMilliseconds) return "item deadline must follow its start"
+    if (
+      (record._tag === "StopIntended" || record._tag === "LimitReached") &&
+      record.serverLaunch !== undefined &&
+      (record.serverLaunch.incarnation !== record.incarnation ||
+        record.serverLaunch.phase !== "Live" ||
+        record.serverLaunch.pid === null)
+    )
+      return "item stop launch must identify its live app-server incarnation"
+    if (record._tag === "Completed" && record.completedAtMilliseconds < record.startedAtMilliseconds)
+      return "item completion precedes its start"
+    if (
+      record._tag === "StopIntended" &&
+      record.reason !== "ClockReversed" &&
+      record.stopIntentAtMilliseconds < record.startedAtMilliseconds
+    )
+      return "item stop intent precedes its start"
+    if (record._tag === "LimitReached") {
+      if (record.reason !== "ClockReversed" && record.stopIntentAtMilliseconds < record.startedAtMilliseconds)
+        return "item stop intent precedes its start"
+      if (record.reason !== "ClockReversed" && record.stoppedAtMilliseconds < record.stopIntentAtMilliseconds)
+        return "item stop proof precedes its intent"
+    }
+    return undefined
+  })
+)
+export type CodexToolEffectRecord = typeof CodexToolEffectRecord.Type
+
+const toolEffectIdentityKey = (
+  runId: RunId,
+  attemptId: AttemptId,
+  turnId: CodexTurnId,
+  itemId: CodexToolItemId
+): string => JSON.stringify([runId, attemptId, turnId, itemId])
+const toolEffectKey = (record: CodexToolEffectRecord): string =>
+  toolEffectIdentityKey(record.runId, record.attemptId, record.turnId, record.itemId)
+
+const toolEffectEquivalence = Schema.toEquivalence(CodexToolEffectRecord)
+const toolEffectTransitionValid = (previous: CodexToolEffectRecord, next: CodexToolEffectRecord): boolean => {
+  if (toolEffectEquivalence(previous, next)) return true
+  if (
+    previous.runId !== next.runId ||
+    previous.attemptId !== next.attemptId ||
+    previous.threadId !== next.threadId ||
+    previous.turnId !== next.turnId ||
+    previous.itemId !== next.itemId ||
+    previous.incarnation !== next.incarnation ||
+    previous.worktree !== next.worktree ||
+    previous.startedAtMilliseconds !== next.startedAtMilliseconds ||
+    previous.deadlineMilliseconds !== next.deadlineMilliseconds
+  )
+    return false
+  if (previous._tag === "Started") return next._tag === "Completed" || next._tag === "StopIntended"
+  return (
+    previous._tag === "StopIntended" &&
+    next._tag === "LimitReached" &&
+    (previous.serverLaunch === undefined
+      ? next.serverLaunch === undefined
+      : next.serverLaunch !== undefined &&
+        Schema.toEquivalence(CodexServerLaunchRecord)(previous.serverLaunch, next.serverLaunch)) &&
+    previous.reason === next.reason &&
+    previous.stopIntentAtMilliseconds === next.stopIntentAtMilliseconds
+  )
+}
 
 /** Durable ownership intent and observation for one application-scoped app-server child. */
 export const CodexServerLaunchRecord = Schema.Struct({
@@ -570,7 +693,8 @@ export type CodexServerLeaseOwnerProjection =
 const CodexAttemptStoreSnapshot = Schema.Struct({
   attempts: Schema.Array(CodexAttemptRecord),
   serverLaunch: Schema.NullOr(CodexServerLaunchRecord),
-  replacements: Schema.Array(CodexPurgedWorkUnitReplacementLedger)
+  replacements: Schema.Array(CodexPurgedWorkUnitReplacementLedger),
+  toolEffects: Schema.optionalKey(Schema.Array(CodexToolEffectRecord))
 }).check(
   Schema.makeFilter((snapshot) => {
     const keys = new Set(snapshot.attempts.map((record) => keyOf(record.correlationRunId, record.correlationAttemptId)))
@@ -584,9 +708,11 @@ const CodexAttemptStoreSnapshot = Schema.Struct({
       return "private attempt snapshot aliases one Codex thread to multiple attempts"
     const replacements = snapshot.replacements
     const requestIds = new Set(replacements.map((replacement) => replacement.requestId))
-    return requestIds.size === replacements.length
+    if (requestIds.size !== replacements.length) return "private replacement snapshot contains duplicate requests"
+    const toolKeys = (snapshot.toolEffects ?? []).map(toolEffectKey)
+    return new Set(toolKeys).size === toolKeys.length
       ? undefined
-      : "private replacement snapshot contains duplicate requests"
+      : "private tool-effect snapshot contains duplicate items"
   })
 )
 type CodexAttemptStoreSnapshot = typeof CodexAttemptStoreSnapshot.Type
@@ -601,6 +727,8 @@ const CodexAttemptStoreOperation = Schema.Literals([
   "clearServerLaunch",
   "readReplacementLedger",
   "appendReplacementLedger",
+  "readToolEffect",
+  "writeToolEffect",
   "acquireServerLease",
   "releaseServerLease"
 ])
@@ -641,6 +769,17 @@ export interface CodexAttemptStoreService {
   readonly appendReplacementLedger: (
     ledger: CodexPurgedWorkUnitReplacementLedger
   ) => Effect.Effect<void, CodexAttemptStoreFailure>
+  readonly readToolEffect?: (
+    runId: RunId,
+    attemptId: AttemptId,
+    turnId: CodexTurnId,
+    itemId: CodexToolItemId
+  ) => Effect.Effect<Option.Option<CodexToolEffectRecord>, CodexAttemptStoreFailure>
+  readonly listToolEffects?: (
+    runId: RunId,
+    attemptId: AttemptId
+  ) => Effect.Effect<ReadonlyArray<CodexToolEffectRecord>, CodexAttemptStoreFailure>
+  readonly writeToolEffect?: (record: CodexToolEffectRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   /** Cross-process exclusive admission lease for the application child. */
   readonly acquireServerLease: (
     owner: CodexServerLeaseRecord,
@@ -653,7 +792,7 @@ export class CodexAttemptStore extends Context.Service<CodexAttemptStore, CodexA
   "@dalph/CodexAttemptStore"
 ) {}
 
-const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: null, replacements: [] }
+const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: null, replacements: [], toolEffects: [] }
 
 export const errorCode = (error: unknown): string =>
   typeof error === "object" && error !== null && "code" in error ? String(error.code) : ""
@@ -669,6 +808,9 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
       )
       const replacements = yield* Ref.make<ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>>(
         new Map(initial.replacements.map((ledger) => [ledger.requestId, ledger]))
+      )
+      const toolEffects = yield* Ref.make<ReadonlyMap<string, CodexToolEffectRecord>>(
+        new Map((initial.toolEffects ?? []).map((record) => [toolEffectKey(record), record]))
       )
       const snapshotGate = yield* Semaphore.make(1)
       const readAttempt = Effect.fn("CodexAttemptStore.Memory.readAttempt")(function* (
@@ -686,7 +828,13 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
               ...current,
               [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
             ])
-            yield* validateSnapshot(next, yield* Ref.get(launch), yield* Ref.get(replacements), "writeAttempt")
+            yield* validateSnapshot(
+              next,
+              yield* Ref.get(launch),
+              yield* Ref.get(replacements),
+              yield* Ref.get(toolEffects),
+              "writeAttempt"
+            )
             yield* Ref.set(attempts, next)
           })
         )
@@ -698,7 +846,13 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         yield* snapshotGate.withPermit(
           Effect.gen(function* () {
             const next = Option.some(record)
-            yield* validateSnapshot(yield* Ref.get(attempts), next, yield* Ref.get(replacements), "writeServerLaunch")
+            yield* validateSnapshot(
+              yield* Ref.get(attempts),
+              next,
+              yield* Ref.get(replacements),
+              yield* Ref.get(toolEffects),
+              "writeServerLaunch"
+            )
             yield* Ref.set(launch, next)
           })
         )
@@ -730,8 +884,51 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
             }
             if (merged._tag === "Idempotent") return
             const next = new Map([...current, [ledger.requestId, merged.ledger] as const])
-            yield* validateSnapshot(yield* Ref.get(attempts), yield* Ref.get(launch), next, "appendReplacementLedger")
+            yield* validateSnapshot(
+              yield* Ref.get(attempts),
+              yield* Ref.get(launch),
+              next,
+              yield* Ref.get(toolEffects),
+              "appendReplacementLedger"
+            )
             yield* Ref.set(replacements, next)
+          })
+        )
+      const readToolEffect: CodexAttemptStoreService["readToolEffect"] = (runId, attemptId, turnId, itemId) =>
+        Ref.get(toolEffects).pipe(
+          Effect.map((current) => {
+            const record = current.get(toolEffectIdentityKey(runId, attemptId, turnId, itemId))
+            return record === undefined ? Option.none() : Option.some(record)
+          })
+        )
+      const listToolEffects: CodexAttemptStoreService["listToolEffects"] = (runId, attemptId) =>
+        Ref.get(toolEffects).pipe(
+          Effect.map((current) =>
+            [...current.values()].filter((record) => record.runId === runId && record.attemptId === attemptId)
+          )
+        )
+      const writeToolEffect: CodexAttemptStoreService["writeToolEffect"] = (record) =>
+        snapshotGate.withPermit(
+          Effect.gen(function* () {
+            const current = yield* Ref.get(toolEffects)
+            const key = toolEffectKey(record)
+            const previous = current.get(key)
+            if (previous !== undefined && !toolEffectTransitionValid(previous, record)) {
+              return yield* new CodexAttemptStoreFailure({
+                detail: "tool-effect transition contradicts its exact retained item",
+                operation: "writeToolEffect"
+              })
+            }
+            if (previous !== undefined && toolEffectEquivalence(previous, record)) return
+            const next = new Map([...current, [key, record] as const])
+            yield* validateSnapshot(
+              yield* Ref.get(attempts),
+              yield* Ref.get(launch),
+              yield* Ref.get(replacements),
+              next,
+              "writeToolEffect"
+            )
+            yield* Ref.set(toolEffects, next)
           })
         )
       const lease = yield* Ref.make<Option.Option<CodexServerLeaseRecord>>(Option.none())
@@ -790,6 +987,9 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         clearServerLaunch,
         readReplacementLedger,
         appendReplacementLedger,
+        readToolEffect,
+        listToolEffects,
+        writeToolEffect,
         acquireServerLease,
         releaseServerLease
       })
@@ -1237,12 +1437,14 @@ const parseSnapshotDocument = (text: string): CodexAttemptStoreSnapshot => {
 const encodeSnapshot = (
   attempts: ReadonlyMap<string, CodexAttemptRecord>,
   serverLaunch: Option.Option<CodexServerLaunchRecord>,
-  replacements: ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>
+  replacements: ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>,
+  toolEffects: ReadonlyMap<string, CodexToolEffectRecord>
 ): string =>
   JSON.stringify({
     attempts: [...attempts.values()],
     serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null,
-    replacements: [...replacements.values()]
+    replacements: [...replacements.values()],
+    toolEffects: [...toolEffects.values()]
   })
 
 /** Validates the complete next snapshot before one store operation crosses persistence. */
@@ -1250,6 +1452,7 @@ const validateSnapshot = (
   attempts: ReadonlyMap<string, CodexAttemptRecord>,
   serverLaunch: Option.Option<CodexServerLaunchRecord>,
   replacements: ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>,
+  toolEffects: ReadonlyMap<string, CodexToolEffectRecord>,
   operation: CodexAttemptStoreOperation
 ): Effect.Effect<void, CodexAttemptStoreFailure> =>
   Effect.try({
@@ -1257,7 +1460,8 @@ const validateSnapshot = (
       Schema.decodeUnknownSync(CodexAttemptStoreSnapshot)({
         attempts: [...attempts.values()],
         serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null,
-        replacements: [...replacements.values()]
+        replacements: [...replacements.values()],
+        toolEffects: [...toolEffects.values()]
       })
     },
     catch: (error) => new CodexAttemptStoreFailure({ detail: String(error), operation })
@@ -1335,6 +1539,9 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
       const replacements = yield* Ref.make<ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>>(
         new Map(initial.snapshot.replacements.map((ledger) => [ledger.requestId, ledger]))
       )
+      const toolEffects = yield* Ref.make<ReadonlyMap<string, CodexToolEffectRecord>>(
+        new Map((initial.snapshot.toolEffects ?? []).map((record) => [toolEffectKey(record), record]))
+      )
       const loadFailure = yield* Ref.make<Option.Option<CodexAttemptStoreFailure>>(initial.failure)
       const persistence = yield* Semaphore.make(1)
       const guard = <A>(
@@ -1357,7 +1564,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
               const text = encodeSnapshot(
                 yield* Ref.get(attempts),
                 yield* Ref.get(launch),
-                yield* Ref.get(replacements)
+                yield* Ref.get(replacements),
+                yield* Ref.get(toolEffects)
               )
               // The private state file is an append-only checksummed boundary.
               // It never re-resolves a validated temporary path for rename;
@@ -1385,7 +1593,13 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
               ...current,
               [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
             ])
-            yield* validateSnapshot(next, yield* Ref.get(launch), yield* Ref.get(replacements), "writeAttempt")
+            yield* validateSnapshot(
+              next,
+              yield* Ref.get(launch),
+              yield* Ref.get(replacements),
+              yield* Ref.get(toolEffects),
+              "writeAttempt"
+            )
             yield* Ref.set(attempts, next)
           })
         ).pipe(
@@ -1399,7 +1613,13 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
           "writeServerLaunch",
           Effect.gen(function* () {
             const next = Option.some(record)
-            yield* validateSnapshot(yield* Ref.get(attempts), next, yield* Ref.get(replacements), "writeServerLaunch")
+            yield* validateSnapshot(
+              yield* Ref.get(attempts),
+              next,
+              yield* Ref.get(replacements),
+              yield* Ref.get(toolEffects),
+              "writeServerLaunch"
+            )
             yield* Ref.set(launch, next)
           })
         ).pipe(
@@ -1440,12 +1660,65 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
             }
             if (merged._tag === "Idempotent") return
             const next = new Map([...current, [ledger.requestId, merged.ledger] as const])
-            yield* validateSnapshot(yield* Ref.get(attempts), yield* Ref.get(launch), next, "appendReplacementLedger")
+            yield* validateSnapshot(
+              yield* Ref.get(attempts),
+              yield* Ref.get(launch),
+              next,
+              yield* Ref.get(toolEffects),
+              "appendReplacementLedger"
+            )
             yield* Ref.set(replacements, next)
           })
         ).pipe(
           Effect.andThen(persist("appendReplacementLedger")),
           Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "appendReplacementLedger"))
+        )
+      const readToolEffect: CodexAttemptStoreService["readToolEffect"] = (runId, attemptId, turnId, itemId) =>
+        guard(
+          "readToolEffect",
+          Ref.get(toolEffects).pipe(
+            Effect.map((current) => {
+              const record = current.get(toolEffectIdentityKey(runId, attemptId, turnId, itemId))
+              return record === undefined ? Option.none() : Option.some(record)
+            })
+          )
+        )
+      const listToolEffects: CodexAttemptStoreService["listToolEffects"] = (runId, attemptId) =>
+        guard(
+          "readToolEffect",
+          Ref.get(toolEffects).pipe(
+            Effect.map((current) =>
+              [...current.values()].filter((record) => record.runId === runId && record.attemptId === attemptId)
+            )
+          )
+        )
+      const writeToolEffect: CodexAttemptStoreService["writeToolEffect"] = (record) =>
+        guard(
+          "writeToolEffect",
+          Effect.gen(function* () {
+            const current = yield* Ref.get(toolEffects)
+            const key = toolEffectKey(record)
+            const previous = current.get(key)
+            if (previous !== undefined && !toolEffectTransitionValid(previous, record)) {
+              return yield* new CodexAttemptStoreFailure({
+                detail: "tool-effect transition contradicts its exact retained item",
+                operation: "writeToolEffect"
+              })
+            }
+            if (previous !== undefined && toolEffectEquivalence(previous, record)) return
+            const next = new Map([...current, [key, record] as const])
+            yield* validateSnapshot(
+              yield* Ref.get(attempts),
+              yield* Ref.get(launch),
+              yield* Ref.get(replacements),
+              next,
+              "writeToolEffect"
+            )
+            yield* Ref.set(toolEffects, next)
+          })
+        ).pipe(
+          Effect.andThen(persist("writeToolEffect")),
+          Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "writeToolEffect"))
         )
       const heldLease = yield* Ref.make<
         Option.Option<{ readonly file: FileHandle; readonly owner: CodexServerLeaseRecord }>
@@ -1617,6 +1890,9 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         clearServerLaunch,
         readReplacementLedger,
         appendReplacementLedger,
+        readToolEffect,
+        listToolEffects,
+        writeToolEffect,
         acquireServerLease,
         releaseServerLease
       })

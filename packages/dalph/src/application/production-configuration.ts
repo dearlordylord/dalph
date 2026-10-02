@@ -34,6 +34,7 @@ import { Effect, Layer, MutableList, Ref, Schema, SchemaIssue } from "effect"
 import { IntegratorCandidateWorktreeRoot, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
 import { ExecutorProfile, ExecutorProfileId } from "./executor-profile.js"
 import { ProductionRunReactivationInterval } from "./production.js"
+import { CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
 
 const canonicalAbsolutePath = (subject: string) =>
   Schema.makeFilter<string>((value) => {
@@ -156,6 +157,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   evidenceStoreRoot: CanonicalEvidenceStoreLocator,
   plannedAttemptWorktreeRoot: ProductionPlannedAttemptWorktreeRoot,
   codexExecutorPrivateStateDirectory: ProductionCodexExecutorPrivateStateDirectory,
+  codexToolEffectPolicy: Schema.optionalKey(CodexToolEffectPolicy),
   kimiExecutorPrivateStateDirectory: Schema.optionalKey(ProductionKimiExecutorPrivateStateDirectory),
   integratorCandidateWorktreeRoot: IntegratorCandidateWorktreeRoot,
   integratorPrivateStore: IntegratorPrivateStoreLocator,

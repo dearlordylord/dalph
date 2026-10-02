@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only local protocol fixtures. */
+import { setTimeout as delay } from "node:timers/promises"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import type { PlatformError } from "effect"
@@ -27,6 +28,7 @@ import { isolatedCodexProcessNativeService } from "../../test-support/isolated-c
 const protocolFixture = String.raw`#!/usr/bin/env node
 const fs = require("node:fs")
 const path = require("node:path")
+const platformOs = process.platform === "darwin" ? "macos" : "linux"
 let buffer = ""
 let requestNumber = 0
 let threadReadNumber = 0
@@ -62,14 +64,14 @@ const responseFor = (method, params = {}) => {
   if (mode === "non-openai-provider-credential" && method === "initialize") {
     const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
     return process.env.DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL === "fixture-provider-key" && argumentsAreExact
-      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
-      : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
+      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs }
+      : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs }
   }
   if (mode === "unattended-policy" && method === "initialize") {
     const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
     return argumentsAreExact
-      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
-      : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
+      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs }
+      : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs }
   }
   if (method === "config/read") {
     return mode === "unsupported-unattended-policy"
@@ -461,7 +463,7 @@ const responseFor = (method, params = {}) => {
     return { turn: { ...validTurn, status: "inProgress", items: [] } }
   }
   return method === "initialize"
-    ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
+    ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs }
     : method === "thread/start" || method === "thread/read" || method === "thread/resume"
       ? { thread: validThread }
       : method === "turn/start"
@@ -602,6 +604,17 @@ const onMessage = (message) => {
   if (mode === "owned-activity-hint" && message.method === "thread/start") {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "item/completed", params: { opaque: true } }) + "\n")
   }
+  if (mode === "tool-effect-events" && message.method === "thread/start") {
+    for (const [method, item] of [
+      ["item/started", { id: "tool-1", type: "commandExecution", command: "pnpm check:fast", cwd: "/fixture/worktree" }],
+      ["item/completed", { id: "tool-1", type: "commandExecution" }],
+      ["item/started", { type: "dynamicToolCall" }]
+    ]) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0", method, params: { threadId: "protocol-thread", turnId: "protocol-turn", item }
+      }) + "\n")
+    }
+  }
   if ((mode === "turn-completed-burst" || mode === "turn-completed-overflow") && message.method === "turn/start") {
     const total = mode === "turn-completed-overflow" ? 65 : 64
     const matchingIndex = mode === "turn-completed-overflow" ? 64 : 63
@@ -697,6 +710,7 @@ process.on("SIGTERM", () => {
 `
 
 const fixtureFilePollAttemptLimit = 1_000 // eslint-disable-line no-magic-numbers -- deterministic fixture setup bound
+const fixtureFilePollIntervalMilliseconds = 2 // eslint-disable-line no-magic-numbers -- real child startup needs wall time, not virtual TestClock time
 
 const awaitFile = (
   fileSystem: FileSystem.FileSystem,
@@ -710,7 +724,11 @@ const awaitFile = (
           .exists(file)
           .pipe(
             Effect.flatMap((exists) =>
-              exists ? Effect.void : Effect.yieldNow.pipe(Effect.andThen(awaitFile(fileSystem, file, remaining - 1)))
+              exists
+                ? Effect.void
+                : Effect.promise(() => delay(fixtureFilePollIntervalMilliseconds)).pipe(
+                    Effect.andThen(awaitFile(fileSystem, file, remaining - 1))
+                  )
             )
           )
   )
@@ -1765,6 +1783,32 @@ it.effect("traces real turn/completed ingress and hint publication without retai
     )
   ).pipe(Effect.provide(TestConsole.layer))
 })
+
+it.effect("routes exact tool item starts, completions, and malformed owned notifications", () =>
+  withFixture("tool-effect-events", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const attach = app.attachToolEffects
+        if (attach === undefined) return yield* Effect.die("tool effect notifications must be available")
+        const effects = yield* attach
+        const received = yield* effects.pipe(Stream.take(3), Stream.runCollect, Effect.forkChild)
+        yield* app.startThread("/fixture/worktree")
+        const events = Array.from(yield* Fiber.join(received))
+        expect(events.map((event) => event.phase)).toEqual(["Started", "Completed", "Malformed"])
+        expect(events[0]).toMatchObject({
+          threadId: "protocol-thread",
+          turnId: "protocol-turn",
+          itemId: "tool-1",
+          kind: "commandExecution",
+          command: "pnpm check:fast",
+          cwd: "/fixture/worktree"
+        })
+        expect(typeof events[0]?.observedAtMonotonicNanoseconds).toBe("bigint")
+        expect(events[2]).toMatchObject({ itemId: "malformed-tool-item", phase: "Malformed" })
+      })
+    )
+  )
+)
 
 it.effect("routes repeated exact completion notifications after the turn ID is bound", () =>
   withFixture("turn-completed-repeated-post-bind", (app) =>

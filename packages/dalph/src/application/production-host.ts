@@ -80,7 +80,7 @@ import {
 } from "./executor-profile.js"
 import { CodexAttemptStore, type CodexAttemptStoreService, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
-import { nodeCodexPlannedAttemptExecutorLayer } from "./codex-planned-attempt-executor.js"
+import { nodeCodexPlannedAttemptExecutorLayerWithOptions } from "./codex-planned-attempt-executor.js"
 import { nodeKimiAcpClientLayer } from "./kimi-acp.js"
 import { nodeKimiAttemptPrivateStoreLayer } from "./kimi-attempt-store.js"
 import { kimiPlannedAttemptExecutorLayer } from "./kimi-planned-attempt-executor.js"
@@ -748,7 +748,11 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                 adapters.boundaryObserver
               )
             : observedPlannedAttemptExecutorLayer(
-                nodeCodexPlannedAttemptExecutorLayer.pipe(
+                nodeCodexPlannedAttemptExecutorLayerWithOptions(
+                  configuration.codexToolEffectPolicy === undefined
+                    ? {}
+                    : { toolEffectPolicy: configuration.codexToolEffectPolicy }
+                ).pipe(
                   Layer.provide(appLayer),
                   Layer.provide(activityCensusLayer),
                   Layer.provide(attemptStoreLayer),

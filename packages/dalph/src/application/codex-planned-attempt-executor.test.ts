@@ -1,3 +1,5 @@
+/* eslint-disable import/no-nodejs-modules -- The native-store restart fixture needs the host's canonical temporary path. */
+import { realpathSync } from "node:fs"
 import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
@@ -84,6 +86,7 @@ import {
   CodexProcessStartIdentity,
   CodexThreadWorkingDirectory,
   type CodexTurnCompletedHint,
+  type CodexToolEffectNotification,
   type CodexTerminalSealPolicy,
   type CodexAppServerService,
   type CodexThreadSnapshot,
@@ -100,7 +103,10 @@ import {
   mergeCodexReplacementLedger,
   CodexSealedTerminal,
   CodexServerIncarnation,
+  CodexServerLaunchRecord,
   CodexAttemptRecord,
+  CodexToolEffectRecord,
+  CodexToolItemId,
   CodexReplacementRequestId,
   nodeCodexAttemptStoreLayer,
   type CodexAttemptStoreService,
@@ -120,6 +126,7 @@ import {
   codexPlannedAttemptExecutorLayerWithOptions,
   defaultCodexTaskInstructions
 } from "./codex-planned-attempt-executor.js"
+import { CodexToolEffectLimitMilliseconds, CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
 
 interface CodexCompletionHintTestControlService {
   readonly publishIfTerminal: () => Effect.Effect<boolean>
@@ -221,6 +228,7 @@ type Harness = {
   readonly resumeCwds: Array<string>
   readonly threadReads: () => number
   readonly closeCount: () => number
+  readonly allowContainmentClose: () => void
   readonly interruptCount: () => number
   readonly threadStarts: () => number
   readonly attemptReadCount: () => number
@@ -229,6 +237,7 @@ type Harness = {
   readonly currentThread: () => CodexThreadSnapshot
   readonly currentRecord: () => CodexAttemptRecord | undefined
   readonly replacementLedger: () => CodexPurgedWorkUnitReplacementLedger | undefined
+  readonly toolEffectRecords: () => ReadonlyArray<CodexToolEffectRecord>
   readonly setThread: (thread: CodexThreadSnapshot) => void
   readonly restoreProviderThread: (thread: CodexThreadSnapshot) => void
   readonly setProviderTurnLedger: (turns: ReadonlyArray<CodexTurnSnapshot>) => void
@@ -302,6 +311,9 @@ const makeHarness = (
       | ((threadId: CodexThreadId) => Effect.Effect<Stream.Stream<CodexTurnCompletedHint>, never, Scope.Scope>)
       | Effect.Effect<Stream.Stream<CodexTurnCompletedHint>, never, Scope.Scope>
     readonly activityHints?: CodexAppServerService["attachOwnedActivityHints"]
+    readonly toolEffects?: CodexAppServerService["attachToolEffects"]
+    readonly failContainmentClose?: boolean
+    readonly onToolEffectWrite?: (record: CodexToolEffectRecord) => Effect.Effect<void>
     readonly beforeTurnStart?: () => Effect.Effect<void>
     readonly beforeAttemptRead?: () => Effect.Effect<void>
     readonly afterActivityCensus?: () => Effect.Effect<void>
@@ -348,8 +360,10 @@ const makeHarness = (
   let backgroundTerminationFailure = false
   let keepTurnRunningOnInterruptCount = options.keepTurnRunningOnInterruptCount ?? 0
   let associatedWriteFailure = false
+  let containmentCloseFailure = options.failContainmentClose === true
   let safelySuspendedWriteFailure = false
   const replacementLedgers = new Map<string, CodexPurgedWorkUnitReplacementLedger>()
+  const toolEffectRecords = new Map<string, CodexToolEffectRecord>()
   let replacementIntentFailure = false
   let replacementTurnIntentFailure = false
   let replacementCalledFailure = false
@@ -401,6 +415,7 @@ const makeHarness = (
             )
         }),
     attachOwnedActivityHints: options.activityHints ?? Effect.succeed(Stream.empty),
+    attachToolEffects: options.toolEffects ?? Effect.succeed(Stream.empty),
     startThread: (cwd) =>
       Effect.sync(() => {
         threadStartCount += 1
@@ -538,7 +553,21 @@ const makeHarness = (
       }),
     close: Effect.sync(() => {
       appCloseCount += 1
-    })
+    }).pipe(
+      Effect.andThen(
+        Effect.suspend(() =>
+          containmentCloseFailure
+            ? Effect.fail(
+                new CodexAppServerFailure({
+                  detail: "controlled writer remains live",
+                  kind: "Unavailable",
+                  operation: "close"
+                })
+              )
+            : Effect.void
+        )
+      )
+    )
   }
 
   const store: CodexAttemptStoreService = {
@@ -583,6 +612,19 @@ const makeHarness = (
     readServerLaunch: () => Effect.succeed(Option.none()),
     writeServerLaunch: () => Effect.void,
     clearServerLaunch: () => Effect.void,
+    readToolEffect: (runId, attemptId, turnId, itemId) =>
+      Effect.sync(() => {
+        const record = toolEffectRecords.get(JSON.stringify([runId, attemptId, turnId, itemId]))
+        return record === undefined ? Option.none() : Option.some(record)
+      }),
+    listToolEffects: (runId, attemptId) =>
+      Effect.sync(() =>
+        [...toolEffectRecords.values()].filter((record) => record.runId === runId && record.attemptId === attemptId)
+      ),
+    writeToolEffect: (record) =>
+      Effect.sync(() => {
+        toolEffectRecords.set(JSON.stringify([record.runId, record.attemptId, record.turnId, record.itemId]), record)
+      }).pipe(Effect.andThen(options.onToolEffectWrite?.(record) ?? Effect.void)),
     readReplacementLedger: (requestId) =>
       Effect.sync(() => {
         const ledger = replacementLedgers.get(requestId)
@@ -645,6 +687,9 @@ const makeHarness = (
     resumeCwds,
     threadReads: () => threadReadCount,
     closeCount: () => appCloseCount,
+    allowContainmentClose: () => {
+      containmentCloseFailure = false
+    },
     interruptCount: () => interruptCount,
     threadStarts: () => threadStartCount,
     attemptReadCount: () => attemptReadCount,
@@ -653,6 +698,7 @@ const makeHarness = (
     currentThread: () => currentThread,
     currentRecord: () => records.get(keyOf(attempt.runId, attempt.attemptId)),
     replacementLedger: () => [...replacementLedgers.values()].at(-1),
+    toolEffectRecords: () => [...toolEffectRecords.values()],
     setThread: (thread) => {
       currentThread = thread
     },
@@ -1323,6 +1369,606 @@ it.effect("does not fall back to the legacy global completion stream without exa
     })
   ).pipe(Effect.provide(layerFor(harness)))
 })
+
+it.effect("cuts a self-matching Codex item at its exact default deadline and retains dirty evidence", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const itemWritten = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      const executorLayer = layerForImplementation(codexPlannedAttemptExecutorLayer)(harness)
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+        const published = yield* PubSub.publish(notifications, {
+          phase: "Started",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "loop-1",
+          kind: "dynamicToolCall",
+          observedAtMilliseconds: now
+        })
+        expect(published).toBe(true)
+        yield* Deferred.await(itemWritten)
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Started", deadlineMilliseconds: now + 60_000 }])
+        yield* TestClock.adjust(Duration.seconds(60))
+        expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Some", value: { _tag: "Unreadable" } })
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached" }])
+        expect(harness.interruptCount()).toBe(1)
+        expect(harness.closeCount()).toBe(1)
+        expect(harness.turnCount()).toBe(1)
+      }).pipe(Effect.provide(executorLayer))
+    })
+  )
+)
+
+it.effect("retains responsibility when a tool writer survives containment close", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const itemWritten = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
+        failContainmentClose: true,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+        const published = yield* PubSub.publish(notifications, {
+          phase: "Started",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "resistant-1",
+          kind: "dynamicToolCall",
+          observedAtMilliseconds: now
+        })
+        expect(published).toBe(true)
+        yield* Deferred.await(itemWritten)
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Started" }])
+        yield* TestClock.adjust(Duration.seconds(60))
+        expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Some", value: { _tag: "TemporarilyUnavailable" } })
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "StopIntended" }])
+        expect(harness.closeCount()).toBe(1)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("does not reset an active item's deadline on an unrelated completion", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const itemWritten = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        yield* PubSub.publish(notifications, {
+          phase: "Started",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "loop-1",
+          kind: "dynamicToolCall",
+          observedAtMilliseconds: 0
+        })
+        yield* Deferred.await(itemWritten)
+        yield* TestClock.adjust(Duration.seconds(30))
+        yield* PubSub.publish(notifications, {
+          phase: "Completed",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "unrelated-1",
+          kind: "fileChange",
+          observedAtMilliseconds: 30_000
+        })
+        yield* Effect.yieldNow
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Started", deadlineMilliseconds: 60_000 }])
+        yield* TestClock.adjust(Duration.seconds(30))
+        expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Some", value: { _tag: "Unreadable" } })
+        expect(harness.closeCount()).toBe(1)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("allows the exact configured quiet check past the default item deadline", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const itemWritten = yield* Deferred.make<void>()
+      const checkCommand = "pnpm check:all --candidate=" + attempt.baseSha
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      const configured = codexPlannedAttemptExecutorLayerWithOptions({
+        toolEffectPolicy: CodexToolEffectPolicy.make({
+          defaultLimitMilliseconds: 60_000,
+          longCommands: [
+            {
+              command: checkCommand,
+              cwd: worktree,
+              limitMilliseconds: CodexToolEffectLimitMilliseconds.make(3_900_000)
+            }
+          ]
+        })
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+        yield* PubSub.publish(notifications, {
+          phase: "Started",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "check-1",
+          kind: "commandExecution",
+          command: checkCommand,
+          cwd: worktree,
+          observedAtMilliseconds: now
+        })
+        yield* Deferred.await(itemWritten)
+        yield* TestClock.adjust(Duration.seconds(61))
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Started", deadlineMilliseconds: now + 3_900_000 }])
+        expect(waiting.pollUnsafe()).toBeUndefined()
+        expect(harness.closeCount()).toBe(0)
+        yield* PubSub.publish(notifications, {
+          phase: "Completed",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "check-1",
+          kind: "commandExecution",
+          observedAtMilliseconds: now + 61_000
+        })
+        yield* Effect.yieldNow
+        expect(harness.closeCount()).toBe(0)
+        yield* attachment.close
+      }).pipe(Effect.provide(layerForImplementation(configured)(harness)))
+    })
+  )
+)
+
+it.effect("keeps the admitted command allowance after executor restart with a different configuration", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const itemWritten = yield* Deferred.make<void>()
+      const checkCommand = "pnpm check:all --candidate=" + attempt.baseSha
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      const admitted = codexPlannedAttemptExecutorLayerWithOptions({
+        toolEffectPolicy: CodexToolEffectPolicy.make({
+          defaultLimitMilliseconds: 60_000,
+          longCommands: [
+            {
+              command: checkCommand,
+              cwd: worktree,
+              limitMilliseconds: CodexToolEffectLimitMilliseconds.make(3_900_000)
+            }
+          ]
+        })
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+          expect(harness.currentRecord()).toMatchObject({
+            _tag: "Running",
+            toolEffectPolicy: { longCommands: [{ command: checkCommand, limitMilliseconds: 3_900_000 }] }
+          })
+        }).pipe(Effect.provide(layerForImplementation(admitted)(harness)))
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+          const attachment = yield* lifecycle.attach(correlation)
+          const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+          yield* PubSub.publish(notifications, {
+            phase: "Started",
+            threadId: CodexThreadId.make("codex-thread-issue-58"),
+            turnId: CodexTurnId.make("codex-turn-1"),
+            itemId: "restart-check-1",
+            kind: "commandExecution",
+            command: checkCommand,
+            cwd: worktree,
+            observedAtMilliseconds: 0
+          })
+          yield* Deferred.await(itemWritten)
+          yield* TestClock.adjust(Duration.seconds(61))
+          expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Started", deadlineMilliseconds: 3_900_000 }])
+          expect(waiting.pollUnsafe()).toBeUndefined()
+          expect(harness.closeCount()).toBe(0)
+          yield* attachment.close
+        }).pipe(Effect.provide(layerFor(harness)))
+      )
+    })
+  )
+)
+
+it.effect("settles a finite file-change item before its deadline without stopping its worktree", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const started = yield* Deferred.make<void>()
+      const completed = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started"
+            ? Deferred.succeed(started, undefined).pipe(Effect.asVoid)
+            : record._tag === "Completed"
+              ? Deferred.succeed(completed, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        const item = {
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "generator-1",
+          kind: "fileChange" as const
+        }
+        yield* PubSub.publish(notifications, { ...item, phase: "Started", observedAtMilliseconds: 0 })
+        yield* Deferred.await(started)
+        yield* TestClock.adjust(Duration.seconds(59))
+        yield* PubSub.publish(notifications, { ...item, phase: "Completed", observedAtMilliseconds: 59_000 })
+        yield* Deferred.await(completed)
+        yield* TestClock.adjust(Duration.seconds(2))
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Completed" }])
+        expect(harness.currentRecord()).toMatchObject({ _tag: "Running", worktree })
+        expect(harness.closeCount()).toBe(0)
+        expect(waiting.pollUnsafe()).toBeUndefined()
+        yield* attachment.close
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("uses monotonic elapsed time when a late completion has an earlier wall timestamp", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const started = yield* Deferred.make<void>()
+      const limited = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        onToolEffectWrite: (record) =>
+          record._tag === "Started"
+            ? Deferred.succeed(started, undefined).pipe(Effect.asVoid)
+            : record._tag === "LimitReached"
+              ? Deferred.succeed(limited, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        const item = {
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "late-completion-1",
+          kind: "fileChange" as const
+        }
+        yield* PubSub.publish(notifications, {
+          ...item,
+          phase: "Started",
+          observedAtMilliseconds: 0,
+          observedAtMonotonicNanoseconds: 0n
+        })
+        yield* Deferred.await(started)
+        yield* TestClock.adjust(Duration.seconds(59))
+        yield* PubSub.publish(notifications, {
+          ...item,
+          phase: "Completed",
+          observedAtMilliseconds: 59_000,
+          observedAtMonotonicNanoseconds: 61_000_000_000n
+        })
+        yield* Deferred.await(limited)
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached", reason: "Elapsed" }])
+        expect(harness.closeCount()).toBe(1)
+        expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Some", value: { _tag: "Unreadable" } })
+        yield* attachment.close
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("uses the original turn-start anchor when an active item has no start notification", () => {
+  const harness = makeHarness()
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      const original = harness.currentThread()
+      harness.setThread({
+        ...original,
+        turns: original.turns.map((turn) => ({
+          ...turn,
+          items: [{ id: "unreported-1", type: "dynamicToolCall", status: "inProgress" }]
+        }))
+      })
+      const attachment = yield* lifecycle.attach(correlation)
+      expect(harness.currentRecord()).toMatchObject({ turnStartedAtMilliseconds: 0 })
+      const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      // Let the observer install its one-second cadence, then reach the original
+      // turn-start deadline at 60 seconds total; this is one item limit.
+      yield* TestClock.adjust(Duration.seconds(1))
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(Duration.seconds(59))
+      yield* Effect.yieldNow
+      expect(harness.closeCount()).toBe(1)
+      expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Some", value: { _tag: "Unreadable" } })
+      expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached", reason: "MissingStart" }])
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.closeCount()).toBe(1)
+    })
+  ).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("stops an owned malformed tool notification before another effect is admitted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const harness = makeHarness({
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        yield* PubSub.publish(notifications, {
+          phase: "Malformed",
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: "malformed-tool-item",
+          observedAtMilliseconds: 0
+        })
+        expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Some", value: { _tag: "Unreadable" } })
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached", reason: "Malformed" }])
+        expect(harness.closeCount()).toBe(1)
+        expect(harness.turnCount()).toBe(1)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("reopens a durable item stop intent and finishes exact containment close without another Begin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const itemWritten = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        failContainmentClose: true,
+        interruptUnavailable: true,
+        onToolEffectWrite: (record) =>
+          record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
+        toolEffects: PubSub.subscribe(notifications).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+          const attachment = yield* lifecycle.attach(correlation)
+          const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+          yield* PubSub.publish(notifications, {
+            phase: "Started",
+            threadId: CodexThreadId.make("codex-thread-issue-58"),
+            turnId: CodexTurnId.make("codex-turn-1"),
+            itemId: "crash-1",
+            kind: "dynamicToolCall",
+            observedAtMilliseconds: 0
+          })
+          yield* Deferred.await(itemWritten)
+          yield* TestClock.adjust(Duration.seconds(60))
+          expect(yield* Fiber.join(waiting)).toMatchObject({ _tag: "Some", value: { _tag: "TemporarilyUnavailable" } })
+          expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "StopIntended" }])
+        }).pipe(Effect.provide(layerFor(harness)))
+      )
+      harness.allowContainmentClose()
+      const recovered = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          return yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+        }).pipe(Effect.provide(layerFor(harness)))
+      )
+      expect(recovered).toMatchObject({ _tag: "Unreadable" })
+      expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached", reason: "Elapsed" }])
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.closeCount()).toBe(2)
+    })
+  )
+)
+
+it.effect("reconciles a retained old app-server launch after a real incarnation change", () => {
+  const harness = makeHarness()
+  let reconciled = 0
+  const oldLaunch = CodexServerLaunchRecord.make({
+    command: ["codex", "app-server"],
+    incarnation: harness.app.incarnation,
+    phase: "Live",
+    pid: 101
+  })
+  return Effect.scoped(
+    Effect.gen(function* () {
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+        }).pipe(Effect.provide(layerFor(harness)))
+      )
+      const write = harness.store.writeToolEffect
+      if (write === undefined) return yield* Effect.die("controlled tool store is missing")
+      yield* write(
+        CodexToolEffectRecord.cases.StopIntended.make({
+          runId: correlation.runId,
+          attemptId: correlation.attemptId,
+          threadId: CodexThreadId.make("codex-thread-issue-58"),
+          turnId: CodexTurnId.make("codex-turn-1"),
+          itemId: CodexToolItemId.make("old-launch-1"),
+          incarnation: oldLaunch.incarnation,
+          serverLaunch: oldLaunch,
+          worktree,
+          startedAtMilliseconds: 0,
+          deadlineMilliseconds: 60_000,
+          reason: "Elapsed",
+          stopIntentAtMilliseconds: 60_000
+        })
+      )
+      const restarted: Harness = {
+        ...harness,
+        app: {
+          ...harness.app,
+          incarnation: CodexServerIncarnation.make("new-app-server-incarnation"),
+          stopRetainedLaunch: (launch) =>
+            Effect.sync(() => {
+              expect(launch).toEqual(oldLaunch)
+              reconciled += 1
+            })
+        }
+      }
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          return yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+        }).pipe(Effect.provide(layerFor(restarted)))
+      )
+      expect(result).toMatchObject({ _tag: "Unreadable" })
+      expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached" }])
+      expect(reconciled).toBe(1)
+      expect(harness.closeCount()).toBe(0)
+      expect(harness.turnCount()).toBe(1)
+    })
+  )
+})
+
+it.effect(
+  "does not claim a stopped item when the retained containment incarnation contradicts the current child",
+  () => {
+    const harness = makeHarness()
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const writeToolEffect = harness.store.writeToolEffect
+        if (writeToolEffect === undefined) return yield* Effect.die("controlled tool effect store is unavailable")
+        yield* writeToolEffect(
+          CodexToolEffectRecord.cases.StopIntended.make({
+            runId: correlation.runId,
+            attemptId: correlation.attemptId,
+            threadId: CodexThreadId.make("codex-thread-issue-58"),
+            turnId: CodexTurnId.make("codex-turn-1"),
+            itemId: CodexToolItemId.make("contradictory-1"),
+            incarnation: CodexServerIncarnation.make("foreign-containment"),
+            worktree,
+            startedAtMilliseconds: 0,
+            deadlineMilliseconds: 60_000,
+            reason: "Elapsed",
+            stopIntentAtMilliseconds: 60_000
+          })
+        )
+        expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+          _tag: "Unreadable"
+        })
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "StopIntended" }])
+        expect(harness.closeCount()).toBe(0)
+        expect(harness.turnCount()).toBe(1)
+      })
+    ).pipe(Effect.provide(layerFor(harness)))
+  }
+)
 
 it.effect("continues targeted census checks when the final terminal seal census finds exact live activity", () =>
   Effect.scoped(
@@ -3687,7 +4333,7 @@ for (const storage of ["memory", "sqlite-and-private-files"] as const) {
     it.effect(`reconstructs the original Begin after absent-thread replacement loss at ${cut} with ${storage}`, () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
-        const directory = yield* fs.makeTempDirectoryScoped()
+        const directory = realpathSync(yield* fs.makeTempDirectoryScoped())
         const harness = makeHarness({ freshThreadIds: true })
         const memoryJournal = yield* JournalStore
         const durableLayer = nodeCodexAttemptStoreLayer({ stateDirectory: `${directory}/private` })

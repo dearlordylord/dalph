@@ -1,3 +1,5 @@
+/* eslint-disable import/no-nodejs-modules -- realpath canonicalizes macOS temporary-directory aliases for the filesystem fixture. */
+import { realpathSync } from "node:fs"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
@@ -32,17 +34,21 @@ import {
   CodexServerLeaseRecord,
   CodexServerLaunchRecord,
   CodexThreadId,
+  CodexToolEffectRecord,
+  CodexToolItemId,
   CodexTurnId,
   defaultCodexStateDirectory,
   memoryCodexAttemptStoreLayer,
   nodeCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
+import { CodexToolEffectLimitMilliseconds, CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
 
 const specification = makeTaskWorkSpecification({
   body: "Private store test",
   taskId: TaskId.make("issue-58-store-task"),
   title: "Issue 58 private store"
 })
+
 const attempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt:issue-58-store:0"),
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -52,6 +58,40 @@ const attempt = PlannedTaskAttempt.make({
   taskId: TaskId.make("issue-58-store-task"),
   taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/tmp/dalph-issue-58-store-worktree")
+})
+const toolSubject = {
+  runId: attempt.runId,
+  attemptId: attempt.attemptId,
+  threadId: CodexThreadId.make("private-thread-58"),
+  turnId: CodexTurnId.make("private-turn-58"),
+  itemId: CodexToolItemId.make("private-item-58"),
+  incarnation: CodexServerIncarnation.make("private-incarnation-58"),
+  worktree: attempt.worktree,
+  startedAtMilliseconds: 1_000,
+  deadlineMilliseconds: 61_000
+} as const
+const activeTool = CodexToolEffectRecord.cases.Started.make(toolSubject)
+const runningWithPolicy = CodexAttemptRecord.cases.Running.make({
+  attemptId: attempt.attemptId,
+  correlationAttemptId: attempt.attemptId,
+  correlationRunId: attempt.runId,
+  currentToken: CodexOwnedTurnToken.make("private-tool-policy-token-58"),
+  turnStartedAtMilliseconds: 1_000,
+  turnStartIncarnation: toolSubject.incarnation,
+  toolEffectPolicy: CodexToolEffectPolicy.make({
+    defaultLimitMilliseconds: 60_000,
+    longCommands: [
+      {
+        command: "pnpm check:all",
+        cwd: attempt.worktree,
+        limitMilliseconds: CodexToolEffectLimitMilliseconds.make(3_900_000)
+      }
+    ]
+  }),
+  observedTurnId: toolSubject.turnId,
+  priorObservedTurnId: null,
+  threadId: toolSubject.threadId,
+  worktree: attempt.worktree
 })
 const associated = CodexAttemptRecord.cases.AssociatedPreTurn.make({
   attemptId: attempt.attemptId,
@@ -88,7 +128,7 @@ const otherLeaseOwner = CodexServerLeaseRecord.make({
 })
 
 const nodeLayer = (storePath: string) =>
-  nodeCodexAttemptStoreLayer({ stateDirectory: storePath.slice(0, storePath.lastIndexOf("/")) }).pipe(
+  nodeCodexAttemptStoreLayer({ stateDirectory: realpathSync(storePath.slice(0, storePath.lastIndexOf("/"))) }).pipe(
     Layer.provide(NodeServices.layer)
   )
 
@@ -729,7 +769,7 @@ it.effect("reads the configured default state directory through Effect Config", 
         yield* store.writeAttempt(associated)
       }).pipe(
         Effect.provide(nodeCodexAttemptStoreLayer()),
-        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_STATE_DIRECTORY: root }))),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_STATE_DIRECTORY: realpathSync(root) }))),
         Effect.provide(NodeServices.layer)
       )
       const state = yield* fileSystem.stat(`${root}/executor-private-state.json`)
@@ -742,6 +782,54 @@ it.effect("keeps the production default under the explicit Dalph state directory
   expect(defaultCodexStateDirectory).toBe("/var/lib/dalph")
   return Effect.succeed(undefined)
 })
+
+it.effect("reopens an exact tool stop intent and rejects a contradictory item transition", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-tool-effect-store-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const intended = CodexToolEffectRecord.cases.StopIntended.make({
+        ...toolSubject,
+        serverLaunch: launch,
+        reason: "Elapsed",
+        stopIntentAtMilliseconds: 61_000
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          if (store.writeToolEffect === undefined) throw new Error("tool-effect store writer is missing")
+          yield* store.writeAttempt(runningWithPolicy)
+          yield* store.writeToolEffect(activeTool)
+          yield* store.writeToolEffect(intended)
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          if (store.readToolEffect === undefined || store.writeToolEffect === undefined)
+            throw new Error("tool-effect store boundary is missing")
+          const reopened = yield* store.readToolEffect(
+            activeTool.runId,
+            activeTool.attemptId,
+            activeTool.turnId,
+            activeTool.itemId
+          )
+          expect(Option.getOrThrow(reopened)).toEqual(intended)
+          expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(runningWithPolicy))
+          const contradictory = CodexToolEffectRecord.cases.LimitReached.make({
+            ...toolSubject,
+            reason: "Elapsed",
+            stopIntentAtMilliseconds: 62_000,
+            stoppedAtMilliseconds: 63_000
+          })
+          expect(Exit.isFailure(yield* Effect.exit(store.writeToolEffect(contradictory)))).toBe(true)
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("keeps memory attempt, launch, and lease facts exact across replacement and release", () =>
   Effect.gen(function* () {

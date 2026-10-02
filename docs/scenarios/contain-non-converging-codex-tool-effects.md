@@ -2,10 +2,8 @@
 
 Issue: [#398](https://github.com/dearlordylord/dalph/issues/398).
 
-Status: accepted executor scenarios on 2026-10-02. These chronologies specify
-a runtime change; their test names below are required seams until implementation
-provides passing evidence. The scenario document alone changes no runtime
-behavior.
+Status: accepted executor scenarios on 2026-10-02; implementation evidence is
+mapped below. The chronologies remain the acceptance contract.
 
 ## Governing behavior
 
@@ -210,6 +208,20 @@ absence or reuse as stopped-writer proof`.
    before a runtime handoff. The full local gate remains an explicit
    maintainer diagnostic under the current check policy.
 
-This design does not change Dalph runtime behavior by itself: it adds only a
-specification and prospective test seams. The implementation must establish
-passing evidence before the issue can claim runtime containment.
+## Scenario-to-test map
+
+| Scenario | Positive evidence | Independent negative evidence |
+| --- | --- | --- |
+| Self-matching edit | `codex-planned-attempt-executor.test.ts`: `cuts a self-matching Codex item at its exact default deadline and retains dirty evidence` | `does not reset an active item's deadline on an unrelated completion`; provider heartbeat and text notifications are excluded by `codex-app-server-protocol.test.ts`'s exact item lifecycle decoding |
+| Quiet long check | `codex-planned-attempt-executor.test.ts`: `allows the exact configured quiet check past the default item deadline`; `keeps the admitted command allowance after executor restart with a different configuration` | `codex-tool-effect-policy.test.ts`: `does not give a wrapper, lookalike, or unknown tool the long allowance`; `rejects duplicate and unbounded configuration` |
+| Finite generator | `codex-planned-attempt-executor.test.ts`: `settles a finite file-change item before its deadline without stopping its worktree`; completion is the only settlement signal and the implementation has no byte or write-count predicate | `does not reset an active item's deadline on an unrelated completion`; `uses monotonic elapsed time when a late completion has an earlier wall timestamp` |
+| Resistant descendant | `codex-app-server-public.test.ts`: `escalates a real resistant writer and recovers after its leader exits before close` uses a disposable process and checks SIGKILL, absent membership, and stopped writes | `codex-planned-attempt-executor.test.ts`: `retains responsibility when a tool writer survives containment close` |
+| Crash after stop intent | `codex-planned-attempt-executor.test.ts`: `reopens a durable item stop intent and finishes exact containment close without another Begin`; `reconciles a retained old app-server launch after a real incarnation change`; `codex-attempt-store.test.ts` reopens the retained node store | The old/new incarnation test asserts one turn and zero close calls on the replacement app-server; the real process probe proves the old leader can already be absent |
+| Contradictory restart | `codex-planned-attempt-executor.test.ts`: `does not claim a stopped item when the retained containment incarnation contradicts the current child` | The same test asserts `StopIntended` remains, no containment signal occurs, and the turn count stays one |
+
+The real process probe passed on macOS and in a Node 24 Linux container on
+2026-10-02; its two cases cover a leader that exits during ordinary stop and
+a leader already absent when recovery begins. The complete public-boundary
+test file also passed on Linux (19/19). The shared group-census policy has
+controlled Linux and Darwin cases in
+`codex-app-server-process-policy.property.test.ts`.

@@ -65,6 +65,27 @@ describe("production repository host configuration", () => {
     expect("applicationExitDrain" in decoded).toBe(false)
   })
 
+  it("admits one exact Codex tool command allowance and rejects an overlong allowance", async () => {
+    const command = "pnpm check:all --candidate=" + "a".repeat(40)
+    const input = {
+      ...validRawConfiguration(),
+      codexToolEffectPolicy: {
+        longCommands: [{ command, cwd: "/srv/dalph/planned-attempts/one", limitMilliseconds: 3_900_000 }]
+      }
+    }
+    const admitted = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(input))
+    expect(admitted.codexToolEffectPolicy?.longCommands[0]?.command).toBe(command)
+    const rejected = await Effect.runPromiseExit(
+      decodeProductionRepositoryHostConfiguration({
+        ...input,
+        codexToolEffectPolicy: {
+          longCommands: [{ command, cwd: "/srv/dalph/planned-attempts/one", limitMilliseconds: 5_400_001 }]
+        }
+      })
+    )
+    expect(rejected._tag).toBe("Failure")
+  })
+
   it("decodes configured executor profiles and a host default", async () => {
     const decoded = await Effect.runPromise(
       decodeProductionRepositoryHostConfiguration({

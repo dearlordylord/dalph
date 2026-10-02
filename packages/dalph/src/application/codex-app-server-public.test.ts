@@ -15,7 +15,11 @@ import {
   controlledCodexAppServerLayer,
   controlledCodexOwnedActivityCensusLayer,
   codexAppServerNodeLayer,
+  incarnationWithProcessIdentity,
+  makeNodeCodexProcessGroupCensusService,
+  makeNodeCodexProcessOwnershipService,
   makeNodeCodexOwnedActivityCensusService,
+  stopOwnedAppServer,
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection,
   type CodexOwnedProcessIdentity,
@@ -267,6 +271,90 @@ process.stdin.on("data", (chunk) => {
 })
 setInterval(() => {}, 1000)
 `
+
+const resistantWriterFixture = String.raw`#!/usr/bin/env node
+const fs = require("node:fs")
+const { spawn } = require("node:child_process")
+const child = spawn(process.execPath, ["-e",
+  'process.on("SIGTERM", () => {}); setInterval(() => require("node:fs").appendFileSync(process.argv[1], "write\\n"), 5)',
+  process.argv[4]
+], { stdio: "ignore" })
+fs.writeFileSync(process.argv[3], String(child.pid))
+setInterval(() => {}, 1000)
+`
+
+it.effect("escalates a real resistant writer and recovers after its leader exits before close", () =>
+  Effect.forEach([false, true], (leaderAlreadyExited) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-resistant-writer-" })
+        const executable = path.join(root, "fixture-codex")
+        const pidFile = path.join(root, "writer.pid")
+        const outputFile = path.join(root, "writer.txt")
+        yield* fileSystem.writeFileString(executable, resistantWriterFixture)
+        yield* fileSystem.chmod(executable, 0o755)
+        const token = CodexServerIncarnation.make("resistant-writer-fixture")
+        const child = spawn(executable, ["app-server", pidFile, outputFile], {
+          detached: true,
+          env: { ...nodeProcess.env, DALPH_CODEX_SERVER_INCARNATION: token },
+          stdio: "ignore"
+        })
+        const pid = child.pid
+        if (pid === undefined) return yield* Effect.die("fixture did not spawn")
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            try {
+              nodeProcess.kill(-pid, "SIGKILL")
+            } catch {
+              // The tested containment should already be absent.
+            }
+          })
+        )
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if (yield* fileSystem.exists(outputFile)) break
+          yield* nodeCodexProcessNativeService.wait(10)
+        }
+        expect(yield* fileSystem.exists(outputFile)).toBe(true)
+        const incarnation = yield* Effect.promise(() => incarnationWithProcessIdentity(token, pid))
+        if (incarnation === undefined) return yield* Effect.die("fixture has no process identity")
+        const launch = CodexServerLaunchRecord.make({
+          command: [executable, "app-server", pidFile, outputFile],
+          incarnation,
+          phase: "Live",
+          pid
+        })
+        const signals: Array<{ readonly pid: number; readonly signal: number | NodeJS.Signals }> = []
+        const native = {
+          ...nodeCodexProcessNativeService,
+          kill: (target: number, signal: number | NodeJS.Signals) => {
+            signals.push({ pid: target, signal })
+            return nodeCodexProcessNativeService.kill(target, signal)
+          }
+        }
+        const census = makeNodeCodexProcessGroupCensusService(native)
+        const ownership = makeNodeCodexProcessOwnershipService(census, native)
+        if (leaderAlreadyExited) {
+          nodeProcess.kill(-pid, "SIGTERM")
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            if ((yield* ownership.observe(launch))._tag === "Absent") break
+            yield* nodeCodexProcessNativeService.wait(10)
+          }
+          expect((yield* ownership.observe(launch))._tag).toBe("Absent")
+          expect((yield* census.observe(launch))._tag).toBe("ExactLive")
+        }
+        yield* stopOwnedAppServer(ownership, census, launch, native)
+        expect(signals).toContainEqual({ pid: -pid, signal: "SIGKILL" })
+        const after = yield* census.observe(launch)
+        expect(after._tag).toBe("Absent")
+        const size = (yield* fileSystem.readFile(outputFile)).length
+        yield* nodeCodexProcessNativeService.wait(50)
+        expect((yield* fileSystem.readFile(outputFile)).length).toBe(size)
+      }).pipe(Effect.provide(NodeServices.layer))
+    )
+  )
+)
 
 type OwnedActivityCensusService = {
   readonly observe: (

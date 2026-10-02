@@ -77,6 +77,36 @@ export interface CodexTurnCompletedHint {
   readonly turnId: CodexTurnId
 }
 
+/** Private app-server lifecycle of one tool item; payload text stays with Codex. */
+export interface CodexToolEffectNotification {
+  readonly phase: "Started" | "Completed" | "Malformed"
+  readonly threadId: CodexThreadId
+  readonly turnId: CodexTurnId
+  readonly itemId: string
+  readonly kind?: "commandExecution" | "fileChange" | "dynamicToolCall"
+  readonly command?: string
+  readonly cwd?: string
+  readonly observedAtMilliseconds: number
+  /** Process-local elapsed-time source; restart uses the retained wall anchor instead. */
+  readonly observedAtMonotonicNanoseconds?: bigint
+}
+
+const CodexToolEffectNotificationBoundary = Schema.Struct({
+  threadId: CodexThreadId,
+  turnId: CodexTurnId,
+  item: Schema.Struct({
+    id: Schema.NonEmptyString,
+    type: Schema.String,
+    command: Schema.optionalKey(Schema.String),
+    cwd: Schema.optionalKey(Schema.String)
+  })
+})
+const CodexToolEffectNotificationIdentityBoundary = Schema.Struct({ threadId: CodexThreadId, turnId: CodexTurnId })
+
+const codexToolEffectKinds = new Set(["commandExecution", "fileChange", "dynamicToolCall"])
+const isCodexToolEffectKind = (value: string): value is NonNullable<CodexToolEffectNotification["kind"]> =>
+  codexToolEffectKinds.has(value)
+
 /** Scoped completion receiver that learns its exact turn ID after turn/start returns. */
 export interface CodexTurnCompletedSubscription {
   readonly hints: Stream.Stream<CodexTurnCompletedHint>
@@ -467,6 +497,12 @@ export interface CodexAppServerService {
     threadId: CodexThreadId,
     expectedTurnId?: CodexTurnId
   ) => Effect.Effect<CodexTurnCompletedSubscription, never, Scope.Scope>
+  /** Executor-private tool lifecycle; attach before turn/start to retain early notifications. */
+  readonly attachToolEffects?: Effect.Effect<Stream.Stream<CodexToolEffectNotification>, never, Scope.Scope>
+  /** Exact detached launch kept with an item stop intent for restart recovery. */
+  readonly serverLaunch?: CodexServerLaunchRecord
+  /** Reconcile a retained prior launch without signaling the current app-server. */
+  readonly stopRetainedLaunch?: (launch: CodexServerLaunchRecord) => Effect.Effect<void, CodexAppServerFailure>
   /** Process-level protocol failures wake existing observers without inventing a completion identity. */
   readonly attachProtocolFailures?: Effect.Effect<Stream.Stream<CodexAppServerFailure>, never, Scope.Scope>
   /** Broadcast owned-activity hints; consumers must reread the exact process/activity census. */
@@ -579,6 +615,7 @@ export const failAfterClose = (
   close.pipe(Effect.andThen(Effect.fail(error)))
 
 const ownershipStopPollAttempts = 50
+const ordinaryStopGracePollAttempts = 5
 const ownershipStopPollDelayMilliseconds = 20 // eslint-disable-line no-magic-numbers -- bounded process-stop polling interval
 const waitForOwnershipPoll = (native: CodexProcessNativeService): Effect.Effect<void> =>
   native.wait(ownershipStopPollDelayMilliseconds)
@@ -1747,6 +1784,7 @@ interface JsonRpcClient {
     expectedTurnId?: CodexTurnId
   ) => Effect.Effect<CodexTurnCompletedSubscription, never, Scope.Scope>
   readonly attachProtocolFailures: Effect.Effect<Stream.Stream<CodexAppServerFailure>, never, Scope.Scope>
+  readonly attachToolEffects: Effect.Effect<Stream.Stream<CodexToolEffectNotification>, never, Scope.Scope>
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly request: (
     operation: CodexAppServerRequestOperation,
@@ -1960,9 +1998,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const protocolFailures = yield* PubSub.unbounded<CodexAppServerFailure>()
   const protocolFailureState = yield* Ref.make<Option.Option<CodexAppServerFailure>>(Option.none())
   const ownedActivityHints = yield* PubSub.sliding<void>(1)
+  const toolEffects = yield* PubSub.unbounded<CodexToolEffectNotification>()
   const turnCompletedNotificationOrdinal = yield* Ref.make(0)
   yield* Effect.addFinalizer(() => PubSub.shutdown(protocolFailures))
   yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
+  yield* Effect.addFinalizer(() => PubSub.shutdown(toolEffects))
   const encoder = new TextEncoder()
   const failPendingRequests = (requests: ReadonlyArray<PendingJsonRpcRequest>, failure: CodexAppServerFailure) =>
     Effect.forEach(requests, (request) => Deferred.fail(request.deferred, failure), { discard: true })
@@ -2027,6 +2067,71 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
             return failProtocol(failure)
           }
           if (envelope._tag === "Notification") {
+            if (envelope.method === "item/started" || envelope.method === "item/completed") {
+              const item = Schema.decodeUnknownResult(CodexToolEffectNotificationBoundary)(message["params"])
+              if (Result.isSuccess(item) && isCodexToolEffectKind(item.success.item.type)) {
+                const kind = item.success.item.type
+                return Effect.clockWith((clock) =>
+                  Effect.all({
+                    observedAtMilliseconds: clock.currentTimeMillis,
+                    observedAtMonotonicNanoseconds: clock.monotonicTimeNanos
+                  })
+                ).pipe(
+                  Effect.flatMap(({ observedAtMilliseconds, observedAtMonotonicNanoseconds }) => {
+                    const notification: CodexToolEffectNotification = {
+                      phase: envelope.method === "item/started" ? "Started" : "Completed",
+                      threadId: item.success.threadId,
+                      turnId: item.success.turnId,
+                      itemId: item.success.item.id,
+                      kind,
+                      ...(item.success.item.command === undefined ? {} : { command: item.success.item.command }),
+                      ...(item.success.item.cwd === undefined ? {} : { cwd: item.success.item.cwd }),
+                      observedAtMilliseconds,
+                      observedAtMonotonicNanoseconds
+                    }
+                    return PubSub.publish(toolEffects, notification).pipe(
+                      Effect.andThen(
+                        envelope.method === "item/completed"
+                          ? PubSub.publish(ownedActivityHints, undefined)
+                          : Effect.void
+                      ),
+                      Effect.asVoid
+                    )
+                  })
+                )
+              }
+              if (Result.isFailure(item)) {
+                const identity = Schema.decodeUnknownResult(CodexToolEffectNotificationIdentityBoundary)(
+                  message["params"]
+                )
+                if (Result.isSuccess(identity)) {
+                  const params = message["params"]
+                  const rawItem = isJsonObject(params) ? params["item"] : undefined
+                  const itemId =
+                    isJsonObject(rawItem) && typeof rawItem["id"] === "string" && rawItem["id"].length > 0
+                      ? rawItem["id"]
+                      : "malformed-tool-item"
+                  return Effect.clockWith((clock) =>
+                    Effect.all({
+                      observedAtMilliseconds: clock.currentTimeMillis,
+                      observedAtMonotonicNanoseconds: clock.monotonicTimeNanos
+                    })
+                  ).pipe(
+                    Effect.flatMap(({ observedAtMilliseconds, observedAtMonotonicNanoseconds }) =>
+                      PubSub.publish(toolEffects, {
+                        phase: "Malformed",
+                        threadId: identity.success.threadId,
+                        turnId: identity.success.turnId,
+                        itemId,
+                        observedAtMilliseconds,
+                        observedAtMonotonicNanoseconds
+                      })
+                    ),
+                    Effect.asVoid
+                  )
+                }
+              }
+            }
             if (envelope.method === "turn/completed") {
               const notification = Schema.decodeUnknownResult(CodexTurnCompletedNotificationBoundary)(message["params"])
               if (Result.isFailure(notification)) return Effect.void
@@ -2229,6 +2334,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     attachOwnedActivityHints: PubSub.subscribe(ownedActivityHints).pipe(
       Effect.map((subscription) =>
         Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
+      )
+    ),
+    attachToolEffects: PubSub.subscribe(toolEffects).pipe(
+      Effect.map((subscription) =>
+        Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const)))
       )
     ),
     attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
@@ -2634,7 +2744,8 @@ export const awaitExactMembersAbsent = (
 export const signalExactDetachedDescendants = (
   launch: CodexServerLaunchRecord,
   group: Extract<CodexProcessGroupProjection, { readonly _tag: "ExactLive" }>,
-  native: CodexProcessNativeService = nodeCodexProcessNativeService
+  native: CodexProcessNativeService = nodeCodexProcessNativeService,
+  signal: "SIGTERM" | "SIGKILL" = "SIGTERM"
 ): Effect.Effect<void, CodexAppServerFailure> => {
   /* v8 ignore next -- @preserve Only Linux and Darwin reach exact detached-descendant cleanup in production. */
   if (native.platform !== "linux" && native.platform !== "darwin") return Effect.void
@@ -2658,7 +2769,7 @@ export const signalExactDetachedDescendants = (
           return operationFailure("close", "Ownership", token.detail)
         }
         try {
-          native.kill(member.pid, "SIGTERM")
+          native.kill(member.pid, signal)
         } catch (error) {
           if (!processWasAbsent(error)) return operationFailure("close", "Ownership", error)
         }
@@ -2666,7 +2777,12 @@ export const signalExactDetachedDescendants = (
       },
       catch: closeOwnershipFailure
     }).pipe(Effect.flatMap((failure) => (failure === undefined ? Effect.void : Effect.fail(failure))))
-  ).pipe(Effect.asVoid, Effect.andThen(awaitExactMembersAbsent(escapedMembers, ownershipStopPollAttempts, native)))
+  ).pipe(
+    Effect.asVoid,
+    Effect.andThen(
+      signal === "SIGTERM" ? Effect.void : awaitExactMembersAbsent(escapedMembers, ownershipStopPollAttempts, native)
+    )
+  )
 }
 
 /** The app-server layer is process scoped; its close is registered once with the shared application shell. */
@@ -3216,7 +3332,8 @@ export const discoverAppServerProcesses = async (
 
 export const signalOwnedProcessGroup = (
   pid: number,
-  native: CodexProcessNativeService = nodeCodexProcessNativeService
+  native: CodexProcessNativeService = nodeCodexProcessNativeService,
+  signal: "SIGTERM" | "SIGKILL" = "SIGTERM"
 ): Effect.Effect<void, CodexAppServerFailure> =>
   Effect.suspend(() => {
     const groupSignal =
@@ -3225,7 +3342,7 @@ export const signalOwnedProcessGroup = (
             try: () => native.execFile("taskkill", ["/PID", String(pid), "/T", "/F"]),
             catch: processSignalFailure
           }).pipe(Effect.asVoid)
-        : Effect.try({ try: () => native.kill(-pid, "SIGTERM"), catch: processSignalFailure }).pipe(Effect.asVoid)
+        : Effect.try({ try: () => native.kill(-pid, signal), catch: processSignalFailure }).pipe(Effect.asVoid)
     return groupSignal.pipe(
       // A failed group signal never falls back to an unverified PID: that
       // PID may already identify a different process incarnation.
@@ -3256,17 +3373,36 @@ export const stopOwnedAppServer = (
     const pid = launch.pid
     // The signal is authorized only after a fresh identity observation.
     const observed = yield* service.observe(launch)
-    if (observed._tag === "Absent") return
-    if (!isExactOwnedServerProcess(observed, pid)) {
+    if (observed._tag !== "Absent" && !isExactOwnedServerProcess(observed, pid)) {
       return yield* Effect.fail(operationFailure("close", "Ownership", "process identity changed before signal"))
     }
     const group = yield* groupCensus.observe(launch)
     if (isUnusableProcessGroup(group)) {
       return yield* Effect.fail(operationFailure("close", "Ownership", group.detail))
     }
+    if (observed._tag === "Absent" && group._tag === "Absent") return
     if (group._tag === "ExactLive") yield* signalExactDetachedDescendants(launch, group, native)
     yield* signalOwnedProcessGroup(pid, native)
-    if (group._tag === "ExactLive") yield* awaitExactMembersAbsent(group.members, ownershipStopPollAttempts, native)
+    if (group._tag !== "ExactLive") return
+    const ordinaryStop = yield* Effect.result(
+      awaitExactMembersAbsent(group.members, ordinaryStopGracePollAttempts, native)
+    )
+    if (Result.isSuccess(ordinaryStop)) return
+    if (ordinaryStop.failure.detail !== "owned descendant did not become absent") return yield* ordinaryStop.failure
+    // A resistant writer gets one fresh identity and group census before forced escalation.
+    const freshOwner = yield* service.observe(launch)
+    if (freshOwner._tag !== "Absent" && !isExactOwnedServerProcess(freshOwner, pid)) {
+      return yield* Effect.fail(operationFailure("close", "Ownership", "process identity changed before forced signal"))
+    }
+    const freshGroup = yield* groupCensus.observe(launch)
+    if (freshGroup._tag !== "ExactLive") {
+      return yield* Effect.fail(operationFailure("close", "Ownership", "process group changed before forced signal"))
+    }
+    // The original census retains escaped children even if their parent was
+    // reparented after SIGTERM; each identity is reread before a forced signal.
+    yield* signalExactDetachedDescendants(launch, group, native, "SIGKILL")
+    yield* signalOwnedProcessGroup(pid, native, "SIGKILL")
+    yield* awaitExactMembersAbsent(freshGroup.members, ownershipStopPollAttempts, native)
   })
 
 export const closeHandleFailure = (error: unknown): CodexAppServerFailure =>
@@ -3384,6 +3520,23 @@ export const codexAppServerLayer = (
         .releaseServerLease(leaseOwner)
         .pipe(Effect.mapError((error) => operationFailure("close", "Ownership", error.detail)))
       const close = yield* Effect.cached(closeHandle.pipe(Effect.andThen(rpc.close), Effect.andThen(releaseLease)))
+      const stopRetainedLaunch = (prior: CodexServerLaunchRecord) =>
+        Effect.gen(function* () {
+          if (prior.incarnation === liveIncarnation) {
+            return yield* Effect.fail(
+              operationFailure("close", "Ownership", "retained launch is the current app-server")
+            )
+          }
+          if (Option.isNone(processGroupCensus)) {
+            return yield* Effect.fail(
+              operationFailure("close", "Ownership", "retained launch has no process-group census")
+            )
+          }
+          yield* ownership.stop(prior)
+          yield* awaitOwnedGroupAbsent(processGroupCensus.value, prior, ownershipStopPollAttempts, native)
+          yield* reconcilePriorTokenOwnedActivities(prior, native)
+          yield* awaitOwnedProcessAbsent(ownership, prior, ownershipStopPollAttempts, "close", native)
+        })
       yield* rpc.installDeadlineClose(close)
       // The application shell owns the only graceful Exit close. The scope
       // finalizer is a process-death fallback and cannot synthesize executor
@@ -3664,10 +3817,13 @@ export const codexAppServerLayer = (
         terminalSealPolicy: "ExactCompletionHintRequired",
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachExactTurnCompletedHints: rpc.attachExactTurnCompletedHints,
+        attachToolEffects: rpc.attachToolEffects,
         attachProtocolFailures: rpc.attachProtocolFailures,
         attachOwnedActivityHints: rpc.attachOwnedActivityHints,
         incarnation: liveIncarnation,
         serverPid: childPid,
+        serverLaunch: liveLaunch,
+        stopRetainedLaunch,
         ...(selected.requireUnattendedPolicy === true ? { unattendedPolicyAdmission: Effect.void } : {}),
         startThread,
         listThreads,

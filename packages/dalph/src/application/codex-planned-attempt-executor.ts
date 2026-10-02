@@ -61,7 +61,7 @@ import {
   CodexThreadWorkingDirectory,
   nodeCodexOwnedActivityCensusLayer,
   type CodexTurnCompletedHint,
-  type CodexTurnCompletedSubscription,
+  type CodexToolEffectNotification,
   type CodexOwnedActivityCensusProjection,
   type CodexOwnedProcessIdentity,
   type CodexThreadSnapshot,
@@ -80,17 +80,29 @@ import {
   CodexReplacementOperationId,
   CodexReplacementRequestId,
   CodexSealedTerminal,
+  type CodexServerIncarnation,
   type CodexReplacementRequestDigest,
   type CodexSealedTerminal as CodexSealedTerminalType,
   type CodexThreadId,
-  type CodexTurnId
+  type CodexTurnId,
+  CodexToolEffectRecord,
+  CodexToolItemId
 } from "./codex-attempt-store.js"
+import { CodexToolEffectPolicy, codexToolEffectLimit } from "./codex-tool-effect-policy.js"
 
 /** A terminal Codex message must contain one unambiguous 40-character commit. */
 const commitPattern = /(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/g
 const lastElementOffset = -1
 const hexRadix = 16
 const hexByteWidth = 2
+// eslint-disable-next-line no-magic-numbers -- The provider gets a bounded grace before exact containment closes.
+const toolInterruptGrace = Duration.seconds(5)
+const missingToolStartScanIntervalMilliseconds = 5_000
+const ordinaryToolEffectLimitMilliseconds = 60_000
+// eslint-disable-next-line no-magic-numbers -- One millisecond is one thousand microseconds and one million nanoseconds.
+const nanosecondsPerMillisecond = BigInt(1_000) * BigInt(1_000)
+const completedToolStatuses = new Set(["completed", "failed", "declined", "interrupted"])
+const toolItemTypes = new Set(["commandExecution", "fileChange", "dynamicToolCall"])
 type JsonRecord = Record<string, unknown>
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null
@@ -221,13 +233,19 @@ const intentRecordFor = (
   attempt: Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">,
   threadId: CodexThreadId,
   currentToken: CodexOwnedTurnToken,
-  priorObservedTurnId: CodexTurnId | null
+  priorObservedTurnId: CodexTurnId | null,
+  turnStartedAtMilliseconds: number,
+  turnStartIncarnation: CodexServerIncarnation,
+  toolEffectPolicy: CodexToolEffectPolicy
 ): CodexIntentRecord =>
   CodexAttemptRecord.cases.TurnIntentRecorded.make({
     attemptId: attempt.attemptId,
     correlationAttemptId: attempt.attemptId,
     correlationRunId: attempt.runId,
     currentToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy,
     priorObservedTurnId,
     threadId,
     worktree: attempt.worktree
@@ -238,13 +256,19 @@ const observedRecordFor = (
   threadId: CodexThreadId,
   currentToken: CodexOwnedTurnToken,
   observedTurnId: CodexTurnId,
-  priorObservedTurnId: CodexTurnId | null
+  priorObservedTurnId: CodexTurnId | null,
+  turnStartedAtMilliseconds?: number,
+  turnStartIncarnation?: CodexServerIncarnation,
+  toolEffectPolicy?: CodexToolEffectPolicy
 ): CodexObservedRecord =>
   CodexAttemptRecord.cases.TurnObserved.make({
     attemptId: attempt.attemptId,
     correlationAttemptId: attempt.attemptId,
     correlationRunId: attempt.runId,
     currentToken,
+    ...(turnStartedAtMilliseconds === undefined ? {} : { turnStartedAtMilliseconds }),
+    ...(turnStartIncarnation === undefined ? {} : { turnStartIncarnation }),
+    ...(toolEffectPolicy === undefined ? {} : { toolEffectPolicy }),
     observedTurnId,
     priorObservedTurnId,
     threadId,
@@ -260,6 +284,11 @@ const runningRecordFor = (
     correlationAttemptId: attempt.attemptId,
     correlationRunId: attempt.runId,
     currentToken: record.currentToken,
+    ...(record.turnStartedAtMilliseconds === undefined
+      ? {}
+      : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
+    ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
+    ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
     observedTurnId: record.observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
     threadId: record.threadId,
@@ -275,6 +304,11 @@ const safelySuspendedRecordFor = (
     correlationAttemptId: attempt.attemptId,
     correlationRunId: attempt.runId,
     currentToken: record.currentToken,
+    ...(record.turnStartedAtMilliseconds === undefined
+      ? {}
+      : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
+    ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
+    ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
     observedTurnId: record.observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
     threadId: record.threadId,
@@ -290,6 +324,11 @@ const suspensionStopIntendedRecordFor = (
     correlationAttemptId: attempt.attemptId,
     correlationRunId: attempt.runId,
     currentToken: record.currentToken,
+    ...(record.turnStartedAtMilliseconds === undefined
+      ? {}
+      : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
+    ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
+    ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
     observedTurnId: record.observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
     threadId: record.threadId,
@@ -308,6 +347,11 @@ const terminalRecordFor = (
     correlationAttemptId: attempt.attemptId,
     correlationRunId: attempt.runId,
     currentToken: record.currentToken,
+    ...(record.turnStartedAtMilliseconds === undefined
+      ? {}
+      : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
+    ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
+    ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
     evidenceManifest,
     observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
@@ -889,6 +933,7 @@ const defaultCodexOwnedActivityObservationInterval = CodexOwnedActivityObservati
 
 interface CodexPlannedAttemptExecutorLayerOptions {
   readonly ownedActivityObservationInterval?: CodexOwnedActivityObservationInterval
+  readonly toolEffectPolicy?: CodexToolEffectPolicy
   /** Instructions inside one opaque provider turn; an explicit empty list omits the default review policy. */
   readonly taskInstructions?: ReadonlyArray<string>
 }
@@ -899,7 +944,8 @@ interface CodexPlannedAttemptExecutorLayerOptions {
  */
 const makeCodexPlannedAttemptExecutorContext = (
   ownedActivityObservationInterval: CodexOwnedActivityObservationInterval,
-  taskInstructions: ReadonlyArray<string>
+  taskInstructions: ReadonlyArray<string>,
+  toolEffectPolicy: CodexToolEffectPolicy
 ) =>
   Effect.gen(function* () {
     const app = yield* CodexAppServer
@@ -913,6 +959,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     type TurnCompletionSubscription = {
       readonly close: Effect.Effect<void>
       readonly stream: Stream.Stream<CodexTurnCompletedHint>
+      readonly toolEffects: Stream.Stream<CodexToolEffectNotification>
       readonly expectTurnId: (turnId: CodexTurnId) => Effect.Effect<void>
     }
     const turnCompletionSubscriptions = yield* Ref.make<ReadonlyMap<string, TurnCompletionSubscription>>(new Map())
@@ -945,9 +992,14 @@ const makeCodexPlannedAttemptExecutorContext = (
           : yield* app
               .attachExactTurnCompletedHints(threadId)
               .pipe(Effect.provideService(Scope.Scope, subscriptionScope))
+      const toolEffects =
+        app.attachToolEffects === undefined
+          ? Stream.empty
+          : yield* app.attachToolEffects.pipe(Effect.provideService(Scope.Scope, subscriptionScope))
       const subscription: TurnCompletionSubscription = {
         close: Scope.close(subscriptionScope, Exit.void).pipe(Effect.asVoid),
-        stream: attached?.hints ?? Stream.empty,
+        stream: attached?.hints ?? Stream.fromIterable<CodexTurnCompletedHint>([]),
+        toolEffects,
         expectTurnId: attached?.expectTurnId ?? (() => Effect.void)
       }
       const key = plannedAttemptExecutorCorrelationKey(correlation)
@@ -969,7 +1021,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       threadId: CodexThreadId,
       turnId: CodexTurnId | undefined,
       attachmentScope: Scope.Scope
-    ): Effect.Effect<CodexTurnCompletedSubscription, never, Scope.Scope> =>
+    ): Effect.Effect<TurnCompletionSubscription, never, Scope.Scope> =>
       Ref.modify(turnCompletionSubscriptions, (current) => {
         const key = plannedAttemptExecutorCorrelationKey(correlation)
         const present = current.get(key)
@@ -977,15 +1029,28 @@ const makeCodexPlannedAttemptExecutorContext = (
       }).pipe(
         Effect.flatMap((present) => {
           if (present === undefined) {
-            return app.attachExactTurnCompletedHints === undefined
-              ? Effect.succeed({ hints: Stream.empty, expectTurnId: () => Effect.void })
-              : app
-                  .attachExactTurnCompletedHints(threadId, turnId)
-                  .pipe(Effect.provideService(Scope.Scope, attachmentScope))
+            return Effect.gen(function* () {
+              const attached =
+                app.attachExactTurnCompletedHints === undefined
+                  ? undefined
+                  : yield* app
+                      .attachExactTurnCompletedHints(threadId, turnId)
+                      .pipe(Effect.provideService(Scope.Scope, attachmentScope))
+              const toolEffects =
+                app.attachToolEffects === undefined
+                  ? Stream.empty
+                  : yield* app.attachToolEffects.pipe(Effect.provideService(Scope.Scope, attachmentScope))
+              return {
+                close: Effect.void,
+                stream: attached?.hints ?? Stream.fromIterable<CodexTurnCompletedHint>([]),
+                toolEffects,
+                expectTurnId: attached?.expectTurnId ?? (() => Effect.void)
+              }
+            })
           }
           return (turnId === undefined ? Effect.void : present.expectTurnId(turnId)).pipe(
             Effect.andThen(Effect.addFinalizer(() => present.close)),
-            Effect.as({ hints: present.stream, expectTurnId: present.expectTurnId })
+            Effect.as(present)
           )
         })
       )
@@ -1386,7 +1451,10 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.threadId,
           record.currentToken,
           reconciliation.turn.id,
-          record.priorObservedTurnId
+          record.priorObservedTurnId,
+          record.turnStartedAtMilliseconds,
+          record.turnStartIncarnation,
+          record.toolEffectPolicy
         )
         yield* save(observed)
         return observed
@@ -1474,7 +1542,10 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.threadId,
           record.currentToken,
           turn.id,
-          record.priorObservedTurnId
+          record.priorObservedTurnId,
+          record.turnStartedAtMilliseconds,
+          record.turnStartIncarnation,
+          record.toolEffectPolicy
         )
         yield* save(observed)
         yield* save(runningRecordFor(attempt, observed))
@@ -1531,6 +1602,9 @@ const makeCodexPlannedAttemptExecutorContext = (
       record: CodexSendableRecord,
       priorObservedTurnId: CodexTurnId | null,
       currentToken: CodexOwnedTurnToken,
+      turnStartedAtMilliseconds: number,
+      turnStartIncarnation: CodexServerIncarnation,
+      retainedToolEffectPolicy: CodexToolEffectPolicy,
       result: StartedTurnResult
     ) {
       if (result._tag === "Report") return result.report
@@ -1544,7 +1618,16 @@ const makeCodexPlannedAttemptExecutorContext = (
         turns: [turn],
         ...(turn.correlation === undefined ? {} : { correlation: turn.correlation })
       })
-      const observed = observedRecordFor(attempt, record.threadId, currentToken, turn.id, priorObservedTurnId)
+      const observed = observedRecordFor(
+        attempt,
+        record.threadId,
+        currentToken,
+        turn.id,
+        priorObservedTurnId,
+        turnStartedAtMilliseconds,
+        turnStartIncarnation,
+        retainedToolEffectPolicy
+      )
       yield* save(observed)
       // Even a terminal status in the turn/start response is only an initial
       // response fact. The exact completion notification is the authorization
@@ -1566,16 +1649,38 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (record._tag === "TurnIntentRecorded") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       const priorObservedTurnId = record._tag === "AssociatedPreTurn" ? null : record.observedTurnId
       const currentToken = yield* freshOwnedTurnToken
+      const turnStartedAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      const retainedToolEffectPolicy = hasOwnedTurnRecord(record)
+        ? (record.toolEffectPolicy ?? toolEffectPolicy)
+        : toolEffectPolicy
       // Persist the crossing intent before turn/start. A lost response can
       // therefore be reconciled without sending a second turn.
-      const intent = intentRecordFor(attempt, record.threadId, currentToken, priorObservedTurnId)
+      const intent = intentRecordFor(
+        attempt,
+        record.threadId,
+        currentToken,
+        priorObservedTurnId,
+        turnStartedAtMilliseconds,
+        app.incarnation,
+        retainedToolEffectPolicy
+      )
       yield* save(intent)
       // The provider may complete the new turn before its turn/start response
       // arrives, so install the exact-ID notification subscription first.
       yield* completionSubscriptionForTurnStart(correlation, record.threadId)
       return yield* startTurnAcrossBoundary(attempt, specification, correlation, intent).pipe(
         Effect.flatMap((result) =>
-          finishStartedTurn(attempt, correlation, record, priorObservedTurnId, currentToken, result)
+          finishStartedTurn(
+            attempt,
+            correlation,
+            record,
+            priorObservedTurnId,
+            currentToken,
+            turnStartedAtMilliseconds,
+            app.incarnation,
+            retainedToolEffectPolicy,
+            result
+          )
         ),
         Effect.onExit((exit) =>
           Exit.isFailure(exit)
@@ -1659,7 +1764,10 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.threadId,
           record.currentToken,
           turn.id,
-          record.priorObservedTurnId
+          record.priorObservedTurnId,
+          record.turnStartedAtMilliseconds,
+          record.turnStartIncarnation,
+          record.toolEffectPolicy
         )
         yield* save(observed)
         yield* save(runningRecordFor(attempt, observed))
@@ -1793,7 +1901,10 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.threadId,
           record.currentToken,
           turn.id,
-          record.priorObservedTurnId
+          record.priorObservedTurnId,
+          record.turnStartedAtMilliseconds,
+          record.turnStartIncarnation,
+          record.toolEffectPolicy
         )
         yield* save(observed)
         yield* save(safelySuspendedRecordFor(attempt, observed))
@@ -1934,6 +2045,77 @@ const makeCodexPlannedAttemptExecutorContext = (
       return unreadable(correlation)
     })
 
+    const listToolEffects = (correlation: PlannedAttemptExecutorCorrelation) =>
+      store.listToolEffects?.(correlation.runId, correlation.attemptId) ?? Effect.succeed([])
+    const writeToolEffect = (record: CodexToolEffectRecord) =>
+      store.writeToolEffect?.(record) ?? Effect.fail(new CodexTurnBoundaryUnknown({}))
+    const readToolEffect = (
+      correlation: PlannedAttemptExecutorCorrelation,
+      turnId: CodexTurnId,
+      itemId: CodexToolItemId
+    ) =>
+      store.readToolEffect?.(correlation.runId, correlation.attemptId, turnId, itemId) ??
+      Effect.fail(new CodexTurnBoundaryUnknown({}))
+    const finishToolEffectStop = Effect.fn("CodexPlannedAttemptExecutor.finishToolEffectStop")(function* (
+      record: Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }>
+    ) {
+      if (record.incarnation === app.incarnation) {
+        yield* app
+          .interruptTurn(record.threadId, record.turnId)
+          .pipe(Effect.timeoutOrElse({ duration: toolInterruptGrace, orElse: () => Effect.void }), Effect.ignore)
+        // close proves the exact app-server containment stopped, including its writers.
+        yield* app.close
+      } else {
+        if (
+          record.serverLaunch === undefined ||
+          record.serverLaunch.incarnation !== record.incarnation ||
+          app.stopRetainedLaunch === undefined
+        )
+          return yield* new CodexTurnBoundaryUnknown({})
+        yield* app.stopRetainedLaunch(record.serverLaunch)
+      }
+      const stoppedAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      yield* writeToolEffect(
+        CodexToolEffectRecord.cases.LimitReached.make({
+          runId: record.runId,
+          attemptId: record.attemptId,
+          threadId: record.threadId,
+          turnId: record.turnId,
+          itemId: record.itemId,
+          incarnation: record.incarnation,
+          worktree: record.worktree,
+          ...(record.serverLaunch === undefined ? {} : { serverLaunch: record.serverLaunch }),
+          startedAtMilliseconds: record.startedAtMilliseconds,
+          deadlineMilliseconds: record.deadlineMilliseconds,
+          reason: record.reason,
+          stopIntentAtMilliseconds: record.stopIntentAtMilliseconds,
+          stoppedAtMilliseconds
+        })
+      )
+    })
+    const stopToolEffect = Effect.fn("CodexPlannedAttemptExecutor.stopToolEffect")(function* (
+      record: Extract<CodexToolEffectRecord, { readonly _tag: "Started" }>,
+      reason: "Elapsed" | "Malformed" | "MissingStart" | "ClockReversed"
+    ) {
+      const stopIntentAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      const intent = CodexToolEffectRecord.cases.StopIntended.make({
+        runId: record.runId,
+        attemptId: record.attemptId,
+        threadId: record.threadId,
+        turnId: record.turnId,
+        itemId: record.itemId,
+        incarnation: record.incarnation,
+        worktree: record.worktree,
+        ...(app.serverLaunch === undefined ? {} : { serverLaunch: app.serverLaunch }),
+        startedAtMilliseconds: record.startedAtMilliseconds,
+        deadlineMilliseconds: record.deadlineMilliseconds,
+        reason,
+        stopIntentAtMilliseconds
+      })
+      yield* writeToolEffect(intent)
+      yield* finishToolEffectStop(intent)
+    })
+
     type LifecycleProjectionOutcome = {
       readonly continueLifecycleObservation: boolean
       readonly projection: PlannedAttemptExecutorProjectionType
@@ -2005,6 +2187,17 @@ const makeCodexPlannedAttemptExecutorContext = (
         attemptId: record.correlationAttemptId
       })
       if (!sameCorrelation(observed, correlation)) return projectionOutcome(foreign(correlation, observed))
+      const retainedToolEffects = yield* listToolEffects(correlation)
+      const intendedToolStop = retainedToolEffects.find(
+        (effect): effect is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }> =>
+          effect._tag === "StopIntended"
+      )
+      if (intendedToolStop !== undefined) {
+        yield* finishToolEffectStop(intendedToolStop)
+        return projectionOutcome(unreadable(correlation, "Codex tool item limit reached"))
+      }
+      if (retainedToolEffects.some((effect) => effect._tag === "LimitReached"))
+        return projectionOutcome(unreadable(correlation, "Codex tool item limit reached"))
       if (isBeginReconciliation(purpose) && record._tag === "Terminal") {
         return projectionOutcome(exact(running(correlation)))
       }
@@ -2584,12 +2777,20 @@ const makeCodexPlannedAttemptExecutorContext = (
         replacementLedgerHasPhase(ledger, "TurnObserved") || replacementLedgerHasPhase(ledger, "Sealed")
           ? ledger
           : yield* appendReplacementEntry(ledger, observedEntry)
+      const prior = yield* store.readAttempt(request.plannedAttempt.runId, request.plannedAttempt.attemptId)
+      const admittedPolicy =
+        Option.isSome(prior) && hasOwnedTurnRecord(prior.value)
+          ? (prior.value.toolEffectPolicy ?? toolEffectPolicy)
+          : toolEffectPolicy
       const observed = observedRecordFor(
         request.plannedAttempt,
         predecessor.threadId,
         replacementToken,
         correlatedTurn.id,
-        null
+        null,
+        undefined,
+        undefined,
+        admittedPolicy
       )
       yield* save(observed)
       const sealedLedger = replacementLedgerHasPhase(observedLedger, "Sealed")
@@ -2959,9 +3160,13 @@ const makeCodexPlannedAttemptExecutorContext = (
               : undefined
           const turnSubscription =
             retainedThreadId === undefined
-              ? { hints: Stream.empty, expectTurnId: (_turnId: CodexTurnId) => Effect.void }
+              ? {
+                  stream: Stream.fromIterable<CodexTurnCompletedHint>([]),
+                  toolEffects: Stream.fromIterable<CodexToolEffectNotification>([]),
+                  expectTurnId: (_turnId: CodexTurnId) => Effect.void
+                }
               : yield* takeTurnCompletionSubscription(correlation, retainedThreadId, retainedTurnId, attachmentScope)
-          const turnHints = turnSubscription.hints
+          const turnHints = turnSubscription.stream
           const activityHints = yield* app.attachOwnedActivityHints.pipe(
             Effect.provideService(Scope.Scope, attachmentScope)
           )
@@ -2969,6 +3174,247 @@ const makeCodexPlannedAttemptExecutorContext = (
             app.attachProtocolFailures === undefined
               ? Stream.empty
               : yield* app.attachProtocolFailures.pipe(Effect.provideService(Scope.Scope, attachmentScope))
+          const lastMissingStartScanAt = yield* Ref.make<number | undefined>(undefined)
+          const toolEffectMonotonicStarts = yield* Ref.make<ReadonlyMap<string, bigint>>(new Map())
+          const toolObservationStopped = yield* Deferred.make<void>()
+          const toolIdentityMatches = (item: CodexToolEffectNotification): boolean =>
+            retainedThreadId !== undefined &&
+            retainedTurnId !== undefined &&
+            item.threadId === retainedThreadId &&
+            item.turnId === retainedTurnId
+          const toolEffectGate = yield* Semaphore.make(1)
+          const toolLimitProjection = () => projectionOutcome(unreadable(correlation, "Codex tool item limit reached"))
+          const observeToolEffect = (item: CodexToolEffectNotification) =>
+            Effect.gen(function* () {
+              if (!toolIdentityMatches(item) || retainedTurnId === undefined || retainedThreadId === undefined)
+                return undefined
+              const itemId = CodexToolItemId.make(item.itemId)
+              const found = yield* readToolEffect(correlation, retainedTurnId, itemId)
+              const retained = Option.isSome(found) ? found.value : undefined
+              if (item.phase === "Malformed") {
+                if (retained?._tag === "Completed" || retained?._tag === "LimitReached") return undefined
+                if (retained?._tag === "StopIntended") {
+                  yield* finishToolEffectStop(retained)
+                  return toolLimitProjection()
+                }
+                if (Result.isFailure(privateRecord) || Option.isNone(privateRecord.success))
+                  return toolLimitProjection()
+                const owned = privateRecord.success.value
+                const started =
+                  retained?._tag === "Started"
+                    ? retained
+                    : CodexToolEffectRecord.cases.Started.make({
+                        runId: correlation.runId,
+                        attemptId: correlation.attemptId,
+                        threadId: retainedThreadId,
+                        turnId: retainedTurnId,
+                        itemId,
+                        incarnation: app.incarnation,
+                        worktree: owned.worktree,
+                        startedAtMilliseconds: hasOwnedTurnRecord(owned)
+                          ? (owned.turnStartedAtMilliseconds ?? item.observedAtMilliseconds)
+                          : item.observedAtMilliseconds,
+                        deadlineMilliseconds: item.observedAtMilliseconds + ordinaryToolEffectLimitMilliseconds
+                      })
+                if (retained === undefined) yield* writeToolEffect(started)
+                yield* stopToolEffect(started, "Malformed")
+                return toolLimitProjection()
+              }
+              if (item.phase === "Started") {
+                if (retained !== undefined) return undefined
+                if (Result.isFailure(privateRecord) || Option.isNone(privateRecord.success))
+                  return toolLimitProjection()
+                const owned = privateRecord.success.value
+                const admittedPolicy = hasOwnedTurnRecord(owned)
+                  ? (owned.toolEffectPolicy ?? toolEffectPolicy)
+                  : toolEffectPolicy
+                const limit = codexToolEffectLimit(
+                  admittedPolicy,
+                  item.cwd === owned.worktree
+                    ? { ...item, kind: item.kind ?? "dynamicToolCall" }
+                    : { kind: item.kind ?? "dynamicToolCall" }
+                )
+                yield* writeToolEffect(
+                  CodexToolEffectRecord.cases.Started.make({
+                    runId: correlation.runId,
+                    attemptId: correlation.attemptId,
+                    threadId: retainedThreadId,
+                    turnId: retainedTurnId,
+                    itemId,
+                    incarnation: app.incarnation,
+                    worktree: privateRecord.success.value.worktree,
+                    startedAtMilliseconds: item.observedAtMilliseconds,
+                    deadlineMilliseconds: item.observedAtMilliseconds + limit
+                  })
+                )
+                const monotonicStart = item.observedAtMonotonicNanoseconds
+                if (monotonicStart !== undefined) {
+                  yield* Ref.update(toolEffectMonotonicStarts, (current) =>
+                    new Map(current).set(JSON.stringify([retainedTurnId, itemId]), monotonicStart)
+                  )
+                }
+                return undefined
+              }
+              // A completion for an item whose start was not observed cannot
+              // settle or extend any other item's retained deadline.
+              if (retained === undefined) return undefined
+              if (retained._tag !== "Started") return undefined
+              const monotonicStart = yield* Ref.get(toolEffectMonotonicStarts).pipe(
+                Effect.map((starts) => starts.get(JSON.stringify([retainedTurnId, itemId])))
+              )
+              if (
+                item.observedAtMilliseconds < retained.startedAtMilliseconds ||
+                (monotonicStart !== undefined &&
+                  item.observedAtMonotonicNanoseconds !== undefined &&
+                  item.observedAtMonotonicNanoseconds < monotonicStart)
+              ) {
+                yield* stopToolEffect(retained, "ClockReversed")
+                return toolLimitProjection()
+              }
+              const completionExpired =
+                monotonicStart === undefined || item.observedAtMonotonicNanoseconds === undefined
+                  ? item.observedAtMilliseconds >= retained.deadlineMilliseconds
+                  : item.observedAtMonotonicNanoseconds - monotonicStart >=
+                    BigInt(retained.deadlineMilliseconds - retained.startedAtMilliseconds) * nanosecondsPerMillisecond
+              if (completionExpired) {
+                yield* stopToolEffect(retained, "Elapsed")
+                return toolLimitProjection()
+              }
+              yield* writeToolEffect(
+                CodexToolEffectRecord.cases.Completed.make({
+                  runId: retained.runId,
+                  attemptId: retained.attemptId,
+                  threadId: retained.threadId,
+                  turnId: retained.turnId,
+                  itemId: retained.itemId,
+                  incarnation: retained.incarnation,
+                  worktree: retained.worktree,
+                  startedAtMilliseconds: retained.startedAtMilliseconds,
+                  deadlineMilliseconds: retained.deadlineMilliseconds,
+                  completedAtMilliseconds: item.observedAtMilliseconds
+                })
+              )
+              yield* Ref.update(
+                toolEffectMonotonicStarts,
+                (current) => new Map([...current].filter(([key]) => key !== JSON.stringify([retainedTurnId, itemId])))
+              )
+              return undefined
+            })
+          const checkToolEffectDeadline = Effect.gen(function* () {
+            const retained = yield* listToolEffects(correlation)
+            const pending = retained.find(
+              (record): record is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }> =>
+                record._tag === "StopIntended"
+            )
+            if (pending !== undefined) {
+              yield* finishToolEffectStop(pending)
+              return toolLimitProjection()
+            }
+            const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+            const monotonicNow = yield* Effect.clockWith((clock) => clock.monotonicTimeNanos)
+            const monotonicStarts = yield* Ref.get(toolEffectMonotonicStarts)
+            const reversed = retained.find((record) => {
+              if (record._tag !== "Started") return false
+              const monotonicStart = monotonicStarts.get(JSON.stringify([record.turnId, record.itemId]))
+              return (
+                now < record.startedAtMilliseconds || (monotonicStart !== undefined && monotonicNow < monotonicStart)
+              )
+            })
+            if (reversed !== undefined && reversed._tag === "Started") {
+              yield* stopToolEffect(reversed, "ClockReversed")
+              return toolLimitProjection()
+            }
+            const expired = retained.find((record) => {
+              if (record._tag !== "Started") return false
+              const monotonicStart = monotonicStarts.get(JSON.stringify([record.turnId, record.itemId]))
+              return monotonicStart === undefined
+                ? now >= record.deadlineMilliseconds
+                : monotonicNow - monotonicStart >=
+                    BigInt(record.deadlineMilliseconds - record.startedAtMilliseconds) * nanosecondsPerMillisecond
+            })
+            if (expired !== undefined && expired._tag === "Started") {
+              yield* stopToolEffect(expired, "Elapsed")
+              return toolLimitProjection()
+            }
+            const owned =
+              Result.isSuccess(privateRecord) && Option.isSome(privateRecord.success)
+                ? privateRecord.success.value
+                : undefined
+            if (
+              retainedThreadId === undefined ||
+              retainedTurnId === undefined ||
+              owned === undefined ||
+              !hasOwnedTurnRecord(owned) ||
+              owned.turnStartedAtMilliseconds === undefined ||
+              now < owned.turnStartedAtMilliseconds + ordinaryToolEffectLimitMilliseconds
+            )
+              return undefined
+            const lastScan = yield* Ref.get(lastMissingStartScanAt)
+            if (lastScan !== undefined && now - lastScan < missingToolStartScanIntervalMilliseconds) return undefined
+            yield* Ref.set(lastMissingStartScanAt, now)
+            const thread = yield* app.readThread(retainedThreadId)
+            const turn = thread.turns.find((candidate) => candidate.id === retainedTurnId)
+            if (turn === undefined || turn.ownedTurnToken !== owned.currentToken) return toolLimitProjection()
+            const activeItem = turn.items.find(
+              (candidate) =>
+                isJsonRecord(candidate) &&
+                typeof candidate["id"] === "string" &&
+                candidate["id"].length > 0 &&
+                typeof candidate["type"] === "string" &&
+                toolItemTypes.has(candidate["type"]) &&
+                (typeof candidate["status"] !== "string" || !completedToolStatuses.has(candidate["status"]))
+            )
+            if (!isJsonRecord(activeItem) || typeof activeItem["id"] !== "string") return undefined
+            if (retained.some((record) => record.turnId === retainedTurnId && record.itemId === activeItem["id"]))
+              return undefined
+            if (owned.turnStartIncarnation === undefined || owned.turnStartIncarnation !== app.incarnation)
+              return toolLimitProjection()
+            const missingStart = CodexToolEffectRecord.cases.Started.make({
+              runId: correlation.runId,
+              attemptId: correlation.attemptId,
+              threadId: retainedThreadId,
+              turnId: retainedTurnId,
+              itemId: CodexToolItemId.make(activeItem["id"]),
+              incarnation: owned.turnStartIncarnation,
+              worktree: owned.worktree,
+              startedAtMilliseconds: owned.turnStartedAtMilliseconds,
+              deadlineMilliseconds: owned.turnStartedAtMilliseconds + ordinaryToolEffectLimitMilliseconds
+            })
+            yield* writeToolEffect(missingStart)
+            yield* stopToolEffect(missingStart, "MissingStart")
+            return toolLimitProjection()
+          })
+          const toolEffectCandidates = Stream.merge(
+            turnSubscription.toolEffects.pipe(
+              Stream.mapEffect((item) =>
+                toolEffectGate
+                  .withPermit(observeToolEffect(item))
+                  .pipe(
+                    Effect.catch((error: unknown) =>
+                      Effect.succeed(projectionOutcome(projectFailure(correlation, error)))
+                    )
+                  )
+              )
+            ),
+            Stream.fromSchedule(Schedule.spaced(Duration.seconds(1))).pipe(
+              Stream.mapEffect(() =>
+                toolEffectGate
+                  .withPermit(checkToolEffectDeadline)
+                  .pipe(
+                    Effect.catch((error: unknown) =>
+                      Effect.succeed(projectionOutcome(projectFailure(correlation, error)))
+                    )
+                  )
+              )
+            )
+          ).pipe(
+            Stream.filter((candidate): candidate is LifecycleProjectionOutcome => candidate !== undefined),
+            Stream.takeUntil(
+              (candidate) =>
+                candidate.projection._tag !== "Exact" || candidate.projection.report._tag !== "ExecutorWorkExecuting"
+            ),
+            Stream.interruptWhen(Deferred.await(toolObservationStopped))
+          )
           const shouldContinueLifecycleObservation = (outcome: LifecycleProjectionOutcome) =>
             outcome.continueLifecycleObservation &&
             outcome.projection._tag === "Exact" &&
@@ -2987,6 +3433,12 @@ const makeCodexPlannedAttemptExecutorContext = (
                     .pipe(
                       Effect.tap((outcome) =>
                         Ref.set(latestLifecycleOutcome, outcome).pipe(
+                          Effect.andThen(
+                            outcome.projection._tag === "Exact" &&
+                              outcome.projection.report._tag === "ExecutorWorkExecuting"
+                              ? Effect.void
+                              : Deferred.succeed(toolObservationStopped, undefined)
+                          ),
                           Effect.andThen(
                             shouldContinueLifecycleObservation(outcome)
                               ? Deferred.succeed(heldTerminalActivity, undefined)
@@ -3114,8 +3566,11 @@ const makeCodexPlannedAttemptExecutorContext = (
           )
           const changes = Stream.merge(
             Stream.merge(
-              Stream.merge(turnNotificationCandidates, activityNotificationCandidates),
-              protocolFailureCandidates
+              Stream.merge(
+                Stream.merge(turnNotificationCandidates, activityNotificationCandidates),
+                protocolFailureCandidates
+              ),
+              toolEffectCandidates
             ),
             lifecycleCadence
           ).pipe(
@@ -3141,7 +3596,8 @@ export const codexPlannedAttemptExecutorLayerWithOptions = (options: CodexPlanne
   Layer.effectContext(
     makeCodexPlannedAttemptExecutorContext(
       options.ownedActivityObservationInterval ?? defaultCodexOwnedActivityObservationInterval,
-      options.taskInstructions ?? defaultCodexTaskInstructions
+      options.taskInstructions ?? defaultCodexTaskInstructions,
+      options.toolEffectPolicy ?? CodexToolEffectPolicy.make({ defaultLimitMilliseconds: 60_000, longCommands: [] })
     )
   )
 
@@ -3149,9 +3605,11 @@ export const codexPlannedAttemptExecutorLayerWithOptions = (options: CodexPlanne
 export const codexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorLayerWithOptions()
 
 /** Supported production composition: use the node-owned activity census. */
-export const nodeCodexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorLayer.pipe(
-  Layer.provide(nodeCodexOwnedActivityCensusLayer)
-)
+export const nodeCodexPlannedAttemptExecutorLayerWithOptions = (
+  options: CodexPlannedAttemptExecutorLayerOptions = {}
+) => codexPlannedAttemptExecutorLayerWithOptions(options).pipe(Layer.provide(nodeCodexOwnedActivityCensusLayer))
+
+export const nodeCodexPlannedAttemptExecutorLayer = nodeCodexPlannedAttemptExecutorLayerWithOptions()
 
 class ForeignAttemptRecord extends Schema.TaggedError<ForeignAttemptRecord>()("ForeignAttemptRecord", {
   observed: PlannedAttemptExecutorCorrelation
