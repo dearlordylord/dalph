@@ -142,9 +142,9 @@ harness changes, not a prerequisite for each cassette edit. Selection retains
 deleted and renamed source paths.
 The seven-task `deliveryInvariantStoryCapstone` is excluded from the
 recorded-catalog round trip. Its focused DS01–DS17 causal checkpoint test runs
-in the ordinary cassette suite; the complete DS18–DS22 proof remains under
-`pnpm test:integration:capstone` while its DS21 fixture is repaired. A passing
-routine gate proves only the focused prefix.
+in the ordinary cassette suite; the complete DS18–DS22 proof runs under
+`pnpm test:integration:capstone`. A passing routine gate proves only the
+focused prefix.
 During focused capstone fixture repair, use each observed mismatch to name the
 competing causes and inspect the exact boundary evidence before editing. A
 fixture-only correction supported by that evidence may be followed by another
@@ -330,7 +330,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test:cassettes:historical-chronology` | Run the retained historical exact-order cassette files explicitly; failures remain visible while their activation chronology is reconciled. |
 
 | `test:recorded-catalog` | Run the routine in-memory recorded-cassette catalog without starting the built production CLI. The seven-task capstone is manual through `test:integration:capstone`. |
-| `test:integration:capstone` | Explicitly run the seven-task delivery capstone, its status/cleanup assertions, and its recorded-catalog round trip with one Vitest worker. This is separate manual evidence for the accepted delivery-capstone story; its chronology remains under repair. |
+| `test:integration:capstone` | Explicitly run the seven-task delivery capstone, its status/cleanup assertions, and its recorded-catalog round trip with one Vitest worker. This is separate manual evidence for the accepted delivery-capstone story. |
 | `test:integration:publication` | Build the Dalph CLI and run the process-based direct-publication integration scenario explicitly, with one Vitest worker. Required before handoff when direct-publication or its composed completion/dependant behavior changes. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Manually run the historical DS01–DS13 strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. It is no longer an automatic local or hosted gate under #413's causal publication contract. |

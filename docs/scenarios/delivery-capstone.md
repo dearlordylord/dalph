@@ -63,8 +63,13 @@ evict any of them. These cuts need not have a separate Delivery publication.
 DS04, DS07, DS10, DS12, DS13, DS14, and DS21 use exact committed journal
 checkpoints, canonical position/capacity reconstruction, and the prepared
 trace's graph evidence. DS21 follows both E/F/G's accepted Begin reports and
-A–D's settlements; admission does not wait for those settlements. DS18 uses
-the actual G4 revalidation publication immediately before the authored await
+A–D's settlements, and precedes F's terminal report; admission does not wait
+for those settlements. E's independent terminal report may already be accepted
+at this cut. If so, E has released its position but remains a retained
+integration obligation; otherwise E still holds its position. F and G remain
+held in either chronology. This fixture-only correction changes no Dalph
+runtime behavior. DS18 uses the actual G4 revalidation publication immediately
+before the authored await
 marker. Other rows use actual captured publications; DS08 uses the actual
 old-process owner-close interval. DS22 keeps its settlement publication and
 separately checks the first actual capture where the exact settlement owner

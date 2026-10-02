@@ -130,7 +130,10 @@ report releases its task-work position and establishes one distinct integration
 responsibility, so E, F and G are admitted in graph order as positions release.
 Their task work may execute while earlier results wait for the single
 serialized integration target; integration and task-work admission are
-independent. Each result still crosses the same outer Integrator, Git
+independent. E may report its accepted terminal result before D's integration
+settles. E then releases its task-work position but remains a retained
+integration obligation; F and G continue executing. Each result still crosses
+the same outer Integrator, Git
 qualification, promotion, completion-claim replacement, focused
 task-completion success, claim-deletion, and delivery-settlement protocol as A.
 
@@ -165,7 +168,7 @@ executable and no obligation is outstanding, so the coordinator returns
 | 18 | C reopened | G₄ | 2 | B D | C | — | D9 D19 |
 | 19 | capacity 2 → 3; C admitted | G₄ | 3 | B C D | — | — | D6 D13 |
 | 20 | F and G added | G₅ | 3 | B C D | — | — | D7 D9 |
-| 21 | B C D settled; E F G executing after released-position admission while integration remains serialized | G₅ | 3 | E F G | — | — | D6 D24 D33 |
+| 21 | B C D settled; E F G begun after released-position admission; E may already be accepted | G₅ | 3 | E F G if E executes; F G if E is terminal | E if terminal | — | D6 D24 D33 |
 | 22 | all complete and all exact completion claims removed | G₅ | 3 | — | — | — | **D34 D35** |
 
 Held plus retained is the whole of what Dalph owes at any row, and the rule is
@@ -173,8 +176,10 @@ load-bearing: an accepted result is an obligation before it is integrated, so a
 task appears in Retained from the moment its executor reports until exact
 completion finality settles it. That is why A is retained at rows 13 and 14.
 During the intermediate DS-21 progression B, C, and D remain retained while
-their results pass through integration; row 21 is the later cut after those
-settlements, with E, F, and G executing from the released task-work positions.
+their results pass through integration. Row 21 is the later cut after those
+settlements and all three successor Begin reports. F and G still execute;
+E either executes or has reported an accepted result. In the latter case E
+is retained until its own integration and completion finality settle.
 
 A row whose held count exceeds capacity is legal and appears twice, at 7 and 9:
 the ceiling governs admission, never eviction.

@@ -343,7 +343,7 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
     expect(accepted.report._tag).toBe(
       row.held.includes(task)
         ? "ExecutorWorkExecuting"
-        : task === "A"
+        : task === "A" || (row.beat === transient.startedSuccessors && task === "E")
           ? "ExecutorWorkTerminal"
           : "ExecutorWorkSafelySuspended"
     )
@@ -441,9 +441,20 @@ export const assertDeliveryCapstoneJournalCheckpoint = (
       row.before.kind !== "Occurrence" ||
       row.before.capture.occurrence._tag !== "PlannedAttemptExecutorPassiveLifecycleChanged"
     )
-      return expect.fail("DS21 upper fence is not E terminal occurrence")
-    expect(row.before.capture.occurrence.report).toMatchObject({ _tag: "ExecutorWorkTerminal", attemptId: attempts.E })
-    for (const task of row.held) {
+      return expect.fail("DS21 upper fence is not F terminal occurrence")
+    expect(row.before.capture.occurrence.report).toMatchObject({ _tag: "ExecutorWorkTerminal", attemptId: attempts.F })
+    const terminalF = required(
+      run.records.find(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report._tag === "ExecutorWorkTerminal" &&
+          event.report.correlation.attemptId === attempts.F &&
+          event.report.correlation.runId === run.runId
+      ),
+      "DS21 exact F terminal report absent"
+    )
+    expect(terminalF.position).toBeGreaterThan(lower.position)
+    for (const task of ["E", "F", "G"] as const) {
       const response = required(
         prefix.find(
           ({ event }) =>

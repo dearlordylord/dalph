@@ -93,6 +93,30 @@ export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<Deliver
     if (latest.kind !== "Journal" || fence.kind !== "Journal") return expect.fail("initial Begin fence is not durable")
     return fence.record.position > latest.record.position ? fence : latest
   })
+  const ds21After = [
+    responseFence(run, "E"),
+    responseFence(run, "F"),
+    responseFence(run, "G"),
+    settlementFence(run, "A"),
+    settlementFence(run, "B"),
+    settlementFence(run, "C"),
+    settlementFence(run, "D")
+  ].reduce((latest, current) => {
+    if (latest.kind !== "Journal" || current.kind !== "Journal")
+      return expect.fail("DS21 accepted Begin or settlement anchor not journal-backed")
+    return current.record.position > latest.record.position ? current : latest
+  })
+  if (ds21After.kind !== "Journal") return expect.fail("DS21 lower fence is not journal-backed")
+  const eTerminalAcceptedByDs21 = run.records.some(
+    ({ event, position }) =>
+      position <= ds21After.record.position &&
+      event._tag === "PlannedAttemptExecutorWorkReported" &&
+      event.report._tag === "ExecutorWorkTerminal" &&
+      event.report.correlation.attemptId === attempts.E &&
+      event.report.correlation.runId === run.runId
+  )
+  const ds21Held: ReadonlyArray<Task> = eTerminalAcceptedByDs21 ? ["F", "G"] : ["E", "F", "G"]
+  const ds21Retained: ReadonlyArray<Task> = eTerminalAcceptedByDs21 ? ["E"] : []
   return [
     {
       beat: DS.entry,
@@ -321,23 +345,11 @@ export const rowsFor = (run: AuthoredScenarioCassetteRun): ReadonlyArray<Deliver
       beat: DS.startedSuccessors,
       graph: "G5",
       capacity: initialCapacity,
-      held: ["E", "F", "G"],
-      retained: [],
+      held: ds21Held,
+      retained: ds21Retained,
       alice: [],
-      after: [
-        responseFence(run, "E"),
-        responseFence(run, "F"),
-        responseFence(run, "G"),
-        settlementFence(run, "A"),
-        settlementFence(run, "B"),
-        settlementFence(run, "C"),
-        settlementFence(run, "D")
-      ].reduce((latest, current) => {
-        if (latest.kind !== "Journal" || current.kind !== "Journal")
-          return expect.fail("DS21 accepted Begin or settlement anchor not journal-backed")
-        return current.record.position > latest.record.position ? current : latest
-      }),
-      before: terminalFence(run, "E")
+      after: ds21After,
+      before: terminalFence(run, "F")
     },
     {
       beat: DS.settled,

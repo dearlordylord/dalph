@@ -2,7 +2,7 @@
 
 Owning issue: [#413](https://github.com/dearlordylord/dalph/issues/413).
 Status: accepted and implemented; #413 focused evidence runs in the ordinary
-cassette suite. The separate full capstone fixture remains open at DS21.
+cassette suite. The separate 22-beat capstone runs by explicit request.
 
 ## Governing behavior
 
@@ -96,8 +96,7 @@ evidence when that evidence already names the exact operation. Any additional
 process-local signal is limited to a multi-record action with no such durable
 outcome; it cannot replace Journal authority.
 
-The separate 22-beat capstone check still has a DS21 fixture discrepancy: its
-selected journal prefix already includes E's accepted terminal report, so the
-fresh admission projection holds F and G rather than E, F, and G. This also
-occurs with the former publication yield. It does not change the DS14–DS17
-evidence above; DS21–DS22 remain under the capstone's separate repair scope.
+The 22-beat capstone's DS21 checkpoint now accepts both causal orders at the
+last A–D settlement: E either still executes or has reported an accepted
+terminal result and remains retained for integration. F and G still hold their
+positions. This checkpoint is separate from the DS14–DS17 evidence above.
