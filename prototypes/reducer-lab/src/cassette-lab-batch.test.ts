@@ -10,7 +10,8 @@ import {
   type CassetteExecution,
   maintainedCassetteBatchConcurrency,
   runBoundedCassetteBatch,
-  runMaintainedCassetteExecution
+  runMaintainedCassetteExecution,
+  selectCassetteWatchdogCursor
 } from "./cassette-lab.ts"
 
 const keys = Array.from({ length: maintainedCassetteBatchConcurrency * 2 + 1 }, (_, index) => index)
@@ -55,6 +56,15 @@ assert.equal(new Set(settled).size, keys.length, "progress has no duplicate keys
 assert.deepEqual(settled.toSorted((left, right) => left - right), keys, "progress has no omitted keys")
 
 console.log("✓ bounds maintained cassette work while preserving ordered results and exact progress")
+
+assert.deepEqual(
+  selectCassetteWatchdogCursor(
+    { activation: 1, captureOrder: 6, itemTag: "OlderProjectedItem", storyPosition: 3 },
+    { activation: 2, captureOrder: 7, itemTag: "LatestCapturedItem", storyPosition: 4 }
+  ),
+  { activation: 2, captureOrder: 7, itemTag: "LatestCapturedItem", storyPosition: 4 },
+  "a newer raw capture owns timeout cursor diagnostics while projection trails"
+)
 
 let interrupted = false
 const stalledKey = "authored:singletonTaskCompletes" as const

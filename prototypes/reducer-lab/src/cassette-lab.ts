@@ -249,6 +249,23 @@ export interface CassetteRunProgress {
   readonly resultTag?: CassetteLabResult["_tag"]
 }
 
+export interface CassetteWatchdogCursorObservation {
+  readonly activation: number
+  readonly captureOrder: number
+  readonly itemTag: string | null
+  readonly storyPosition: number
+}
+
+/** Raw capture and projected playback advance independently; the greatest capture order owns cursor diagnostics. */
+export const selectCassetteWatchdogCursor = (
+  projected: CassetteWatchdogCursorObservation | null,
+  captured: CassetteWatchdogCursorObservation | null
+): CassetteWatchdogCursorObservation | null => {
+  if (projected === null) return captured
+  if (captured === null) return projected
+  return captured.captureOrder > projected.captureOrder ? captured : projected
+}
+
 /** Computes the Effect Crypto digest contract without requiring a secure browser origin. */
 export const browserDigest = (algorithm: Crypto.DigestAlgorithm, data: Uint8Array): Uint8Array => {
   return Match.value(algorithm).pipe(
@@ -616,18 +633,30 @@ const runCassetteDescriptor = async (
   }
   const moment = latestMoment as AuthoredObservationMoment | null
   const capture = latestCapture as AuthoredObservationCapture | null
-  const storyPosition = moment?.storyPosition ?? capture?.storyPosition ?? null
-  const latestStoryItemTag = moment?._tag === "AuthoredStoryOccurrenceMoment"
-    ? moment.occurrence._tag
-    : capture?._tag === "AuthoredStoryOccurrenceCaptured"
-      ? capture.occurrence._tag
-      : storyPosition === null ? null : descriptor.story[storyPosition]?._tag ?? null
+  const cursor = selectCassetteWatchdogCursor(
+    moment === null ? null : {
+      activation: moment.activationOrdinal,
+      captureOrder: moment.captureOrder,
+      itemTag: moment._tag === "AuthoredStoryOccurrenceMoment"
+        ? moment.occurrence._tag
+        : descriptor.story[moment.storyPosition]?._tag ?? null,
+      storyPosition: moment.storyPosition
+    },
+    capture === null ? null : {
+      activation: capture.activationOrdinal,
+      captureOrder: capture.captureOrder,
+      itemTag: capture._tag === "AuthoredStoryOccurrenceCaptured"
+        ? capture.occurrence._tag
+        : descriptor.story[capture.storyPosition]?._tag ?? null,
+      storyPosition: capture.storyPosition
+    }
+  )
   const frame = moment?.deliveryFrame ?? null
   return timedOutResult(descriptor, {
     elapsedMs: Date.now() - startedAt,
-    latestActivation: moment?.activationOrdinal ?? capture?.activationOrdinal ?? null,
-    latestStoryItemTag,
-    latestStoryPosition: storyPosition,
+    latestActivation: cursor?.activation ?? null,
+    latestStoryItemTag: cursor?.itemTag ?? null,
+    latestStoryPosition: cursor?.storyPosition ?? null,
     lastObservationCheckpoint: moment === null
       ? capture === null
         ? "journal=unavailable; projection=unavailable; observation=none"
