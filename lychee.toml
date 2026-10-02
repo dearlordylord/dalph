@@ -1,0 +1,4 @@
+# Blocking navigation check: no remote requests, no cache, and no broad exclusions.
+offline = true
+include_fragments = "anchor-only"
+no_progress = true

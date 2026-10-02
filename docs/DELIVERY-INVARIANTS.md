@@ -511,7 +511,9 @@ whole-Run termination only after both durable retained attempts and their
 independently reconstructed positions are gone. Issue #102 implements the
 `Blocked` and `Cancelled` clauses through the same production finality path.
 
-**D36 No busy loop on unchanged facts.** One activation performs at most one
+### D36 No busy loop on unchanged facts
+
+One activation performs at most one
 post-quiescence tracker reconfirmation. It runs any actions introduced by that
 observation to quiescence and then returns; unchanged observations do not
 produce repeated work or continuous polling. A later activation may perform

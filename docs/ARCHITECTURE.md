@@ -6,8 +6,8 @@ It does not duplicate target-repository rules, operational scenarios, provider
 limits, implementation status, or the issue roadmap.
 
 Canonical domain language lives in [CONTEXT.md](CONTEXT.md). Chronological
-behavior lives under [scenarios/](scenarios/), and accepted design decisions
-live under [adr/](adr/).
+behavior lives under [scenarios/](scenarios), and accepted design decisions
+live under [adr/](adr).
 
 ## Governing Composition
 
@@ -518,8 +518,8 @@ depart from the community knowledge base.
 | [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | pre-claim remote-destination admission, immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, outer Integrator, direct publication, Git qualification, and exact-head promotion |
 | [Control-plane latency and responsiveness](architecture/control-plane-latency-and-responsiveness.md) | tracker freshness, local derivation, admission, executor observation, local ownership contradiction, application drain, and recovery timing policy |
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
-| [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |
-| [adr/](adr/) | accepted design decisions and their trade-offs |
+| [scenarios/](scenarios) | chronological behavior and acceptance-test mappings |
+| [adr/](adr) | accepted design decisions and their trade-offs |
 
 The configured tracker owns roadmap and implementation status. This document
 and its grouped architecture pages state stable structure and invariants only.

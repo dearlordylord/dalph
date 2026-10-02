@@ -1,5 +1,7 @@
 # Issue #386 acceptance and scoped review audit
 
+Evidence supports the current [direct-publication acceptance mapping](scenarios/direct-remote-publication.md). Each dated section names its own candidate and test boundary; a result applies only to that candidate. Earlier cassette paths below describe executed checks, not commands for today’s tree. Current execution uses [command preparation](development/commands.md#focused-test-preparation). No earlier passing stage qualifies current HEAD.
+
 Audit started 2026-09-27 16:39:59 UTC; stop time 17:24:59 UTC (45 minutes).
 Evidence reconciliation completed 2026-09-27 16:55 UTC, within the time box.
 Planned Base: `7d4c545f5ad7a1ebff3d32940877c514083f297e`.
@@ -55,7 +57,7 @@ The accepted [S4/S5/S7/S8 chronology and eight-row plan](scenarios/direct-remote
 ### S8: Proof and finality — B5 resolved at `53158090c`
 
 - [batch-grant.test.ts](../packages/orchestrator/src/workflow/protocols/direct-publication/batch-grant.test.ts), `records and replays one exact Full rerun grant during Pause, then executes one bounded batch after Unpause`, asserts a grant leaves `publicationPremiseFor` missing, completion fails `RemotePublicationMissing`, and no completion or authorization calls occur (E2). The accepted plan's `completion-task-protocol.test.ts::does not complete a task from an exhaustion grant without exact publication proof` does not exist; this is the actual grant-specific test. [completion-task-protocol.test.ts](../packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts), `requires exact remote publication proof before a new tracker completion`, independently asserts zero completion and authorization calls without proof (E2).
-- [direct-remote-publication.test.ts](../packages/dalph/test/cassettes/direct-remote-publication.test.ts), `publishes M before local promotion and task completion, then releases its dependant from a later complete graph`, checks finality and all three cleanup results before the later completed graph observation and B's executor start after it (E2). The grant journey in E3 asserts exact proof, promotion, completion, finality, and termination. The formal `detectsGrantReceiptUsedAsPublicationProofTest` passed in E4.
+- [direct-remote-publication.test.ts](https://github.com/dearlordylord/dalph/blob/8cd92c9247607f6633cf8544a64867e6c820c01a/packages/dalph/test/cassettes/direct-remote-publication.test.ts), `publishes M before local promotion and task completion, then releases its dependant from a later complete graph`, checks finality and all three cleanup results before the later completed graph observation and B's executor start after it (E2). The grant journey in E3 asserts exact proof, promotion, completion, finality, and termination. The formal `detectsGrantReceiptUsedAsPublicationProofTest` passed in E4.
 - **B5 — resolved grant-only finality absence:** the grant-only `batch-grant.test.ts` prefix exercises the ordinary Run finality selector, sees `RunMustRemainActive`, and asserts zero `IntegrationFinalitySettled` appends and Q unsettled, as mapped below.
 
 ### S4/S5/S7/S8: Formal chronology — covered as formal evidence
@@ -2645,7 +2647,7 @@ This was controlled process-integration evidence only. At this 2026-09-29
 checkpoint it did not establish the required fresh supervised real-provider S1
 dogfood or full qualification; both were outstanding then. The later fresh
 hosted remote S1 completed on 2026-10-01 and is recorded in the [#388 workflow
-acceptance ledger](#hosted-s1-workflow-acceptance-2026-10-01). That later run
+acceptance ledger](#hosted-s1-workflow-acceptance--2026-10-01). That later run
 does not turn this controlled evidence into hosted evidence or establish a full
 qualification. Preserve the accepted S1/S4/S8 outcomes and the 45-second
 publication bound.

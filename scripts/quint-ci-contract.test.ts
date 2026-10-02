@@ -295,7 +295,14 @@ describe("hosted formal-model contract", () => {
     expect(suffixJob).toContain("include-hidden-files: true")
     expect(suffixJob).toMatch(/- name: Upload hosted quality stage evidence[\s\S]*?if: always\(\)/u)
 
-    expect(aggregateJob).toContain("needs: [change-plan, docs-quality, quality-preflight, quality-suffix]")
+    expect(aggregateJob).toContain(
+      "needs: [change-plan, documentation-links, docs-quality, quality-preflight, quality-suffix]"
+    )
+    expect(aggregateJob).toContain("needs.documentation-links.result != 'success'")
+    const documentationJob = jobs.get("documentation-links")?.join("\n") ?? ""
+    expect(documentationJob).toContain("node scripts/check-docs.mjs")
+    expect(documentationJob).toContain("timeout-minutes: 5")
+    expect(documentationJob).not.toContain("docs-only ==")
     expect(aggregateJob).toContain("\n    if: always()")
     expect(aggregateJob).toContain("Download hosted quality stage evidence")
     expect(aggregateJob).not.toContain("merge-multiple: true")

@@ -78,7 +78,9 @@
     "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-candidate-checks.mjs",
     "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/generate-formal-command-inventory.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
     "test:formal:integration": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-gate.integration.test.mjs",
-    "test:delivery-smoke": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-smoke.mjs"
+    "test:delivery-smoke": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-smoke.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
+    "test:docs": "node --test scripts/check-docs.test.mjs"
   },
   "lint-staged": {
     "*.{js,mjs,ts,tsx}": "node scripts/run-quality-lint.mjs --staged --fix"

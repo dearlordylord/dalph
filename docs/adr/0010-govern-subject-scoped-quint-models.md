@@ -177,7 +177,7 @@ projects, together. The adapter, projections, and controls remain test support;
 they are not production package APIs, workflow stages, or states.
 
 The current verification commands, supported runtimes, and execution allowances
-are specified in [DEVELOPMENT.md](../DEVELOPMENT.md#formal-reuse-and-handoff).
+are specified in [DEVELOPMENT.md](../development/formal.md#formal-reuse-and-handoff).
 Local `pnpm check:all` acquires complete formal evidence or reuses validated
 success for unchanged formal inputs, then validates it again before handoff.
 `pnpm check:quint` independently uses the same guarded formal workflow. Hosted

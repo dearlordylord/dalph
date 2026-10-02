@@ -115,6 +115,6 @@ though no Quint model or executable conformance adapter changes. The frozen
 candidate requires `pnpm check:all` before handoff and `pnpm check:quint` before
 integration, as required by
 [ADR 0010](../adr/0010-govern-subject-scoped-quint-models.md#consequences) and the
-[development workflow](../DEVELOPMENT.md#keeping-implementation-work-finite).
+[development workflow](../development/workflow.md#keeping-implementation-work-finite).
 DS-21, DS-22, and #279's uninterrupted composition remain
 explicitly deferred to their owning tickets; no blocker edge is removed.

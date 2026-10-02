@@ -57,6 +57,26 @@ jobs:
         id: quality_plan
         run: node scripts/quality-gate-stage-plan.mjs --base "${{ steps.change.outputs.base-sha }}" --candidate "${{ steps.change.outputs.head-sha }}" --github-output "$GITHUB_OUTPUT"
 
+  documentation-links:
+    name: Offline documentation references
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+
+      - name: Verify checker integration and current documentation targets
+        # Same implementation as pnpm check:docs; no workspace install/build needed.
+        # Runs for code changes too, because source renames break unchanged docs.
+        run: |
+          node --test scripts/check-docs.test.mjs
+          node scripts/check-docs.mjs
+
   docs-quality:
     name: Documentation-only quality gate
     needs: change-plan
@@ -295,7 +315,7 @@ jobs:
 
   quality-aggregate:
     name: Hosted quality gate
-    needs: [change-plan, docs-quality, quality-preflight, quality-suffix]
+    needs: [change-plan, documentation-links, docs-quality, quality-preflight, quality-suffix]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -310,6 +330,12 @@ jobs:
       DALPH_COVERAGE_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
 
     steps:
+      - name: Refuse failed or missing documentation validation
+        if: needs.documentation-links.result != 'success'
+        run: |
+          printf 'Documentation references did not pass; refusing a successful required check.\n' >&2
+          exit 1
+
       - name: Refuse failed change plan
         if: needs.change-plan.result != 'success'
         run: |

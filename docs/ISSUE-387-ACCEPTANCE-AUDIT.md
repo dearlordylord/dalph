@@ -1,5 +1,7 @@
 # Issue #387 acceptance audit
 
+Evidence supports the current [retained-publication chronology](scenarios/direct-remote-publication.md). Candidate identities and observations are scoped per section; protocol-only checks and production-composition checks remain distinct. These results do not qualify a later candidate or provide a new execution plan. Use [current checks](development/checks.md#choosing-checks) for a new attempt.
+
 ## Candidate and source review
 
 - Exact worktree: `/workspace/typescript/dalph-worktrees/issue-387-independent-r2`.

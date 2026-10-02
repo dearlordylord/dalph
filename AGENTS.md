@@ -12,11 +12,12 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 | Task | Required guidance |
 | --- | --- |
+| Find a behavior, source module, or verification owner | [Repository navigation](docs/NAVIGATION.md); [scenario catalog](docs/scenarios/README.md) for behavior, [tooling owners](docs/development/tooling.md) for checks |
 | Plan or change runtime behavior | [Operational scenarios](docs/OPERATIONAL-SCENARIOS.md), then the accepted issue/specification/scenario |
-| Change domain or architecture language | [Context](docs/CONTEXT.md) and [architecture](docs/ARCHITECTURE.md) |
+| Change domain or architecture language | [Context glossary](docs/CONTEXT.md#language) and [architecture compositions](docs/ARCHITECTURE.md#protected-compositions) |
 | Write or change a Quint model | [Quint guide](docs/QUINT-GUIDE.md) |
 | Review significant changes or repair findings | [Code review](docs/CODE_REVIEW.md) |
-| Develop, choose checks, or diagnose stalls | [Development workflow](docs/DEVELOPMENT.md#keeping-implementation-work-finite) and [commands](docs/DEVELOPMENT.md#commands) |
+| Develop, choose checks, or diagnose stalls | [Development workflow](docs/development/workflow.md#keeping-implementation-work-finite) and [commands](docs/development/commands.md#commands) |
 
 ## Implementation constraints
 
@@ -61,7 +62,7 @@ questions. Reuse guidance already read unless it changed or scope changed.
   current acceptance behavior.
 - Use minimal live-provider fixtures, controlled tests for bulk behavior, and
   never retry throttled mutations.
-- Select checks using [choosing checks](docs/DEVELOPMENT.md#choosing-checks);
+- Select checks using [choosing checks](docs/development/checks.md#choosing-checks);
   close [scoped reviews](docs/CODE_REVIEW.md#review-closure) before handoff.
 - Target repositories' application-specific typecheck, model-checking, and MBT
   gates are not Dalph implementation gates.
@@ -73,11 +74,11 @@ questions. Reuse guidance already read unless it changed or scope changed.
   inspect with `pnpm gate:status <run-id>` and explicitly prove stopped writers
   with `pnpm gate:reconcile <run-id>`. Missing exits remain unproven. Run the
   command to wait for ownership; never poll another agent's gate. See the local
-  Linux/cooperative scope in [DEVELOPMENT.md](docs/DEVELOPMENT.md#heavy-gate-admission).
+  Linux/cooperative scope in [gate custody](docs/development/gates.md#heavy-gate-admission).
   `DALPH_GATE_SLOTS` sets clone capacity. `check:fast` and focused tests remain
   unadmitted; standalone preflight writes artifacts and is admitted.
 - During a full gate, freeze its exact worktree and follow the
-  [parallel-work rules](docs/DEVELOPMENT.md#parallel-work-during-a-full-gate):
+  [parallel-work rules](docs/development/gates.md#parallel-work-during-a-full-gate):
   independent work uses other worktrees; candidate Git reads set
   `GIT_OPTIONAL_LOCKS=0`; shared tools, dependencies, Git configuration, packed
   refs, and unknown shared writes wait. Blocking edges still forbid
@@ -87,5 +88,5 @@ questions. Reuse guidance already read unless it changed or scope changed.
   reuse cross-worktree formal certification. Interrupted runs restart after
   stopped-writer reconciliation. Never credit missing or failed stages.
 - Before declaring Playwright environment-blocked, try the documented
-  [browser setup](docs/DEVELOPMENT.md#browser-and-real-host-setup); report the exact unrun command
+  [browser setup](docs/development/browser.md#browser-and-real-host-setup); report the exact unrun command
   and missing dependency if privileges block setup.

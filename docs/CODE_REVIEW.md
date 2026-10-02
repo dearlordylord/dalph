@@ -14,7 +14,7 @@ no runtime behavior changes. Aggregate totals are not scenario evidence.
 
 ## Implementation checklist
 
-- **Language:** apply the [literal reading test](DEVELOPMENT.md#domain-language).
+- **Language:** apply the [literal reading test](development/commands.md#domain-language).
   Name the actor, action, state change, and boundary before canonical shorthand.
   Define abstract terms concretely or replace them.
 - **Boundaries and failures:** parse tracker, executor, Git, configuration, and
@@ -44,6 +44,11 @@ no runtime behavior changes. Aggregate totals are not scenario evidence.
 - **Recovery:** preserve intent after an uncertain result and reread the request
   destination before retry: tracker for claims, Git for refs/worktrees, execution
   substrate for reports. Cleanup is also fail-closed.
+- **Documentation evidence:** apply [current guidance and evidence](NAVIGATION.md#current-guidance-and-evidence).
+  Passing evidence names its exact candidate and tested boundary. Check that a
+  mapped test actually exercises the claimed production or protocol boundary;
+  link validity alone cannot establish that. Remove superseded instructions and
+  repair their pointers; Git preserves history.
 
 ### Review closure
 
@@ -65,5 +70,5 @@ no runtime behavior changes. Aggregate totals are not scenario evidence.
    local fixes/commits need neither every axis restarted nor fresh reviewers.
    Investigate recurring defect classes' shared cause before more local repairs.
 5. Resolve scoped blockers and pass the checks required by
-   [choosing checks](DEVELOPMENT.md#choosing-checks). Failures reopen
+   [choosing checks](development/checks.md#choosing-checks). Failures reopen
    affected work under step 4; green checks need no new broad review.

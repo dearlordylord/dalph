@@ -6,7 +6,7 @@ Issue: [Specify final remote publication before task completion](https://github.
 competing-push S2, and their scoped reviews are recorded. One fresh supervised
 hosted S1 completed on 2026-10-01 with publication, promotion, tracker
 completion, cleanup, and workflow termination proven; the evidence ledger is in
-the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance-2026-10-01).
+the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance--2026-10-01).
 The CLI returned exit 1 while closing the Codex app server. A separate
 reproduction supports a configured-wrapper/observed-executable identity
 mismatch at that launcher boundary; this is a launcher follow-up, not a missing
@@ -1201,7 +1201,7 @@ cannot settle until `Begin` releases; the focused command passed with 1 test
 passed and 178 skipped. This repair changes provider-local sequencing only;
 the no-extra-remote-read decision is unchanged. At this 2026-09-30 repair
 checkpoint, the fresh supervised disposable S1 remained pending; the later
-2026-10-01 hosted S1 evidence is recorded in the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance-2026-10-01).
+2026-10-01 hosted S1 evidence is recorded in the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance--2026-10-01).
 
 ## Implementation and acceptance boundary
 
@@ -1255,5 +1255,5 @@ qualify the current candidate. No frozen full gate has been run for the current
 candidate; local `check:all` is an optional maintainer/release diagnostic under
 current policy. At the time of this earlier implementation checkpoint, the
 required fresh supervised hosted S1 remained unproven; the 2026-10-01 hosted S1
-is documented in the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance-2026-10-01).
+is documented in the [#388 acceptance audit](../ISSUE-386-ACCEPTANCE-AUDIT.md#hosted-s1-workflow-acceptance--2026-10-01).
 No GitHub issue closure is claimed by this scenario document.

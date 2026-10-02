@@ -64,7 +64,7 @@ read for the local clone), keep that credential in the environment, and never
 put it in the JSON file. Codex uses the invoking user's ordinary CLI login and
 ambient `CODEX_HOME`; Dalph does not require or select an API/provider
 credential. The complete, copyable
-[disposable production walkthrough](docs/DEVELOPMENT.md#disposable-production-repository-walkthrough)
+[disposable production walkthrough](docs/development/walkthrough.md#disposable-production-repository-walkthrough)
 creates disjoint local state and worktree paths, lists every non-secret
 configuration field, explains the state-changing consequences, shows the
 version-1 NDJSON records, exercises recovery, and disposes or deliberately
@@ -108,7 +108,7 @@ Use pnpm. Work is performed on `master`; implementation tickets declare their
 blocking edges and acceptance evidence in GitHub.
 
 Install dependencies with `pnpm install` and choose checks by
-[change scope](docs/DEVELOPMENT.md#choosing-checks). The root harness enforces
+[change scope](docs/development/checks.md#choosing-checks). The root harness enforces
 strict TypeScript and Effect-aware linting, dependency-cycle and duplication
 checks, enforced test coverage, and secret scanning. See
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) and

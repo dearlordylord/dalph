@@ -18,7 +18,7 @@ import { afterEach, expect, it } from "vitest"
 const temporaryRoots: Array<string> = []
 const repositoryIdentity = "alice/dalph-production-walkthrough"
 const markerName = ".dalph-walkthrough-repository"
-const documentation = readFileSync(new URL("../docs/DEVELOPMENT.md", import.meta.url), "utf8")
+const documentation = readFileSync(new URL("../docs/development/walkthrough.md", import.meta.url), "utf8")
 const disposalSection = documentation.split("#### 6. Dispose exactly, or preserve everything")[1] ?? ""
 const cleanupBlock = [...disposalSection.matchAll(/```bash\n([\s\S]*?)\n```/g)].at(-1)?.[1] ?? ""
 

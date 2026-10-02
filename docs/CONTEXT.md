@@ -3,7 +3,25 @@
 This context names repository delivery-orchestration concepts. It is separate
 from every target repository's application and domain model.
 
+## Find a term
+
+Read the group for the current boundary; use `rg -n -F '**<term>**:' docs/CONTEXT.md`
+to locate an exact definition without reading the whole glossary.
+
+| Boundary | Vocabulary |
+| --- | --- |
+| Actors, executor, and Operator | [Actors](#actors-and-responsibilities) |
+| Exit, Pause, and capacity | [Application Exit](#application-exit), [controls](#operator-controls-and-pause), [executor work](#executor-work-and-capacity) |
+| Run activation and termination | [Runs and finality](#runs-and-finality) |
+| Journal replay and trace observations | [Journal](#journal-history-and-reconstruction), [occurrences](#occurrences-and-trace-provenance) |
+| Graph membership, tracker reads, and authority | [Membership](#run-membership-and-prerequisites), [tracker facts](#tracker-facts-and-authority), [read policies](#tracker-read-policies) |
+| Delivery frontier and live ownership | [Delivery](#delivery-description-and-execution) |
+| Task revision, claims, and attempts | [Tasks and claims](#tasks-and-claims), [attempts](#attempts-and-accepted-results), [continuation](#active-work-and-continuation) |
+| Integration, publication, and cleanup | [Integration](#integration-and-promotion), [publication](#remote-publication-and-recovery), [cleanup](#resource-cleanup), [Git lineage](#worktrees-and-git-lineage) |
+
 ## Language
+
+### Actors and responsibilities
 
 **Target application**:
 The product system in a repository whose work Dalph coordinates.
@@ -50,6 +68,8 @@ person identity; a separately accepted transport request identity may identify
 a redeliverable request without identifying the person. Authentication and
 multiple operator identities require a separately accepted boundary design.
 _Avoid_: Authenticated operator identity, claim owner, provider user
+
+### Application Exit
 
 **Graceful application Exit request**:
 An Operator or process supervisor's transport-neutral request that the running
@@ -152,6 +172,8 @@ after an Exit drain failure or the Exit drain limit without claiming unresolved
 work reached safety.
 _Avoid_: Graceful application Exit, safe suspension, cancellation, Run termination
 
+### Occurrences and trace provenance
+
 **Workflow occurrence**:
 One concrete happening relevant to a Dalph run. Constructing a command,
 workflow operation, frontier transition, or test control does not prove that a
@@ -244,6 +266,8 @@ coverage, freshness, target, revision, and journal position. It neither copies
 the action's actor nor claims the read caused the tracker facts.
 _Avoid_: Tracker edit, tracker read initiated, cached graph state
 
+### Operator controls and Pause
+
 **Applied control direction**:
 The initiated action established when Operator's Pause or Unpause direction is
 accepted and applied to one exact run or task subject. Receiving or durably
@@ -289,6 +313,8 @@ Pause-covered responsibility from being classified at its ordinary safe
 boundary. A blocker belongs only to that correlated responsibility and cannot
 be inferred from another obligation on the same ticket.
 _Avoid_: Generic draining reason, ticket-level blocker, progress percentage
+
+### Executor work and capacity
 
 **Planned-attempt executor work**:
 The injected executor implementation's complete course of work for one planned
@@ -428,6 +454,8 @@ persisted executor state, and a missing projection does not prove that the
 responsibility is safe or terminal or authorize replacement.
 _Avoid_: Generic inspection of executor-specific journal events, internal wait
 
+### Tooling requirements and fixtures
+
 **Historical Ralph harness**:
 The one-off `scripts/ralph-run.sh` experiment and its execution formats.
 _Avoid_: Ralph architecture, compatibility baseline, legacy runtime
@@ -447,6 +475,8 @@ A serialized set of normalized tasks and dependency/grouping edges used by
 dry-run and deterministic-test scenarios. It is neither GitHub API data nor a
 fresh read from a configured task tracker.
 _Avoid_: Tracker fixture, tracker state file, GitHub Issues API fixture
+
+### Runs and finality
 
 **Run**:
 One durable Dalph coordination instance for one Run root task. Its
@@ -519,6 +549,8 @@ for the stop proof, not this permanent workflow disposition itself.
 _Avoid_: Safe suspension, executor success, executor failure, worktree cleanup,
 claim release
 
+### Journal history and reconstruction
+
 **Workflow-journal history**:
 The ordered, decoded Dalph workflow-journal records for one exact `RunId`.
 It contains only facts Dalph recorded about its workflow; Git history,
@@ -573,6 +605,8 @@ boundary, or terminal attempt for every task represented by one reduced
 workflow-journal history. Dalph does not persist this projection.
 _Avoid_: Recovery stage, runnable frontier, persisted recovery state
 
+### Run membership and prerequisites
+
 **Run root task**:
 The one task chosen when a Run begins. Each complete Run task graph read starts
 from this task. The task tracker uses its native task locator at the boundary;
@@ -603,6 +637,8 @@ workflow responsibility. Dalph preserves that responsibility for a later
 activation, reconciliation, or disposition; the membership edit does not prove
 cleanup, claim release, successful handoff, or a whole-run conflict.
 _Avoid_: Removed task, automatic cleanup, whole-run membership conflict
+
+### Tracker facts and authority
 
 **Task tracker**:
 The external work-record application configured for a Dalph run. It stores task
@@ -691,6 +727,8 @@ The reducer's reconstruction of usable task and edge facts from
 only by folding later facts with explicit coverage, completeness, consistency,
 freshness, and replacement evidence.
 _Avoid_: Current task graph, persisted frontier, tracker authority
+
+### Delivery description and execution
 
 **Delivery frontier**:
 The process-local, evidence-bearing projection of each ticket's eligibility or
@@ -806,6 +844,8 @@ result, constructed candidate, request acknowledgement, or tracker command is
 not a delivery settlement.
 _Avoid_: Executor completion, integration candidate, tracker completion request
 
+### Tracker read policies
+
 **Potentially mixed-time task-graph read**:
 A normalized task-graph read result assembled without a provider guarantee that
 all covered facts share one revision or instant; different facts may reflect
@@ -839,6 +879,8 @@ The typed final failure returned when a task-graph read policy consumes
 intermediate page failures or contradictions but cannot assemble a valid
 normalized result within its bound.
 _Avoid_: Task-graph read contradiction, potentially mixed-time task-graph read, infinite retry
+
+### Tasks and claims
 
 **Task**:
 A normalized Dalph value describing one unit of requested repository work read
@@ -974,6 +1016,8 @@ authorizes no deletion.
 _Avoid_: Single-record claim deletion, acknowledged cleanup, reusable cleanup
 approval, foreign-claim repair
 
+### Attempts and accepted results
+
 **Planned task attempt**:
 One immutable Dalph decision to try one exact task revision fingerprint in one
 run from one exact Base SHA. It binds its attempt identity, branch ref,
@@ -1039,6 +1083,8 @@ Evidence-store bytes whose content digest is their identity, so different bytes
 necessarily have a different reference. “Immutable” describes that storage
 property; Dalph has no corresponding mutable-evidence category.
 _Avoid_: Editable evidence, current workspace state, review verdict
+
+### Integration and promotion
 
 **Integration responsibility**:
 The durable Dalph responsibility created after the exact accepted terminal
@@ -1167,6 +1213,8 @@ current agent evidence proves that the exact integration session has no
 running activity. It does not prove tracker completion or settle the retained
 integration responsibility.
 _Avoid_: Candidate submission, agent completion, promotion alone, tracker completion
+
+### Remote publication and recovery
 
 **Remote publication target**:
 The one credential-free remote Git repository endpoint and fully qualified
@@ -1320,6 +1368,8 @@ Integration-quarantine direction choice and does not prove publication or
 task completion.
 _Avoid_: `IntegrationQuarantineDirectionApplied`, new task attempt, budget reset, publication proof
 
+### Resource cleanup
+
 **Cleanup authorization subject**:
 The immutable, family-specific permission to dispose one exact durable resource.
 It names the terminal disposition occurrence, locator, owner, last authority
@@ -1363,6 +1413,8 @@ promotion or a different readable head. Dalph keeps M, its candidate resource,
 session, accepted result, and Git-qualification evidence, releases its process-local
 target position, and sends no fourth attempt.
 _Avoid_: Failed task, discarded candidate, automatic replacement, unbounded retry
+
+### Worktrees and Git lineage
 
 **Planned-task-attempt recording predecessor**:
 An earlier workflow operation named by a planned-task-attempt recording
@@ -1419,6 +1471,8 @@ compare-and-set against its exact expected target head. A stale exact head
 selects session reconciliation; an ambiguous head requires a reread. Neither
 decision authorizes a force update.
 _Avoid_: Target overwrite, promotion result, integration start
+
+### Active work and continuation
 
 **Task revision fingerprint**:
 The opaque fingerprint of one task-work specification's exact normalized
