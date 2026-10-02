@@ -2,9 +2,10 @@
 
 Issue: [#398](https://github.com/dearlordylord/dalph/issues/398).
 
-Status: proposed executor design. These chronologies specify a future runtime
-change; their test names below are required seams, not passing evidence. No
-current Dalph runtime behavior is claimed by this document.
+Status: accepted executor scenarios on 2026-10-02. These chronologies specify
+a runtime change; their test names below are required seams until implementation
+provides passing evidence. The scenario document alone changes no runtime
+behavior.
 
 ## Governing behavior
 
