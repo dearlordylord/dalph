@@ -2891,7 +2891,7 @@ export const launchCommandFacts = (
 }
 
 /* v8 ignore next -- @preserve The Windows PowerShell branch requires a Windows host and is paired with platform-policy tests. */
-const readLaunchCommandLine = async (
+export const readLaunchCommandLine = async (
   pid: number,
   native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Promise<ReadonlyArray<string>> =>

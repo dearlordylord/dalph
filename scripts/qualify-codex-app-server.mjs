@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
 import { execFile as nodeExecFile, spawn } from "node:child_process"
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import { promisify } from "node:util"
+import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const execFile = promisify(nodeExecFile)
 const pinnedCodexVersion = "0.149.0"
@@ -55,6 +58,31 @@ const main = async () => {
   }
 
   await run("pnpm", ["--filter", "@dalph/dalph...", "build"])
+  const preflightDirectory = await realpath(await mkdtemp(nodePath.join(tmpdir(), "dalph-codex-launch-preflight-")))
+  const selectedExecutable =
+    nodePath.isAbsolute(codexExecutable) || codexExecutable.includes(nodePath.sep)
+      ? nodePath.resolve(codexExecutable)
+      : codexExecutable
+  try {
+    await runBoundedCommand({
+      executable: nodeProcess.execPath,
+      args: [
+        nodePath.resolve("packages/dalph/dist/bin/codex-launch-preflight.js"),
+        selectedExecutable,
+        preflightDirectory
+      ],
+      name: "Codex launch preflight",
+      relayParentSignals: true,
+      timeoutMilliseconds: 15_000
+    })
+    const outcome = JSON.parse(await readFile(nodePath.join(preflightDirectory, "outcome.json"), "utf8"))
+    if (outcome.status !== "passed") throw new Error("Codex launch preflight did not prove exact close")
+    await rm(preflightDirectory, { recursive: true })
+  } catch (error) {
+    throw new Error(`Codex launch preflight did not qualify; retained evidence: ${preflightDirectory}`, {
+      cause: error
+    })
+  }
   await run("pnpm", ["vitest", "run", ...testFiles, "--maxWorkers=1"], {
     env: { ...nodeProcess.env, CODEX_BIN: codexExecutable, DALPH_RUN_REAL_CODEX_QUALIFICATION: "1" }
   })

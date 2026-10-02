@@ -757,6 +757,18 @@ The browser runner owns its host; no manual Vite or `REDUCER_LAB_URL` is needed.
 `CODEX_HOME`, serves a deterministic local Responses endpoint, and uses temporary
 Git repositories/worktrees. It is outside `check:all`; the same contract runs
 on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-server-qualification.yml).
+After building, the command first starts one app-server with the selected
+executable through Dalph's production Effect process owner, then requires an
+exact owned close before Vitest starts. This preflight uses a separate isolated
+`CODEX_HOME` and durable process-state directory. A failed or timed-out
+preflight retains that directory and prints its locator; do not rerun the
+qualification until its recorded child is reconciled. The preflight does not
+start a task or contact a model. The shared macOS process adapter now gives
+Darwin's complete `ps eww -axo` census a 64 MiB output cap; the Node default
+cap rejected a 1.1 MiB census during the first preflight. This restores the
+already accepted exact process observation and cleanup path in
+[Codex app-server qualification](scenarios/codex-app-server-qualification.md),
+while a census above the new cap still fails closed.
 That workflow starts automatically for Codex integration source and scenario
 changes. A shared `package.json` or qualification-workflow edit alone uses
 `workflow_dispatch` when its Codex qualification contract needs checking; it

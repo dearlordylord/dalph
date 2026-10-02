@@ -22,9 +22,13 @@ export class CodexProcessNative extends Context.Service<CodexProcessNative, Code
   "@dalph/CodexProcessNative"
 ) {}
 
+// Darwin's `ps eww -axo` includes every process environment; the Node default
+// maxBuffer can reject an otherwise valid ownership census before cleanup.
+const processObservationMaxBufferBytes = 67_108_864
+
 const runExecFile = (file: string, arguments_: ReadonlyArray<string>): Promise<{ readonly stdout: string }> =>
   new Promise((resolve, reject) => {
-    execFile(file, arguments_, { encoding: "utf8" }, (error, stdout) => {
+    execFile(file, arguments_, { encoding: "utf8", maxBuffer: processObservationMaxBufferBytes }, (error, stdout) => {
       if (error !== null) {
         reject(error)
       } else {
