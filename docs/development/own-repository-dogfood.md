@@ -107,7 +107,7 @@ const configuration = {
   },
   plannedAttemptBaseSha: env.DALPH_BASE_SHA,
   plannedAttemptExecutor: "codex:production",
-  claimOwner: "dalph:own-repository-dogfood",
+  claimOwner: "dalph:dogfood",
   taskWorkCapacity: 1,
   journalDatabase: `${root}/journal.sqlite`,
   evidenceStoreRoot: `${root}/evidence`,

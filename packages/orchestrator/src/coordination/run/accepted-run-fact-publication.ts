@@ -1,6 +1,11 @@
 import { Data, Effect, Schema } from "effect"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { journalRecordByPosition, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import {
+  journalRecordByKey,
+  journalRecordByPosition,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
+import { intentRecordKey } from "../../workflow-journal/record-key.js"
 import type { OperationId } from "../../workflow/identity.js"
 
 /**
@@ -13,6 +18,11 @@ export type AcceptedRunFactPublication = Data.TaggedEnum<{
   RetainedWait: Record<never, never>
   ReadPending: { readonly operationId: OperationId }
   ReadObserved: { readonly operationId: OperationId }
+  /** A graph read caused by this activation's entry or quiescence check. */
+  ActivationGraphReadObserved: {
+    readonly operationId: OperationId
+    readonly cause: "WorkflowEstablishment" | "PostQuiescenceReconfirmation"
+  }
   ReadFailed: { readonly operationId: OperationId }
 }>
 
@@ -37,9 +47,23 @@ export const acceptedRunFactPublicationFromPrefix = Effect.fn("AcceptedRunFactPu
       return AcceptedRunFactPublication.ReadPending({ operationId: event.operation.operationId })
     }
     if (event._tag === "TaskTrackerFactsObserved") {
-      return event.observation._tag === "TaskTrackerFactsReadFailed"
-        ? AcceptedRunFactPublication.ReadFailed({ operationId: event.operationId })
-        : AcceptedRunFactPublication.ReadObserved({ operationId: event.operationId })
+      if (event.observation._tag === "TaskTrackerFactsReadFailed") {
+        return AcceptedRunFactPublication.ReadFailed({ operationId: event.operationId })
+      }
+      const intent = journalRecordByKey(prefix, intentRecordKey(event.operationId))
+      if (
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed" &&
+        intent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+        intent.event.operation._tag === "ReadTrackerGraph" &&
+        (intent.event.operation.cause._tag === "WorkflowEstablishment" ||
+          intent.event.operation.cause._tag === "PostQuiescenceReconfirmation")
+      ) {
+        return AcceptedRunFactPublication.ActivationGraphReadObserved({
+          operationId: event.operationId,
+          cause: intent.event.operation.cause._tag
+        })
+      }
+      return AcceptedRunFactPublication.ReadObserved({ operationId: event.operationId })
     }
     if (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") {
       return AcceptedRunFactPublication.ReadObserved({ operationId: event.operationId })

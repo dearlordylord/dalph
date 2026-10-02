@@ -363,6 +363,71 @@ it.effect("coalesces concurrent hints behind one activation", () =>
   )
 )
 
+it.effect("one completed graph read wake does not create another publication-owned activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const observer = yield* Deferred.make<(publication: AcceptedRunFactPublicationValue) => Effect.Effect<void>>()
+      const idleHandoffs = yield* Queue.unbounded<void>()
+      const thirdStarted = yield* Deferred.make<void>()
+      const activations = yield* Ref.make(0)
+
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-own-read-publication"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Effect.gen(function* () {
+              const count = yield* Ref.updateAndGet(activations, (current) => current + 1)
+              if (count === 3) yield* Deferred.succeed(thirdStarted, undefined)
+              const publish = yield* Deferred.await(observer)
+              if (count <= 2) {
+                const readOperationId = OperationId.make(`activation-read-${count}`)
+                yield* publish(AcceptedRunFactPublication.ReadPending({ operationId: readOperationId }))
+                yield* publish(
+                  AcceptedRunFactPublication.ActivationGraphReadObserved({
+                    operationId: readOperationId,
+                    cause: "WorkflowEstablishment"
+                  })
+                )
+                const reconfirmationId = OperationId.make(`reconfirmation-${count}`)
+                yield* publish(AcceptedRunFactPublication.ReadPending({ operationId: reconfirmationId }))
+                yield* publish(
+                  AcceptedRunFactPublication.ActivationGraphReadObserved({
+                    operationId: reconfirmationId,
+                    cause: "PostQuiescenceReconfirmation"
+                  })
+                )
+              }
+              return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+            }),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ acceptedFactPublication }) =>
+            Deferred.succeed(observer, acceptedFactPublication),
+          onActivationHandoffIdle: () => Queue.offer(idleHandoffs, undefined).pipe(Effect.asVoid),
+          onFailure: () => Effect.void
+        },
+        () =>
+          Effect.gen(function* () {
+            yield* Queue.take(idleHandoffs)
+            yield* Queue.take(idleHandoffs)
+            yield* TestClock.adjust("30 minutes")
+            expect(yield* Ref.get(activations)).toBe(2)
+            const publish = yield* Deferred.await(observer)
+            yield* publish(
+              AcceptedRunFactPublication.ReadObserved({ operationId: OperationId.make("independent-completed-read") })
+            )
+            yield* Deferred.await(thirdStarted)
+            expect(yield* Ref.get(activations)).toBe(3)
+          })
+      )
+    })
+  )
+)
+
 it.effect("an unchanged retained wait retracts only its publication-owned trailing activation", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -629,13 +694,39 @@ it.effect("classifies an accepted unchanged root/dependant graph reconfirmation 
     }
     const unchangedObservation = makeTaskTrackerFactsObservedFromRead(priorRecords, unchangedRead, snapshot)
     expect(unchangedObservation.observation._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
+    const unchangedRecord = {
+      event: unchangedObservation,
+      key: outcomeRecordKey(unchangedRead.operationId),
+      position: JournalPosition.make(5),
+      runId
+    }
+    const reconfirmation = makeTrackerGraphObservationOperation(
+      { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: unchangedRead.operationId },
+      OperationId.make("completed-root-quiescence-reconfirmation"),
+      target,
+      [unchangedRead.operationId]
+    )
+    const reconfirmationIntent = {
+      event: taskTrackerReadIntent(reconfirmation),
+      key: intentRecordKey(reconfirmation.operationId),
+      position: JournalPosition.make(6),
+      runId
+    }
+    const reconfirmationObservation = makeTaskTrackerFactsObservedFromRead(
+      [...priorRecords, unchangedIntent, unchangedRecord],
+      reconfirmation,
+      snapshot
+    )
+    expect(reconfirmationObservation.observation._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
     const acceptedPrefix = reduceWorkflowJournalHistory(runId, [
       ...priorRecords,
       unchangedIntent,
+      unchangedRecord,
+      reconfirmationIntent,
       {
-        event: unchangedObservation,
-        key: outcomeRecordKey(unchangedRead.operationId),
-        position: JournalPosition.make(5),
+        event: reconfirmationObservation,
+        key: outcomeRecordKey(reconfirmation.operationId),
+        position: JournalPosition.make(7),
         runId
       }
     ])
@@ -646,7 +737,16 @@ it.effect("classifies an accepted unchanged root/dependant graph reconfirmation 
     }
 
     expect(yield* acceptedRunFactPublicationFromPrefix(JournalPosition.make(5), acceptedPrefix.prefix)).toEqual(
-      AcceptedRunFactPublication.ReadObserved({ operationId: unchangedRead.operationId })
+      AcceptedRunFactPublication.ActivationGraphReadObserved({
+        operationId: unchangedRead.operationId,
+        cause: "WorkflowEstablishment"
+      })
+    )
+    expect(yield* acceptedRunFactPublicationFromPrefix(JournalPosition.make(7), acceptedPrefix.prefix)).toEqual(
+      AcceptedRunFactPublication.ActivationGraphReadObserved({
+        operationId: reconfirmation.operationId,
+        cause: "PostQuiescenceReconfirmation"
+      })
     )
   })
 )

@@ -88,6 +88,62 @@ observation, or infer work from the missing notification.
   historical alias` proves the package barrel exposes
   `productionCliFromStdio` without preserving the superseded #218 wrapper.
 
+## A completed graph read cannot recursively reactivate its own wake
+
+### Governing behavior
+
+The [accepted #391/#413 completed-read boundary](issue-391-acceptance.md#crash-retry-and-forbidden-results)
+allows one coalesced ordinary entry after a completed read, while forbidding a
+further self-sustaining chain. This chronology refines that entry when its
+fresh G1/G2 graph reads also complete; it preserves the independent wake and
+the [required post-quiescence read](stabilize-each-run.md#g2-is-requested-only-after-g1-is-quiescent-and-reveals-b).
+
+### Starting situation and trigger
+
+No person directly triggers this case. Run R is unterminated and unpaused. Its
+owner has admitted one activation, and an executor attempt is still running.
+No tracker notification, timer tick, Operator wake, or independent executor
+publication arrives during this activation.
+
+### Ordered boundary calls and visible result
+
+The activation records a tracker graph read intent, reads the tracker, and
+records the accepted result. At quiescence it records and performs the required
+later tracker reconfirmation. The Journal publishes these accepted records to
+the same owner while the activation is running. The owner admits one coalesced
+later entry for the completed read, as allowed by #413. That entry may perform
+its own current graph and post-quiescence reads. If both reconfirm the same
+facts, G2 retracts the entry's own pending publication wake, so it does not
+admit a third entry merely because those reads were published. A later independent
+publication, Operator wake, or timer still requests a fresh check. A completed
+read from another operation retains a trailing check while this activation
+runs.
+
+If the process crashes before either read result is recorded, the ordinary
+read-intent reconciliation applies on restart. If it crashes after the results
+are recorded, the next ordinary entry reads them from the Journal; no
+process-local wake survives. No retry is authorized solely by the old results.
+
+The maintainer sees the active attempt remain owned and at most one additional
+check from the first completed graph read. Dalph must not let that check
+recursively reenter the same Run, discard an independent publication,
+duplicate the attempt, or weaken the required post-quiescence reconfirmation.
+
+### Acceptance-test mapping
+
+- `one completed graph read wake does not create another publication-owned
+  activation` proves the first read allows one later entry and its unchanged
+  G2 prevents a third.
+- `classifies an accepted unchanged root/dependant graph reconfirmation as a
+  completed read` proves the classifier preserves distinct G1 and G2 causes.
+- `maintained delivery capstone proves the #413 publication and integration
+  interval through DS17` proves the needed continuation authority graph read
+  remains selected after the active graph read.
+- `keeps an independent completed-read wake when another read fails` proves an
+  independent publication still retains its later check.
+- The production Dogfood #319 Journal sequence supplies the failing boundary:
+  repeated G1/G2 reads after one executor attempt was already running.
+
 ## Several hints produce one activation and one optional trailing check
 
 ### Starting situation

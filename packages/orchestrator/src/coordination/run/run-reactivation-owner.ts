@@ -160,6 +160,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const stopped = yield* Ref.make(false)
       /** One tagged phase closes the producer/finalization handoff race. */
       const activationPhase = yield* Ref.make<ActivationPhase>({ _tag: "Idle", generation: 0 })
+      /** The exact generation admitted by an accepted-fact publication, if any. */
+      const publicationOwnedActivation = yield* Ref.make<Option.Option<number>>(Option.none())
       /** A trailing activation cannot be displaced by later one-slot hints. */
       const trailingActivationObligation = yield* Ref.make<Option.Option<TrailingActivationObligation>>(Option.none())
       /** A retained wait can race the worker while both cross the activation-finalization gate. */
@@ -316,11 +318,27 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         // A read intent has no authority result. A failed result retracts
         // publication-owned progress unless another read has completed.
         if (publication._tag === "ReadPending") return
-        if (publication._tag === "WorkflowProgress" || publication._tag === "ReadObserved") {
-          const arrivalPhase = yield* Ref.get(activationPhase)
+        const arrivalPhase = yield* Ref.get(activationPhase)
+        const publicationGeneration = yield* Ref.get(publicationOwnedActivation)
+        const ownPublicationGraphRead =
+          publication._tag === "ActivationGraphReadObserved" &&
+          arrivalPhase._tag === "Running" &&
+          Option.isSome(publicationGeneration) &&
+          publicationGeneration.value === arrivalPhase.generation
+        const ownQuiescenceReconfirmation =
+          ownPublicationGraphRead && publication.cause === "PostQuiescenceReconfirmation"
+        if (
+          !ownQuiescenceReconfirmation &&
+          (publication._tag === "WorkflowProgress" ||
+            publication._tag === "ReadObserved" ||
+            publication._tag === "ActivationGraphReadObserved")
+        ) {
           yield* commandGate.withPermit(
             Effect.gen(function* () {
-              if (publication._tag === "ReadObserved") {
+              if (
+                publication._tag === "ReadObserved" ||
+                (publication._tag === "ActivationGraphReadObserved" && !ownPublicationGraphRead)
+              ) {
                 yield* Ref.set(completedReadWakeGeneration, Option.some(arrivalPhase.generation))
               }
               const retainedGeneration = yield* Ref.get(retainedWaitGeneration)
@@ -332,7 +350,6 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           )
           return
         }
-        const arrivalPhase = yield* Ref.get(activationPhase)
         yield* commandGate.withPermit(
           Effect.gen(function* () {
             const readWake = yield* Ref.get(completedReadWakeGeneration)
@@ -533,6 +550,12 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                     _tag: "Running" as const,
                     generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
                   })
+                  yield* Ref.set(
+                    publicationOwnedActivation,
+                    pending.value.kind._tag === "AcceptedFactPublication"
+                      ? Option.some(phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation)
+                      : Option.none()
+                  )
                   return Option.some(
                     pending.value.kind._tag === "ActiveWorkAuthorityRefresh"
                       ? {
@@ -550,6 +573,12 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                   _tag: "Running" as const,
                   generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
                 })
+                yield* Ref.set(
+                  publicationOwnedActivation,
+                  hint._tag === "AcceptedFactPublication"
+                    ? Option.some(phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation)
+                    : Option.none()
+                )
                 return Option.some({
                   hint,
                   activationKind:
