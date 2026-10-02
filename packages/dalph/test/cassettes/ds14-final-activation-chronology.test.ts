@@ -3,10 +3,10 @@ import { it } from "@effect/vitest"
 import { Effect, Result, Schema } from "effect"
 import { expect } from "vitest"
 import { TraceOutputError } from "@dalph/orchestrator"
-import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import { deliveryStoryDs14ThroughDs17AuthoredCassette, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 import { AuthoredCassetteInteractionMismatch } from "../../src/cassettes/authored-cursor.js"
 
-const cassette = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+const cassette = deliveryStoryDs14ThroughDs17AuthoredCassette
 const unsettledReturnAt = cassette.story.findIndex(
   (item) =>
     item._tag === "CoordinatorActivationReturned" &&

@@ -20,7 +20,6 @@ void test("product changes retain runtime proof without infrastructure and catal
     "format-lint",
     "secrets",
     "capability-registration",
-    "delivery-repeatability",
     "coverage"
   ])
     assert.ok(selected.includes(id), id)
@@ -33,6 +32,7 @@ void test("product changes retain runtime proof without infrastructure and catal
     "recorded-catalog"
   ])
     assert.ok(!selected.includes(id), id)
+  assert.ok(!selected.includes("delivery-repeatability"))
 })
 
 void test("tooling, shared configuration, and unknown changes retain infrastructure controls", () => {
@@ -64,8 +64,11 @@ void test("cassette and projection changes retain catalog assertions without Lab
   for (const id of ["recorded-catalog", "reducer-lab"]) assert.ok(labPaths.includes(id), id)
 })
 
-void test("deep sampling routes through the same fresh-process runner as smoke evidence", () => {
+void test("manual historical deep sampling and smoke share the fresh-process runner", () => {
   const scripts = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts
-  assert.equal(scripts["test:delivery-repeatability"], "node scripts/run-delivery-repeatability.mjs")
-  assert.equal(scripts["test:delivery-smoke"], "node scripts/run-delivery-smoke.mjs")
+  assert.equal(
+    scripts["test:delivery-repeatability"],
+    "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-repeatability.mjs"
+  )
+  assert.equal(scripts["test:delivery-smoke"], "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-smoke.mjs")
 })

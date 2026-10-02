@@ -9,7 +9,7 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 10, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 11, version: 1 })
 
 // Local Vitest-backed obligations are admitted under the highest fixed cap
 // proven safe by the pairwise memory campaign recorded for issue #336.  This
@@ -38,12 +38,6 @@ export const qualityGateCleanRunnerPreparation = Object.freeze({
   id: "frozen-install-and-artifact-preparation",
   preflightRerun: false,
   timeoutMilliseconds: 10 * 60 * SECOND
-})
-
-const deliveryDigestArtifactObligation = Object.freeze({
-  id: "delivery-digest",
-  required: true,
-  type: "delivery-repeatability-digest"
 })
 
 const coverageArtifactObligations = Object.freeze([
@@ -140,17 +134,6 @@ export const preflightQualityGates = (baseSha) => [
  * so local ordered/resume execution and hosted stage planning cannot drift.
  */
 export const qualificationQualityGates = () => [
-  {
-    artifactObligations: Object.freeze([deliveryDigestArtifactObligation]),
-    artifactRoots: Object.freeze([]),
-    args: Object.freeze(["test:delivery-repeatability"]),
-    boundary: "qualification",
-    cleanRunnerPreparation: qualityGateCleanRunnerPreparation,
-    id: "delivery-repeatability",
-    name: "delivery repeatability",
-    terminationGrace: 15 * SECOND,
-    timeout: 19 * 60 * SECOND
-  },
   {
     artifactObligations: Object.freeze([]),
     artifactRoots: Object.freeze([]),

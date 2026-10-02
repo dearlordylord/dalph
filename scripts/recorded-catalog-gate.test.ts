@@ -10,7 +10,7 @@ import {
 } from "./quality-gate-test-fixture.js"
 
 const recordedCatalogTest = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
-const broadQualificationCommands = ["test:delivery-repeatability", "test:recorded-catalog", "test"]
+const broadQualificationCommands = ["test:recorded-catalog", "test"]
 const { boundedQualityGateCommand, fullQualityGateManifest, recordedCatalogQualityGate } = qualityGateStagePolicy
 
 it(
@@ -42,11 +42,7 @@ it(
 
     expect(result.exitCode).toBe(1)
     expect(result.output).toContain("Quality gate 'maintained recorded-catalog semantics' failed with exit 23")
-    expect(invocations).toEqual([
-      ...broadQualityGateStructuralCommands,
-      "test:delivery-repeatability",
-      "test:recorded-catalog"
-    ])
+    expect(invocations).toEqual([...broadQualityGateStructuralCommands, "test:recorded-catalog"])
     expect(invocations.filter((command) => command === "test:recorded-catalog")).toHaveLength(1)
     expect(invocations.at(-1)).toBe("test:recorded-catalog")
     expect(invocations).not.toContain("test")
@@ -89,7 +85,10 @@ it("coverage excludes the monolithic proof while retaining coverage reports and 
     "packages/dalph/test/integration/direct-remote-publication.integration.test.ts",
     "packages/dalph/test/cassettes/delivery-repeatability.test.ts",
     "scripts/capability-registration.test.ts",
-    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts",
+    "packages/dalph/test/cassettes/delivery-predecessor-cleanup.test.ts",
+    "packages/dalph/test/cassettes/ds14-final-activation-chronology.test.ts",
+    "packages/dalph/test/cassettes/authored-runner-process-lifecycle.test.ts"
   ])
   expect(coverage.test?.exclude).toContain(recordedCatalogTest)
   expect(coverage.test?.exclude).toContain(

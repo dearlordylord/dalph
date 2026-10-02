@@ -14,7 +14,6 @@ import {
 import {
   fullQualityGateManifest,
   qualityGateCleanRunnerPreparation,
-  qualityGatePolicyIdentity,
   qualityGateQualificationStageIds,
   qualificationQualityGates
 } from "./quality-gate-stage-policy.mjs"
@@ -22,14 +21,14 @@ import {
 const baseSha = "b".repeat(40)
 const candidateSha = "c".repeat(40)
 
-void test("the shared manifest names the three independent suffix obligations once", () => {
+void test("the shared manifest names the two independent suffix obligations once", () => {
   const manifestIds = fullQualityGateManifest(baseSha)
     .filter(({ boundary }) => boundary === "qualification")
     .map(({ id }) => id)
   assert.deepEqual(manifestIds, qualityGateQualificationStageIds)
   assert.deepEqual(
     qualificationQualityGates().map(({ id }) => id),
-    ["delivery-repeatability", "recorded-catalog", "coverage"]
+    ["recorded-catalog", "coverage"]
   )
   assert.deepEqual(qualityGateCleanRunnerPreparation, {
     artifactTransfer: "none",
@@ -48,15 +47,13 @@ void test("generates one exact candidate/Base/policy plan entry for every Node a
 
   assert.deepEqual(plan.expectedStageIds, qualityGateQualificationStageIds)
   assert.deepEqual(plan.expectedCells, [
-    { nodeVersion: "24.20.0", stageId: "delivery-repeatability" },
     { nodeVersion: "24.20.0", stageId: "recorded-catalog" },
     { nodeVersion: "24.20.0", stageId: "coverage" },
-    { nodeVersion: "25.1.0", stageId: "delivery-repeatability" },
     { nodeVersion: "25.1.0", stageId: "recorded-catalog" },
     { nodeVersion: "25.1.0", stageId: "coverage" }
   ])
   assert.deepEqual(plan.nodeVersions, ["24.20.0", "25.1.0"])
-  assert.equal(plan.stages.length, 6)
+  assert.equal(plan.stages.length, 4)
   assert.equal(plan.policyDigest, qualityGateStagePlanPolicyDigest)
   assert.match(plan.configurationDigest, /^[0-9a-f]{64}$/u)
   assert.equal(plan.configDigest, plan.configurationDigest)
@@ -69,36 +66,8 @@ void test("generates one exact candidate/Base/policy plan entry for every Node a
   )
   assert.deepEqual(
     plan.stages.map(({ nodeVersion, stageId }) => `${nodeVersion}:${stageId}`),
-    [
-      "24.20.0:delivery-repeatability",
-      "24.20.0:recorded-catalog",
-      "24.20.0:coverage",
-      "25.1.0:delivery-repeatability",
-      "25.1.0:recorded-catalog",
-      "25.1.0:coverage"
-    ]
+    ["24.20.0:recorded-catalog", "24.20.0:coverage", "25.1.0:recorded-catalog", "25.1.0:coverage"]
   )
-
-  const delivery = plan.stages.find(({ stageId }) => stageId === "delivery-repeatability")
-  assert.deepEqual(delivery?.command.args, ["pnpm", "--silent", "test:delivery-repeatability"])
-  assert.deepEqual(delivery?.bounds, {
-    processGroupAbsenceTimeoutMilliseconds: 2_000,
-    terminationGraceMilliseconds: 15_000,
-    timeoutMilliseconds: 1_140_000
-  })
-  assert.deepEqual(delivery?.artifactObligations, [
-    { id: "delivery-digest", required: true, type: "delivery-repeatability-digest" }
-  ])
-  assert.deepEqual(delivery?.identity, {
-    baseSha,
-    candidateSha,
-    nodeVersion: "24.20.0",
-    policy: qualityGatePolicyIdentity,
-    policyDigest: plan.policyDigest,
-    configurationDigest: plan.configurationDigest,
-    stageId: "delivery-repeatability",
-    version: 1
-  })
 
   const coverage = plan.stages.find(({ stageId }) => stageId === "coverage")
   assert.deepEqual(coverage?.artifactObligations, [
@@ -171,12 +140,11 @@ void test("the plan CLI rejects unsupported options before emitting a matrix", (
   )
 })
 
-void test("ordinary hosted changes select the same smoke and catalog policy as local checks", () => {
+void test("ordinary hosted changes select the same coverage policy as local checks", () => {
   const changedPaths = ["packages/dalph/src/application/cli.ts"]
   const plan = createQualityGateStagePlan({ baseSha, candidateSha, nodeVersions: ["24.20.0", "25.1.0"], changedPaths })
   assert.deepEqual(plan.nodeVersions, ["24.20.0"])
-  assert.deepEqual(plan.expectedStageIds, ["delivery-repeatability", "coverage"])
-  assert.ok(plan.stages[0].command.args.includes("test:delivery-smoke"))
+  assert.deepEqual(plan.expectedStageIds, ["coverage"])
   const local = fullQualityGateManifest(baseSha, { changedPaths }).filter(
     ({ boundary }) => boundary === "qualification"
   )
@@ -194,6 +162,5 @@ void test("ordinary hosted changes select the same smoke and catalog policy as l
     nodeVersions: ["24.20.0", "25.1.0"],
     changedPaths: ["scripts/run-bounded-command.mjs"]
   })
-  assert.equal(broad.stages.length, 6)
-  assert.ok(broad.stages[0].command.args.includes("test:delivery-repeatability"))
+  assert.equal(broad.stages.length, 4)
 })

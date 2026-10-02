@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect, Queue, Ref, Fiber, Deferred } from "effect"
+import { Effect, Queue, Ref, Fiber, Deferred, Option } from "effect"
 import { expect } from "vitest"
 import { TaskId, IntegrationTargetRef } from "@dalph/contracts"
 import {
@@ -23,7 +23,17 @@ const start = Effect.fn("DistinctFinalityTest.start")(function* (fixture: Fixtur
   const running = yield* fixture.activate.pipe(Effect.forkScoped)
   const take = <A>(queue: Queue.Dequeue<A>) =>
     Queue.take(queue).pipe(
-      Effect.raceFirst(Fiber.join(running).pipe(Effect.andThen(Effect.die("runtime exited before checkpoint"))))
+      Effect.raceFirst(
+        Fiber.await(running).pipe(
+          Effect.flatMap(() => Queue.poll(queue)),
+          Effect.flatMap((pending) =>
+            Option.match(pending, {
+              onSome: Effect.succeed,
+              onNone: () => Fiber.join(running).pipe(Effect.andThen(Effect.die("runtime exited before checkpoint")))
+            })
+          )
+        )
+      )
     )
   const event = (matches: (event: WorkflowEvent) => boolean) =>
     Effect.gen(function* () {

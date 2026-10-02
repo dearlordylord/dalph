@@ -35,6 +35,7 @@ interface DeliveryStoryAcceptanceTest {
     | "packages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts"
     | "packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts"
     | "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts"
+    | "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts"
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
     | "packages/dalph/test/cassettes/capstone.execution.test.ts"
@@ -88,26 +89,15 @@ const orchestratorTest = (
 
 const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
-const controlledCheckpointTable = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
-const controlledOccurrenceCassette = capstoneTest("consumes exactly the accepted controlled occurrence inventory")
-const ds14ThroughDs17Test = capstoneTest(
-  "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality"
-)
-const ds15NegativeTest = capstoneTest("rejects DS-15 evidence when M or M2 lacks exact ordered head-then-C parents")
-const ds16NegativeTest = capstoneTest("rejects DS16 evidence without the rejected CAS attempt")
-const ds16AuthoredBoundaryNegativeTest = capstoneTest(
-  "fails immediately when an authored CAS response is replaced by another selection without fabricating provider ambiguity"
+const ds15NegativeTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
+  "it.effect",
+  "wrong ordered parents do not qualify the explicitly reported M"
 )
 const ds16StaleReadNegativeTest = orchestratorTest(
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/promotion-stale.test.ts",
   "it.effect",
   "rejects quarantine after a stale pre-request read or a missing compare-and-set intent"
-)
-const ds14ThroughDs17PrefixHistoryTest = capstoneTest(
-  "accepts every DS-14 through DS-17 checkpoint prefix as valid history with at most one recorded successor, promotion, and completion attempt"
-)
-const ds14ThroughDs17ComposedRestartTest = capstoneTest(
-  "resumes the composed DS-14 through DS-17 path after every CAS-to-successor durable checkpoint"
 )
 const deliveryCapstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   declaration: "it.effect",
@@ -117,19 +107,15 @@ const deliveryCapstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
 const deliveryCapstoneExecutionTest = deliveryCapstoneTest(
   "maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run"
 )
+const deliveryCapstone413PrefixTest = deliveryCapstoneTest(
+  "maintained delivery capstone proves the #413 publication and integration interval through DS17"
+)
 const deliveryCapstoneCleanupTest = deliveryCapstoneTest(
   "completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup"
 )
 const deliveryCapstoneReplayTest = deliveryCapstoneTest(
   "replays the maintained capstone with the same exact chronology"
 )
-const ds17FinalityRestartTests = [
-  capstoneTest("resumes exact DS-17 finality after TargetPromotionObservedSuccess durable checkpoint"),
-  capstoneTest("resumes exact DS-17 finality after CompletionClaimReplaced durable checkpoint"),
-  capstoneTest("resumes exact DS-17 finality after CompletionTaskAcknowledged durable checkpoint"),
-  capstoneTest("resumes exact DS-17 finality after CompletionClaimDeleted durable checkpoint"),
-  capstoneTest("resumes exact DS-17 finality after IntegrationFinalitySettled durable checkpoint")
-] as const
 const promotionStaleRestartTest = orchestratorTest(
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/promotion-stale.test.ts",
   "it.effect",
@@ -165,7 +151,6 @@ const successorDeliveryRestartTest = orchestratorTest(
   "it",
   "delivers the already-recorded FullRerun successor after restart"
 )
-const controlledCassetteKeys = ["controlled:controlledDs01ThroughDs13"] as const
 const controlledDeliveryBeatIds = deliveryStoryBeatIds.slice(0, deliveryStoryBeatIds.indexOf("DS-13") + 1)
 const capstoneCassetteKey = "authored:deliveryInvariantStoryCapstone" as const
 
@@ -188,49 +173,24 @@ export const deliveryStoryManifest = {
   cassetteAcceptanceTests: [topologyTest, restartTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    ...controlledDeliveryBeatIds.map((beatId) =>
-      slice(
-        beatId,
-        [...controlledCassetteKeys, capstoneCassetteKey],
-        controlledCheckpointTable,
-        controlledOccurrenceCassette,
-        deliveryCapstoneExecutionTest
-      )
-    ),
+    ...controlledDeliveryBeatIds.map((beatId) => slice(beatId, [capstoneCassetteKey], deliveryCapstone413PrefixTest)),
     slice(
       "DS-14",
-      ["authored:deliveryStoryDs14ThroughDs17", "authored:acceptedResultRestartsIntoIntegration", capstoneCassetteKey],
-      ds14ThroughDs17Test,
-      ds14ThroughDs17ComposedRestartTest,
-      ds14ThroughDs17PrefixHistoryTest,
-      scenarioTest("continues an accepted result after process death and crosses its integration cutoff once"),
-      deliveryCapstoneExecutionTest
+      ["authored:acceptedResultRestartsIntoIntegration", capstoneCassetteKey],
+      deliveryCapstone413PrefixTest,
+      scenarioTest("continues an accepted result after process death and crosses its integration cutoff once")
     ),
-    slice(
-      "DS-15",
-      ["authored:deliveryStoryDs14ThroughDs17", capstoneCassetteKey],
-      ds14ThroughDs17Test,
-      ds15NegativeTest,
-      ds14ThroughDs17ComposedRestartTest,
-      ds14ThroughDs17PrefixHistoryTest,
-      deliveryCapstoneExecutionTest
-    ),
+    slice("DS-15", [capstoneCassetteKey], deliveryCapstone413PrefixTest, ds15NegativeTest),
     slice(
       "DS-16",
-      ["authored:deliveryStoryDs14ThroughDs17", capstoneCassetteKey],
-      ds14ThroughDs17Test,
-      ds16NegativeTest,
-      ds16AuthoredBoundaryNegativeTest,
+      [capstoneCassetteKey],
+      deliveryCapstone413PrefixTest,
       ds16StaleReadNegativeTest,
-      ds14ThroughDs17ComposedRestartTest,
-      ds14ThroughDs17PrefixHistoryTest,
-      promotionStaleRestartTest,
-      deliveryCapstoneExecutionTest
+      promotionStaleRestartTest
     ),
     slice(
       "DS-17",
       [
-        "authored:deliveryStoryDs14ThroughDs17",
         "authored:ambiguousCompletionResponse",
         capstoneCassetteKey,
         "integration-finality:restartAfterPromotionResumesCompletionSettlementWithoutAnotherIntegrationAgent",
@@ -239,10 +199,7 @@ export const deliveryStoryManifest = {
         "integration-finality:deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess",
         "integration-finality:reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess"
       ],
-      ds14ThroughDs17Test,
-      ds14ThroughDs17ComposedRestartTest,
-      ...ds17FinalityRestartTests,
-      ds14ThroughDs17PrefixHistoryTest,
+      deliveryCapstone413PrefixTest,
       fullRerunDirectionRedeliveryTest,
       fullRerunPredecessorFactNegativeTest,
       reusedSuccessorIdentityNegativeTest,
@@ -255,10 +212,7 @@ export const deliveryStoryManifest = {
       scenarioTest("does not mutate a foreign claim while settling a promoted task"),
       scenarioTest("deletes only the exact completion claim after focused task success"),
       scenarioTest("reconciles a lost completion-claim deletion without reopening success"),
-      scenarioTest("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes"),
-      deliveryCapstoneExecutionTest,
-      deliveryCapstoneCleanupTest,
-      deliveryCapstoneReplayTest
+      scenarioTest("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes")
     ),
     slice(
       "DS-18",

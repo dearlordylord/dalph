@@ -12,7 +12,7 @@ import {
 import { Cause, Effect, Exit } from "effect"
 import { expect } from "vitest"
 import {
-  maintainedAuthoredCassetteCatalog,
+  deliveryStoryDs14ThroughDs17AuthoredCassette,
   runAuthoredScenarioCassette,
   runFullRerunPredecessorCleanupFromHistory
 } from "../../src/cassettes/index.js"
@@ -23,9 +23,7 @@ const removedRevision = IntegratorCandidateCleanupEvidenceRevision.make(8)
 
 const cachedDeliveryRun = Effect.runSync(
   Effect.cached(
-    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17).pipe(
-      Effect.provide(NodeCrypto.layer)
-    )
+    runAuthoredScenarioCassette(deliveryStoryDs14ThroughDs17AuthoredCassette).pipe(Effect.provide(NodeCrypto.layer))
   )
 )
 

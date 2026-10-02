@@ -318,7 +318,7 @@ describe("hosted formal-model contract", () => {
       fullQualityGateManifest("0".repeat(40))
         .filter(({ boundary }: { boundary: string }) => boundary === "qualification")
         .map(({ id }: { id: string }) => id)
-    ).toEqual(["delivery-repeatability", "recorded-catalog", "coverage"])
+    ).toEqual(["recorded-catalog", "coverage"])
   })
 
   it("preserves required application checks in the candidate-local runner", () => {
@@ -350,7 +350,7 @@ describe("hosted formal-model contract", () => {
       manifest
         .filter((stage: { readonly boundary: string }) => stage.boundary === "qualification")
         .map((stage: { readonly args: ReadonlyArray<string> }) => stage.args[0])
-    ).toEqual(["test:delivery-repeatability", "test:recorded-catalog", "test"])
+    ).toEqual(["test:recorded-catalog", "test"])
     expect(packageJson.scripts["check:ci:quality"]).not.toContain("test:mbt")
   })
 

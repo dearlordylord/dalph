@@ -3,20 +3,18 @@ import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import { AcceptedJournalReader } from "@dalph/orchestrator"
-import { maintainedAuthoredCassetteCatalog, useAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import { deliveryStoryDs14ThroughDs17AuthoredCassette, useAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
 it.effect(
   "reopens the application process after a durable append loses its live-Journal acknowledgement",
   () =>
     Effect.gen(function* () {
-      const run = yield* useAuthoredScenarioCassette(
-        maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17,
-        (currentRun) =>
-          Effect.gen(function* () {
-            const accepted = yield* (yield* AcceptedJournalReader).readAccepted(currentRun.runId)
-            expect(accepted.lastPosition).toBe(currentRun.records.at(-1)?.position)
-            return currentRun
-          })
+      const run = yield* useAuthoredScenarioCassette(deliveryStoryDs14ThroughDs17AuthoredCassette, (currentRun) =>
+        Effect.gen(function* () {
+          const accepted = yield* (yield* AcceptedJournalReader).readAccepted(currentRun.runId)
+          expect(accepted.lastPosition).toBe(currentRun.records.at(-1)?.position)
+          return currentRun
+        })
       ).pipe(Effect.provide(NodeCrypto.layer))
 
       expect(run.activationOrdinals).toEqual([1, 2, 3])

@@ -6636,7 +6636,6 @@ type MaintainedAuthoredCassetteName =
   | "completionTaskConflict"
   | "currentCompletionGraphAuthority"
   | "deliveryFinalitySpine"
-  | "deliveryStoryDs14ThroughDs17"
   | "deliveryInvariantStory"
   | "deliveryInvariantStoryCapstone"
   | "productionShapedFiveTaskDiamond"
@@ -6706,7 +6705,6 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     completionTaskConflict: completionTaskConflictAuthoredCassette,
     currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
     deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
-    deliveryStoryDs14ThroughDs17: deliveryStoryDs14ThroughDs17AuthoredCassette,
     deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
     deliveryInvariantStoryCapstone: deliveryStoryCapstoneAuthoredCassette,
     productionShapedFiveTaskDiamond: productionShapedFiveTaskDiamondAuthoredCassette,

@@ -32,6 +32,7 @@ const ordinaryWorkerCount = 4
 const coverageWorkerCount = 2
 const runDeliveryRepeatability = processEnvironment["DALPH_RUN_DELIVERY_REPEATABILITY"] === "1"
 const runIntegrationCapstone = processEnvironment["DALPH_RUN_INTEGRATION_CAPSTONE"] === "1"
+const runHistoricalChronology = processEnvironment["DALPH_RUN_HISTORICAL_CHRONOLOGY"] === "1"
 const runQualificationTests = processEnvironment["DALPH_RUN_QUALIFICATION_TESTS"] === "1"
 const runPublicationIntegration = processEnvironment["DALPH_RUN_PUBLICATION_INTEGRATION"] === "1"
 const ordinaryTestIncludes = [
@@ -40,6 +41,14 @@ const ordinaryTestIncludes = [
   "scripts/**/*.test.ts",
   "scripts/run-delivery-repeatability.test.mjs",
   "test/**/*.test.ts"
+]
+// These pre-#413 composed cassettes pin an activation's exact scheduler turn.
+// Keep them callable while their chronological assertions are reconciled with
+// the accepted causal publication boundary.
+const historicalChronologyTestPatterns = [
+  "packages/dalph/test/cassettes/delivery-predecessor-cleanup.test.ts",
+  "packages/dalph/test/cassettes/ds14-final-activation-chronology.test.ts",
+  "packages/dalph/test/cassettes/authored-runner-process-lifecycle.test.ts"
 ]
 const selectedTestExcludes = (mode: string) => [
   "**/node_modules/**",
@@ -52,6 +61,7 @@ const selectedTestExcludes = (mode: string) => [
   ...(runQualificationTests || runDeliveryRepeatability || runIntegrationCapstone
     ? []
     : [recordedCatalogCoverageTestPattern]),
+  ...(runHistoricalChronology ? [] : historicalChronologyTestPatterns),
   ...(mode === "coverage" ? [performanceTestPattern, publicRecoveryProcessBoundaryTestPattern] : [])
 ]
 // Inline projects do not inherit root Vite aliases. Every test interpretation

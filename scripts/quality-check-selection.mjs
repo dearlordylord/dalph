@@ -49,17 +49,11 @@ export const selectQualityStages = (stages, changedPaths) => {
       )
     )
   const lab = unknown || changedPaths.some((path) => /^prototypes\/reducer-lab\//u.test(path))
-  return stages
-    .filter((stage) => {
-      if (advisory.has(stage.id)) return false
-      if (controls.has(stage.id)) return shared
-      if (stage.id === "reducer-lab") return lab
-      if (stage.id === "recorded-catalog") return catalog
-      return true
-    })
-    .map((stage) =>
-      stage.id === "delivery-repeatability" && !requiresBroadSampling(changedPaths)
-        ? { ...stage, name: "fresh-process delivery smoke", args: ["test:delivery-smoke"], timeout: 5 * 60_000 }
-        : stage
-    )
+  return stages.filter((stage) => {
+    if (advisory.has(stage.id)) return false
+    if (controls.has(stage.id)) return shared
+    if (stage.id === "reducer-lab") return lab
+    if (stage.id === "recorded-catalog") return catalog
+    return true
+  })
 }

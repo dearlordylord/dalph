@@ -442,10 +442,6 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   const refreshAfterJournalChange = Effect.fn("DeliveryRelations.refreshAfterJournalChange")(function* (
     journalPosition: JournalPosition
   ) {
-    // Intent and its accepted observation are commonly appended back-to-back.
-    // Let the writer finish its current turn, then publish the newest accepted
-    // position once instead of exposing an intermediate planning frontier.
-    yield* Effect.yieldNow
     const current = yield* SubscriptionRef.get(state)
     if (
       current._tag === "ReactiveDeliveryOpen" &&

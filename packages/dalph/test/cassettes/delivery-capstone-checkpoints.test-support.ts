@@ -130,7 +130,8 @@ export const deliveryCapstoneCheckpointWindowInventory = (run: AuthoredScenarioC
   }
 }
 export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryCapstoneCheckpoints")(function* (
-  run: AuthoredScenarioCassetteRun
+  run: AuthoredScenarioCassetteRun,
+  throughBeat: number = DS.settled
 ) {
   const publications = run.observationCaptures.filter(
     (capture): capture is Publication => capture._tag === "DeliveryPublicationCaptured"
@@ -139,7 +140,7 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
   let checkpoints = Chunk.empty<DeliveryCapstoneCheckpoint>()
   let previousOrder = 0
   let previousJournalPosition: JournalRecord["position"] | null = null
-  for (const row of rowsFor(run)) {
+  for (const row of rowsFor(run).filter(({ beat }) => beat <= throughBeat)) {
     if (isDeliveryCapstoneJournalBeat(row.beat)) {
       if (row.after.kind !== "Journal") return expect.fail(`DS${row.beat}: transient lower fence is not journal-backed`)
       const checkpoint = assertDeliveryCapstoneJournalCheckpoint(run, { ...row, after: row.after, beat: row.beat })
@@ -390,6 +391,6 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
       ).toEqual(["F", "G"])
   }
   const orderedCheckpoints = Chunk.toArray(checkpoints)
-  expect(orderedCheckpoints.map(({ beat }) => beat)).toEqual(Object.values(DS))
+  expect(orderedCheckpoints.map(({ beat }) => beat)).toEqual(Object.values(DS).filter((beat) => beat <= throughBeat))
   return orderedCheckpoints
 })

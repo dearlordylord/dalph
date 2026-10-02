@@ -14,6 +14,22 @@ not workflow actions or provider calls. This supersedes only the former
 1,014-event strict oracle and does not authorize production changes to make a
 guessed order pass.
 
+### #413 publication-order amendment on 2026-10-01
+
+The coordinator now publishes each accepted Journal boundary without an
+Effect scheduler yield. An activation may therefore return after the Operator's
+integration-quarantine direction and before the next target-lineage read; the
+accepted [publication-operation boundary](accepted-publication-operation-boundary.md)
+requires the direction to precede that read, but permits either activation
+split. The historical 1,010-item total order and its twenty-process digest
+require one split and no longer qualify current behavior. They remain
+available through `pnpm test:cassettes:historical-chronology` and
+`pnpm test:delivery-repeatability` for repair, outside automatic local and
+hosted gates. The focused seven-task DS01–DS17 checkpoint test retains the
+current causal and durable state evidence; the full DS18–DS22 capstone remains
+under its separate repair scope. This amendment changes verification policy,
+not tracker, Git, executor, or journal semantics.
+
 ### Necessary cassette-description adjustment on 2026-09-12
 
 The original acceptance above remains the historical record. Under the
@@ -30,7 +46,7 @@ this fixture adjustment changes no Dalph runtime behavior or boundary call.
 The adjusted array's digest is
 `6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8`.
 The 13 checkpoint table, required causal edges, rejection controls, and the
-20-run delivery-repeatability qualification remain mandatory. This
+20-run delivery-repeatability qualification remained mandatory at this historical cut. This
 capture and adjustment
 do not claim that C4 or final qualification has passed.
 
@@ -616,8 +632,8 @@ occurrence mismatch. It records the candidate commit, iteration, occurrence
 count, accepted-order digest, and elapsed time. A failed sequence grants no
 credit to its successful prefix.
 
-`pnpm check:all` runs this named repeatability qualification as its own bounded
-stage. The later coverage stage skips only this duplicate twenty-process
+At the historical cut, `pnpm check:all` ran this named repeatability
+qualification as its own bounded stage. The later coverage stage skipped only this duplicate twenty-process
 invocation; it does not
 waive the test, and all ordinary capstone tests remain in coverage. This keeps
 the C4 child-process owner alive through its own termination and reaping path

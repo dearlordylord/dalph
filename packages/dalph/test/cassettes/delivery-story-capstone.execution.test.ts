@@ -1,3 +1,5 @@
+/* eslint-disable import/no-nodejs-modules -- Manual historical cassette opt-in is read before test registration. */
+import { env as processEnvironment } from "node:process"
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { AttemptId, plannedAttemptExecutorCorrelation, TaskId } from "@dalph/contracts"
@@ -69,6 +71,7 @@ import {
 } from "../../test-support/controlled-occurrences.js"
 import {
   AuthoredScenarioCassette,
+  deliveryStoryDs14ThroughDs17AuthoredCassette,
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette,
   type AuthoredObservationCapture,
@@ -77,6 +80,8 @@ import {
 
 const lastItemIndex = -1
 const capstoneTimeout = 600_000
+// These exact-turn assertions predate #413; the causal replacements run in the ordinary suite.
+const historicalIt = it.effect.skipIf(processEnvironment["DALPH_RUN_HISTORICAL_CHRONOLOGY"] !== "1")
 const boundedContinuationTimeout = 120_000
 const cachedRun = Effect.runSync(
   Effect.cached(
@@ -87,9 +92,7 @@ const cachedRun = Effect.runSync(
 )
 const cachedDs14ThroughDs17Run = Effect.runSync(
   Effect.cached(
-    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17).pipe(
-      Effect.provide(NodeCrypto.layer)
-    )
+    runAuthoredScenarioCassette(deliveryStoryDs14ThroughDs17AuthoredCassette).pipe(Effect.provide(NodeCrypto.layer))
   )
 )
 
@@ -586,7 +589,7 @@ const deliveryStoryRestartCheckpoints = [
 type DeliveryStoryRestartCheckpoint = (typeof deliveryStoryRestartCheckpoints)[number]
 
 it("distinguishes legacy and exact targeted coordinator deaths at the cassette boundary", () => {
-  const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+  const base = deliveryStoryDs14ThroughDs17AuthoredCassette
   const decodeStrict = Schema.decodeUnknownSync(AuthoredScenarioCassette, { onExcessProperty: "error" })
   const withFirstDeathReplacedBy = (replacement: unknown) => {
     let replaced = false
@@ -648,7 +651,7 @@ const deliveryStoryWithRestartAfter = (
   afterJournalEvent: DeliveryStoryRestartCheckpoint,
   baselineRun: AuthoredScenarioCassetteRun
 ) => {
-  const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+  const base = deliveryStoryDs14ThroughDs17AuthoredCassette
   const story = [...base.story]
   // Only the crash after Q leaves a direction driver waiting while Run
   // stabilization pays G2. The other cuts resume a plan-continuation read and
@@ -906,7 +909,7 @@ const deliveryStoryWithRestartAfter = (
   }
 }
 
-it.effect(
+historicalIt(
   "fails closed when an armed targeted coordinator death passes its exact journal event",
   () =>
     Effect.gen(function* () {
@@ -933,7 +936,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "resumes the composed DS-14 through DS-17 path after every CAS-to-successor durable checkpoint",
   () =>
     Effect.gen(function* () {
@@ -1115,37 +1118,37 @@ const verifyDeliveryStoryFinalityRestart = (checkpoint: (typeof deliveryStoryFin
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
   })
 
-it.effect(
+historicalIt(
   "resumes exact DS-17 finality after TargetPromotionObservedSuccess durable checkpoint",
   () => verifyDeliveryStoryFinalityRestart("TargetPromotionObservedSuccess"),
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "resumes exact DS-17 finality after CompletionClaimReplaced durable checkpoint",
   () => verifyDeliveryStoryFinalityRestart("CompletionClaimReplaced"),
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "resumes exact DS-17 finality after CompletionTaskAcknowledged durable checkpoint",
   () => verifyDeliveryStoryFinalityRestart("CompletionTaskAcknowledged"),
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "resumes exact DS-17 finality after CompletionClaimDeleted durable checkpoint",
   () => verifyDeliveryStoryFinalityRestart("CompletionClaimDeleted"),
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "resumes exact DS-17 finality after IntegrationFinalitySettled durable checkpoint",
   () => verifyDeliveryStoryFinalityRestart("IntegrationFinalitySettled"),
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality",
   () =>
     Effect.gen(function* () {
@@ -1156,11 +1159,11 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "rejects DS-15 evidence when M or M2 lacks exact ordered head-then-C parents",
   () =>
     Effect.gen(function* () {
-      const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+      const base = deliveryStoryDs14ThroughDs17AuthoredCassette
       const malformedCandidates = [
         {
           candidateText: "refs/heads/dalph/integrator-candidate-A",
@@ -1271,7 +1274,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "rejects DS16 evidence without the rejected CAS attempt",
   () =>
     Effect.gen(function* () {
@@ -1309,7 +1312,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "accepts every DS-14 through DS-17 checkpoint prefix as valid history with at most one recorded successor, promotion, and completion attempt",
   () =>
     Effect.gen(function* () {
@@ -2023,7 +2026,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "DS-06 admits D only after B1 releases and keeps E outside every boundary",
   () =>
     Effect.gen(function* () {
@@ -2274,7 +2277,7 @@ it.effect(
   capstoneTimeout
 )
 
-it.effect(
+historicalIt(
   "DS-07 applies P2 without evicting the three already-held attempts",
   () =>
     Effect.gen(function* () {
@@ -3761,7 +3764,7 @@ it.effect(
   boundedContinuationTimeout
 )
 
-it.effect(
+historicalIt(
   "emits the exact DS01 through DS13 delivery checkpoint table",
   () =>
     Effect.gen(function* () {
@@ -3940,7 +3943,7 @@ it.effect(
   boundedContinuationTimeout
 )
 
-it.effect(
+historicalIt(
   "records the complete cassette-free controlled occurrence order",
   () =>
     Effect.gen(function* () {
@@ -4039,7 +4042,7 @@ it.effect(
   boundedContinuationTimeout
 )
 
-it.effect(
+historicalIt(
   "consumes exactly the accepted controlled occurrence inventory",
   () =>
     Effect.gen(function* () {

@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { runAuthoredScenarioCassette } from "../../src/cassettes/authored-runner.js"
 import { deliveryStoryCapstoneAuthoredCassette } from "../../src/cassettes/delivery-story-capstone.js"
 import { assertDeliveryCapstoneCheckpoints } from "./delivery-capstone-checkpoints.test-support.js"
+import { DS } from "./delivery-capstone-checkpoint-boundaries.test-support.js"
 import {
   assertDeliveryCapstoneFinalityCorrelations,
   assertDeliveryCapstonePredecessorCleanup
@@ -17,6 +18,17 @@ const cachedCapstoneRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(deliveryStoryCapstoneAuthoredCassette).pipe(Effect.provide(NodeCrypto.layer))
   )
+)
+
+it.effect(
+  "maintained delivery capstone proves the #413 publication and integration interval through DS17",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* cachedCapstoneRun
+      expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+      yield* assertDeliveryCapstoneCheckpoints(run, DS.settledA)
+    }),
+  capstoneTimeout
 )
 
 it.effect.skipIf(!runIntegrationCapstone)(

@@ -42,11 +42,12 @@
     "check:baseline": "node scripts/with-gate-slot.mjs -- node scripts/run-baseline.mjs",
     "check:duplicates": "jscpd .",
     "test:capability-registration": "DALPH_RUN_QUALIFICATION_TESTS=1 vitest run scripts/capability-registration.test.ts",
-    "test:delivery-repeatability": "node scripts/run-delivery-repeatability.mjs",
-    "test:delivery-repeatability:warm": "node scripts/run-delivery-repeatability.mjs --mode=warm",
+    "test:delivery-repeatability": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-repeatability.mjs",
+    "test:delivery-repeatability:warm": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-repeatability.mjs --mode=warm",
     "test:public-recovery": "vitest run packages/dalph/src/application/production-public-recovery.integration.test.ts --maxWorkers=1",
     "test:recorded-catalog": "DALPH_RUN_QUALIFICATION_TESTS=1 vitest run packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts",
     "test:cassettes:memory": "vitest run packages/dalph/test/cassettes --maxWorkers=4",
+    "test:cassettes:historical-chronology": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 vitest run packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts packages/dalph/test/cassettes/delivery-predecessor-cleanup.test.ts packages/dalph/test/cassettes/ds14-final-activation-chronology.test.ts packages/dalph/test/cassettes/authored-runner-process-lifecycle.test.ts --maxWorkers=1",
     "test:integration:publication": "pnpm --filter @dalph/dalph... build && DALPH_RUN_PUBLICATION_INTEGRATION=1 vitest run packages/dalph/test/integration/direct-remote-publication.integration.test.ts --maxWorkers=1",
     "test:integration:capstone": "DALPH_RUN_INTEGRATION_CAPSTONE=1 vitest run packages/dalph/test/cassettes/capstone.execution.test.ts packages/dalph/test/cassettes/authored-delivery-status.test.ts packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts --maxWorkers=1",
     "check:lab": "pnpm --filter @dalph/reducer-lab-prototype check",
@@ -77,7 +78,7 @@
     "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-candidate-checks.mjs",
     "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/generate-formal-command-inventory.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
     "test:formal:integration": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-gate.integration.test.mjs",
-    "test:delivery-smoke": "node scripts/run-delivery-smoke.mjs"
+    "test:delivery-smoke": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-smoke.mjs"
   },
   "lint-staged": {
     "*.{js,mjs,ts,tsx}": "node scripts/run-quality-lint.mjs --staged --fix"

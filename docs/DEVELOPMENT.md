@@ -140,10 +140,11 @@ comprehensive `pnpm check:lab:browser` checks shared Lab navigation and all
 maintained catalog entries; it is a manual diagnostic for shared Lab or browser
 harness changes, not a prerequisite for each cassette edit. Selection retains
 deleted and renamed source paths.
-The seven-task `deliveryInvariantStoryCapstone` is excluded from routine cassette
-execution and the recorded-catalog round trip. Run `pnpm test:integration:capstone`
-explicitly for its separate delivery-capstone proof. A passing routine gate
-does not prove that accepted story.
+The seven-task `deliveryInvariantStoryCapstone` is excluded from the
+recorded-catalog round trip. Its focused DS01–DS17 causal checkpoint test runs
+in the ordinary cassette suite; the complete DS18–DS22 proof remains under
+`pnpm test:integration:capstone` while its DS21 fixture is repaired. A passing
+routine gate proves only the focused prefix.
 During focused capstone fixture repair, use each observed mismatch to name the
 competing causes and inspect the exact boundary evidence before editing. A
 fixture-only correction supported by that evidence may be followed by another
@@ -227,8 +228,9 @@ follows the runtime rule.
 For a hosted comprehensive qualification handoff, the Integrator first runs the
 focused checks that own the repaired boundary before final qualification. A
 separate lint/Lab baseline is not required. Hosted CI runs its
-generated structural preflight before the generated delivery-repeatability,
-recorded-catalog, and coverage suffix cells. Each clean suffix runner installs
+generated structural preflight before the generated recorded-catalog and
+coverage suffix cells. The historical strict-order delivery repeatability is
+manual while #413's permitted publication schedules are reconciled. Each clean suffix runner installs
 the frozen dependency graph and then runs the bounded `pnpm check:artifacts`
 preparation declared by the shared stage algebra, so package `dist` trees exist
 before coverage or another suffix stage consumes them. This preparation does not
@@ -324,12 +326,14 @@ All commands below use `pnpm`. Script definitions live in
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
 | `test` | Run tests and report advisory production/evaluation and changed-line coverage; takes an admission slot. |
-| `test:cassettes:memory` | Run the in-memory cassette test directory without coverage or built CLI startup. The seven-task delivery capstone is manual through `test:integration:capstone`; dedicated recorded-catalog and delivery-repeatability tests retain their own commands. |
+| `test:cassettes:memory` | Run the in-memory cassette suite without coverage or built CLI startup. Three historical files and sixteen exact-turn cases in `delivery-story-capstone.execution.test.ts` are held for explicit repair through `test:cassettes:historical-chronology`; the old DS14–DS17 fixture is no longer in the maintained catalog. The seven-task capstone's DS01–DS17 causal prefix runs here; its complete DS18–DS22 proof remains manual through `test:integration:capstone`. |
+| `test:cassettes:historical-chronology` | Run the retained historical exact-order cassette files explicitly; failures remain visible while their activation chronology is reconciled. |
+
 | `test:recorded-catalog` | Run the routine in-memory recorded-cassette catalog without starting the built production CLI. The seven-task capstone is manual through `test:integration:capstone`. |
 | `test:integration:capstone` | Explicitly run the seven-task delivery capstone, its status/cleanup assertions, and its recorded-catalog round trip with one Vitest worker. This is separate manual evidence for the accepted delivery-capstone story; its chronology remains under repair. |
 | `test:integration:publication` | Build the Dalph CLI and run the process-based direct-publication integration scenario explicitly, with one Vitest worker. Required before handoff when direct-publication or its composed completion/dependant behavior changes. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
-| `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |
+| `test:delivery-repeatability` | Manually run the historical DS01–DS13 strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. It is no longer an automatic local or hosted gate under #413's causal publication contract. |
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 
@@ -343,8 +347,20 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id> [--previous-boot=<recorded boot UUID>]` | Ordinary form closes registration and proves every recorded writer group absent before clearing exact worktree/slot fences. The explicit previous-boot form accepts only a structurally complete no-child/observed inventory from the supplied recorded boot, durably records `UNPROVEN` stopped custody, and clears exact fences without probing or signalling old process groups. |
 | `gate:recovery`, `gate:diagnose`, `gate:verify-repair` | Historical recovery commands; ordinary candidate-runner admission does not consult their records. |
-| `check:all --candidate=<base sha>` | Invoke `scripts/run-candidate-checks.mjs` on the clean, frozen checkout using its exact Base. It records the selected preflight/application manifest and successful stage results. A launched child stage that exits nonzero is identified by the top-level failure message and retained stage log; dependency preparation or input-guard failures may have no stage result or child-stage log. Formal relevance is `not-requested`; run `pnpm check:quint` explicitly for local proof, and retain CI's separate formal verification. Revision-10 selects Reducer Lab only for a `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Interrupted attempts restart after stopped-writer reconciliation. |
+| `check:all --candidate=<base sha>` | Invoke `scripts/run-candidate-checks.mjs` on the clean, frozen checkout using its exact Base. It records the selected preflight/application manifest and successful stage results. A launched child stage that exits nonzero is identified by the top-level failure message and retained stage log; dependency preparation or input-guard failures may have no stage result or child-stage log. Formal relevance is `not-requested`; run `pnpm check:quint` explicitly for local proof, and retain CI's separate formal verification. Revision-11 selects Reducer Lab only for a `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Interrupted attempts restart after stopped-writer reconciliation. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
+
+The held files are `delivery-predecessor-cleanup.test.ts`,
+`ds14-final-activation-chronology.test.ts`, and
+`authored-runner-process-lifecycle.test.ts`; sixteen exact-turn cases in
+`delivery-story-capstone.execution.test.ts` are held by test name. The three
+files and most held cases reuse the historical DS14–DS17 cassette; three held
+cases assert the former controlled DS01–DS13 total order. Their previous assertions do not
+prove #413's accepted causal order. The ordinary suite still runs the
+publication, reactivation, restart, process-death, and finality tests; the
+focused seven-task DS01–DS17 check supplies the required #413 integration
+edge. The manual command intentionally reports the held files' failures until
+their own scenarios are re-authored.
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
 changed files—and no unrelated source file—to Oxlint and dprint. Oxlint rejects

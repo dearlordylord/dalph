@@ -1,7 +1,8 @@
 # Alice restarts an attempt while two Journal readers publish independently
 
 Owning issue: [#413](https://github.com/dearlordylord/dalph/issues/413).
-Status: accepted chronology; implementation and mapped evidence pending.
+Status: accepted and implemented; #413 focused evidence runs in the ordinary
+cassette suite. The separate full capstone fixture remains open at DS21.
 
 ## Governing behavior
 
@@ -86,7 +87,7 @@ part of this contract.
 | Intent-only prefix is published for recovery without admitting A | `reactive-delivery-relations.test.ts`: blocked tracker outcome and planning frontier |
 | Independent completed operation survives A's retained failure | `journaled-run-bootstrap.test.ts` and `run-reactivation-owner.test.ts`: two exact operation identities |
 | Either Restart read order yields one exact successor path | `changedAttemptRestartsCleanly` causal window and reversed-order negative control |
-| Integration direction and lineage retain their causal edge across either permitted activation split | focused DS14–DS17 capstone cassette |
+| Integration direction and lineage retain their causal edge across either permitted activation split | `capstone.execution.test.ts`: `maintained delivery capstone proves the #413 publication and integration interval through DS17` checks the exact DS01–DS17 prefix, including DS14–DS17 |
 | Process death at each read/publication cut reconstructs from Journal without a duplicate effect | focused bootstrap/recovery tests |
 | A completed position releases waiters, and cancellation removes an old waiter | `reactive-delivery-relations.test.ts`: blocked derivation and scoped cancellation |
 
@@ -94,3 +95,9 @@ The read-operation completion boundary should use accepted Journal outcome
 evidence when that evidence already names the exact operation. Any additional
 process-local signal is limited to a multi-record action with no such durable
 outcome; it cannot replace Journal authority.
+
+The separate 22-beat capstone check still has a DS21 fixture discrepancy: its
+selected journal prefix already includes E's accepted terminal report, so the
+fresh admission projection holds F and G rather than E, F, and G. This also
+occurs with the former publication yield. It does not change the DS14–DS17
+evidence above; DS21–DS22 remain under the capstone's separate repair scope.

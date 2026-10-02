@@ -7,7 +7,7 @@ import {
   runQualityGateFixture
 } from "./quality-gate-test-fixture.js"
 
-const broadQualificationCommands = ["test:delivery-repeatability", "test:recorded-catalog", "test"]
+const broadQualificationCommands = ["test:recorded-catalog", "test"]
 
 it(
   "runs the capability audit exactly once and continues to the next quality stage",
@@ -22,7 +22,7 @@ it(
     expect(invocations).toEqual([...broadQualityGateStructuralCommands, ...broadQualificationCommands])
     expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
     expect(capabilityIndex).toBeGreaterThan(-1)
-    expect(invocations[capabilityIndex + 1]).toBe("test:delivery-repeatability")
+    expect(invocations[capabilityIndex + 1]).toBe("test:recorded-catalog")
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )
@@ -57,7 +57,10 @@ it("keeps the exact combined exclusions out of ordinary tests and in coverage", 
     "packages/dalph/test/integration/direct-remote-publication.integration.test.ts",
     "packages/dalph/test/cassettes/delivery-repeatability.test.ts",
     "scripts/capability-registration.test.ts",
-    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts",
+    "packages/dalph/test/cassettes/delivery-predecessor-cleanup.test.ts",
+    "packages/dalph/test/cassettes/ds14-final-activation-chronology.test.ts",
+    "packages/dalph/test/cassettes/authored-runner-process-lifecycle.test.ts"
   ])
   expect(coverage.test?.exclude).toEqual([
     "**/node_modules/**",
@@ -67,6 +70,9 @@ it("keeps the exact combined exclusions out of ordinary tests and in coverage", 
     "packages/dalph/test/cassettes/delivery-repeatability.test.ts",
     "scripts/capability-registration.test.ts",
     "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts",
+    "packages/dalph/test/cassettes/delivery-predecessor-cleanup.test.ts",
+    "packages/dalph/test/cassettes/ds14-final-activation-chronology.test.ts",
+    "packages/dalph/test/cassettes/authored-runner-process-lifecycle.test.ts",
     "**/*.performance.test.ts",
     "packages/dalph/src/application/production-public-recovery.integration.test.ts"
   ])

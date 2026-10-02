@@ -843,18 +843,24 @@ await scenario("keeps a paused task held until the exact safe-suspension report"
     (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkSafelySuspended"
   )
   assert(safeSuspensionPosition >= 0, "The maintained pause story must declare safe suspension")
-  const beforeSafeSuspension = result.deliveryFrames.find(
-    ({ storyPosition }) => storyPosition === safeSuspensionPosition
-  )
-  const afterSafeSuspension = result.deliveryFrames.find(
-    ({ storyPosition }) => storyPosition === safeSuspensionPosition + 1
-  )
+  const heldByA = (frame: (typeof result.deliveryFrames)[number]) =>
+    frame.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0")
+  const firstHeldIndex = result.deliveryFrames.findIndex(heldByA)
   assert(
-    beforeSafeSuspension?.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0") === true,
+    firstHeldIndex >= 0 &&
+      (result.deliveryFrames[firstHeldIndex]?.storyPosition ?? Number.POSITIVE_INFINITY) <= safeSuspensionPosition &&
+      result.deliveryFrames
+        .slice(firstHeldIndex)
+        .filter(({ storyPosition }) => storyPosition <= safeSuspensionPosition)
+        .every(heldByA),
     "Pause direction and an ExecutorWorkExecuting report must leave A holding its exact position"
   )
+  const firstReleasedIndex = result.deliveryFrames.findIndex(
+    (frame) => frame.storyPosition > safeSuspensionPosition && !heldByA(frame)
+  )
   assert(
-    afterSafeSuspension?.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0") === false,
+    firstReleasedIndex > firstHeldIndex &&
+      result.deliveryFrames.slice(firstHeldIndex, firstReleasedIndex).every(heldByA),
     "Only the exact ExecutorWorkSafelySuspended report may release A's position"
   )
 })
@@ -2489,16 +2495,29 @@ await scenario("shows graph observation provenance quiescence and planned action
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The pause delivery fixture is missing")
   }
-  const passiveIndex = result.deliveryFrames.findIndex(({ graph, quiescence }) =>
-    graph._tag === "Established" && quiescence._tag === "QuiescencePassive"
+  const passiveIndices = result.deliveryFrames.flatMap(({ graph, quiescence }, index) =>
+    graph._tag === "Established" && quiescence._tag === "QuiescencePassive" ? [index] : []
   )
-  if (passiveIndex < 0) throw new Error("The pause fixture has no established passive publication")
+  if (passiveIndices.length === 0) throw new Error("The pause fixture has no established passive publication")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The pause delivery timeline is missing")
+  const passiveFacts = passiveIndices.map((index) => {
+    chooseOption(timeline, String(deliveryMomentIndex(result, index)))
+    return { index, facts: document.querySelector("[data-role='delivery-frame']")?.textContent ?? "" }
+  })
+  const paused = passiveFacts.find(({ facts }) => facts.includes("Operator paused the Run"))
+  const executing = passiveFacts.find(
+    ({ facts, index }) => index >= (paused?.index ?? Number.POSITIVE_INFINITY) &&
+      facts.includes("Attempt attempt:A:0 reported ExecutorWorkExecuting")
+  )
+  assert(paused !== undefined, "The concrete operator Pause landmark must appear in a passive publication")
+  assert(executing !== undefined, "The exact executor-attempt landmark must follow Pause")
+  if (executing === undefined) return
+  const passiveIndex = executing.index
   chooseOption(timeline, String(deliveryMomentIndex(result, passiveIndex)))
   const facts = document.querySelector("[data-role='delivery-frame']")?.textContent ?? ""
   const passiveFrame = result.deliveryFrames[passiveIndex]
@@ -2516,14 +2535,6 @@ await scenario("shows graph observation provenance quiescence and planned action
   assert(
     facts.includes("planned action proposals") || facts.includes("planning fails closed"),
     "The downstream action plan must be summarized without implying execution"
-  )
-  assert(
-    facts.includes("Operator paused the Run"),
-    "A batched publication must retain the concrete operator Pause landmark"
-  )
-  assert(
-    facts.includes("Attempt attempt:A:0 reported ExecutorWorkExecuting"),
-    "A batched publication must retain the exact executor-attempt landmark after Pause"
   )
   assert(
     document.querySelector("[data-role='delivery-action-planning']") !== null,
