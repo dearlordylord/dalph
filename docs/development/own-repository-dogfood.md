@@ -93,6 +93,7 @@ It preserves the ordinary executor selection and supplies no model override.
 ```bash
 export DALPH_CONFIG="${DALPH_DOGFOOD_ROOT}/production.json"
 mkdir -p "${DALPH_DOGFOOD_ROOT}"/{evidence,codex-private,task-worktrees,integrator-worktrees}
+chmod 700 "${DALPH_DOGFOOD_ROOT}/codex-private"
 node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs"
 const env = process.env
