@@ -396,6 +396,35 @@ child, and accounts for implementation-owned descendants. A normal application
 stop leaves non-ephemeral thread history available for later resume and does
 not archive or delete attempt threads.
 
+### Darwin close after thread startup (#378)
+
+Alice starts a persistent Codex thread on macOS. The app-server launches MCP
+helpers as direct children in detached process groups; Codex may omit Dalph's
+server-launch environment token from those helpers. Alice then requests a
+graceful application Exit after all admitted attempts have drained. The close
+boundary takes a process-group/ancestry snapshot, rereads each descendant's
+process-start identity and its complete live parent chain back to the exact
+app-server incarnation, and signals only those proven descendants. A helper
+with the exact launch token may instead be reconciled by that token after its
+parent exits. The close result becomes successful only after the app-server,
+helpers, and retained token-bearing activities are observed absent; the
+private launch record is then cleared.
+
+A missing token on an otherwise freshly proven descendant must not turn a
+completed Run into a process Exit failure. A changed PID incarnation, broken
+parent chain, foreign launch token, unreadable observation, or surviving
+writer must never authorize a signal or fabricated successful Exit. If Dalph
+dies before close records absence, startup retains the launch intent and
+reconciles the exact previous incarnation before admitting a replacement.
+
+`codex-app-server-process-policy.property.test.ts::closes tokenless Darwin MCP
+descendants only while their exact ancestry remains live` covers a tokenless
+direct MCP child, a tokenless nested helper, a changed ancestor, and a foreign
+token. A focused real macOS app-server probe starts one thread and closes it;
+it requires a successful close and absent descendants without starting a task
+turn. The existing application Exit tests cover drain ordering and retained
+launch behavior after interrupted cleanup.
+
 A sudden Dalph process death records no application or Run event. Before
 launching app-server, Dalph durably records one private server-launch
 incarnation and ownership intent; it does not persist the execution substrate's

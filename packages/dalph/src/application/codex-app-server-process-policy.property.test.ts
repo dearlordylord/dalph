@@ -1184,6 +1184,68 @@ describe("Codex process observation policy", () => {
     }
   })
 
+  it("closes tokenless Darwin MCP descendants only while their exact ancestry remains live", async () => {
+    const started = "Fri Oct  2 15:00:00 2026"
+    const leader = stat(30, 1, 30, `darwin:${started}`)
+    const helper = stat(31, 30, 31, `darwin:${started}`)
+    const nested = stat(32, 31, 31, `darwin:${started}`)
+    const launch = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make(`close-token|darwin%3A${encodeURIComponent(started)}`),
+      phase: "Live",
+      pid: 30
+    })
+    const members = [leader, helper, nested]
+    const signals: Array<number> = []
+    const darwinNative = native({
+      platform: "darwin",
+      execFile: async (_file, args) => {
+        const pid = Number(args.at(-1))
+        if (args.includes("eww")) {
+          return { stdout: pid === 30 ? "codex DALPH_CODEX_SERVER_INCARNATION=close-token\n" : "helper\n" }
+        }
+        const entry = members.find((member) => member.pid === pid)
+        return {
+          stdout: entry === undefined ? "" : `${entry.pid} ${entry.parentPid} ${entry.processGroupId} S ${started}\n`
+        }
+      },
+      kill: (pid) => {
+        signals.push(pid)
+      }
+    })
+    const succeeded = await Effect.runPromiseExit(
+      signalExactDetachedDescendants(launch, { _tag: "ExactLive", members }, darwinNative)
+    )
+    expect(Exit.isSuccess(succeeded)).toBe(true)
+    expect(signals).toEqual([32, 31])
+
+    const changedAncestor = native({
+      ...darwinNative,
+      execFile: async (file, args) =>
+        args.at(-1) === "31" && !args.includes("eww")
+          ? { stdout: `31 30 31 S Fri Oct  2 15:00:01 2026\n` }
+          : darwinNative.execFile(file, args)
+    })
+    const rejected = await Effect.runPromiseExit(
+      signalExactDetachedDescendants(launch, { _tag: "ExactLive", members }, changedAncestor)
+    )
+    expect(Exit.isFailure(rejected)).toBe(true)
+    expect(signals).toEqual([32, 31])
+
+    const foreignToken = native({
+      ...darwinNative,
+      execFile: async (file, args) =>
+        args.at(-1) === "32" && args.includes("eww")
+          ? { stdout: "helper DALPH_CODEX_SERVER_INCARNATION=foreign-token\n" }
+          : darwinNative.execFile(file, args)
+    })
+    const foreign = await Effect.runPromiseExit(
+      signalExactDetachedDescendants(launch, { _tag: "ExactLive", members }, foreignToken)
+    )
+    expect(Exit.isFailure(foreign)).toBe(true)
+    expect(signals).toEqual([32, 31])
+  })
+
   it("validates launch command identity without assuming an absolute executable", () => {
     const complete = CodexServerLaunchRecord.make({
       command: ["codex", "app-server"],

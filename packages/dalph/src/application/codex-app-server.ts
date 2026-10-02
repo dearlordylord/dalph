@@ -1255,7 +1255,7 @@ const terminateExactOwnedActivityMember = async (
   if (incarnation !== undefined) {
     const token = await observeDarwinIncarnationToken(member.pid, incarnation, native)
     if (token._tag === "Absent") return
-    if (token._tag === "Unreadable" || token._tag === "Contradictory") {
+    if (token._tag === "Unreadable" || token._tag === "Contradictory" || token._tag === "Missing") {
       return operationFailure("thread/ownedActivity/terminate", "Ownership", token.detail)
     }
   }
@@ -2751,7 +2751,25 @@ export const signalExactDetachedDescendants = (
   if (native.platform !== "linux" && native.platform !== "darwin") return Effect.void
   const pid = launch.pid
   if (pid === null) return Effect.void
-  const escapedMembers = group.members.filter((member) => member.pid !== pid && member.processGroupId !== pid)
+  const byPid = new Map(group.members.map((member) => [member.pid, member]))
+  const ancestryDepth = (member: CodexOwnedProcessIdentity): number => {
+    let depth = 0
+    let parentPid = member.parentPid
+    const seen = new Set<number>()
+    while (parentPid !== pid && !seen.has(parentPid)) {
+      seen.add(parentPid)
+      const parent = byPid.get(parentPid)
+      if (parent === undefined) break
+      depth += 1
+      parentPid = parent.parentPid
+    }
+    return depth
+  }
+  // Signal nested children before their parents while the fresh ancestry is
+  // still available to prove ownership of tokenless Codex helpers.
+  const escapedMembers = group.members
+    .filter((member) => member.pid !== pid && member.processGroupId !== pid)
+    .toSorted((left, right) => ancestryDepth(right) - ancestryDepth(left))
   return Effect.forEach(escapedMembers, (member) =>
     Effect.tryPromise({
       // eslint-disable-next-line complexity -- Escaped cleanup revalidates identity and the durable Darwin incarnation before one signal.
@@ -2767,6 +2785,53 @@ export const signalExactDetachedDescendants = (
         if (token._tag === "Absent") return
         if (token._tag === "Unreadable" || token._tag === "Contradictory") {
           return operationFailure("close", "Ownership", token.detail)
+        }
+        if (token._tag === "Missing") {
+          let parentPid = observed.stat.parentPid
+          if (parentPid !== member.parentPid) {
+            return operationFailure("close", "Ownership", `owned descendant ${member.pid} changed parent`)
+          }
+          const seen = new Set<number>([member.pid])
+          while (parentPid !== pid) {
+            if (seen.has(parentPid)) {
+              return operationFailure("close", "Ownership", `owned descendant ${member.pid} has cyclic ancestry`)
+            }
+            seen.add(parentPid)
+            const recordedParent = byPid.get(parentPid)
+            if (recordedParent === undefined) {
+              return operationFailure("close", "Ownership", `owned descendant ${member.pid} lost exact ancestry`)
+            }
+            const freshParent = await readProcessStatObservation(parentPid, native)
+            if (freshParent._tag !== "Read" || freshParent.stat.startIdentity !== recordedParent.startIdentity) {
+              return operationFailure("close", "Ownership", `owned descendant ${member.pid} changed ancestry`)
+            }
+            parentPid = freshParent.stat.parentPid
+            if (parentPid !== recordedParent.parentPid) {
+              return operationFailure("close", "Ownership", `owned descendant ${member.pid} changed ancestry`)
+            }
+          }
+          const recordedLeader = byPid.get(pid)
+          const freshLeader = await readProcessStatObservation(pid, native)
+          if (
+            recordedLeader === undefined ||
+            freshLeader._tag !== "Read" ||
+            freshLeader.stat.startIdentity !== recordedLeader.startIdentity
+          ) {
+            return operationFailure("close", "Ownership", `owned descendant ${member.pid} lost exact app-server parent`)
+          }
+          const leaderToken = await observeDarwinIncarnationToken(pid, launch.incarnation, native)
+          if (leaderToken._tag !== "Exact") {
+            return operationFailure("close", "Ownership", `owned descendant ${member.pid} lost exact app-server token`)
+          }
+          const freshMember = await readProcessStatObservation(member.pid, native)
+          if (freshMember._tag === "Absent") return
+          if (
+            freshMember._tag !== "Read" ||
+            freshMember.stat.startIdentity !== member.startIdentity ||
+            freshMember.stat.parentPid !== member.parentPid
+          ) {
+            return operationFailure("close", "Ownership", `owned descendant ${member.pid} changed before signal`)
+          }
         }
         try {
           native.kill(member.pid, signal)
@@ -3031,6 +3096,7 @@ export const readLaunchCommandLine = async (
 type DarwinIncarnationTokenObservation =
   | { readonly _tag: "Exact" }
   | { readonly _tag: "Absent" }
+  | { readonly _tag: "Missing"; readonly detail: string }
   | { readonly _tag: "Contradictory"; readonly detail: string }
   | { readonly _tag: "Unreadable"; readonly detail: string }
 
@@ -3045,7 +3111,7 @@ const observeDarwinIncarnationToken = async (
     const command = (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(pid)])).stdout
     if (command.trim().length === 0) return { _tag: "Absent" }
     const tokenEntry = command.split(/\s+/).find((value) => value.startsWith(`${codexServerIncarnationEnvironment}=`))
-    if (tokenEntry === undefined) return { _tag: "Contradictory", detail: `pid ${pid} has no launch token` }
+    if (tokenEntry === undefined) return { _tag: "Missing", detail: `pid ${pid} has no launch token` }
     return tokenEntry.slice(codexServerIncarnationEnvironment.length + 1) === durableIncarnationToken(incarnation)
       ? { _tag: "Exact" }
       : { _tag: "Contradictory", detail: `pid ${pid} carries a different launch token` }
@@ -3117,6 +3183,7 @@ export const validateLaunchedProcessObservation = async (
   const token = await observeDarwinIncarnationToken(pid, launch.incarnation, native)
   if (token._tag === "Absent") return { _tag: "Absent" }
   if (token._tag === "Unreadable" || token._tag === "Contradictory") return token
+  if (token._tag === "Missing") return { _tag: "Contradictory", detail: token.detail }
   return { _tag: "ExactLive", pid }
   /* v8 ignore stop -- @preserve */
 }
