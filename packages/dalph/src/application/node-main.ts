@@ -1,6 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- The shipped executable delegates its exact Node process lifecycle here. */
 import nodeProcess from "node:process"
-import { Cause, type Effect, Runtime } from "effect"
+import { Cause, type Effect, Option, Runtime } from "effect"
+import { DalphCommandExit } from "./command-exit.js"
 import { encodeRuntimeDiagnostic, projectRuntimeCause } from "./runtime-diagnostic.js"
 
 const configuredSensitiveValues = () => [
@@ -19,8 +20,10 @@ const runMainWithoutSignalInterruption = Runtime.makeRunMain(({ fiber, teardown 
       }
     }
     teardown(exit, (status) => {
+      const failure = exit._tag === "Failure" ? Cause.findErrorOption(exit.cause) : Option.none()
       // eslint-disable-next-line functional/immutable-data -- Node's process exitCode is the host-visible result channel.
-      nodeProcess.exitCode = status
+      nodeProcess.exitCode =
+        Option.isSome(failure) && failure.value instanceof DalphCommandExit ? failure.value.status : status
     })
   })
 })

@@ -1,0 +1,237 @@
+/* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { NodeCrypto } from "@effect/platform-node"
+import { Crypto, Effect, FiberSet, Option, Schema } from "effect"
+import { type ProductionRunningHostObservation } from "./production-host.js"
+import {
+  decodeRunningHostRequest,
+  encodeRunningHostEnvelope,
+  HostInstanceId,
+  type LocalHostAddress,
+  RunningHostDescriptor,
+  type RequestId,
+  RunningHostError,
+  runningHostLimits,
+  runningHostFailureEnvelope,
+  runningHostSuccessEnvelope
+} from "./running-host-contract.js"
+import { projectRunningHostRunControl, projectRunningHostSnapshot } from "./running-host-projection.js"
+
+const httpStatus = { success: 200, badRequest: 400, conflict: 409, tooLarge: 413, unavailable: 503 } as const
+
+const invalid = (code: string): RunningHostError => ({ _tag: "InvalidRequest", fieldPath: "", code })
+const body = Effect.fn("RunningHostHttp.readBody")((request: IncomingMessage) =>
+  Effect.tryPromise({
+    try: async (signal) => {
+      const parts: Array<Uint8Array> = []
+      let size = 0
+      const abort = () => request.destroy()
+      signal.addEventListener("abort", abort, { once: true })
+      try {
+        const chunks: AsyncIterable<unknown> = request.iterator({ destroyOnReturn: false })
+        for await (const chunk of chunks) {
+          if (!(chunk instanceof Uint8Array)) return Promise.reject(invalid("RequestBodyEncoding"))
+          size += chunk.byteLength
+          if (size > runningHostLimits.requestBytes)
+            return Promise.reject(
+              RunningHostError.cases.FrameTooLarge.make({
+                direction: "Incoming",
+                maximumBytes: runningHostLimits.requestBytes,
+                measuredBytes: size
+              })
+            )
+          parts.push(chunk)
+        }
+        return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(parts))
+      } finally {
+        signal.removeEventListener("abort", abort)
+      }
+    },
+    catch: (error): RunningHostError => {
+      const decoded = Schema.decodeUnknownOption(RunningHostError)(error)
+      return Option.isSome(decoded) ? decoded.value : invalid("RequestBodyUnreadable")
+    }
+  }).pipe(
+    Effect.timeout("5 seconds"),
+    Effect.catchTag("TimeoutError", () => Effect.fail(invalid("RequestBodyTimedOut")))
+  )
+)
+
+const write = Effect.fn("RunningHostHttp.write")(
+  (response: ServerResponse, text: string, status = httpStatus.success, requestId: RequestId | null = null) =>
+    Effect.tryPromise({
+      try: () =>
+        new Promise<void>((resolve, reject) => {
+          response.once("error", reject)
+          response.once("close", () => {
+            if (!response.writableFinished) reject(new Error("ResponseClosed"))
+          })
+          response.writeHead(status, { "content-type": "application/json", connection: "close" })
+          response.end(text, () => resolve())
+        }),
+      catch: (): RunningHostError => ({ _tag: "TransportFailed", phase: "Write", reason: "ResponseClosed" })
+    }).pipe(
+      Effect.timeout("5 seconds"),
+      Effect.catchTag("TimeoutError", () =>
+        Effect.fail<RunningHostError>(
+          requestId === null
+            ? { _tag: "TransportFailed", phase: "Write", reason: "WriteTimedOut" }
+            : {
+                _tag: "WriteTimedOut",
+                subject: { _tag: "Request", requestId },
+                deadlineMillis: runningHostLimits.writeDeadlineMillis
+              }
+        )
+      ),
+      Effect.onError(() =>
+        Effect.sync(() => {
+          response.destroy()
+        })
+      )
+    )
+)
+
+/** One listener dispatches passive requests against the already acquired host. */
+export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>(
+  address: LocalHostAddress,
+  observation: ProductionRunningHostObservation<E>
+) {
+  const descriptor = RunningHostDescriptor.make({
+    _tag: "HostDescriptor",
+    protocolVersion: 1,
+    hostInstanceId: HostInstanceId.make(
+      yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(
+        Effect.mapError(
+          (): RunningHostError => ({ _tag: "HostUnavailable", address, reason: "HostIdentityUnavailable" })
+        )
+      )
+    ),
+    selectedRun: { runId: observation.selection.runId, target: observation.target },
+    limits: runningHostLimits
+  })
+  const dispatch = Effect.fn("RunningHostHttp.dispatch")(function* (input: unknown) {
+    const request = yield* decodeRunningHostRequest(input, descriptor)
+    if (yield* observation.closing)
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "HostClosing",
+        hostInstanceId: descriptor.hostInstanceId,
+        cutoff: "AdmissionClosed"
+      })
+    const value =
+      request.operation._tag === "ReadSnapshot"
+        ? yield* observation.current.get.pipe(
+            Effect.flatMap((state) => projectRunningHostSnapshot(request.runId, state))
+          )
+        : yield* Effect.gen(function* () {
+            const control = yield* observation.readRunControl.pipe(
+              Effect.mapError(
+                (): RunningHostError => ({
+                  _tag: "ReadFailed",
+                  causeTag: "ProductionPassiveControlUnavailable",
+                  detail: "Accepted Run control is unavailable."
+                })
+              )
+            )
+            const failure = yield* observation.activationFailure
+            const typed = Option.isSome(failure)
+              ? Schema.decodeUnknownOption(
+                  Schema.Struct({
+                    _tag: Schema.Literal("WorkflowRunTerminationEvidenceInvalid"),
+                    runId: Schema.NonEmptyString
+                  })
+                )(failure.value)
+              : Option.none()
+            const finality =
+              Option.isSome(typed) && typed.value.runId === request.runId
+                ? {
+                    _tag: "WorkflowRunTerminationEvidenceInvalid" as const,
+                    runId: request.runId,
+                    detail: "Run termination evidence is causally invalid."
+                  }
+                : null
+            return yield* projectRunningHostRunControl(control, finality)
+          })
+    return runningHostSuccessEnvelope(request, value)
+  })
+  const handle = Effect.fn("RunningHostHttp.handle")(function* (request: IncomingMessage, response: ServerResponse) {
+    let input: unknown = null
+    const outcome = yield* Effect.gen(function* () {
+      if (request.headers.origin !== undefined || request.headers.host !== new URL(address).host) {
+        return yield* Effect.fail(invalid("LocalOriginRequired"))
+      }
+      if (yield* observation.closing)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "HostClosing",
+          hostInstanceId: descriptor.hostInstanceId,
+          cutoff: "AdmissionClosed"
+        })
+      if (request.method === "GET" && request.url === "/dalph/v1/descriptor") {
+        return { _tag: "Descriptor" as const, text: JSON.stringify(descriptor) }
+      }
+      if (request.method !== "POST" || request.url !== "/dalph/v1/request")
+        return yield* Effect.fail(invalid("RouteUnsupported"))
+      if (request.headers["content-type"] !== "application/json")
+        return yield* Effect.fail(invalid("ContentTypeUnsupported"))
+      input = yield* body(request).pipe(
+        Effect.flatMap((text) => Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(text)),
+        Effect.mapError(
+          (error): RunningHostError =>
+            RunningHostError.guards.FrameTooLarge(error) ? error : invalid("RequestJsonInvalid")
+        )
+      )
+      const envelope = yield* dispatch(input)
+      return { _tag: "Envelope" as const, envelope, text: yield* encodeRunningHostEnvelope(envelope) }
+    }).pipe(
+      Effect.catch((error) => {
+        const envelope = runningHostFailureEnvelope(input, error)
+        return encodeRunningHostEnvelope(envelope).pipe(
+          Effect.map((text) => ({ _tag: "Envelope" as const, envelope, text }))
+        )
+      })
+    )
+    const error =
+      outcome._tag === "Envelope" && outcome.envelope.result._tag === "Failure" ? outcome.envelope.result.error : null
+    const status =
+      error?._tag === "InvalidRequest"
+        ? httpStatus.badRequest
+        : error?._tag === "FrameTooLarge" && error.direction === "Incoming"
+          ? httpStatus.tooLarge
+          : error?._tag === "HostInstanceMismatch"
+            ? httpStatus.conflict
+            : error?._tag === "HostClosing"
+              ? httpStatus.unavailable
+              : httpStatus.success
+    yield* write(response, outcome.text, status, outcome._tag === "Envelope" ? outcome.envelope.requestId : null)
+  })
+  const runRequest = yield* FiberSet.makeRuntime<never, void, never>()
+  const server = yield* Effect.acquireRelease(
+    Effect.tryPromise({
+      try: () =>
+        new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
+          const listener = createServer((request, response) =>
+            runRequest(
+              handle(request, response).pipe(
+                Effect.catch(() =>
+                  Effect.sync(() => {
+                    response.destroy()
+                  })
+                )
+              )
+            )
+          )
+          listener.once("error", reject)
+          listener.listen(Number(new URL(address).port), "127.0.0.1", () => resolve(listener))
+        }),
+      catch: (): RunningHostError => ({ _tag: "HostUnavailable", address, reason: "ListenerBindFailed" })
+    }),
+    (listener) =>
+      Effect.promise(
+        () =>
+          new Promise<void>((resolve) => {
+            listener.closeAllConnections()
+            listener.close(() => resolve())
+          })
+      )
+  )
+  return { descriptor, address, server }
+}, Effect.provide(NodeCrypto.layer))

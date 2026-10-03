@@ -43,6 +43,7 @@ import {
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { traceOutputStdioLayer } from "../presentation/stdio-trace-output.js"
 import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
+import { makeRunningHostCommands, type ProductionListeningHostRunner } from "./running-host-cli.js"
 
 /** Host callback consumed by the public command after all CLI/configuration validation. */
 export type ProductionCliHostRunner<E, R> = <EUse>(
@@ -75,7 +76,8 @@ const mapProductionOutputFailure = <E>(failure: E): E | ProductionCliOutputError
 export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = never>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
   signals: ApplicationExitSignalBoundary = nodeApplicationExitSignalBoundary,
-  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>
+  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>,
+  runListeningHost?: ProductionListeningHostRunner<EHost, RHost>
 ) => {
   const cancel = Command.make(
     "cancel",
@@ -360,7 +362,8 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
       cancel,
       publicationCommand("publication-resume"),
       publicationCommand("publication-grant"),
-      publicationSubjects
+      publicationSubjects,
+      ...(runListeningHost === undefined ? [] : makeRunningHostCommands(runListeningHost, signals))
     ])
   )
 }
@@ -374,8 +377,13 @@ export const runProductionCli = <EHost, RHost, EInspect = never, RInspect = neve
 export const productionCliFromStdio = <EHost, RHost, EInspect = never, RInspect = never>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
   signals?: ApplicationExitSignalBoundary,
-  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>
-) => Command.run(makeProductionCli(runProductionHost, signals, inspectPublicationSubjects), runConfiguration)
+  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>,
+  runListeningHost?: ProductionListeningHostRunner<EHost, RHost>
+) =>
+  Command.run(
+    makeProductionCli(runProductionHost, signals, inspectPublicationSubjects, runListeningHost),
+    runConfiguration
+  )
 
 export const makeProductionCliHostRunner =
   <ECodex, EGithub, ETrace>(adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>) =>
@@ -414,9 +422,10 @@ export const productionCliHostObservationOf = (
 /** One shipped command composition; qualification supplies only the host's named boundary Layers. */
 export const makeProductionCliApplicationFromHost = <EHost, RHost, EInspect = never, RInspect = never>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
-  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>
+  inspectPublicationSubjects?: ProductionPublicationInspector<EInspect, RInspect>,
+  runListeningHost?: ProductionListeningHostRunner<EHost, RHost>
 ) =>
-  productionCliFromStdio(runProductionHost, undefined, inspectPublicationSubjects).pipe(
+  productionCliFromStdio(runProductionHost, undefined, inspectPublicationSubjects, runListeningHost).pipe(
     Effect.provide(
       Layer.mergeAll(
         makeDryRunTrackerGraphReaderLayer(fixtureReaderFileLayer),
@@ -432,8 +441,17 @@ export const makeProductionCliApplicationFromHost = <EHost, RHost, EInspect = ne
 export const makeProductionCliApplication = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
 ) =>
-  makeProductionCliApplicationFromHost(makeProductionCliHostRunner(adapters), (configuration) =>
-    inspectProductionPublicationSubjects(configuration, adapters)
+  makeProductionCliApplicationFromHost(
+    makeProductionCliHostRunner(adapters),
+    (configuration) => inspectProductionPublicationSubjects(configuration, adapters),
+    (configuration, use) =>
+      withDecodedProductionRepositoryHost(
+        configuration,
+        productionRepositoryHostGraph(adapters),
+        use,
+        "Run",
+        "Listening"
+      )
   )
 
 /** The shipped binary selects live defaults at every external boundary. */

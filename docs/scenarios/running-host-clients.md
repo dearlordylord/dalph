@@ -3,9 +3,10 @@
 Alice starts one repository host separately; her CLI and agent's MCP process
 attach to its selected Run. This document completes the technical contract of
 [#366](https://github.com/dearlordylord/dalph/issues/366) under
-[#365](https://github.com/dearlordylord/dalph/issues/365). It specifies future
-interfaces. It changes no executable, configuration, model, or runtime behavior.
-The named public acceptance tests below are requirements, not passing evidence.
+[#365](https://github.com/dearlordylord/dalph/issues/365). It specifies the milestone
+interfaces. The maintained #368 mapping below names the implemented passive
+slice; later command and watch slices retain their separate acceptance owners.
+Qualification evidence belongs to each implementation issue.
 
 ## Governing behavior and current seams
 
@@ -31,12 +32,14 @@ They do not prove transport buffering, callbacks, or public encodings.
 The [production host](../../packages/dalph/src/application/production-host.ts)
 already owns selection, coordinator scope, current publication, accepted-history
 signal and an independent `JournaledRunTerminationSource`. Its observation
-interface exposes publication controls, not the new operations below.
+interface exposes publication controls and the passive accepted-prefix getter
+used by the listening host.
 The [bootstrap](../../packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts)
 already returns accepted termination with exact `TraceCursor`, reads durable
 reactivation control, and accesses capacity through active runtime controls.
-The [CLI](../../packages/dalph/src/application/live-cli.ts) currently owns its
-production invocation; it does not already implement attachment.
+The [CLI](../../packages/dalph/src/application/live-cli.ts) owns its
+production invocation and the separate listening-host and passive attachment
+commands.
 The new adapters must reuse these instances and one projection, rather than
 compose another host over the same database.
 
@@ -662,3 +665,26 @@ Source inspection or a protocol mock cannot replace actual child-process lifetim
 qualification. No live provider mutation or bulk live fixture is needed. The
 implementation handoff must enumerate passing evidence per row and per adapter;
 aggregate test totals or a successful prefix do not settle a missing suffix.
+
+## Maintained passive-read implementation (#368)
+
+Alice starts `dalph host --production --config ABS --listen ADDRESS TARGET`.
+The existing production composition retains its coordinator and selected Run
+until application Exit; attached CLI and MCP processes only call its HTTP read
+boundary. The ordinary `dalph run` invocation retains its existing lifetime.
+Mutating commands and watches remain owned by the later slices above.
+
+| Owned scenario or boundary | Maintained proof |
+| --- | --- |
+| S1: one host, coherent publication and passive clients | `production-running-host.test.ts`: the one-task fixture compares actual CLI/MCP results and checks unchanged accepted history, tracker/Git calls, one executor turn and zero client Exit requests. Its separate three-task case checks grouping, prerequisite edges and tasks without attempts. |
+| S2: exited clients, replacement and original-host delivery | The same production test replaces CLI/MCP children against the same Run, then observes real Git/SQLite acceptance, promotion, tracker confirmation and exact accepted Completed disposition/position with one Run beginning. `production-running-host-fixture.ts` is the maintained provider-edge fixture for later slices. |
+| S11: refusal before effects | `running-host-contract.test.ts` decodes address, version, Run, instance and root errors; `running-host-http.test.ts` exercises HTTP refusal and unchanged control-read counts, including exact incoming byte limits. The production test exercises unavailable-address and wrong-Run failures through actual clients. |
+| S12: publication and termination remain distinct | `running-host-projection.test.ts` proves NotReady/Closed and pending/accepted/finality-failed alternatives. HTTP tests exercise Closed without accepted termination and the typed finality failure. Production tests compare both clients' exact accepted terminal evidence. |
+| Listening host retains an activation failure | `production-host.test.ts`, `listening host retains an activation failure while its client scope stays open`, proves retained typed failure, open observation/admission and delayed scope release. |
+| Shared result size and identity | `running-host-contract.test.ts` proves exact result-byte limit/next-byte rejection, safe wire positions and cross-Run rejection. |
+| CLI bounded writes and passive command validation | `running-host-cli.test.ts` uses the public parser and injected Effect output service against the read host, rejects bad client configuration before acquisition, and proves exact five-second cancellation. |
+| Both interfaces preserve every shared failure | `running-host-client-parity.test.ts` compares the source HTTP client and actual CLI/MCP children for all eleven errors through both passive operations, the exact shared result-byte boundary and rejection of excess descriptor properties before requests. Its blocked-stdout subprocess test proves client exit and a surviving peer after each cancellation. |
+| MCP protocol, resources and errors | `running-host-mcp.test.ts` proves the pinned handshake, tool/resource parity, incompatible versions, extra arguments, incoming framing/UTF-8, finite RPC identities and bounded writes. |
+
+The full changing-graph settlement and abrupt host death remain #375 and #374
+respectively. These future owners do not replace the passive assertions above.

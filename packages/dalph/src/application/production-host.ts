@@ -8,6 +8,10 @@ import {
   type RunId
 } from "@dalph/contracts"
 import {
+  AcceptedJournalReader,
+  acceptedJournalRecordsForKind,
+  journalRecordAt,
+  type JournaledRunTermination,
   GithubGraphqlClient,
   type GithubGraphqlExecution,
   GithubGraphqlRequestError,
@@ -61,7 +65,7 @@ import {
   sqliteJournalStoreLayer,
   taskClaimAcquisitionPlannerLayer,
   type ProductionRunSelection,
-  type TraceCursor,
+  TraceCursor,
   type JournalRecord,
   TraceReader,
   TraceReaderLayer,
@@ -73,7 +77,7 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Logger, Option, Schema, type Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Logger, Option, Ref, Schema, type Scope } from "effect"
 // eslint-disable-next-line import/no-nodejs-modules -- The production host selects its own Node executable for task preparation.
 import nodeProcess from "node:process"
 import {
@@ -144,6 +148,26 @@ export interface ProductionHostObservation {
     JournaledRunBootstrap["Service"]["operatorControl"],
     "applyRemotePublicationResume" | "applyRemotePublicationBatchGrant"
   >
+}
+
+/** One immutable accepted-prefix read; it does not establish or publish Run state. */
+export interface ProductionPassiveRunControl {
+  readonly direction: "RunPaused" | "RunUnpaused" | "RunTerminated"
+  readonly observedAt: TraceCursor
+  readonly termination: JournaledRunTermination | null
+}
+
+export class ProductionPassiveControlUnavailable extends Schema.TaggedError<ProductionPassiveControlUnavailable>()(
+  "ProductionPassiveControlUnavailable",
+  {}
+) {}
+
+/** Listener ownership survives delivery settlement and typed activation failure. */
+export interface ProductionRunningHostObservation<E> extends ProductionHostObservation {
+  readonly target: ProductionRepositoryHostConfiguration["target"]
+  readonly readRunControl: Effect.Effect<ProductionPassiveRunControl, ProductionPassiveControlUnavailable>
+  readonly activationFailure: Effect.Effect<Option.Option<E>>
+  readonly closing: Effect.Effect<boolean>
 }
 
 /** The exact retained publication address available to an Operator without starting delivery. */
@@ -1041,8 +1065,9 @@ export const withDecodedProductionRepositoryHost = <
 >(
   configuration: ProductionRepositoryHostConfiguration,
   graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation, EProvider>,
-  use: (observation: ProductionHostObservation) => Effect.Effect<A, EUse, RUse>,
-  operation: "Run" | "Cancel" = "Run"
+  use: (observation: ProductionRunningHostObservation<EActivation>) => Effect.Effect<A, EUse, RUse>,
+  operation: "Run" | "Cancel" = "Run",
+  lifetime: "Invocation" | "Listening" = "Invocation"
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1074,6 +1099,42 @@ export const withDecodedProductionRepositoryHost = <
       const source = Context.get(run, JournaledRunObservationSource)
       const bootstrap = Context.getOption(run, JournaledRunBootstrap)
       yield* Effect.raceFirst(source.awaitEstablished, Deferred.await(activationFailure))
+      const retainedFailure = yield* Ref.make<Option.Option<EActivation>>(Option.none())
+      const acceptedReader = Context.getOption(run, AcceptedJournalReader)
+      const readRunControl = Effect.gen(function* () {
+        if (Option.isNone(acceptedReader)) return yield* new ProductionPassiveControlUnavailable({})
+        const prefix = yield* acceptedReader.value
+          .readAccepted(selection.runId)
+          .pipe(Effect.mapError(() => new ProductionPassiveControlUnavailable({})))
+        const last = journalRecordAt(prefix.records, prefix.records.length - 1)
+        if (last === undefined || prefix.runId !== selection.runId) {
+          return yield* new ProductionPassiveControlUnavailable({})
+        }
+        // The reader certifies this exact accepted prefix. Inspect only applied
+        // control occurrences, without revalidating or copying workflow history.
+        const controls = acceptedJournalRecordsForKind(prefix, "ControlDirectionApplied")
+        let direction: "RunPaused" | "RunUnpaused" = "RunUnpaused"
+        for (let index = controls.length - 1; index >= 0; index -= 1) {
+          const control = journalRecordAt(controls, index)
+          if (control?.event._tag === "ControlDirectionApplied" && control.event.subject._tag === "Run") {
+            direction = control.event.direction === "Pause" ? "RunPaused" : "RunUnpaused"
+            break
+          }
+        }
+        const terminalRecords = acceptedJournalRecordsForKind(prefix, "WorkflowRunTerminated")
+        const terminal = journalRecordAt(terminalRecords, terminalRecords.length - 1)
+        return {
+          direction: terminal?.event._tag === "WorkflowRunTerminated" ? ("RunTerminated" as const) : direction,
+          observedAt: TraceCursor.make({ runId: selection.runId, position: last.position }),
+          termination:
+            terminal?.event._tag === "WorkflowRunTerminated"
+              ? {
+                  disposition: terminal.event.disposition,
+                  terminatedAt: TraceCursor.make({ runId: selection.runId, position: terminal.position })
+                }
+              : null
+        } satisfies ProductionPassiveRunControl
+      })
       const observation = {
         acceptedHistory: source.acceptedHistory,
         current: source.current,
@@ -1081,14 +1142,22 @@ export const withDecodedProductionRepositoryHost = <
         selection,
         traceReader,
         applicationExitRequestBoundary: applicationExit.requestBoundary,
+        target: configuration.target,
+        readRunControl,
+        activationFailure: Ref.get(retainedFailure),
+        closing: applicationExit.admission.snapshot.pipe(Effect.map((state) => state.cutoffClosed)),
         ...(Option.isSome(bootstrap) ? { remotePublicationControl: bootstrap.value.operatorControl } : {})
-      } satisfies ProductionHostObservation
-      // The caller reports the exact lifecycle result and returns from this
-      // callback; normal Effect.scoped finalization then closes the Run and
-      // foundation resources and releases coordinator ownership. A typed activation failure can
-      // arrive after the Run has been established; keep the host effect
-      // attached to that failure so closure does not turn it into Run finality,
-      // Exit, or a host retry.
+      } satisfies ProductionRunningHostObservation<EActivation>
+      // Invocation callers end their scope on an activation failure. A listening
+      // host retains that failure for passive readers and keeps its existing
+      // coordinator and listener until the caller requests application Exit.
+      if (lifetime === "Listening") {
+        yield* Deferred.await(activationFailure).pipe(
+          Effect.catch((failure) => Ref.set(retainedFailure, Option.some(failure))),
+          Effect.forkScoped
+        )
+        return yield* use(observation)
+      }
       return yield* Effect.raceFirst(use(observation), Deferred.await(activationFailure))
     })
   )

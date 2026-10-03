@@ -9,6 +9,9 @@ import {
 } from "../../src/cassettes/index.js"
 import { shiftAuthoredCausalWindow } from "../../src/cassettes/authored-causal-authoring.js"
 
+// Both cases execute the maintained ten-task coordinator prefix before asserting its return.
+const doubleDiamondExecutionTimeout = 600_000
+
 const cassette = maintainedAuthoredCassetteCatalog.deliveryInvariantStory
 const declaredReturn = {
   _tag: "CoordinatorActivationReturned",
@@ -128,38 +131,40 @@ it.effect(
       expect(run.deliveryFrames.at(-1)?.heldPositions).toEqual([])
       expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
     }).pipe(Effect.provide(NodeCrypto.layer)),
-  // The existing maintained ten-task acceptance cases use this same bound.
-  600_000
+  doubleDiamondExecutionTimeout
 )
 
-it.effect("rejects omission of the actual double-diamond activation return before its owed next graph", () =>
-  Effect.gen(function* () {
-    const { returnPosition } = paidG2BoundaryPositions()
-    expect(cassette.story[returnPosition]).toEqual(declaredReturn)
-    expect(cassette.story[returnPosition + 1]).toEqual({
-      _tag: "DalphSelects",
-      operation: { _tag: "ReadTrackerGraph", target: "double-diamond-target" }
-    })
-    const missingReturn = {
-      ...cassette,
-      story: cassette.story.filter((_, index) => index !== returnPosition),
-      causalWindows: cassette.causalWindows?.map((window) =>
-        window.startIndex > returnPosition ? shiftAuthoredCausalWindow(window, -1) : window
-      )
-    }
-    const outcome = yield* runAuthoredScenarioCassette(missingReturn).pipe(Effect.result)
-    if (Result.isSuccess(outcome)) {
-      return yield* Effect.die("omitted activation return unexpectedly completed the double diamond")
-    }
-    const failure = outcome.failure
-    if (!Schema.is(AuthoredCassetteInteractionMismatch)(failure)) {
-      return yield* Effect.die("omitted activation return did not fail at its exact authored cursor")
-    }
-    expect(failure).toMatchObject({
-      _tag: "AuthoredCassetteInteractionMismatch",
-      actual: "CoordinatorActivationReturned",
-      expected: "DalphSelects",
-      storyPosition: returnPosition
-    })
-  }).pipe(Effect.provide(NodeCrypto.layer))
+it.effect(
+  "rejects omission of the actual double-diamond activation return before its owed next graph",
+  () =>
+    Effect.gen(function* () {
+      const { returnPosition } = paidG2BoundaryPositions()
+      expect(cassette.story[returnPosition]).toEqual(declaredReturn)
+      expect(cassette.story[returnPosition + 1]).toEqual({
+        _tag: "DalphSelects",
+        operation: { _tag: "ReadTrackerGraph", target: "double-diamond-target" }
+      })
+      const missingReturn = {
+        ...cassette,
+        story: cassette.story.filter((_, index) => index !== returnPosition),
+        causalWindows: cassette.causalWindows?.map((window) =>
+          window.startIndex > returnPosition ? shiftAuthoredCausalWindow(window, -1) : window
+        )
+      }
+      const outcome = yield* runAuthoredScenarioCassette(missingReturn).pipe(Effect.result)
+      if (Result.isSuccess(outcome)) {
+        return yield* Effect.die("omitted activation return unexpectedly completed the double diamond")
+      }
+      const failure = outcome.failure
+      if (!Schema.is(AuthoredCassetteInteractionMismatch)(failure)) {
+        return yield* Effect.die("omitted activation return did not fail at its exact authored cursor")
+      }
+      expect(failure).toMatchObject({
+        _tag: "AuthoredCassetteInteractionMismatch",
+        actual: "CoordinatorActivationReturned",
+        expected: "DalphSelects",
+        storyPosition: returnPosition
+      })
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  doubleDiamondExecutionTimeout
 )

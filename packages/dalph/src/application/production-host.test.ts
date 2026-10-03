@@ -625,6 +625,96 @@ it.effect("production host exposes TaskTrackerMutationThrottled unchanged and te
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("listening host retains an activation failure while its client scope stays open", () =>
+  Effect.gen(function* () {
+    const events = yield* Ref.make<ReadonlyArray<string>>([])
+    const useEntered = yield* Deferred.make<void>()
+    const failureDelivered = yield* Deferred.make<void>()
+    const scopeReleased = yield* Deferred.make<void>()
+    const throttle = new TaskTrackerMutationThrottled({
+      detail: "GitHub primary rate limit rejected the claim mutation",
+      operation: "AcquireTaskClaim",
+      operationId: OperationId.make("production-host-throttle"),
+      retry: null
+    })
+    const graph = {
+      acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
+      foundation: () => Layer.merge(ownershipLayer, memoryJournalStoreLayer),
+      makeApplicationExit: () => makeProductionHostApplicationExitShell(),
+      run: (
+        configuration: ProductionRepositoryHostConfiguration,
+        selection: ProductionRunSelection,
+        onFailure,
+        _applicationExit
+      ) =>
+        Layer.effectContext(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Ref.update(events, (current) => [...current, "scope-released"]).pipe(
+                Effect.andThen(Deferred.succeed(scopeReleased, undefined))
+              )
+            )
+            yield* Effect.forkScoped(
+              Deferred.await(useEntered).pipe(
+                Effect.andThen(Ref.update(events, (current) => [...current, "tracker-throttle"])),
+                Effect.andThen(Deferred.succeed(failureDelivered, undefined)),
+                Effect.andThen(onFailure(throttle))
+              )
+            )
+            return Context.empty().pipe(
+              Context.add(
+                JournaledRunObservationSource,
+                JournaledRunObservationSource.of({
+                  acceptedHistory: currentSignalOf(
+                    TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
+                  ),
+                  awaitEstablished: Effect.succeed(
+                    JournaledRunEstablished.make({
+                      acceptedAt: JournalPosition.make(1),
+                      runId: selection.runId,
+                      target: configuration.target
+                    })
+                  ),
+                  current: currentSignalOf({ _tag: "NotReady" as const }),
+                  runTermination: unterminatedRun
+                })
+              ),
+              Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
+            )
+          })
+        )
+      // Keep the failure type at this seam explicit: #257 owns conversion
+      // from GitHub's mutation throttle to this provider-neutral error.
+      // The host only observes and propagates the already typed result.
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, TaskTrackerMutationThrottled, never>
+
+    const configuration = yield* decodeProductionRepositoryHostConfiguration(validRawConfiguration())
+    const retained = yield* withDecodedProductionRepositoryHost(
+      configuration,
+      graph,
+      (observation) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(useEntered, undefined)
+          yield* Deferred.await(failureDelivered)
+          const failure = yield* observation.activationFailure.pipe(
+            Effect.repeat({ until: Option.isSome }),
+            Effect.timeout("1 second")
+          )
+          expect(yield* Deferred.isDone(scopeReleased)).toBe(false)
+          expect(yield* observation.current.get).toEqual({ _tag: "NotReady" })
+          expect(yield* observation.closing).toBe(false)
+          return failure
+        }),
+      "Run",
+      "Listening"
+    )
+    expect(Option.getOrThrow(retained)).toBe(throttle)
+    yield* Deferred.await(scopeReleased)
+
+    expect(yield* Ref.get(events)).toEqual(["tracker-throttle", "scope-released"])
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("next host invocation recovers the same Run and authority-reads before mutation", () =>
   Effect.scoped(
     Effect.gen(function* () {
