@@ -2,13 +2,18 @@
 import { RunId } from "@dalph/contracts"
 import { ControlDirectionApplicationOrdinal, JournalPosition, TraceCursor } from "@dalph/orchestrator"
 import { request as httpRequest } from "node:http"
+import { networkInterfaces } from "node:os"
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Option, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { runningHostLimits } from "./running-host-contract.js"
-import { availableLocalHostAddress, makeRunningHostReadProbe } from "../../test-support/running-host-read-probe.js"
+import {
+  availableHostAddress,
+  availableLocalHostAddress,
+  makeRunningHostReadProbe
+} from "../../test-support/running-host-read-probe.js"
 import { serveRunningHost } from "./running-host-http.js"
 
 it.live("HTTP reads remain passive, reject wrong identities and malformed bytes, and respect Exit admission", () =>
@@ -230,4 +235,53 @@ it.effect("the client's response deadline stops its wait while the host complete
       yield* Deferred.await(completed)
     })
   )
+)
+
+const configuredIpv4 = Object.values(networkInterfaces())
+  .flat()
+  .find((entry) => entry?.family === "IPv4" && !entry.internal)?.address
+
+it.live.skipIf(configuredIpv4 === undefined)(
+  "HTTP binds the configured interface and serves passive attachment reads",
+  () =>
+    Effect.gen(function* () {
+      if (configuredIpv4 === undefined) return yield* Effect.die("No assigned non-loopback IPv4 interface")
+      const probe = yield* makeRunningHostReadProbe()
+      const address = yield* availableHostAddress(configuredIpv4)
+      const listening = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const host = yield* serveRunningHost(address, probe.observation)
+          expect(host.server.address()).toMatchObject({ address: configuredIpv4, port: Number(new URL(address).port) })
+          expect(yield* readRunningHostDescriptor(address)).toEqual(host.descriptor)
+          expect(yield* callRunningHost(address, probe.runId, { _tag: "ReadSnapshot" })).toMatchObject({
+            result: { _tag: "Success", value: { _tag: "NotReady" } }
+          })
+          expect(yield* Ref.get(probe.reads)).toBe(0)
+          for (const headers of [{ host: "127.0.0.1:1" }, { origin: "http://foreign.example" }]) {
+            const rejected = yield* Effect.promise(
+              () =>
+                new Promise<unknown>((resolve, reject) => {
+                  const request = httpRequest(`${address}/dalph/v1/descriptor`, { headers }, (response) => {
+                    let text = ""
+                    response.setEncoding("utf8")
+                    response.on("data", (chunk: string) => {
+                      text += chunk
+                    })
+                    response.on("end", () => resolve(JSON.parse(text)))
+                    response.on("error", reject)
+                  })
+                  request.on("error", reject)
+                  request.end()
+                })
+            )
+            expect(rejected).toMatchObject({
+              result: { _tag: "Failure", error: { _tag: "InvalidRequest", code: "LocalOriginRequired" } }
+            })
+          }
+          expect(yield* Ref.get(probe.reads)).toBe(0)
+          return host
+        })
+      )
+      expect(listening.server.listening).toBe(false)
+    })
 )

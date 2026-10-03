@@ -74,12 +74,11 @@ is an exact CLI alias of `unpause`. `--json` is required for this first attached
 CLI; no human-output variant is implied. The existing `run`, cancellation and
 publication commands keep their existing meanings.
 
-`LocalHostAddress` is an explicitly provided HTTP origin with literal IPv4
-`127.0.0.1`, nonzero TCP port, and no credentials/path/query/fragment. The host
-binds only that literal loopback address. There is no default port, discovery,
+`LocalHostAddress` is an explicitly provided HTTP origin with a canonical literal IPv4 address, nonzero TCP port, and no credentials/path/query/fragment. The host
+binds only the requested literal IPv4 address. There is no default port, discovery,
 redirect following, hostname resolution, proxy routing, or automatic startup.
-Reject browser Origin headers and nonmatching Host authorities; this is a local
-trusted-user boundary, not remote authentication. An occupied port fails startup
+Reject browser Origin headers and nonmatching Host authorities; this is an explicitly selected
+trusted-network boundary, not remote authentication. An occupied port fails startup
 without attaching to its occupant. Advertise only after exact Run establishment
 and successful bind. Host stdout emits one JSON `HostReady` descriptor, then
 lifecycle diagnostics; clients never parse the host's logs to select work.
@@ -725,3 +724,5 @@ existing authorities. Full quality and fresh model gates qualify the candidate;
 callback completion is proved by the concrete tests, not inferred from a model.
 Capacity remains #370, paused Refresh #371, watch #372, abrupt killed-host
 reconstruction #374, and full changing-graph qualification #375.
+
+The accepted [Docker-IP attachment extension](running-host-docker-ip.md) supersedes the original loopback-only address restriction. Existing loopback commands remain valid.

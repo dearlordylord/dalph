@@ -24,11 +24,20 @@ export type HostInstanceId = typeof HostInstanceId.Type
 export const RequestId = Schema.NonEmptyString.pipe(Schema.brand("RunningHostRequestId"))
 export type RequestId = typeof RequestId.Type
 const maximumTcpPort = 65535
-/** Explicit trusted-local origin. No hostname, credentials, path, proxy or discovery is accepted. */
+const maximumIpv4Octet = 255
+/** Explicit trusted-network IPv4 origin. No hostname, credentials, wildcard, path or discovery is accepted. */
 export const LocalHostAddress = Schema.String.check(
   Schema.makeFilter((value) => {
-    const match = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(value)
-    return (match !== null && Number(match[1]) <= maximumTcpPort) || "expected an explicit http://127.0.0.1:PORT origin"
+    const match = /^http:\/\/((?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}):([1-9][0-9]{0,4})$/.exec(value)
+    return (
+      (match !== null &&
+        match[1] !== undefined &&
+        match[1] !== "0.0.0.0" &&
+        match[1] !== "255.255.255.255" &&
+        match[1].split(".").every((octet) => Number(octet) <= maximumIpv4Octet) &&
+        Number(match[2]) <= maximumTcpPort) ||
+      "expected an explicit http://IPv4:PORT origin"
+    )
   })
 ).pipe(Schema.brand("LocalHostAddress"))
 export type LocalHostAddress = typeof LocalHostAddress.Type
