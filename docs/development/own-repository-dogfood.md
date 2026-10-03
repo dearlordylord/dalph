@@ -56,6 +56,9 @@ belongs in the configuration, remote URL, logs, or evidence.
 
 ```bash
 set -euo pipefail
+# Keep user-wide URL rewrites from changing the pinned publication endpoint.
+# Configure commit identity in the dedicated target clone if needed.
+export GIT_CONFIG_GLOBAL=/dev/null
 export DALPH_SOURCE=/absolute/path/to/pinned/dalph
 export DALPH_SOURCE_SHA=REPLACE_WITH_40_HEX_SOURCE_SHA
 export DALPH_ISSUE=REPLACE_WITH_FRESH_ISSUE_NUMBER
