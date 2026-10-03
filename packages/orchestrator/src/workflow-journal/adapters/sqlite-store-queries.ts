@@ -23,7 +23,7 @@ const PersistedJournalRow = Schema.Struct({
   payload_json: Schema.String,
   run_id: RunId,
   position: JournalPosition,
-  record_key: JournalRecordKey
+  record_key_hex: Schema.String
 })
 type PersistedJournalRow = typeof PersistedJournalRow.Type
 
@@ -33,6 +33,14 @@ const lastRecordIndex = -1
 
 const historyCorruption = (partition: JournalPartition, runId: RunId, operation: StoreOperation, detail: string) =>
   new JournalHistoryCorruption({ detail, operation, partition, runId })
+
+/** Node's SQLite TEXT reader stops at NUL; hex carries the complete stored UTF-8 key. */
+const recordKeyFromSqliteHex = (hex: string): JournalRecordKey | undefined => {
+  const bytes = Buffer.from(hex, "hex")
+  if (bytes.length === 0 || bytes.toString("hex").toUpperCase() !== hex.toUpperCase()) return undefined
+  const key = bytes.toString("utf8")
+  return Buffer.from(key, "utf8").equals(bytes) ? JournalRecordKey.make(key) : undefined
+}
 
 const parseEvent = (
   row: Pick<PersistedJournalRow, "event_kind" | "event_version" | "payload_json">,
@@ -69,6 +77,19 @@ const decodeScannedRow = (
         runId: identityRunId
       }
     }
+    const key = recordKeyFromSqliteHex(decoded.success.record_key_hex)
+    if (key === undefined) {
+      return {
+        _tag: "BoundaryIssue",
+        issue: new JournalBoundaryDecodeIssue({
+          detail: "stored journal record key is not valid UTF-8 hex",
+          partition,
+          rowOrdinal,
+          runId: decoded.success.run_id
+        }),
+        runId: decoded.success.run_id
+      }
+    }
     const event = yield* parseEvent(decoded.success, operation).pipe(Effect.result)
     if (Result.isFailure(event)) {
       return {
@@ -84,12 +105,7 @@ const decodeScannedRow = (
     }
     return {
       _tag: "Record",
-      record: {
-        event: event.success,
-        key: decoded.success.record_key,
-        position: decoded.success.position,
-        runId: decoded.success.run_id
-      }
+      record: { event: event.success, key, position: decoded.success.position, runId: decoded.success.run_id }
     }
   })
 
@@ -175,11 +191,11 @@ export const makeSqliteJournalQueries = (
     const input = yield* (
       partition === "Hot"
         ? sql`
-          SELECT run_id, position, record_key, event_kind, event_version, payload_json
+          SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records WHERE run_id = ${runId} ORDER BY position ASC
         `
         : sql`
-          SELECT run_id, position, record_key, event_kind, event_version, payload_json
+          SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records_cold WHERE run_id = ${runId} ORDER BY position ASC
         `
     ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))
@@ -188,13 +204,24 @@ export const makeSqliteJournalQueries = (
     )
     if (onPartitionRowsQueried !== undefined) yield* onPartitionRowsQueried(partition, runId, rows.length)
     const decodedRows = yield* Effect.forEach(rows, (row) =>
-      parseEvent(row, operation).pipe(
-        Effect.map((event) => ({
+      Effect.gen(function* () {
+        const key = recordKeyFromSqliteHex(row.record_key_hex)
+        if (key === undefined) {
+          return yield* historyCorruption(
+            partition,
+            runId,
+            operation,
+            "stored journal record key is not valid UTF-8 hex"
+          )
+        }
+        const event = yield* parseEvent(row, operation).pipe(
+          Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
+        )
+        return {
           evidence: { event, position: row.position },
-          record: { event, key: row.record_key, position: row.position, runId: row.run_id } satisfies JournalRecord
-        })),
-        Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
-      )
+          record: { event, key, position: row.position, runId: row.run_id } satisfies JournalRecord
+        }
+      })
     )
     const records = decodedRows.map(({ record }) => record)
     const observedKeys = new Set<JournalRecordKey>()
@@ -323,11 +350,11 @@ export const makeSqliteJournalQueries = (
     const rows = yield* (
       partition === "Hot"
         ? sql`
-          SELECT run_id, position, record_key, event_kind, event_version, payload_json
+          SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records ORDER BY run_id ASC, position ASC
         `
         : sql`
-          SELECT run_id, position, record_key, event_kind, event_version, payload_json
+          SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records_cold ORDER BY run_id ASC, position ASC
         `
     ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))

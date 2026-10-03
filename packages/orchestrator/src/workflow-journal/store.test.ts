@@ -7,7 +7,7 @@ import { Cause, ConfigProvider, Context, Deferred, Effect, FileSystem, Fiber, La
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
-import { RunId, TaskId } from "@dalph/contracts"
+import { GitCommitSha, RunId, TaskId } from "@dalph/contracts"
 import {
   FixtureTarget,
   AcceptedJournalReader,
@@ -50,8 +50,16 @@ import {
   controlDirectionAppliedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  remotePublicationAdmissionObservedRecordKey,
+  remotePublicationAdmissionReadIntendedRecordKey,
   runCancellationAppliedRecordKey
 } from "./record-key.js"
+import { WorkflowActor } from "../workflow/registry/actor.js"
+import {
+  RemotePublicationAdmissionObservedEvent,
+  RemotePublicationAdmissionReadIntendedEvent,
+  remotePublicationAdmissionIdFor
+} from "../workflow/protocols/direct-publication/events.js"
 import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import {
@@ -1001,6 +1009,60 @@ durableJournalStoreContract(
               { migration_id: 2, name: "create_cold_journal_records" }
             ])
           }).pipe(Effect.provide(Reactivity.layer))
+        )
+      )
+    )
+
+    it.effect("reopens distinct admission keys containing NUL without merging their suffixes", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("sqlite-nul-admission-keys")
+            const target = FixtureTarget.make("sqlite-nul-admission-target")
+            const admissionId = remotePublicationAdmissionIdFor(runId, remotePublicationTargetForTest)
+            const intendedKey = remotePublicationAdmissionReadIntendedRecordKey(admissionId)
+            const observedKey = remotePublicationAdmissionObservedRecordKey(admissionId)
+            const firstEvent = RemotePublicationAdmissionReadIntendedEvent.make({
+              admissionId,
+              initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+              occurrenceClassification: "InitiatedAction",
+              runId,
+              target: remotePublicationTargetForTest,
+              version: workflowJournalEventVersion
+            })
+            const secondEvent = RemotePublicationAdmissionObservedEvent.make({
+              admissionId,
+              observation: { _tag: "ExistingBranch", remoteHead: GitCommitSha.make("a".repeat(40)) },
+              occurrenceClassification: "NonActionOccurrence",
+              runId,
+              target: remotePublicationTargetForTest,
+              version: workflowJournalEventVersion
+            })
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+              yield* journal.append(runId, intendedKey, firstEvent)
+              yield* journal.append(runId, observedKey, secondEvent)
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              const records = yield* journal.read(runId)
+              expect(records.map(({ key }) => key)).toEqual([
+                JournalRecordKey.make("run:began"),
+                intendedKey,
+                observedKey
+              ])
+              expect((yield* journal.scanHot()).runs).toContainEqual(expect.objectContaining({ runId, records }))
+              expect((yield* journal.auditAll()).issues).toEqual([])
+              expect((yield* journal.append(runId, intendedKey, firstEvent)).position).toBe(JournalPosition.make(2))
+              expect((yield* journal.read(runId)).map(({ position }) => position)).toEqual([
+                JournalPosition.make(1),
+                JournalPosition.make(2),
+                JournalPosition.make(3)
+              ])
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+          })
         )
       )
     )
