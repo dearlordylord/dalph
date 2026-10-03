@@ -141,3 +141,24 @@ Issue qualification remains incomplete:
 These qualification failures do not waive the issue's full/model gates. The
 core acceptance behavior is observed; integration/issue completion remains
 conditional on those gates. Public attachment qualification remains #375.
+
+## Qualification repair scope
+
+The refresh fixture measures each activation before its explicit application
+Exit. Graceful Exit then legitimately suspends remaining executor work through
+the real journaled drain; those teardown effects must not be mistaken for
+refresh effects. A simulated crash closes its process scope without requesting
+Exit, preserving the crash prefix for recovery. The fixture will retain the
+pre-Exit calls and history and separately assert successful ordinary Exit.
+The existing recovery fixture supplies the tool-effect subscription required
+by the executor, and the provider fixture asserts the controller's existing
+five-key environment. These are controlled-test corrections: no production
+operation, decision, or adapter behavior changes. The workspace-resolution
+fixture and formal observer use their original commands after preserving
+ignored reference checkouts under `.scratch/reference-checkouts-367`.
+
+The newly discovered unfinished blocker D in the constraint fixture has its
+own work specification and a foreign tracker claim. It remains unfinished;
+Dalph must not begin it. Returning C's work specification for a D read was
+invalid fixture evidence and prevented the real Exit drain from reconstructing
+history. The fixture now returns D's exact facts without changing production.

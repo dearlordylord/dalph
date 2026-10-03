@@ -1475,15 +1475,29 @@ it.effect(
         let allocations = 0
         let turns = 0
         let startedTurn: CodexTurnSnapshot | undefined
+        let retainedThread: CodexThreadSnapshot | undefined
         const privateStore = nodeCodexAttemptStoreLayer({ stateDirectory })
         const fixture = yield* makePublicRunFixture(() => [], {
           executorLayerForApplication: (planned, ordinal) => {
-            let thread: CodexThreadSnapshot | undefined
+            let thread = retainedThread
             let startedTurnToken: CodexOwnedTurnToken | undefined
             const app = Layer.unwrap(
               Effect.map(CodexAttemptStore, (durable) =>
                 Layer.mock(CodexAppServer, {
                   incarnation: CodexServerIncarnation.make(`process-${ordinal}`),
+                  attachToolEffects: Effect.succeed(Stream.empty),
+                  readThread: (threadId) =>
+                    retainedThread?.id === threadId
+                      ? Effect.succeed(retainedThread)
+                      : Effect.fail(
+                          new CodexAppServerFailure({
+                            kind: "NotFound",
+                            operation: "thread/read",
+                            detail: "controlled provider has no retained thread with this identity"
+                          })
+                        ),
+                  listThreadTurns: () => Effect.succeed(startedTurn === undefined ? [] : [startedTurn]),
+                  listBackgroundTerminals: () => Effect.succeed([]),
                   attachTurnCompletedHints: Effect.succeed(Stream.empty),
                   attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
                     Effect.succeed({
@@ -1532,7 +1546,7 @@ it.effect(
                           operation: "thread/resume",
                           detail: "empty rollout disappeared with the earlier process"
                         })
-                      if (turns > 0)
+                      if (turns > 0 && ordinal === 2)
                         return yield* new CodexAppServerFailure({
                           kind: "Unavailable",
                           operation: "thread/resume",
@@ -1559,6 +1573,12 @@ it.effect(
                         status: "inProgress" as const,
                         items: [],
                         ownedTurnToken: token
+                      }
+                      retainedThread = {
+                        id: threadId,
+                        cwd: CodexThreadWorkingDirectory.make(cwd),
+                        status: "active",
+                        turns: [startedTurn]
                       }
                       return startedTurn
                     })

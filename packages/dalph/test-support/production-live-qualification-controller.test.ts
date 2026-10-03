@@ -161,6 +161,7 @@ describe("#307 production live qualification controller", () => {
         ],
         environment: {
           CODEX_HOME: "/tmp/dalph-live-q/codex",
+          DALPH_LIVE_CODEX_PREFLIGHT: "0",
           GITHUB_TOKEN: "github-secret",
           DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "controlled-provider-secret",
           GIT_OPTIONAL_LOCKS: "0"
@@ -263,7 +264,7 @@ describe("#307 production live qualification controller", () => {
       { _tag: "Failed", stage: "ReadOutput", processId: 703, spawnCount: 1 }
     ])
     expect(credentials).toEqual(["safe-controlled-provider-1", "safe-controlled-provider-2"])
-    expect(captured.every(({ environment }) => Object.keys(environment).length === 4)).toBe(true)
+    expect(captured.every(({ environment }) => Object.keys(environment).length === 5)).toBe(true)
     expect(captured.every(({ environment }) => environment["CODEX_HOME"] === invocation.codexHome)).toBe(true)
     expect(MutableList.toArray(published)).toHaveLength(0)
     expect(JSON.stringify(results)).not.toContain("safe-controlled-provider")

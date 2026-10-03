@@ -1338,19 +1338,12 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           yield* Ref.update(activeSelectionOperationKeys, (current) => [...current, `${tag}:${operationId}`])
         })
 
-      const readJournal = () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const journal = yield* JournalStore
-            return yield* journal.read(runId)
-          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
-        )
-
       const runProcess = (processNumber: number) =>
         Effect.scoped(
           Effect.gen(function* () {
             yield* Ref.set(phase, "Startup")
             const processCrash = processNumber === 1 ? options.crash : undefined
+            const exiting = yield* Ref.make(false)
             const ordinaryActivationCount = yield* Ref.make(0)
             const registeredObservers = yield* Ref.make<AcceptedRunReactivationObservers | undefined>(undefined)
             const trackerMutation = TrackerMutation.of({
@@ -1368,14 +1361,24 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   Effect.andThen(
                     selectedTaskId === constrainedTaskId && claimMode === "Unreadable"
                       ? Effect.fail(new TaskClaimReadFailure({ detail: "claim unreadable", taskId: selectedTaskId }))
-                      : selectedTaskId === constrainedTaskId
-                        ? Effect.succeed(claimObservation)
-                        : selectedTaskId === taskId
-                          ? Effect.succeed(claim)
-                          : Effect.map(
-                              Ref.get(acquiredClaims),
-                              (current) => current.get(selectedTaskId) ?? UnclaimedTask.make({ taskId: selectedTaskId })
-                            )
+                      : graphMode === "BlockerAdded" && selectedTaskId === blockerTaskId
+                        ? Effect.succeed(
+                            ActiveTaskClaim.make({
+                              operationId: OperationId.make("production-refresh-blocker-claim"),
+                              owner: ClaimOwner.make("another-dalph"),
+                              taskId: blockerTaskId,
+                              token: ClaimToken.make("production-refresh-blocker-token")
+                            })
+                          )
+                        : selectedTaskId === constrainedTaskId
+                          ? Effect.succeed(claimObservation)
+                          : selectedTaskId === taskId
+                            ? Effect.succeed(claim)
+                            : Effect.map(
+                                Ref.get(acquiredClaims),
+                                (current) =>
+                                  current.get(selectedTaskId) ?? UnclaimedTask.make({ taskId: selectedTaskId })
+                              )
                   )
                 ),
               releaseTaskClaim: () => Effect.void
@@ -1433,7 +1436,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                       ? selectedSpecificationMode === "Changed" && constrainedTaskId === independentTaskId
                         ? changedIndependentSpecification
                         : independentSpecification
-                      : thirdSpecification
+                      : selectedTaskId === thirdTaskId
+                        ? thirdSpecification
+                        : makeTaskWorkSpecification({ body: "Complete D.", taskId: blockerTaskId, title: "Complete D" })
                 })
             })
             const runStartedCommand = (command: "Begin" | "Resume", request: PlannedAttemptExecutorRequest) =>
@@ -1474,6 +1479,12 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 }),
               requestSuspension: (requested) =>
                 Effect.gen(function* () {
+                  if (yield* Ref.get(exiting)) {
+                    yield* Ref.update(suspendedTasks, (current) => new Set([...current, requested.taskId]))
+                    return PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                      correlation: plannedAttemptExecutorCorrelation(requested)
+                    })
+                  }
                   const selectedSpecificationMode = yield* Ref.get(currentSpecificationMode)
                   const constrained =
                     claimMode !== "Exact" ||
@@ -1597,12 +1608,15 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                       })
                     ).pipe(Layer.provide(sqliteJournalStoreLayer({ filename: journalFilename })))
                   )
+            const processJournalContext = yield* Layer.build(
+              journalStoreLayer ?? sqliteJournalStoreLayer({ filename: journalFilename })
+            )
             const applicationExitRequests = yield* Ref.make(0)
             const applicationProcessEnds = yield* Ref.make(0)
             const applicationExitEvents = yield* Ref.make<ReadonlyArray<string>>([])
             const observeApplicationExit = source === "TrackerNotification"
             const runtimeBoundaries = {
-              ...(journalStoreLayer === undefined ? {} : { journalStoreLayer }),
+              journalStoreLayer: Layer.succeedContext(processJournalContext),
               remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
               remotePublicationTarget: remotePublicationTargetForTest,
               applicationExit: observeApplicationExit
@@ -1965,18 +1979,18 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               ...current,
               { processEnds: processEndsBeforeExplicitExit, requests: requestsBeforeExplicitExit }
             ])
-            const applicationExitResult =
-              options.stableStartupWake === undefined
-                ? yield* applicationExit.requestBoundary.requestExit
-                : ({ _tag: "Succeeded" } as const)
-            const expectedApplicationExitResult =
-              processCrash === "AfterConstraintBeforeSuspendIntent" ||
-              processCrash === "SuspendResponseLost" ||
-              processCrash === "AfterG2"
-                ? "Failed"
-                : "Succeeded"
-            expect(applicationExitResult._tag).toBe(expectedApplicationExitResult)
-            const explicitExitWasRequested = observeApplicationExit && options.stableStartupWake === undefined
+            const beforeExit = {
+              executorCalls: yield* Ref.get(executorCalls),
+              executorEntries: yield* Ref.get(executorEntries),
+              journalRecords: yield* Context.get(processJournalContext, JournalStore).read(runId)
+            }
+            const requestGracefulExit = options.stableStartupWake === undefined && processCrash === undefined
+            if (requestGracefulExit) {
+              yield* Ref.set(exiting, true)
+              const applicationExitResult = yield* applicationExit.requestBoundary.requestExit
+              expect(applicationExitResult).toMatchObject({ _tag: "Succeeded" })
+            }
+            const explicitExitWasRequested = observeApplicationExit && requestGracefulExit
             expect(yield* Ref.get(applicationExitRequests)).toBe(explicitExitWasRequested ? 1 : 0)
             expect(yield* Ref.get(applicationProcessEnds)).toBe(explicitExitWasRequested ? 1 : 0)
             if (explicitExitWasRequested) {
@@ -1985,6 +1999,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               expect(yield* Ref.get(applicationExitEvents)).toEqual([])
             }
             return {
+              ...beforeExit,
               activeActivation:
                 source === "AcceptedFactPublication" ||
                 source === "OperatorWake" ||
@@ -2001,9 +2016,10 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         )
 
       const firstProcess = yield* runProcess(1)
-      const firstJournalRecords = options.crash === undefined ? undefined : yield* readJournal()
+      const firstJournalRecords = options.crash === undefined ? undefined : firstProcess.journalRecords
       const secondProcess = options.crash === undefined ? undefined : yield* runProcess(2)
-      const journalRecords = yield* readJournal()
+      const finalProcess = secondProcess ?? firstProcess
+      const journalRecords = finalProcess.journalRecords
       return {
         activeActivation:
           source === "AcceptedFactPublication" || source === "OperatorWake"
@@ -2022,8 +2038,8 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         beforeExplicitExitCounts: yield* Ref.get(beforeExplicitExitCounts),
         maximumActiveConcurrent: yield* Ref.get(maximumActiveConcurrent),
         maximumGraphReadsInFlight: yield* Ref.get(maximumGraphReadsInFlight),
-        executorCalls: yield* Ref.get(executorCalls),
-        executorEntries: yield* Ref.get(executorEntries),
+        executorCalls: finalProcess.executorCalls,
+        executorEntries: finalProcess.executorEntries,
         failpoint: yield* Ref.get(failpoint),
         firstJournalRecords,
         graphTaskIds: snapshot.taskIds(),
