@@ -21,6 +21,8 @@ const liveLaunchPreflightIntegrationTestPattern =
 // deadlines when competing with other files in a broad coverage run.
 const lateCoverageTestPatterns = ["packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"]
 const serialCoverageTestPatterns = [
+  "packages/dalph/src/application/running-host-command.acceptance.test.ts",
+  "packages/dalph/src/application/running-host-client-parity.test.ts",
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
   "scripts/quint-ci-contract.test.ts",
   "packages/dalph/src/application/production-changing-graph-finality.test.ts",

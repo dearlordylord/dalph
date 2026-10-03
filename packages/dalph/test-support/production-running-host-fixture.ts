@@ -41,6 +41,11 @@ interface PausedRunningHostFixture {
   readonly onAcceptedRunControl?: (direction: "Pause" | "Unpause") => Effect.Effect<void>
 }
 
+const reactivationObserversFor = (paused: PausedRunningHostFixture | undefined) => ({
+  ...(paused?.onTimerStateChange === undefined ? {} : { onTimerStateChange: paused.onTimerStateChange }),
+  ...(paused?.onAcceptedRunControl === undefined ? {} : { onAcceptedRunControl: paused.onAcceptedRunControl })
+})
+
 export const runningHostFixtureLayer = nodeGitCommandLayer.pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.merge(NodeCrypto.layer)
@@ -248,8 +253,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   yield* Effect.addFinalizer(() => Deferred.succeed(releaseObservationCut, undefined).pipe(Effect.asVoid))
   const ownerReady = yield* Deferred.make<RunReactivationOwner["Service"]>()
   const productionGraph = productionRepositoryHostGraph({
-    ...(paused?.onTimerStateChange === undefined ? {} : { onTimerStateChange: paused.onTimerStateChange }),
-    ...(paused?.onAcceptedRunControl === undefined ? {} : { onAcceptedRunControl: paused.onAcceptedRunControl }),
+    ...reactivationObserversFor(paused),
     githubRequestCircuitMaxRequests: 2000,
     onActivationFinalizationStart: () =>
       Deferred.succeed(activationFinalizing, undefined).pipe(Effect.andThen(Deferred.await(releaseObservationCut))),

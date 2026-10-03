@@ -110,7 +110,7 @@ const tools = [
   },
   {
     name: "dalph_start_work",
-    description: "Submit an ordinary owner hint; preserves Pause and proves no activation.",
+    description: "Submit a request to check for work; preserve Pause.",
     inputSchema,
     outputSchema
   },

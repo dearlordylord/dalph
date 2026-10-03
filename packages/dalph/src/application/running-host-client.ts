@@ -23,31 +23,28 @@ const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], Read
   StartWork: ["WakeSubmitted"],
   Unpause: ["UnpauseApplied"]
 }
-const compatibleFailure = (request: RunningHostRequest, error: RunningHostError): boolean => {
-  if ("operation" in error && error.operation !== request.operation._tag) return false
-  const command = request.operation._tag === "StartWork" || request.operation._tag === "Unpause"
-  switch (error._tag) {
-    case "UnpausePartiallyApplied":
-      return request.operation._tag === "Unpause"
-    case "RunClosed":
-      return command
-    case "ReadFailed":
-    case "ProjectionFailed":
-      return !command
-    case "CommandFailed":
-    case "CommandOutcomeUnknown":
-    case "FrameTooLarge":
-    case "HostClosing":
-    case "HostInstanceMismatch":
-    case "HostUnavailable":
-    case "InvalidRequest":
-    case "ProtocolVersionUnsupported":
-    case "RunMismatch":
-    case "TransportFailed":
-    case "WriteTimedOut":
-      return true
-  }
+const compatibleFailures: Readonly<
+  Record<RunningHostError["_tag"], ReadonlyArray<RunningHostRequest["operation"]["_tag"]>>
+> = {
+  UnpausePartiallyApplied: ["Unpause"],
+  RunClosed: ["StartWork", "Unpause"],
+  ReadFailed: ["ReadSnapshot", "ReadRunControl"],
+  ProjectionFailed: ["ReadSnapshot", "ReadRunControl"],
+  CommandFailed: ["StartWork", "Unpause"],
+  CommandOutcomeUnknown: ["StartWork", "Unpause"],
+  FrameTooLarge: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  HostClosing: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  HostInstanceMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  HostUnavailable: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  InvalidRequest: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  ProtocolVersionUnsupported: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  RunMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  TransportFailed: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
+  WriteTimedOut: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"]
 }
+const compatibleFailure = (request: RunningHostRequest, error: RunningHostError): boolean =>
+  (!("operation" in error) || error.operation === request.operation._tag) &&
+  compatibleFailures[error._tag].includes(request.operation._tag)
 
 const transportError = (error: unknown, phase: "Handshake" | "Response"): RunningHostError => {
   const known = Schema.decodeUnknownOption(RunningHostError)(error)
@@ -154,6 +151,51 @@ export const readRunningHostDescriptor = Effect.fn("RunningHostClient.descriptor
   (effect) => Effect.scoped(effect.pipe(Effect.provide([NodeHttpClient.layerUndici, NodeCrypto.layer])))
 )
 
+const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (request: RunningHostRequest, input: unknown) {
+  const envelope = yield* Schema.decodeUnknownEffect(RunningHostEnvelope)(input, { onExcessProperty: "error" }).pipe(
+    Effect.mapError(
+      (): RunningHostError => ({ _tag: "TransportFailed", phase: "Response", reason: "ResponseSchemaInvalid" })
+    )
+  )
+  if (envelope.requestId !== request.requestId || envelope.runId !== request.runId)
+    return yield* Effect.fail<RunningHostError>({
+      _tag: "TransportFailed",
+      phase: "Response",
+      reason: "ResponseCorrelationMismatch"
+    })
+  const compatible =
+    envelope.result._tag === "Success"
+      ? successTags[request.operation._tag].includes(envelope.result.value._tag)
+      : compatibleFailure(request, envelope.result.error)
+  if (!compatible)
+    return yield* Effect.fail<RunningHostError>({
+      _tag: "TransportFailed",
+      phase: "Response",
+      reason: "ResponseOperationMismatch"
+    })
+  yield* encodeRunningHostEnvelope(envelope)
+  return envelope
+})
+
+const failureAfterSubmission = (
+  correlation: Pick<RunningHostRequest, "requestId" | "runId">,
+  operation: RunningHostRequest["operation"],
+  submitted: boolean,
+  error: RunningHostError
+) =>
+  runningHostFailureEnvelope(
+    correlation,
+    submitted && (operation._tag === "StartWork" || operation._tag === "Unpause")
+      ? {
+          _tag: "CommandOutcomeUnknown",
+          operation: operation._tag,
+          requestId: correlation.requestId,
+          phase: "AdmissionUnconfirmed",
+          acceptedAt: null
+        }
+      : error
+  )
+
 /** Both attached interfaces call this direct HTTP boundary; no MCP indirection or retry. */
 export const callRunningHost = Effect.fn("RunningHostClient.call")(
   function* (address: LocalHostAddress, runId: RunId, operation: RunningHostRequest["operation"]) {
@@ -197,49 +239,8 @@ export const callRunningHost = Effect.fn("RunningHostClient.call")(
       const input = yield* jsonRequest(address, "/dalph/v1/request", request).pipe(
         Effect.mapError((error): RunningHostError => transportError(error, "Response"))
       )
-      const envelope = yield* Schema.decodeUnknownEffect(RunningHostEnvelope)(input, {
-        onExcessProperty: "error"
-      }).pipe(
-        Effect.mapError(
-          (): RunningHostError => ({ _tag: "TransportFailed", phase: "Response", reason: "ResponseSchemaInvalid" })
-        )
-      )
-      if (envelope.requestId !== requestId || envelope.runId !== runId)
-        return runningHostFailureEnvelope(correlation, {
-          _tag: "TransportFailed",
-          phase: "Response",
-          reason: "ResponseCorrelationMismatch"
-        })
-      const compatible =
-        envelope.result._tag === "Success"
-          ? successTags[operation._tag].includes(envelope.result.value._tag)
-          : compatibleFailure(request, envelope.result.error)
-      if (!compatible)
-        return yield* Effect.fail<RunningHostError>({
-          _tag: "TransportFailed",
-          phase: "Response",
-          reason: "ResponseOperationMismatch"
-        })
-      yield* encodeRunningHostEnvelope(envelope)
-      return envelope
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.succeed(
-          runningHostFailureEnvelope(
-            correlation,
-            submitted && (operation._tag === "StartWork" || operation._tag === "Unpause")
-              ? {
-                  _tag: "CommandOutcomeUnknown",
-                  operation: operation._tag,
-                  requestId,
-                  phase: "AdmissionUnconfirmed",
-                  acceptedAt: null
-                }
-              : error
-          )
-        )
-      )
-    )
+      return yield* decodeReply(request, input)
+    }).pipe(Effect.catch((error) => Effect.succeed(failureAfterSubmission(correlation, operation, submitted, error))))
   },
   (effect) =>
     Effect.scoped(

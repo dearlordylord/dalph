@@ -3,6 +3,8 @@ import { resolveVitestConfig } from "./quality-gate-test-fixture.js"
 
 const resourceSensitiveFiles = [
   "packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts",
+  "packages/dalph/src/application/running-host-command.acceptance.test.ts",
+  "packages/dalph/src/application/running-host-client-parity.test.ts",
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
   "scripts/quint-ci-contract.test.ts",
   "packages/dalph/src/application/production-changing-graph-finality.test.ts",

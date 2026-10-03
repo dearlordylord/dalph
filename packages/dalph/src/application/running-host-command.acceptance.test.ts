@@ -227,6 +227,86 @@ for (const adapter of ["CLI", "MCP"] as const) {
     60000
   )
   it.live(
+    `${adapter} retains durable Unpause when the real callback exceeds the original Exit drain`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>()
+          const stopped = yield* Deferred.make<void>()
+          const callbacks = yield* Ref.make(0)
+          const fixture = yield* makeRunningHostFixture(builtEntry, false, {
+            onAcceptedRunControl: () => Ref.update(callbacks, (count) => count + 1),
+            onTimerStateChange: (state) =>
+              state === "Started"
+                ? Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Effect.never),
+                    Effect.ensuring(Deferred.succeed(stopped, undefined))
+                  )
+                : Effect.void
+          })
+          const address = yield* availableLocalHostAddress
+          yield* withDecodedProductionRepositoryHost(
+            fixture.configuration,
+            fixture.graph,
+            (observation) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  yield* serveRunningHost(address, observation)
+                  const client = yield* startClient(adapter, address, observation.selection.runId)
+                  yield* Deferred.await(entered).pipe(
+                    Effect.timeout("10 seconds"),
+                    Effect.catchTag("TimeoutError", () =>
+                      Effect.die("CLI/MCP did not reach actual callback within 10 seconds")
+                    )
+                  )
+                  expect((yield* fixture.readPausedHistory).at(-1)).toMatchObject({
+                    position: 3,
+                    event: { _tag: "ControlDirectionApplied", direction: "Unpause", ordinal: 2 }
+                  })
+                  const exiting = yield* observation.applicationExitRequestBoundary.requestExit.pipe(Effect.forkChild)
+                  expect(
+                    yield* Fiber.join(exiting).pipe(
+                      Effect.timeout("8 seconds"),
+                      Effect.catchTag("TimeoutError", () => Effect.die("original Exit did not report within 8 seconds"))
+                    )
+                  ).toMatchObject({ _tag: "TimedOut" })
+                  const output = yield* client.output.pipe(
+                    Effect.timeout("10 seconds"),
+                    Effect.catchTag("TimeoutError", () =>
+                      Effect.die("client did not report admitted timeout within 10 seconds")
+                    )
+                  )
+                  const reply = JSON.parse(output.trim().split("\n").at(-1) ?? "")
+                  expect(adapter === "CLI" ? reply : reply.result.structuredContent).toMatchObject({
+                    result: {
+                      error: {
+                        _tag: "CommandOutcomeUnknown",
+                        operation: "Unpause",
+                        phase: "AdmittedCompletionUnconfirmed"
+                      }
+                    }
+                  })
+                  yield* Deferred.await(stopped).pipe(
+                    Effect.timeout("1 second"),
+                    Effect.catchTag("TimeoutError", () => Effect.die("real callback writer did not stop"))
+                  )
+                  expect(yield* Ref.get(callbacks)).toBe(1)
+                  expect(yield* Ref.get(fixture.trackerCalls)).toBe(0)
+                  expect((yield* fixture.readPausedHistory).map(({ event }) => event._tag)).toEqual([
+                    "WorkflowRunBegan",
+                    "ControlDirectionApplied",
+                    "ControlDirectionApplied"
+                  ])
+                })
+              ),
+            "Run",
+            "Listening"
+          )
+        })
+      ).pipe(Effect.provide(runningHostFixtureLayer)),
+    60000
+  )
+  it.live(
     `${adapter} reports unknown after a lost SQLite commit acknowledgement without claiming rollback or callback completion`,
     () =>
       Effect.scoped(

@@ -11,10 +11,22 @@
       "justification": "respond is one deterministic JSON-RPC fixture dispatcher whose branches model the complete retained Codex thread lifecycle across start, read, resume, turn, interrupt, and census requests. Splitting the dispatcher would fragment one protocol transcript without separating production policy."
     }
   },
+  "packages/dalph/src/application/attempt-worktree-preparation.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "The bounded native preparation callback observes one exact child outcome, stopped writers and prepared worktree evidence before returning; command selection is already outside this callback. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/dalph/src/application/codex-app-server.ts": {
     "complexity": {
-      "count": 3,
-      "justification": "classifyJsonRpcEnvelope keeps one fail-closed JSON-RPC wire-shape boundary: version, method/request, notification, response ID, and result/error validation must be classified together before pending-request routing. Splitting these clauses would separate one protocol classification rather than an independent policy decision."
+      "count": 8,
+      "justification": "classifyJsonRpcEnvelope keeps one fail-closed JSON-RPC wire-shape boundary: version, method/request, notification, response ID, and result/error validation must be classified together before pending-request routing. Splitting these clauses would separate one protocol classification rather than an independent policy decision. Additional counted functions cover token/thread ownership, native activity census, response failure decoding, initialize handling and persistent paginated thread listing; each is one bounded wire or census boundary after request dispatch is separated. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/application/codex-attempt-store.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "Stored-record schema coherence and the tool-effect transition predicate validate a single durable record or adjacent record transition before publication. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/dalph/src/application/codex-integrator-envelope.ts": {
@@ -23,16 +35,22 @@
       "justification": "terminalObjectStart performs one reverse, string-aware scan for the balanced JSON object ending at the message boundary. Its quote, brace-depth, completion, and malformed-input branches are the states of that single linear parser; splitting them would obscure the invariant that prevents repeated suffix parsing."
     }
   },
+  "packages/dalph/src/application/codex-integrator.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "Sealing the observed Codex Run and interpreting its final provider response form one evidence boundary; each outcome must preserve the same owned correlation and close order. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/dalph/src/application/codex-planned-attempt-executor.ts": {
     "complexity": {
-      "count": 6,
-      "justification": "The planned-attempt executor keeps one fail-closed lifecycle boundary across durable Codex records, passive projections, command authority, exact close/retry outcomes, and provider-ledger reconciliation; these branches preserve chronology and ownership together rather than represent independent policy decisions."
+      "count": 11,
+      "justification": "The planned-attempt executor keeps one fail-closed lifecycle boundary across durable Codex records, passive projections, command authority, exact close/retry outcomes, and provider-ledger reconciliation; these branches preserve chronology and ownership together rather than represent independent policy decisions. Additional measured boundaries reconcile stored turns, map exact lifecycle projections and tool outcomes, validate replacement records and attach owned observation; each preserves one attempt correlation and its durable chronology. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/dalph/src/application/git-sender-custody.ts": {
     "complexity": {
-      "count": 1,
-      "justification": "census enumerates one sender-custody process set by Linux identity, UID, token, process state, and absent-process handling. These branches jointly prove exact local child ownership before cleanup."
+      "count": 4,
+      "justification": "census enumerates one sender-custody process set by Linux identity, UID, token, process state, and absent-process handling. These branches jointly prove exact local child ownership before cleanup. Darwin process identity, native sender census and spawned/signal observations form one exact sender custody check; variant branches discriminate native observations before authority is released. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/dalph/src/application/kimi-acp.ts": {
@@ -82,16 +100,82 @@
       "justification": "validateControlledEntry and validateDependencyWaitEntry validate controlled qualification status entries against typed lifecycle, dependency, and evidence facts. Their alternatives keep one status-source acceptance boundary."
     }
   },
+  "packages/dalph/src/application/production-host.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "The passive Run-control reader selects its acknowledged prefix, direction and exact terminal evidence together; extracting separate reads would allow incoherent cursors. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/application/running-host-contract.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "ReadySnapshot coherence and malformed-request correlation each validate one wire boundary; safe integers, Run identity and nullable correlation must be decided together before encoding. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/application/running-host-http.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "The HTTP request handler and its result callback retain one request correlation while classifying endpoint, bounded body, dispatch and error response; decode and command ownership are separate boundaries. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/application/running-host-mcp.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "The MCP message handler classifies initialization, notifications, tools and resources at one JSON-RPC request boundary; shared HTTP command ownership and framing are already separate. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/application/running-host-projection.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "Snapshot and control projection classify one coherent runtime publication and independently accepted termination; tagged variants must agree before a value is published. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/dalph/src/application/runtime-diagnostic.ts": {
     "complexity": {
       "count": 2,
       "justification": "sourceTag and sourceOperation retain ordered fallback precedence across decoded source fields, Error identity, primitive identity, and Node operation fields. Splitting either fallback chain would obscure the precedence that defines one safe diagnostic identity rather than remove an independent decision."
     }
   },
-  "packages/dalph/src/cassettes/delivery-story-capstone.ts": {
+  "packages/dalph/src/cassettes/authored-causal-graph.ts": {
     "complexity": {
       "count": 1,
-      "justification": "deliveryStoryCapstoneAuthoredCassette constructs one maintained 22-beat delivery chronology across graph reads, claims, integration, publication, cleanup, and finality. Its branches preserve the scenario declaration and evidence order."
+      "justification": "Occurrence-graph compilation validates all causal dependencies and owner edges before publishing one complete graph; partial graphs are invalid. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/cassettes/authored-cursor.ts": {
+    "complexity": {
+      "count": 5,
+      "justification": "Story cursor claiming and serialized cursor transition preserve one causal window, selected owner and consumption order; independent matching helpers are already extracted. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/cassettes/authored-domain.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "The causal-window schema filter checks role, ordinal and owner relationships within one authored scenario before execution. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/cassettes/authored-presentation.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "Replacement and finality checkpoint rendering follows the complete tagged scenario contract so the visible lyric cannot omit a required causal edge. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/cassettes/authored-runner.ts": {
+    "complexity": {
+      "count": 4,
+      "justification": "Journal hooks, expected-Pause validation, publication matching and cross-activation execution retain one controlled scenario chronology while production workflow operations remain authoritative. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/cassettes/catalog.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "Diamond causal read windows compare one complete predecessor set against accepted promotion and claim evidence; branch variants retain the catalog scenario identity. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/dalph/src/cassettes/delivery-story-capstone.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "deliveryStoryCapstoneAuthoredCassette constructs one maintained 22-beat delivery chronology across graph reads, claims, integration, publication, cleanup, and finality. Its branches preserve the scenario declaration and evidence order. Capstone task expansion and decoded story assembly preserve the full seven-task causal chronology; branch variants encode expected checkpoints rather than runtime policy. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/dalph/src/cassettes/disposition-cleanup-cassette.ts": {
@@ -101,8 +185,8 @@
   },
   "packages/dalph/src/cassettes/recorded.ts": {
     "complexity": {
-      "count": 2,
-      "justification": "verifyRecordedCassetteRoundTrip keeps source and reconstructed cassette histories aligned occurrence by occurrence through cold-prefix recovery and semantic projections, while lyricForOtherRecordedEntry preserves one exhaustive event-family presentation dispatch. Their branches belong to these chronology and classification boundaries rather than independent cassette policies."
+      "count": 4,
+      "justification": "verifyRecordedCassetteRoundTrip keeps source and reconstructed cassette histories aligned occurrence by occurrence through cold-prefix recovery and semantic projections, while lyricForOtherRecordedEntry preserves one exhaustive event-family presentation dispatch. Their branches belong to these chronology and classification boundaries rather than independent cassette policies. Remote-publication event predicates, checkpoint comparison and other-entry lyric projection each classify one closed Journal/recorded-entry union without introducing alternate workflow actions. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/dalph/src/cassettes/target-promotion-protocol-cassette.ts": {
@@ -144,6 +228,12 @@
     "complexity": {
       "count": 1,
       "justification": "This controlled six-task harness keeps tracker lifecycle, exact claim observations, Gfinal freshness, crash cuts, and lost termination acknowledgement in one production-shaped chronology so restart assertions share the same durable prefix; splitting it would make the cross-boundary evidence non-equivalent."
+    }
+  },
+  "packages/dalph/test-support/production-running-host-fixture.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "The controlled GitHub dispatcher preserves one production provider transcript for the root and blocked children; request variants select responses without changing the workflow algebra. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/dalph/test-support/settled-a.ts": {
@@ -188,6 +278,12 @@
       "justification": "After separating graph/specification selection, unique worktree matching, and final lineage construction, the graph-predecessor predicate and readyWorktreeForIntent retain the complete exact Run/target/attempt, causal-position, eligibility, and intent/outcome/plan qualification for their respective evidence pairs. Splitting their remaining identity clauses would obscure one fail-closed pair qualification rather than isolate another decision."
     }
   },
+  "packages/orchestrator/src/coordination/delivery/delivery-action-proposal.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "Fresh-continuation proposal authorization checks all pinned premises before minting the private capability; partial validation cannot publish an executable proposal. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts": {
     "complexity": {
       "count": 1
@@ -211,13 +307,20 @@
   },
   "packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.ts": {
     "complexity": {
-      "count": 2,
-      "justification": "activeResumeRequest validates the exact durable resume receipt before publication restarts. executeAdvancedIntegrationAction sequences the advanced transition through its journaled owner; executeOuterIntegratorAction maps each typed Integrator transition to its identity-free delivery handler. Together these branches preserve receipt identity, action routing, and ordered acknowledgement."
+      "count": 4,
+      "justification": "activeResumeRequest validates the exact durable resume receipt before publication restarts. executeAdvancedIntegrationAction sequences the advanced transition through its journaled owner; executeOuterIntegratorAction maps each typed Integrator transition to its identity-free delivery handler. Together these branches preserve receipt identity, action routing, and ordered acknowledgement. Finality-premise reads, active resume lookup and outer/advanced integration execution each keep one exact responsibility and accepted protocol chronology; their variant branches discriminate that boundary. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/integrator-delivery-action.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "Competing-head successor authorization checks one exact successor plan against all recorded predecessor premises before granting execution authority. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts": {
     "complexity": {
-      "count": 1
+      "count": 2,
+      "justification": "Failed establishment lookup and coherent delivery bundle derivation retain one activation watermark and accepted authority observations before publishing shared relations. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts": {
@@ -231,6 +334,12 @@
       "justification": "explanationAfterPrerequisitesFor, absentIntegratorProgressTransitionsFor, and qualifiedIntegratorProgressTransitionsFor enumerate ordered frontier explanations and Integrator actions across prerequisite, retained, baseline, and qualified boundaries. boundedRetainedWaitFor proves the exact compatible-head publication lacks successor authorization and the responsibility reached its session bound before exposing a wait. These branches form one causal frontier decision table."
     }
   },
+  "packages/orchestrator/src/coordination/frontier/publication-continuation.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "Publication continuation derives one responsibility state from its full accepted prefix; resource retention, executable continuation and visible waits must agree. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
     "complexity": {
       "count": 1
@@ -242,9 +351,16 @@
       "justification": "invalidIntegratorAutomaticSuccessorSession validates one automatic successor against its indexed predecessor, unique session and candidate identity, exact authorization chronology, and bounded generation before adding it to reconstructed history. Those clauses are the complete accepted-history proof for this event."
     }
   },
+  "packages/orchestrator/src/coordination/run/accepted-run-fact-publication.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "Accepted fact publication maps one Journal cursor to its typed authority fact; event variants and their exact correlations cannot be projected from different prefixes. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts": {
     "complexity": {
-      "count": 1
+      "count": 2,
+      "justification": "Runtime activation assembly and stored-Journal establishment keep one scoped process journal, recovery order and lifecycle lease; independent downstream capabilities remain separate Layers. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
@@ -255,12 +371,14 @@
   },
   "packages/orchestrator/src/coordination/run/run-reactivation-owner.ts": {
     "complexity": {
-      "count": 2
+      "count": 3,
+      "justification": "Hint coalescing, accepted fact notifications and activation admission each serialize one process-local owner transition with its cutoff and Pause revision; separate timers and authority reads remain downstream. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/orchestrator/src/coordination/run/run-stabilization.ts": {
     "complexity": {
-      "count": 1
+      "count": 2,
+      "justification": "Run finality proof classification and its fresh tracker confirmation stay together so an accepted disposition cannot outrun its required final authority read. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/orchestrator/src/workflow-journal/record-evidence.ts": {
@@ -297,16 +415,34 @@
       "justification": "deriveRemoteBaselineState reconstructs one baseline protocol state from ordered intent, observation, and catch-up events, enforcing correlation, target, local-head, and outcome consistency. All branches are one fail-closed reducer."
     }
   },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/batch-grant-control.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "Exhaustion verification and accepted-prefix evaluation preserve one publication grant eligibility boundary with the exact session budget and current failed request. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.ts": {
     "complexity": {
       "count": 4,
       "justification": "runRemotePublication sequences direct publication through its observation-phase and sender-phase generators; resumeRemotePublicationOutcome validates the exact receipt and retained history before bounded retry or publication/finality continuation. These branches preserve the single durable retry policy."
     }
   },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/resume-control.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "Resume eligibility classifies one accepted publication state and its exact retained responsibility; historical branches preserve request and failure correlations. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/orchestrator/src/workflow/protocols/direct-publication/state.ts": {
     "complexity": {
       "count": 2,
       "justification": "remotePublicationRetainedCauseIsResumable classifies retained causes eligible for receipt-authorized retry, while deriveRemotePublicationState validates the exact intent, attempt, resume, and proof chronology. These alternatives define one fail-closed publication state reducer."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/transition-journal.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "Publication state validation and next-attempt grant lookup classify one accepted Journal prefix; branch-specific identities and ordinal evidence must be checked together. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.ts": {
@@ -343,6 +479,12 @@
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.ts": {
     "complexity": {
       "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/protocol.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "Fresh finality premises and publication outcome are checked inside one exact responsibility transaction so no accepted finality escapes before all required reads settle. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   },
   "packages/orchestrator/src/workflow/protocols/integration-finality/state.ts": {
@@ -396,6 +538,12 @@
       "justification": "expectedBaseSessionFor and hasForeignSuccessorRelation follow the unique predecessor chain and reject foreign branches. exactSessionRecordForRun counts direct, legacy successor, and automatic S2 session identities; runStateWithoutStarted and runStartHasExactSession preserve the unfinished-versus-contradictory classification and bind each Run start to that exact session. Together they derive one fail-closed Integrator Run state."
     }
   },
+  "packages/orchestrator/src/workflow/protocols/integrator/session-capacity.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "Grant lookup and grant-specific session capacity classify one exact publication responsibility and its accepted sessions before admitting another session. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
+    }
+  },
   "packages/orchestrator/src/workflow/protocols/integrator/state.ts": {
     "complexity": {
       "count": 1,
@@ -432,8 +580,8 @@
   },
   "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
     "complexity": {
-      "count": 5,
-      "justification": "projectHistoricalPublicationResumeRequested validates the receipt against its exact Run responsibility and retained subject. projectHistoricalCompetingHeadSuccessorAuthorization binds authorization to the exact earlier fixed predecessor and compatible retained publication. projectHistoricalAutomaticSuccessorSession validates authorization, completed baseline, fresh lineage, and responsibility bounds; remoteBaselineMatchesRun binds automatic baseline reads back to that authorization. Publication and occurrence dispatch remain exhaustive and preserve historical identity and correlation."
+      "count": 7,
+      "justification": "projectHistoricalPublicationResumeRequested validates the receipt against its exact Run responsibility and retained subject. projectHistoricalCompetingHeadSuccessorAuthorization binds authorization to the exact earlier fixed predecessor and compatible retained publication. projectHistoricalAutomaticSuccessorSession validates authorization, completed baseline, fresh lineage, and responsibility bounds; remoteBaselineMatchesRun binds automatic baseline reads back to that authorization. Publication and occurrence dispatch remain exhaustive and preserve historical identity and correlation. Historical publication, baseline, resume and successor projections classify one accepted event against the same prefix and request correlation; event routing is already separated from these validators. Count reconciled with unchanged Base e7b7f34aa5668bd97d04f599ba3f5324a478d0c0 using Oxlint 1.76.0; #369 introduces no additional above-limit functions."
     }
   }
 }
