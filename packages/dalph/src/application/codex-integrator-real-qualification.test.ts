@@ -82,7 +82,7 @@ const modelCall = async () => {
 const respond = async (message) => {
   if (message.method === "initialized") return
   if (message.method === "initialize") {
-    write(message.id, { userAgent: "dalph-integrator-qualification", codexHome: process.env.CODEX_HOME || "/tmp", platformFamily: "unix", platformOs: "linux" })
+    write(message.id, { userAgent: "dalph-integrator-qualification", codexHome: process.env.CODEX_HOME || "/tmp", platformFamily: "unix", platformOs: process.platform === "darwin" ? "macos" : "linux" })
     return
   }
   if (message.method === "thread/list") {

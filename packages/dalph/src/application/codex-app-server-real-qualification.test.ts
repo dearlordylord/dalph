@@ -112,12 +112,11 @@ const responseShellCommand = (worktree: string): Record<string, unknown> => ({
   item: {
     type: "function_call",
     call_id: "fixture-shell-command",
-    name: "shell_command",
+    name: "exec_command",
     arguments: JSON.stringify({
-      command:
-        "printf '%s\\n' real-codex-qualification > dalph-real-codex.txt && git add dalph-real-codex.txt && git commit -m dalph-real-codex-qualification >/dev/null && git rev-parse HEAD",
+      cmd: "printf '%s\\n' real-codex-qualification > dalph-real-codex.txt && git add dalph-real-codex.txt && git commit -m dalph-real-codex-qualification >/dev/null && git rev-parse HEAD",
       workdir: worktree,
-      timeout_ms: 10_000
+      yield_time_ms: 1_000
     })
   }
 })
@@ -404,6 +403,7 @@ const launchCodex = async (
     approvalPolicy: "never",
     cwd: fixture.worktree,
     ephemeral: false,
+    historyMode: "legacy",
     sandbox: "danger-full-access"
   })
   const thread = Schema.decodeUnknownSync(IdentifiedProtocolValue)(started.result?.["thread"])
@@ -425,7 +425,10 @@ const launchCodexProcess = async (
     stdio: ["pipe", "pipe", "pipe"]
   })
   const rpc = new JsonRpcFixtureClient(child)
-  await rpc.request("initialize", { clientInfo: { name: "dalph-real-qualification", version: "0.0.0" } })
+  await rpc.request("initialize", {
+    clientInfo: { name: "dalph-real-qualification", version: "0.0.0" },
+    capabilities: { experimentalApi: true }
+  })
   rpc.notify("initialized", {})
   return { child, rpc }
 }
@@ -490,6 +493,7 @@ describe("#75 real built Codex app-server qualification", () => {
         approvalPolicy: "never",
         cwd: fixture.worktree,
         ephemeral: false,
+        historyMode: "legacy",
         sandbox: "danger-full-access",
         threadSource
       })

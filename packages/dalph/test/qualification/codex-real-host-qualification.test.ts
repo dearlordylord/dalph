@@ -52,12 +52,11 @@ const shellCommand = (_worktree: string): Record<string, unknown> => ({
   item: {
     type: "function_call",
     call_id: "qualification-shell-command",
-    name: "shell_command",
+    name: "exec_command",
     arguments: JSON.stringify({
-      command:
-        "printf '%s\\n' real-codex-qualification > dalph-real-codex.txt && git add dalph-real-codex.txt && git commit -m dalph-real-codex-qualification >/dev/null && git rev-parse HEAD",
+      cmd: "printf '%s\\n' real-codex-qualification > dalph-real-codex.txt && git add dalph-real-codex.txt && git commit -m dalph-real-codex-qualification >/dev/null && git rev-parse HEAD",
       workdir: _worktree,
-      timeout_ms: 10_000
+      yield_time_ms: 10_000
     })
   }
 })
@@ -69,16 +68,16 @@ const longLivedShellCommand = (
   item: {
     type: "function_call",
     call_id: "qualification-long-lived-shell-command",
-    name: "shell_command",
+    name: "exec_command",
     arguments: JSON.stringify({
-      command:
+      cmd:
         kind === "stuck"
           ? "sh -c 'trap \"\" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 & printf '%s\\n' $! > .dalph-owned-child-pid"
           : kind === "escaped"
             ? "sh -c 'while :; do sleep 1; done' </dev/null >/dev/null 2>&1 & printf '%s\\n' $! > .dalph-owned-child-pid"
             : "printf '%s\\n' $$ > .dalph-owned-child-pid; while :; do sleep 1; done",
       workdir: worktree,
-      timeout_ms: 60_000
+      yield_time_ms: 30_000
     })
   }
 })

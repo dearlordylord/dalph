@@ -60,7 +60,7 @@ fall back to OpenAI or to another provider.
 | The controlled endpoint accepts only `/v1/responses` on its bound loopback listener, invokes only the injected Git-head reader during its four expected requests, and retains only safe operation tags and counts. No external model-client boundary exists in this endpoint. | `controlled qualification provider serves loopback responses without an OpenAI call` |
 
 The qualification runner builds the checked-in Dalph host, verifies Codex
-`0.149.0`, and runs the same suite on Linux and macOS in
+the exact version pinned in `package.json`, and runs the same suite on Linux and macOS in
 `.github/workflows/codex-app-server-qualification.yml`. The raw-protocol tests
 are deliberately separate evidence for Codex notification and JSON-RPC cuts;
 the built-host tests below prove the normalized Dalph boundary.

@@ -545,7 +545,7 @@ export const commitFromTurn = (
 }
 
 export const defaultCodexTaskInstructions: ReadonlyArray<string> = [
-  "Before returning an accepted result, use a fresh `gpt-5.6-sol` medium-reasoning sub-agent to review the candidate against the issue, linked specifications, repository instructions, and `Base..HEAD`. Fix reasonable blocking findings and repeat with a fresh reviewer, stopping as soon as a review reports no reasonable blocking findings. Run at most four review rounds. If reasonable blocking findings remain after the fourth review, report failure and do not return an accepted result."
+  "Before returning an accepted result, use a fresh sub-agent with the same model selected for this task turn and medium reasoning to review the candidate against the issue, linked specifications, repository instructions, and `Base..HEAD`. Fix reasonable blocking findings and repeat with a fresh reviewer, stopping as soon as a review reports no reasonable blocking findings. Run at most four review rounds. If reasonable blocking findings remain after the fourth review, report failure and do not return an accepted result."
 ]
 
 const taskTurnText = (

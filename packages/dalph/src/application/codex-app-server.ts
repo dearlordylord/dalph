@@ -3640,6 +3640,7 @@ export const codexAppServerLayer = (
             approvalPolicy: "never",
             cwd,
             ephemeral: false,
+            historyMode: "legacy",
             sandbox: "danger-full-access",
             ...(ownedThreadToken === undefined
               ? {}

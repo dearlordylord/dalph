@@ -945,6 +945,7 @@ it.effect("supplies the bounded fresh-review instruction in the default task pro
     expect(harness.turnTexts).toHaveLength(1)
     expect(harness.turnTexts[0]).toContain("Dalph executor instructions:")
     expect(harness.turnTexts[0]).toContain(defaultCodexTaskInstructions[0])
+    expect(harness.turnTexts[0]).toContain("same model selected for this task turn and medium reasoning")
     expect(harness.turnTexts[0]).toContain("stopping as soon as a review reports no reasonable blocking findings")
     expect(harness.turnTexts[0]).toContain("Run at most four review rounds")
     expect(harness.turnTexts[0]).toContain("report failure and do not return an accepted result")

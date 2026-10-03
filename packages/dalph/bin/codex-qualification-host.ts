@@ -10,9 +10,10 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  type PlannedAttemptExecutorLifecycleObservationService,
   type PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorReport,
-  type PlannedAttemptExecutorService,
   PlannedAttemptExecutorRequest,
   PlannedTaskAttempt,
   RunId,
@@ -36,7 +37,7 @@ import {
   JournalDatabaseLocator,
   InRunJournal
 } from "@dalph/orchestrator"
-import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Schema, Stream } from "effect"
 import {
   CodexAppServer,
   codexAppServerNodeLayer,
@@ -135,25 +136,36 @@ const taskBody = "Execute the deterministic real-Codex qualification task and re
 const terminalObservationAttempts = 600
 
 const settleAttempt = (
-  executor: PlannedAttemptExecutorService,
-  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
-  remaining: number
+  lifecycle: PlannedAttemptExecutorLifecycleObservationService,
+  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>
 ): Effect.Effect<PlannedAttemptExecutorReport, unknown> =>
-  executor
-    .observe(correlation, { _tag: "PassiveLifecycleObservation" })
-    .pipe(
-      Effect.flatMap((projection) =>
-        projection._tag === "Exact" && projection.report._tag !== "ExecutorWorkExecuting"
-          ? Effect.succeed(projection.report)
-          : remaining <= 0
-            ? Effect.fail(
-                new QualificationConfigurationFailure({
-                  detail: "real Codex turn did not settle within the qualification observation bound"
-                })
-              )
-            : Effect.sleep("25 millis").pipe(Effect.andThen(settleAttempt(executor, correlation, remaining - 1)))
-      )
-    )
+  Effect.scoped(
+    Effect.gen(function* () {
+      const attachment = yield* lifecycle.attach(correlation)
+      const terminalProjection =
+        attachment.current._tag === "Exact" && attachment.current.report._tag !== "ExecutorWorkExecuting"
+          ? Option.some(attachment.current)
+          : yield* attachment.changes.pipe(
+              Stream.filter(
+                (projection) => projection._tag === "Exact" && projection.report._tag !== "ExecutorWorkExecuting"
+              ),
+              Stream.runHead,
+              Effect.timeoutOption("15 seconds"),
+              Effect.map(Option.flatten)
+            )
+      yield* attachment.close
+      if (Option.isNone(terminalProjection)) {
+        return yield* Effect.fail(
+          new QualificationConfigurationFailure({
+            detail: "real Codex turn did not settle within the qualification observation bound"
+          })
+        )
+      }
+      const projection = terminalProjection.value
+      if (projection._tag !== "Exact") return yield* Effect.die("terminal lifecycle projection was not exact")
+      return projection.report
+    })
+  )
 
 const waitForOwnedChildPublication = (
   worktree: string,
@@ -259,6 +271,7 @@ const configurationProgram = Effect.gen(function* () {
         const app = yield* CodexAppServer
         const store = yield* CodexAttemptStore
         const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
         yield* writeEvent({ event: "ready", pid: nodeProcess.pid })
 
         if (configuration.action === "wait" || configuration.action === "pre-thread-cut") return yield* Effect.never
@@ -309,7 +322,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(
             projectionEvent(
               configuration.waitForTerminalProjection
-                ? { _tag: "Exact", report: yield* settleAttempt(executor, correlation, terminalObservationAttempts) }
+                ? { _tag: "Exact", report: yield* settleAttempt(lifecycle, correlation) }
                 : yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
             )
           )
@@ -320,9 +333,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(reportEvent("Begin", initial))
           if (initial._tag === "ExecutorWorkExecuting") {
             yield* Effect.sleep("100 millis")
-            yield* writeEvent(
-              reportEvent("Observe", yield* settleAttempt(executor, correlation, terminalObservationAttempts))
-            )
+            yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation)))
           }
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
@@ -341,7 +352,7 @@ const configurationProgram = Effect.gen(function* () {
                 nodeProcess.stdin.resume()
               })
           )
-          yield* settleAttempt(executor, correlation, terminalObservationAttempts)
+          yield* settleAttempt(lifecycle, correlation)
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))

@@ -38,6 +38,13 @@ Before invoking Dalph, the Operator confirms:
   ChatGPT account before any Run is claimed. A displayed model catalog alone
   does not prove account access.
 
+Before pinning the source, compare `pnpm view @openai/codex version` with the
+exact `@openai/codex` version in `package.json`. If a newer version exists,
+upgrade the dependency and frozen lockfile with pnpm, qualify that version,
+and pin the resulting clean commit. Keep the version fixed during one Run so
+its source and executor remain reproducible. The model smoke must use the
+selected model; a rejected model does not authorize a silent fallback.
+
 ## Pin source, target, and non-secret configuration
 
 Use Bash and stop on a failed command. Replace the three input values below
@@ -52,7 +59,7 @@ set -euo pipefail
 export DALPH_SOURCE=/absolute/path/to/pinned/dalph
 export DALPH_SOURCE_SHA=REPLACE_WITH_40_HEX_SOURCE_SHA
 export DALPH_ISSUE=REPLACE_WITH_FRESH_ISSUE_NUMBER
-export DALPH_CODEX_MODEL=gpt-5.6-sol
+export DALPH_CODEX_MODEL=gpt-6.1-sol
 read -r -s -p "Dalph GitHub issue token: " GITHUB_TOKEN
 printf '\n'
 export GITHUB_TOKEN

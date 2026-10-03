@@ -9,7 +9,8 @@ import { promisify } from "node:util"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const execFile = promisify(nodeExecFile)
-const pinnedCodexVersion = "0.149.0"
+const pinnedCodexVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"))
+  .devDependencies["@openai/codex"]
 const testFiles = [
   "packages/dalph/src/application/codex-app-server-real-qualification.test.ts",
   "packages/dalph/src/application/codex-integrator-real-qualification.test.ts",

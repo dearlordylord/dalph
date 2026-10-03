@@ -107,7 +107,7 @@
     "@effect/vitest": "4.0.0-beta.106",
     "@firfi/quint-connect": "2.0.2-effect4.1",
     "@informalsystems/quint": "0.32.0",
-    "@openai/codex": "0.149.0",
+    "@openai/codex": "0.160.0",
     "@types/node": "26.1.1",
     "@typescript/native": "npm:typescript@7.0.2",
     "@vitest/coverage-v8": "4.1.10",

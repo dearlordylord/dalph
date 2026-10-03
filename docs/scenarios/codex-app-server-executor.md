@@ -170,7 +170,10 @@ task turn.
 
 1. The implementation records private intent to establish P's Codex thread.
 2. It calls `thread/start` with P's exact worktree as `cwd`, non-ephemeral
-   history, and the ambient user configuration.
+   legacy history, and the ambient user configuration. This explicit history
+   mode preserves the supported empty-thread read needed to prove whether Begin
+   crossed the first turn after a crash; an unsupported paginated empty-thread
+   read must not be treated as absence.
 3. Codex returns a generated thread id while the thread is idle. The
    implementation durably records P's exact attempt-thread association.
 4. Only after that record succeeds does the implementation send `turn/start`

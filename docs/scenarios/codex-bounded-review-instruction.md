@@ -23,7 +23,7 @@ No review sub-agent exists and Dalph has no executor result for the attempt.
 
 Dalph starts the task turn with A's instructions, immutable attempt facts, and
 the default executor instruction. That instruction tells the implementer to ask
-a fresh `gpt-5.6-sol` sub-agent using medium reasoning to review the candidate
+a fresh sub-agent using the task turn's selected model and medium reasoning to review the candidate
 against A, linked specifications, repository instructions, and `B..HEAD` before
 returning an accepted result.
 
