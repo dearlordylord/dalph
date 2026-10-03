@@ -140,13 +140,15 @@ describe("production repository host configuration", () => {
             id: "codex/dogfood",
             model: "gpt-5.6-sol",
             permissionPolicy: "unattended",
-            provider: "codex"
+            provider: "codex",
+            worktreePreparation: "dalph-worktree"
           }
         ]
       })
     )
     expect(productionExecutorLocator(decoded)).toBe("executor:codex/dogfood")
     expect(decoded.executorProfiles?.[0]?.model).toBe("gpt-5.6-sol")
+    expect(decoded.executorProfiles?.[0]?.worktreePreparation).toBe("dalph-worktree")
   })
 
   it("production keeps Codex CLI state separate from Dalph executor private state", async () => {

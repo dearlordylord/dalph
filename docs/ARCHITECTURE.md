@@ -413,6 +413,13 @@ activity for that attempt remains executing. Coding-agent,
 reviewer, retry, handback, and session-restoration stages remain internal to a
 future production executor design.
 
+For a Codex profile that opts into Dalph worktree preparation, the production
+executor records an attempt-local intent, runs the bounded repository helper
+in the exact worktree, and requires its terminal receipt before forwarding
+Begin. An unresolved preparation retains that attempt's fence. The shared
+Codex app-server and independent executor work keep their own lifecycles.
+See [prepare the exact Codex task worktree](scenarios/prepare-exact-codex-task-worktree.md).
+
 The current controlled executor shares Dalph's process lifetime; it does not
 prove adoption of an independently surviving production session. See
 [planned-attempt-executor-boundary.md](scenarios/planned-attempt-executor-boundary.md)

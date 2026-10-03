@@ -31,7 +31,7 @@ one-shot run. Source aliases do not create a CLI executable or package `dist`.
 | Type-aware lint or consumers of normal workspace exports/declarations in a fresh or changed checkout | Run `pnpm check:artifacts` first; ignored old `dist` can supply stale types. |
 | Focused tests that spawn `packages/dalph/dist/bin/*`, including hermetic/live qualification fixtures | Run `pnpm --filter @dalph/dalph... build`, then confirm the exact referenced built entry exists before the bounded test attempt. |
 | `pnpm test:integration:publication` and `pnpm test:codex-integrator-qualification` | These commands build their required package closure themselves. Keep build failure distinct from a test result. |
-| New worktree | `pnpm bootstrap:worktree` prepares the frozen dependencies, production artifacts, and bins. In a Dalph task attempt, run `node scripts/prepare-attempt-worktree.mjs` in the exact worktree before the first source check, then use `mise exec --` for Node and pnpm commands. |
+| New worktree | `pnpm bootstrap:worktree` prepares the frozen dependencies, production artifacts, and bins. A Codex executor profile with `worktreePreparation` runs its configured command in the exact task worktree before the first implementation turn. For manual attempts, run `node scripts/prepare-attempt-worktree.mjs` before the first source check. Use `mise exec --` for later Node and pnpm commands. |
 | Lab browser checks | Follow [browser setup](browser.md#browser-and-real-host-setup) before running the selected browser command. |
 
 Before a one-shot test, read its fixture startup to identify the selected adapter

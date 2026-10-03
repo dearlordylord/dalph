@@ -74,6 +74,8 @@ import {
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, Option, Schema, type Scope } from "effect"
+// eslint-disable-next-line import/no-nodejs-modules -- The production host selects its own Node executable for task preparation.
+import nodeProcess from "node:process"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -92,7 +94,15 @@ import {
 } from "./executor-profile.js"
 import { CodexAttemptStore, type CodexAttemptStoreService, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
-import { nodeCodexPlannedAttemptExecutorLayerWithOptions } from "./codex-planned-attempt-executor.js"
+import {
+  defaultCodexTaskInstructions,
+  nodeCodexPlannedAttemptExecutorLayerWithOptions
+} from "./codex-planned-attempt-executor.js"
+import {
+  nodeAttemptWorktreePreparationService,
+  preparedPlannedAttemptExecutor,
+  type AttemptWorktreePreparationService
+} from "./attempt-worktree-preparation.js"
 import { nodeKimiAcpClientLayer } from "./kimi-acp.js"
 import { nodeKimiAttemptPrivateStoreLayer } from "./kimi-attempt-store.js"
 import { kimiPlannedAttemptExecutorLayer } from "./kimi-planned-attempt-executor.js"
@@ -564,21 +574,26 @@ const observedPlannedAttemptExecutor = (
 
 const observedPlannedAttemptExecutorLayer = <E, R>(
   layer: Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation, E, R>,
-  observe: ProductionRepositoryHostBoundaryObserver | undefined
+  observe: ProductionRepositoryHostBoundaryObserver | undefined,
+  preparation?: AttemptWorktreePreparationService
 ) => {
-  if (observe === undefined) return layer
+  if (observe === undefined && preparation === undefined) return layer
   return Layer.fromBuildMemo((memoMap, scope) =>
     Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
       Effect.flatMap((context) =>
-        observe("executor.acquire").pipe(
-          Effect.as(
-            Context.add(
-              context,
-              PlannedAttemptExecutor,
-              observedPlannedAttemptExecutor(Context.get(context, PlannedAttemptExecutor), observe)
-            )
+        Effect.gen(function* () {
+          if (observe !== undefined) yield* observe("executor.acquire")
+          const executor = Context.get(context, PlannedAttemptExecutor)
+          const prepared =
+            preparation === undefined
+              ? executor
+              : yield* preparedPlannedAttemptExecutor(executor, preparation).pipe(Effect.provide(NodeCrypto.layer))
+          return Context.add(
+            context,
+            PlannedAttemptExecutor,
+            observe === undefined ? prepared : observedPlannedAttemptExecutor(prepared, observe)
           )
-        )
+        })
       )
     )
   )
@@ -834,11 +849,19 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                 adapters.boundaryObserver
               )
             : observedPlannedAttemptExecutorLayer(
-                nodeCodexPlannedAttemptExecutorLayerWithOptions(
-                  configuration.codexToolEffectPolicy === undefined
+                nodeCodexPlannedAttemptExecutorLayerWithOptions({
+                  ...(configuration.codexToolEffectPolicy === undefined
                     ? {}
-                    : { toolEffectPolicy: configuration.codexToolEffectPolicy }
-                ).pipe(
+                    : { toolEffectPolicy: configuration.codexToolEffectPolicy }),
+                  ...(selectedProfile.worktreePreparation === undefined
+                    ? {}
+                    : {
+                        taskInstructions: [
+                          "Dalph already prepared this exact worktree with its repository Node and frozen dependencies. Run every later Node and pnpm check through `mise exec --` so a login shell cannot select the host Node.",
+                          ...defaultCodexTaskInstructions
+                        ]
+                      })
+                }).pipe(
                   Layer.provide(appLayer),
                   Layer.provide(activityCensusLayer),
                   Layer.provide(attemptStoreLayer),
@@ -847,7 +870,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                   Layer.provide(NodeCrypto.layer),
                   Layer.provide(NodeServices.layer)
                 ),
-                adapters.boundaryObserver
+                adapters.boundaryObserver,
+                selectedProfile.worktreePreparation === undefined
+                  ? undefined
+                  : nodeAttemptWorktreePreparationService(configuration.codexExecutorPrivateStateDirectory, {
+                      executable: nodeProcess.execPath,
+                      args: ["scripts/prepare-attempt-worktree.mjs"]
+                    })
               )
         const integratorConfiguration = CodexIntegratorConfiguration.make({
           candidateWorktreeRoot: configuration.integratorCandidateWorktreeRoot,

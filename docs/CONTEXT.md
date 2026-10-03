@@ -1431,6 +1431,14 @@ successfully checked the attempt's declared Base SHA as an ancestor of that
 planned-attempt executor work.
 _Avoid_: Worktree created, branch exists, task execution admitted
 
+**Codex task-worktree preparation**:
+The executor's attempt-local check and frozen dependency install after Git has
+proved the exact planned worktree ready and before Codex receives its first
+implementation turn. Its private intent and terminal receipt describe the
+preparation process; they do not replace Git's worktree or lineage facts. An
+uncertain install blocks only that attempt until its writers can be reconciled.
+_Avoid_: Planned worktree ready, source qualification, app-server shutdown
+
 **Git worktree reconciliation fact**:
 A typed fresh Git observation that prevents Dalph from creating or using the
 planned worktree: an existing but unregistered target path, the planned branch

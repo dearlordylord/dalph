@@ -122,7 +122,8 @@ const configuration = {
     id: "codex/dogfood",
     model: env.DALPH_CODEX_MODEL,
     permissionPolicy: "unattended",
-    provider: "codex"
+    provider: "codex",
+    worktreePreparation: "dalph-worktree"
   }],
   claimOwner: "dalph:dogfood",
   taskWorkCapacity: 1,

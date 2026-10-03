@@ -1,6 +1,17 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync, spawnSync } from "node:child_process"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, expect, it } from "vitest"
 
 // @ts-expect-error The task preparation is an executable JavaScript module.
@@ -77,4 +88,72 @@ it("rejects an install that exits without dependencies", async () => {
         command.args.includes("process.version") ? { output: "v24.21.0\n" } : {}
     })
   ).rejects.toMatchObject({ stage: "install" })
+})
+
+it("writes an exact terminal receipt after the frozen install has completed", () => {
+  const root = fixture()
+  execFileSync("git", ["init", "--quiet"], { cwd: root })
+  const bin = join(root, "bin")
+  mkdirSync(bin)
+  const mise = join(bin, "mise")
+  writeFileSync(mise, '#!/bin/sh\nif [ "$3" = node ]; then echo v24.20.0; else mkdir -p node_modules/.pnpm; fi\n')
+  chmodSync(mise, 0o755)
+  const receipt = join(root, "receipt.json")
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("./prepare-attempt-worktree.mjs", import.meta.url))],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+        DALPH_ATTEMPT_PREPARATION_RECEIPT: receipt,
+        DALPH_ATTEMPT_PREPARATION_TOKEN: "exact-token"
+      },
+      timeout: 10_000
+    }
+  )
+  expect(result.status).toBe(0)
+  expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual({
+    _tag: "AttemptWorktreePrepared",
+    node: "v24.20.0",
+    token: "exact-token",
+    worktree: root
+  })
+})
+
+it("does not write a terminal receipt while an install descendant remains unproven", async () => {
+  const root = fixture()
+  execFileSync("git", ["init", "--quiet"], { cwd: root })
+  const bin = join(root, "bin")
+  mkdirSync(bin)
+  const mise = join(bin, "mise")
+  writeFileSync(
+    mise,
+    '#!/bin/sh\nif [ "$3" = node ]; then echo v24.20.0; else sleep 4 >/dev/null 2>&1 </dev/null & exit 1; fi\n'
+  )
+  chmodSync(mise, 0o755)
+  const receipt = join(root, "receipt.json")
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("./prepare-attempt-worktree.mjs", import.meta.url))],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+        DALPH_ATTEMPT_PREPARATION_RECEIPT: receipt,
+        DALPH_ATTEMPT_PREPARATION_TOKEN: "exact-token"
+      },
+      timeout: 10_000
+    }
+  )
+  expect(result.status).toBe(1)
+  expect(result.stderr).toContain("not proven absent")
+  expect(existsSync(receipt)).toBe(false)
+  // The fixture's four-second descendant exits naturally after the two-second
+  // absence window. Keep the test's own process lifetime beyond that exit.
+  await new Promise((resolve) => setTimeout(resolve, 4_000))
 })

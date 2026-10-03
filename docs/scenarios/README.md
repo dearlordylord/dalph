@@ -44,6 +44,7 @@ Git history.
 
 ## Executor work and recovery
 
+- [Prepare the exact Codex task worktree before implementation checks](prepare-exact-codex-task-worktree.md)
 - [Bound one Codex tool effect without losing its planned attempt](contain-non-converging-codex-tool-effects.md)
 - [Ask Codex to review a candidate before accepting it](codex-bounded-review-instruction.md)
 - [Replace one purged Codex work unit in the retained planned attempt](replace-purged-codex-work-unit.md)

@@ -1,16 +1,39 @@
 import { execFileSync } from "node:child_process"
-import { readFile, realpath, stat } from "node:fs/promises"
-import { join } from "node:path"
+import { open, readFile, realpath, stat } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const SECOND = 1_000
+const commandEnvironment = () =>
+  Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DALPH_ATTEMPT_PREPARATION_")))
+
+const writePreparationReceipt = async (result) => {
+  const path = process.env.DALPH_ATTEMPT_PREPARATION_RECEIPT
+  const token = process.env.DALPH_ATTEMPT_PREPARATION_TOKEN
+  if (path === undefined && token === undefined) return
+  if (path === undefined || token === undefined) throw new Error("incomplete preparation receipt authority")
+  const handle = await open(path, "wx", 0o600)
+  try {
+    await handle.writeFile(`${JSON.stringify({ ...result, token })}\n`)
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  const directory = await open(dirname(path), "r")
+  try {
+    await directory.sync()
+  } finally {
+    await directory.close()
+  }
+}
 
 export class AttemptWorktreePreparationFailure extends Error {
-  constructor(stage, detail) {
+  constructor(stage, detail, stoppedWritersProven = true) {
     super(detail)
     this.name = "AttemptWorktreePreparationFailure"
     this.stage = stage
+    this.stoppedWritersProven = stoppedWritersProven
   }
 }
 
@@ -64,6 +87,7 @@ export const prepareAttemptWorktree = async ({
       captureOutput: true,
       cwd: worktree,
       executable: "mise",
+      environment: commandEnvironment(),
       forwardOutput: false,
       name: "Repository Node selection",
       relayParentSignals: true,
@@ -71,7 +95,11 @@ export const prepareAttemptWorktree = async ({
     })
     selectedNode = result.output?.trim()
   } catch (error) {
-    throw new AttemptWorktreePreparationFailure("node", `repository Node selection failed: ${String(error)}`)
+    throw new AttemptWorktreePreparationFailure(
+      "node",
+      `repository Node selection failed: ${String(error)}`,
+      error?.stoppedWritersProven === true
+    )
   }
   if (selectedNode === undefined || !matchesNode(selectedNode, minimumNode)) {
     throw new AttemptWorktreePreparationFailure(
@@ -84,12 +112,18 @@ export const prepareAttemptWorktree = async ({
       args: ["exec", "--", "pnpm", "install", "--frozen-lockfile"],
       cwd: worktree,
       executable: "mise",
+      environment: commandEnvironment(),
+      forwardOutput: false,
       name: "Frozen task-worktree dependency install",
       relayParentSignals: true,
       timeoutMilliseconds: 5 * 60 * SECOND
     })
   } catch (error) {
-    throw new AttemptWorktreePreparationFailure("install", `frozen dependency install failed: ${String(error)}`)
+    throw new AttemptWorktreePreparationFailure(
+      "install",
+      `frozen dependency install failed: ${String(error)}`,
+      error?.stoppedWritersProven === true
+    )
   }
   const dependencyStore = await stat(join(worktree, "node_modules", ".pnpm")).catch(() => undefined)
   if (!dependencyStore?.isDirectory()) {
@@ -104,15 +138,23 @@ export const prepareAttemptWorktree = async ({
 if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
   try {
     const prepared = await prepareAttemptWorktree()
-    process.stdout.write(`${JSON.stringify({ _tag: "AttemptWorktreePrepared", ...prepared })}\n`)
+    const result = { _tag: "AttemptWorktreePrepared", ...prepared }
+    await writePreparationReceipt(result)
+    process.stdout.write(`${JSON.stringify(result)}\n`)
   } catch (error) {
     const failure =
       error instanceof AttemptWorktreePreparationFailure
         ? error
         : new AttemptWorktreePreparationFailure("unknown", String(error))
-    process.stderr.write(
-      `${JSON.stringify({ _tag: "AttemptWorktreePreparationFailed", stage: failure.stage, detail: failure.message })}\n`
-    )
+    const result = { _tag: "AttemptWorktreePreparationFailed", stage: failure.stage, detail: failure.message }
+    if (failure.stoppedWritersProven) {
+      try {
+        await writePreparationReceipt(result)
+      } catch (receiptError) {
+        process.stderr.write(`preparation receipt unavailable: ${String(receiptError)}\n`)
+      }
+    }
+    process.stderr.write(`${JSON.stringify(result)}\n`)
     process.exitCode = 1
   }
 }

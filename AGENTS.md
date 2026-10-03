@@ -2,10 +2,12 @@
 
 - Use pnpm, never npm. Work on `master` unless the task requires an isolated
   branch or worktree.
-- In a fresh Dalph task worktree, run `node scripts/prepare-attempt-worktree.mjs`
-  before the first typecheck, test, build, or lint. It selects the repository's
-  Node through `mise` and installs frozen dependencies once. If it fails, report
-  the preparation stage instead of treating it as a source failure. Run later
+- When Dalph says it has prepared the exact task worktree before the turn, do
+  not run preparation again. Otherwise, in a fresh task worktree run
+  `node scripts/prepare-attempt-worktree.mjs` before the first typecheck, test,
+  build, or lint. It selects the repository's Node through `mise` and installs
+  frozen dependencies. If it fails, report the preparation stage instead of
+  treating it as a source failure. Run later
   Node and pnpm commands through `mise exec --` because a login shell can reset
   `PATH` to an unsupported Node version. This preparation does not qualify code.
 - Start explanations with the concrete actor, action, and boundary; introduce

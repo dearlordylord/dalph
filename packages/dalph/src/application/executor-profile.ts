@@ -39,12 +39,16 @@ export const ExecutorProfile = Schema.Struct({
   model: ExecutorModelAlias,
   permissionPolicy: ExecutorPermissionPolicy,
   provider: Schema.NonEmptyString,
-  providerConfigRef: Schema.optionalKey(ExecutorProviderConfigReference)
+  providerConfigRef: Schema.optionalKey(ExecutorProviderConfigReference),
+  /** Opts an own-repository Codex attempt into the bounded Dalph worktree helper. */
+  worktreePreparation: Schema.optionalKey(Schema.Literal("dalph-worktree"))
 }).check(
   Schema.makeFilter((profile) =>
     profile.adapter === "kimi-acp" && profile.providerConfigRef === undefined
       ? "Kimi executor profiles require a provider configuration reference"
-      : undefined
+      : profile.adapter !== "codex-app-server" && profile.worktreePreparation !== undefined
+        ? "worktree preparation is supported only for Codex executor profiles"
+        : undefined
   )
 )
 export type ExecutorProfile = typeof ExecutorProfile.Type

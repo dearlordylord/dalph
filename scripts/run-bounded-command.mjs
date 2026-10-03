@@ -281,15 +281,19 @@ export const runBoundedCommand = ({
 
     const settle = (settler, value) => {
       if (settled) return
+      let stoppedWritersProven = absenceProven && obligation === undefined
       if (absenceProven && (settler === resolve || isOrdinaryQualityCommandResult(value))) {
         try {
           proveStageDescendantsStopped(obligation)
+          stoppedWritersProven = true
         } catch (error) {
+          stoppedWritersProven = false
           settler = reject
           value = commandError(`${name} descendant custody is not proven stopped: ${error.message}`, "failed")
         }
       }
       if (obligation !== undefined && value !== undefined) value.gateObligationId = obligation.intent.obligationId
+      if (settler === reject && value instanceof Error) value.stoppedWritersProven = stoppedWritersProven
       if (loggingError !== undefined && value instanceof Error) value.loggingFailure = loggingError.loggingFailure
       settled = true
       publishTerminal(settler === resolve ? value : undefined, settler === reject ? value : undefined)
