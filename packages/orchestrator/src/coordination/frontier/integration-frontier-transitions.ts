@@ -1,7 +1,12 @@
 import { derivePublicationContinuation, type PublicationContinuation } from "./publication-continuation.js"
 /* eslint-disable max-lines -- Retry authorization and changed-head disposition remain one frontier algebra owner. */
 import { Option } from "effect"
-import { plannedAttemptExecutorCorrelation, type AttemptId, type TaskId } from "@dalph/contracts"
+import {
+  plannedAttemptExecutorCorrelation,
+  plannedTaskAttemptEquivalence,
+  type AttemptId,
+  type TaskId
+} from "@dalph/contracts"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
@@ -50,6 +55,7 @@ import {
   journalGraphObservationAt,
   journalGraphSnapshotForObservation,
   journalRecordsForAttemptKind,
+  journalRecordsForOperationId,
   journalRecordsOfKind
 } from "../../workflow-journal/record-evidence.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
@@ -185,6 +191,30 @@ const durableTargetLineageFor = (
   return record?.event._tag === "TargetLineageObserved"
     ? { observation: record.event.observation, observedAt: record.position }
     : undefined
+}
+
+/** A refresh requirement invalidates permission to run, not an accepted rewrite constraint. */
+const latestInitialTargetLineageFor = (
+  runState: ReconstructedRunState,
+  responsibility: StartedIntegrationResponsibility
+): TargetLineageObservation | undefined => {
+  const source = workflowHistorySource(runState)
+  const record = Array.from(
+    journalRecordsForAttemptKind(source, responsibility.plannedAttempt.attemptId, "TargetLineageObserved")
+  ).findLast(
+    ({ event }) =>
+      event._tag === "TargetLineageObserved" &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, responsibility.plannedAttempt) &&
+      Array.from(journalRecordsForOperationId(source, event.operationId)).some(
+        ({ event: intent }) =>
+          intent._tag === "GitReadIntentRecorded" &&
+          intent.operation._tag === "ReadTargetLineage" &&
+          plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, responsibility.plannedAttempt) &&
+          intent.operation.integrationTarget.repository === responsibility.integrationTarget.repository &&
+          intent.operation.integrationTarget.ref === responsibility.integrationTarget.ref
+      )
+  )
+  return record?.event._tag === "TargetLineageObserved" ? record.event.observation : undefined
 }
 
 const nextJournalPositionFor = (runState: ReconstructedRunState): JournalPosition => {
@@ -868,6 +898,14 @@ const startedIntegrationProgressTransitionFor = (
   retryProgress: RetryIntegratorProgress,
   continuation: PublicationContinuation
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
+  // Before session fixation, the accepted Git rewrite remains a constraint even
+  // after release or restart. Local ownership changes cannot clear Git evidence.
+  if (integratorState._tag === "Absent") {
+    const lineage = latestInitialTargetLineageFor(runState, responsibility)
+    if (lineage !== undefined && targetLineageIsIncompatible(lineage, responsibility)) {
+      return releaseStartedIntegrationTargetFor(responsibility, held)
+    }
+  }
   // A fixed Integrator session or qualified candidate may outlive a released
   // process-local target position. The unfinished outer boundary reuses S's
   // durable H; only later promotion requires current target authority.

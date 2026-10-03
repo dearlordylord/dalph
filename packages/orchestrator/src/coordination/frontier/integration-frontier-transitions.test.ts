@@ -622,6 +622,64 @@ it("releases the target before an initial Integrator run when fresh lineage is i
       [responsibility]
     ).transitions()
   ).toEqual([RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })])
+  expect(
+    deriveStartedIntegrationFrontier(
+      runState,
+      {
+        activeResponsibilities: [],
+        currentTrackerTaskIds: new Set([taskId]),
+        heldResponsibilities: [],
+        integrationTarget: Option.some(target),
+        remotePublicationConfigured: true,
+        targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
+        targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
+        taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([])
+  const independent = StartedIntegrationResponsibility.make({
+    ...responsibility,
+    plannedAttempt: PlannedTaskAttempt.make({
+      ...responsibility.plannedAttempt,
+      attemptId: AttemptId.make("independent-rewrite-attempt"),
+      taskId: TaskId.make("independent-rewrite-task")
+    }),
+    integrationTarget: IntegrationTarget.make({ ...target, ref: IntegrationTargetRef.make("refs/heads/independent") })
+  })
+  const facts = {
+    activeResponsibilities: [],
+    currentTrackerTaskIds: new Set([taskId, independent.plannedAttempt.taskId]),
+    heldResponsibilities: [],
+    integrationTarget: Option.some(target),
+    remotePublicationConfigured: true,
+    targetLineageByAttemptId: new Map<AttemptId, TargetLineageObservation>(),
+    targetLineageRefreshRequiredAttemptIds: new Set([attemptId]),
+    taskClaimAuthorityByAttemptId: new Map([
+      [attemptId, { _tag: "Exact" as const }],
+      [independent.plannedAttempt.attemptId, { _tag: "Exact" as const }]
+    ])
+  }
+  // A freshness invalidation drops runtime permission but retains the durable constraint.
+  expect(deriveStartedIntegrationFrontier(runState, facts, [responsibility, independent]).transitions()).toEqual([
+    RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: independent })
+  ])
+  const compatible = TargetLineageObservation.make({ ...incompatibleLineage, plannedBaseIsAncestorOfTargetHead: true })
+  const newer = lineageRecords(10, compatible, "compatible-after-rewrite")
+  expect(
+    deriveStartedIntegrationFrontier(
+      {
+        ...runState,
+        workflowHistory: { evidence: journalEvidenceFrom([...records, newer.intent, newer.observation]) }
+      },
+      {
+        ...facts,
+        targetLineageByAttemptId: new Map([[attemptId, compatible]]),
+        targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>()
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })])
 })
 
 it("does not treat another Run at the same journal position as this Run's held target", () => {
@@ -661,8 +719,7 @@ it("does not treat another Run at the same journal position as this Run's held t
     [responsibility]
   ).transitions()
 
-  expect(transitions).toContainEqual(RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility }))
-  expect(transitions).not.toContainEqual(RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility }))
+  expect(transitions).toEqual([])
 })
 
 it("keeps unobserved claims and absent durable lineage waiting without starting Integrator", () => {

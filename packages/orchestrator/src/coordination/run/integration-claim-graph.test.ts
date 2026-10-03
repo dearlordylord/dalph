@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { Effect } from "effect"
-import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, TaskId, IntegrationTarget, IntegrationTargetRef, RunId } from "@dalph/contracts"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -15,9 +15,15 @@ import { RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import {
   integrationTargetResourceSnapshotIncludes,
+  acquireStartedIntegrationTarget,
+  releaseStartedIntegrationTarget,
   makeIntegrationTargetResourceController
 } from "../admission/integration-target-resource.js"
-import { TaskWorkCapacityChangedEvent, taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import {
+  TargetLineageObservedEvent,
+  TaskWorkCapacityChangedEvent,
+  taskTrackerReadIntent
+} from "../../workflow/registry/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -361,5 +367,134 @@ for (const initiallyHeld of [true, false]) {
       expect(costs[0]).toBeGreaterThan(0)
       expect(costs[0]).toBe(costs[1])
     })
+  )
+}
+
+for (const initiallyHeld of [true, false]) {
+  it.effect(
+    initiallyHeld
+      ? "does not re-acquire a started integration target while its durable lineage is non-descendant"
+      : "reconstructs a non-descendant started integration as a blocked wait without reacquiring the target",
+    () =>
+      Effect.gen(function* () {
+        const fixture = integrationFinalityFixture
+        const specification = makeTaskWorkSpecification({
+          body: "rewritten target",
+          title: "Rewritten target",
+          taskId: fixture.taskId
+        })
+        const history = makeAcceptedIntegrationHistory({
+          acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
+          activeClaim: fixture.activeClaim,
+          integrationTarget: fixture.integrationTarget,
+          plannedAttempt: { ...fixture.plannedAttempt, taskRevision: specification.fingerprint },
+          taskSpecification: specification,
+          runId: fixture.runId,
+          targetHeadSha: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+          trackerTarget: fixture.target
+        })
+        const records = history.records.map((record) =>
+          record.event._tag === "TargetLineageObserved"
+            ? {
+                ...record,
+                event: TargetLineageObservedEvent.make({
+                  ...record.event,
+                  observation: { ...record.event.observation, plannedBaseIsAncestorOfTargetHead: false }
+                })
+              }
+            : record
+        )
+        yield* Effect.gen(function* () {
+          const writer = yield* InRunJournal
+          const resources = yield* makeIntegrationTargetResourceController()
+          const recovery = yield* makeRunRecoveryProjection(fixture.runId, fixture.integrationTarget, resources)
+          if (initiallyHeld) {
+            yield* resources.acquire(history.responsibility)
+            yield* resources.publishAcceptedOwnership(history.responsibility)
+          }
+          // An independent Run/target shares this production resource controller.
+          const independent = {
+            ...history.responsibility,
+            plannedAttempt: { ...history.plannedAttempt, runId: RunId.make("independent-lineage-run") },
+            integrationTarget: IntegrationTarget.make({
+              ...fixture.integrationTarget,
+              ref: IntegrationTargetRef.make("refs/heads/independent")
+            })
+          }
+          yield* resources.acquire(independent)
+          yield* resources.publishAcceptedOwnership(independent)
+          const projected = projectTrackerSnapshot({
+            revision: TrackerRevision.make("rewrite-current-open"),
+            tasks: [
+              {
+                id: fixture.taskId,
+                lifecycle: TaskLifecycle.cases.Open.make({}),
+                parentTaskId: null,
+                prerequisiteIds: []
+              }
+            ]
+          })
+          if (projected._tag !== "Valid") return yield* Effect.die("open graph must be valid")
+          const append = (event: Parameters<typeof writer.append>[2]) =>
+            writer.append(fixture.runId, describeJournalEvent(event).expectedKey, event)
+          const graph = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            OperationId.make("rewrite-current-graph"),
+            fixture.target
+          )
+          yield* append(taskTrackerReadIntent(graph))
+          yield* append(
+            taskTrackerFactsObservedEvent(
+              graph.operationId,
+              makeCompleteTaskTrackerFactsObserved(graph, projected.snapshot)
+            )
+          )
+          const claim = makeTaskClaimObservationOperation(
+            OperationId.make("rewrite-current-claim"),
+            fixture.target,
+            fixture.taskId,
+            [graph.operationId]
+          )
+          yield* append(taskTrackerReadIntent(claim))
+          yield* append(
+            taskTrackerFactsObservedEvent(
+              claim.operationId,
+              makeFocusedTaskClaimFactsObserved(claim, fixture.activeClaim)
+            )
+          )
+          const prefix = yield* writer.read(fixture.runId)
+          let releases = 0
+          let acquires = 0
+          let integratorCalls = 0
+          for (let projectionNumber = 0; projectionNumber < 5; projectionNumber += 1) {
+            const projection = yield* recovery.readDeliveryProjection
+            for (const transition of projection.frontier.transitions) {
+              if (transition._tag === "ReleaseStartedIntegrationTarget") {
+                releases += 1
+                yield* releaseStartedIntegrationTarget(resources, transition)
+              }
+              if (transition._tag === "AcquireStartedIntegrationTarget") {
+                acquires += 1
+                yield* acquireStartedIntegrationTarget(resources, transition)
+              }
+              if (transition._tag === "RunIntegrator") integratorCalls += 1
+            }
+            expect(yield* resources.isHeld(independent)).toBe(true)
+            let independentCalls = 0
+            yield* resources.withPermit(
+              independent,
+              Effect.sync(() => {
+                independentCalls += 1
+              })
+            )
+            expect(independentCalls).toBe(1)
+          }
+          expect(releases).toBe(initiallyHeld ? 1 : 0)
+          expect(acquires).toBe(0)
+          expect(integratorCalls).toBe(0)
+          expect(yield* resources.isHeld(history.responsibility)).toBe(false)
+          expect(yield* writer.read(fixture.runId)).toEqual(prefix)
+        }).pipe(Effect.provide(liveJournalTestLayer({ records, runId: fixture.runId, target: fixture.target })))
+      })
   )
 }
