@@ -191,6 +191,26 @@ This is a one-time initial-attachment handoff; later contradictory or
 unreadable projections stay inert and fail closed without a timer or tight
 passive retry.
 
+When the previous app-server has been reconciled absent before a new one is
+launched, a fresh exact terminal turn and absent owned-activity census may seal
+the retained attempt without a replayed notification. The prior app-server's
+durable token must have no surviving writer. This restart-only path does not
+authorize an active turn, a changed turn identity, an unreadable census, or a
+second Begin. During one live app-server incarnation, a matching completion
+notification remains the authorization for a terminal reread.
+
+Codex can keep its own `codex-code-mode-host` process alive after a task turn
+finishes. For one terminal turn, Dalph identifies that host by the exact
+app-server process ancestry, launch token, and executable identity. The host
+itself is server infrastructure; its child processes and background terminals
+remain attempt activity and must be absent before sealing. An unknown process,
+missing identity, active turn, unsettled tool item, or unreadable child census
+still blocks the terminal report. If Dalph exits after the matching notification
+but before report publication, restart applies the fresh terminal and absence
+proof above; repeated recovery accepts one terminal report and starts no new
+Codex turn. This rule changes only executor observation, not tracker, Git,
+integration, publication, or cleanup authority.
+
 `NoReport`, `TemporarilyUnavailable`, `Unreadable`, and
 `CorrelationContradiction` are four distinct unresolved observations. The
 serialized planned-attempt protocol records the exact evidence, retains the
@@ -222,12 +242,12 @@ here instead of maintaining parallel narrative names.
 | A unified-exec item-completed wake rereads equal Executing; its exact descendant later exits without another provider event and the targeted cadence observes Terminal | `observes descendant exit at targeted cadence after an equal item-completed wake` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | Closing a held-terminal attachment cancels its targeted cadence | `closing a held-terminal attachment stops targeted owned-activity census checks` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | A targeted recheck returns a typed projection failure and no later cadence read occurs | `a typed held-terminal projection failure stops targeted census checks without retry` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
-| Processes share one app-server incarnation; only the exact thread's escaped descendant remains live, a foreign thread is excluded, and missing thread identity is unresolved without starting cadence | `planned-attempt census excludes foreign-thread helpers`; `planned-attempt census keeps missing-thread helpers unresolved`; `planned-attempt census counts exact-thread escaped helpers`; `does not schedule held-terminal cadence after an unreadable activity census`; `a typed held-terminal projection failure stops targeted census checks without retry` | `packages/dalph/src/application/codex-app-server-public.test.ts`; `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| Processes share one app-server incarnation; only the exact thread's escaped descendant remains live, a foreign thread is excluded, and missing thread identity is unresolved without starting cadence. An exact provider-owned code-mode host is infrastructure only after the turn and all tool items settle; its descendant remains activity. | `planned-attempt census excludes foreign-thread helpers`; `planned-attempt census keeps missing-thread helpers unresolved`; `planned-attempt census counts exact-thread escaped helpers`; `excludes only a settled provider code-mode host while retaining its task descendant`; `recognizes the settled provider code-mode host from Darwin process facts`; `does not schedule held-terminal cadence after an unreadable activity census`; `a typed held-terminal projection failure stops targeted census checks without retry` | `packages/dalph/src/application/codex-app-server-public.test.ts`; `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | A suspension census signals A's exact descendants and never B's | `suspension census for one Codex thread never signals another thread` | `packages/dalph/src/application/codex-app-server-public.test.ts` |
 | A notification arrives after subscription and before the consumer awaits | `current-first attachment cannot miss a terminal change between projection and await` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | Codex turn/start succeeds before the first thread census exposes the owned turn; the durable Running record keeps the initial attachment until the existing completion hint | `keeps the initial lifecycle attachment through a delayed owned-turn census` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | The generic workflow owner is rebuilt from the shared Journal and retains one executing attempt without another Begin | `restart reprojects the exact executing attempt once then reattaches without Begin` | `packages/dalph/test/scenarios/production.test.ts` |
-| A rebuilt Codex adapter uses the durable exact attempt-thread association, reads Executing, and later observes Terminal without another turn | `rebuilds Codex lifecycle attachment from durable association across scoped restart` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| A rebuilt Codex adapter uses the durable exact attempt-thread association, reads Executing, and later observes Terminal without another turn. After old-server reconciliation, terminal plus absent activity seals without replayed hint. | `rebuilds Codex lifecycle attachment from durable association across scoped restart`; `seals an exact terminal turn after a reconciled app-server restart without replaying its hint` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | Process 1 retains causally proved Safe; the rebuilt Codex adapter reads that exact Safe projection without another suspension or turn command | `rebuilds a causally proved Safe Codex projection from durable association across scoped restart` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | Restart sees retained Terminal before publication | `recovers process death before terminal publication by reprojecting and accepting terminal once` | `packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.test.ts` |
 | Restart sees a pending Terminal observation | `accepts a pending terminal observation after process death without rereading or duplicating the report` | `packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.test.ts` |

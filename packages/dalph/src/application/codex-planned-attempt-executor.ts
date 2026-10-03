@@ -1221,16 +1221,21 @@ const makeCodexPlannedAttemptExecutorContext = (
     })
 
     const observeOwnedActivity = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivity")(function* (
-      thread: CodexThreadSnapshot
+      thread: CodexThreadSnapshot,
+      settledTerminalToolItems = false
     ) {
       const backgroundTerminals = yield* app.listBackgroundTerminals(thread.id)
-      return yield* activityCensus.observe(thread, backgroundTerminals, "PlannedAttempt")
+      return yield* activityCensus.observe(thread, backgroundTerminals, "PlannedAttempt", settledTerminalToolItems)
     })
 
     const observeOwnedActivityByThreadId = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivityByThreadId")(
-      function* (threadId: CodexThreadId) {
+      function* (threadId: CodexThreadId, terminalCorrelation?: PlannedAttemptExecutorCorrelation) {
         const thread = yield* app.readThread(threadId)
-        return yield* observeOwnedActivity(yield* refreshThreadTurnLedger(thread))
+        const settledTerminalToolItems =
+          terminalCorrelation === undefined
+            ? false
+            : (yield* listToolEffects(terminalCorrelation)).every((effect) => effect._tag === "Completed")
+        return yield* observeOwnedActivity(yield* refreshThreadTurnLedger(thread), settledTerminalToolItems)
       }
     )
 
@@ -1367,7 +1372,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       const rereadHead = yield* readHead(attempt)
       if (rereadHead === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       if (rereadHead !== commit) return yield* Effect.fail(new CodexGitObservationUnknown({}))
-      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id)
+      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
         return { continueLifecycleObservation: finalCensus._tag === "ExactLive", report: running(correlation) }
       }
@@ -1410,7 +1415,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (!commitMatchesHead(head, record.terminal.commit)) {
         return yield* Effect.fail(new CodexGitObservationUnknown({}))
       }
-      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id)
+      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
         return { continueLifecycleObservation: finalCensus._tag === "ExactLive", report: running(correlation) }
       }
@@ -1432,7 +1437,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       observedTurnId: CodexTurnId,
       thread: CodexThreadSnapshot
     ) {
-      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id)
+      const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
         return { continueLifecycleObservation: finalCensus._tag === "ExactLive", report: running(correlation) }
       }
@@ -1507,7 +1512,11 @@ const makeCodexPlannedAttemptExecutorContext = (
         return { continueLifecycleObservation: false, report: running(correlation) }
       }
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
-      const census = yield* observeOwnedActivity(reconciliation.thread)
+      const toolEffects = yield* listToolEffects(correlation)
+      const census = yield* observeOwnedActivity(
+        reconciliation.thread,
+        toolEffects.every((effect) => effect._tag === "Completed")
+      )
       if (censusHasActivity(census)) {
         return {
           continueLifecycleObservation: census._tag === "ExactLive",
@@ -2216,13 +2225,19 @@ const makeCodexPlannedAttemptExecutorContext = (
       }
       if (!isThreadBackedRecord(record)) return projectionOutcome(noReport(correlation))
       // Exact-notification providers such as Codex cannot treat a fresh thread
-      // read as completion authority. Providers without that protocol must opt
-      // into fresh lifecycle sealing explicitly; a missing capability fails closed.
+      // read from the same app-server as completion authority. A newly launched
+      // production server has first reconciled the prior server and all of its
+      // token-owned writers absent; its exact terminal read may settle recovery.
       const exactCompletionHintRequired = app.terminalSealPolicy !== "FreshLifecycleMaySeal"
+      const priorServerReconciled =
+        (record._tag === "Running" || record._tag === "SafelySuspended") &&
+        app.serverLaunch !== undefined &&
+        record.turnStartIncarnation !== app.incarnation
+      const terminalReadAuthorized = completionHintAuthorized || priorServerReconciled
       if (
         (record._tag === "Running" || record._tag === "SafelySuspended") &&
         exactCompletionHintRequired &&
-        !completionHintAuthorized
+        !terminalReadAuthorized
       ) {
         // Preserve the durable Safe projection without treating a lifecycle read
         // as completion authority; only Running projects as Executing here.
@@ -2230,14 +2245,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         return projectionOutcome(exact(report), false, record.threadId, record.observedTurnId)
       }
       const reconciliation = yield* reconcile(attempt, correlation, record)
-      return yield* projectReconciliation(
-        correlation,
-        record,
-        attempt,
-        reconciliation,
-        purpose,
-        completionHintAuthorized
-      )
+      return yield* projectReconciliation(correlation, record, attempt, reconciliation, purpose, terminalReadAuthorized)
     })
 
     const projectFailure = (

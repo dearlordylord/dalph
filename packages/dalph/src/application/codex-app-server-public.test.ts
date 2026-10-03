@@ -511,6 +511,99 @@ it.effect("keeps app-server token descendants out of Integrator sessions but in 
   )
 )
 
+it.effect("excludes only a settled provider code-mode host while retaining its task descendant", () =>
+  withFakeProcFiles(
+    ["501", "502", "503", "504"],
+    new Map([
+      ["/proc/501/stat", { _tag: "Read", text: linuxProcessStat(501, 0, 501, "linux:leader") }],
+      ["/proc/501/cmdline", { _tag: "Read", text: "codex\u0000app-server\u0000" }],
+      ["/proc/501/environ", { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000" }],
+      ["/proc/502/stat", { _tag: "Read", text: linuxProcessStat(502, 501, 501, "linux:native") }],
+      ["/proc/502/cmdline", { _tag: "Read", text: "codex\u0000app-server\u0000" }],
+      ["/proc/502/environ", { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000" }],
+      ["/proc/503/stat", { _tag: "Read", text: linuxProcessStat(503, 502, 503, "linux:host") }],
+      ["/proc/503/cmdline", { _tag: "Read", text: "/vendor/bin/codex-code-mode-host\u0000" }],
+      ["/proc/503/environ", { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000" }],
+      ["/proc/504/stat", { _tag: "Read", text: linuxProcessStat(504, 503, 504, "linux:writer") }],
+      ["/proc/504/cmdline", { _tag: "Read", text: "/bin/sh\u0000" }],
+      [
+        "/proc/504/environ",
+        { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000CODEX_THREAD_ID=public-thread\u0000" }
+      ]
+    ]),
+    (native) => {
+      let writerPresent = true
+      const census = makeNodeCodexOwnedActivityCensusService(
+        {
+          ...native,
+          platform: "linux",
+          readdir: async () => (writerPresent ? ["501", "502", "503", "504"] : ["501", "502", "503"])
+        },
+        501,
+        CodexServerIncarnation.make("scope-token|linux%3Aleader")
+      )
+      return Effect.gen(function* () {
+        const completed = thread("idle", [turn("done", "completed")])
+        expect((yield* census.observe(completed, [], "PlannedAttempt"))._tag).toBe("Unreadable")
+        expect(yield* census.observe(completed, [], "PlannedAttempt", true)).toMatchObject({
+          _tag: "ExactLive",
+          activities: [{ _tag: "ProcessGroupDescendant", identity: { pid: 504 } }]
+        })
+        writerPresent = false
+        expect(yield* census.observe(completed, [], "PlannedAttempt", true)).toEqual({ _tag: "Absent" })
+      })
+    }
+  )
+)
+
+it.effect("recognizes the settled provider code-mode host from Darwin process facts", () => {
+  const started = "Fri Oct  2 22:00:00 2026"
+  const stats = [
+    `501 0 501 S ${started}`,
+    `502 501 501 S ${started}`,
+    `503 502 503 S ${started}`,
+    `504 503 504 S ${started}`
+  ]
+  const commands = [
+    "501 /vendor/bin/codex app-server DALPH_CODEX_SERVER_INCARNATION=scope-token",
+    "502 /vendor/bin/codex app-server DALPH_CODEX_SERVER_INCARNATION=scope-token",
+    "503 /vendor/bin/codex-code-mode-host DALPH_CODEX_SERVER_INCARNATION=scope-token",
+    "504 /bin/sh DALPH_CODEX_SERVER_INCARNATION=scope-token CODEX_THREAD_ID=public-thread"
+  ]
+  let writerPresent = true
+  let hostRecognized = true
+  const native = {
+    ...nodeCodexProcessNativeService,
+    platform: "darwin" as const,
+    execFile: async (_file: string, arguments_: ReadonlyArray<string>) => {
+      const selected = writerPresent ? stats : stats.slice(0, -1)
+      const selectedCommands = (writerPresent ? commands : commands.slice(0, -1)).map((command, index) =>
+        index === 2 && !hostRecognized ? command.replace("codex-code-mode-host", "unknown-helper") : command
+      )
+      if (arguments_.includes("pid=,ppid=,pgid=,stat=,lstart=")) return { stdout: `${selected.join("\n")}\n` }
+      if (arguments_.includes("pid=,command=")) return { stdout: `${selectedCommands.join("\n")}\n` }
+      return { stdout: "/bin/sh\n" }
+    }
+  }
+  const census = makeNodeCodexOwnedActivityCensusService(
+    native,
+    501,
+    CodexServerIncarnation.make("scope-token|darwin%3AFri%20Oct%20%202%2022%3A00%3A00%202026")
+  )
+  return Effect.gen(function* () {
+    const completed = thread("idle", [turn("done", "completed")])
+    expect((yield* census.observe(completed, [], "PlannedAttempt"))._tag).toBe("Unreadable")
+    expect(yield* census.observe(completed, [], "PlannedAttempt", true)).toMatchObject({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ProcessGroupDescendant", identity: { pid: 504 } }]
+    })
+    writerPresent = false
+    expect(yield* census.observe(completed, [], "PlannedAttempt", true)).toEqual({ _tag: "Absent" })
+    hostRecognized = false
+    expect((yield* census.observe(completed, [], "PlannedAttempt", true))._tag).toBe("Unreadable")
+  })
+})
+
 it.effect("classifies controlled Linux process census observations at the public activity boundary", () => {
   const liveKill = (() => true) as typeof nodeProcess.kill
   const valid = (pid: number, parentPid: number, processGroupId: number, startIdentity = "start") => ({

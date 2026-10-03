@@ -437,7 +437,8 @@ interface CodexOwnedActivityCensusService {
   readonly observe: (
     thread: CodexThreadSnapshot,
     backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>,
-    scope: CodexOwnedActivityScope
+    scope: CodexOwnedActivityScope,
+    settledTerminalToolItems?: boolean
   ) => Effect.Effect<CodexOwnedActivityCensusProjection, CodexAppServerFailure>
   readonly terminateDescendants: (
     descendants: ReadonlyArray<CodexOwnedProcessIdentity>,
@@ -983,11 +984,13 @@ const tokenMemberForThread = (
   environment: string,
   token: CodexServerIncarnation,
   threadId: CodexThreadId | undefined,
-  platform: CodexProcessNativeService["platform"]
+  platform: CodexProcessNativeService["platform"],
+  providerHostInfrastructure = false
 ): TokenMemberObservation => {
   if (!environmentCarriesToken(environment, `${codexServerIncarnationEnvironment}=${token}`, platform)) {
     return undefined
   }
+  if (providerHostInfrastructure) return undefined
   if (threadId === undefined) {
     return {
       pid: stat.pid,
@@ -1069,7 +1072,8 @@ const readTokenMember = async (
   stat: LinuxProcessStat,
   token: CodexServerIncarnation,
   threadId: CodexThreadId | undefined,
-  native: CodexProcessNativeService
+  native: CodexProcessNativeService,
+  providerHostInfrastructure = false
 ): Promise<TokenMemberObservation> => {
   try {
     const environment =
@@ -1077,7 +1081,7 @@ const readTokenMember = async (
       native.platform === "linux"
         ? await native.readFile(`/proc/${stat.pid}/environ`)
         : (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(stat.pid)])).stdout
-    return tokenMemberForThread(stat, environment, token, threadId, native.platform)
+    return tokenMemberForThread(stat, environment, token, threadId, native.platform, providerHostInfrastructure)
   } catch (error) {
     return tokenReadFailure(stat.pid, error, native)
   }
@@ -1088,14 +1092,22 @@ const readDarwinTokenMembers = async (
   stats: ReadonlyArray<LinuxProcessStat>,
   token: CodexServerIncarnation,
   threadId: CodexThreadId | undefined,
-  native: CodexProcessNativeService
+  native: CodexProcessNativeService,
+  isProviderHostInfrastructure: (stat: LinuxProcessStat, command: string) => boolean = () => false
 ): Promise<ReadonlyArray<TokenMemberObservation>> => {
   const observation = await readDarwinProcessCommands(native)
   if ("failure" in observation) return [observation.failure]
   return stats.flatMap((stat) => {
     const command = observation.commands.get(stat.pid)
     if (command === undefined) return []
-    const member = tokenMemberForThread(stat, command, token, threadId, "darwin")
+    const member = tokenMemberForThread(
+      stat,
+      command,
+      token,
+      threadId,
+      "darwin",
+      isProviderHostInfrastructure(stat, command)
+    )
     return member === undefined ? [] : [member]
   })
 }
@@ -1167,7 +1179,8 @@ const observeOwnedActivityProcesses = async (
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   incarnation?: CodexServerIncarnation,
   appServerPid?: number,
-  threadId?: CodexThreadId
+  threadId?: CodexThreadId,
+  settledTerminalToolItems = false
 ): Promise<OwnedActivityProcessProjection> => {
   if (roots.length === 0 && incarnation === undefined) return { _tag: "Absent" }
   if (native.platform !== "linux" && native.platform !== "darwin") {
@@ -1190,12 +1203,33 @@ const observeOwnedActivityProcesses = async (
       stat.pid !== appServerPid &&
       (appServerProcessGroupId === undefined || stat.processGroupId !== appServerProcessGroupId)
   )
+  const hasProviderHostParent = (stat: LinuxProcessStat): boolean => {
+    if (!settledTerminalToolItems || threadId === undefined || appServerPid === undefined) return false
+    const parent = byPid.get(stat.parentPid)
+    return (
+      parent !== undefined &&
+      parent.processGroupId === appServerProcessGroupId &&
+      (parent.pid === appServerPid || isLinuxProcessDescendant(appServerPid, byPid, parent))
+    )
+  }
+  const isProviderHostInfrastructure = (stat: LinuxProcessStat, command: string): boolean => {
+    if (!hasProviderHostParent(stat)) return false
+    const executable = command.replaceAll("\u0000", " ").trim().split(/\s+/)[0] ?? ""
+    return /(?:^|\/)codex-code-mode-host$/.test(executable)
+  }
   const tokenMembers =
     token === undefined
       ? []
       : native.platform === "darwin"
-        ? await readDarwinTokenMembers(tokenCandidateStats, token, threadId, native)
-        : await Promise.all(tokenCandidateStats.map((stat) => readTokenMember(stat, token, threadId, native)))
+        ? await readDarwinTokenMembers(tokenCandidateStats, token, threadId, native, isProviderHostInfrastructure)
+        : await Promise.all(
+            tokenCandidateStats.map(async (stat) => {
+              const command = hasProviderHostParent(stat)
+                ? await native.readFile(`/proc/${stat.pid}/cmdline`).catch(() => "")
+                : ""
+              return readTokenMember(stat, token, threadId, native, isProviderHostInfrastructure(stat, command))
+            })
+          )
   const tokenFailure = tokenMembers.find((member) => member !== undefined && "detail" in member)
   if (tokenFailure !== undefined && "detail" in tokenFailure) return { _tag: "Unreadable", detail: tokenFailure.detail }
   const exactTokenMembers = tokenMembers.filter(
@@ -1318,7 +1352,7 @@ export const makeNodeCodexOwnedActivityCensusService = (
   appServerPid?: number,
   incarnation?: CodexServerIncarnation
 ): CodexOwnedActivityCensusService => ({
-  observe: (thread, backgroundTerminals, scope) =>
+  observe: (thread, backgroundTerminals, scope, settledTerminalToolItems = false) =>
     Effect.tryPromise({
       try: async (): Promise<CodexOwnedActivityCensusProjection> => {
         const turnObservation = observeOwnedActivityTurns(thread)
@@ -1328,7 +1362,11 @@ export const makeNodeCodexOwnedActivityCensusService = (
           native,
           scope === "PlannedAttempt" ? incarnation : undefined,
           appServerPid,
-          scope === "PlannedAttempt" ? thread.id : undefined
+          scope === "PlannedAttempt" ? thread.id : undefined,
+          scope === "PlannedAttempt" &&
+            settledTerminalToolItems &&
+            turnObservation.activeTurns.length === 0 &&
+            thread.status === "idle"
         )
         if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
           return processProjection

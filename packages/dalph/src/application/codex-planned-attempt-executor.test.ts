@@ -309,6 +309,8 @@ const makeHarness = (
     readonly dieAfterFirstTurnStartOnce?: boolean
     readonly lifecycleHintCount?: number
     readonly terminalSealPolicy?: CodexTerminalSealPolicy
+    readonly incarnation?: CodexServerIncarnation
+    readonly serverLaunch?: CodexServerLaunchRecord
     readonly disableExactCompletionHints?: boolean
     readonly legacyCompletionHints?: CodexAppServerService["attachTurnCompletedHints"]
     readonly lifecycleHints?:
@@ -407,7 +409,8 @@ const makeHarness = (
   }
 
   const app: CodexAppServerService = {
-    incarnation: CodexServerIncarnation.make("controlled-issue-58"),
+    incarnation: options.incarnation ?? CodexServerIncarnation.make("controlled-issue-58"),
+    ...(options.serverLaunch === undefined ? {} : { serverLaunch: options.serverLaunch }),
     ...(options.terminalSealPolicy === undefined ? {} : { terminalSealPolicy: options.terminalSealPolicy }),
     attachTurnCompletedHints: options.legacyCompletionHints ?? Effect.succeed(Stream.empty),
     ...(options.disableExactCompletionHints === true
@@ -2769,6 +2772,55 @@ it.effect("keeps a completed turn pending after reopen when its matching notific
       expect(secondHarness.threadStarts()).toBe(0)
       expect(secondHarness.turnCwds).toHaveLength(0)
       expect(secondHarness.interruptCount()).toBe(0)
+    })
+  )
+)
+
+it.effect("seals an exact terminal turn after a reconciled app-server restart without replaying its hint", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstHarness = makeHarness()
+      const sharedStore = firstHarness.store
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+      }).pipe(Effect.provide(layerFor(firstHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+      const firstThread = firstHarness.currentThread()
+      const ownedTurn = firstThread.turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+      if (ownedTurn === undefined) return yield* Effect.die("restart fixture lost its owned turn")
+      const incarnation = CodexServerIncarnation.make("reconciled-new-server")
+      const secondHarness = makeHarness({
+        incarnation,
+        serverLaunch: CodexServerLaunchRecord.make({
+          command: ["codex", "app-server"],
+          incarnation,
+          phase: "Live",
+          pid: 102
+        })
+      })
+      secondHarness.restoreProviderThread({
+        ...firstThread,
+        status: "idle",
+        turns: firstThread.turns.map((turn) =>
+          turn.id === ownedTurn.id
+            ? { ...turn, status: "completed", items: [{ type: "agentMessage", text: finalResponse(head) }] }
+            : turn
+        )
+      })
+      const observed = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        return yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+      }).pipe(Effect.provide(layerFor(secondHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+      expect(observed).toMatchObject({
+        _tag: "Exact",
+        report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } }
+      })
+      expect(Option.getOrThrow(yield* sharedStore.readAttempt(correlation.runId, correlation.attemptId))).toMatchObject(
+        { _tag: "Terminal" }
+      )
+      expect(firstHarness.turnCount()).toBe(1)
+      expect(secondHarness.threadStarts()).toBe(0)
+      expect(secondHarness.turnCwds).toHaveLength(0)
     })
   )
 )
