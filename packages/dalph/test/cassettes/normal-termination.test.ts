@@ -11,7 +11,7 @@ type Fixture = Effect.Success<ReturnType<typeof makeNormalTermination>>
 const allNames = ["A", ...names]
 
 it.effect(
-  "records Completed once only after Gfinal and no remaining work",
+  "proves seven tracker successes from Gfinal and seven exact claim absences",
   () =>
     Effect.gen(function* () {
       const fixture = yield* makeNormalTermination()
@@ -19,10 +19,8 @@ it.effect(
       yield* deliver(fixture, process)
       yield* process.event((event) => event._tag === "WorkflowRunTerminated")
       const records = yield* fixture.journal.read(fixture.runId)
-      expect(records.filter(({ event }) => event._tag === "IntegrationFinalitySettled")).toHaveLength(7)
-      expect(records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
-      expect(yield* Ref.get(fixture.processEndRequests)).toBe(0)
-      const finalReads = (yield* Ref.get(fixture.graphReads)).filter(
+      const reads = yield* Ref.get(fixture.graphReads)
+      const finalReads = reads.filter(
         ({ intent, revision }) =>
           revision.startsWith("Gfinal") &&
           intent.event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -31,7 +29,11 @@ it.effect(
       )
       expect(finalReads).toHaveLength(1)
       const finalRead = finalReads[0]
-      if (finalRead === undefined || finalRead.runtime === null)
+      if (finalRead === undefined) return expect.fail("missing actual final tracker read")
+      expect(records.filter(({ event }) => event._tag === "IntegrationFinalitySettled")).toHaveLength(7)
+      expect(records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
+      expect(yield* Ref.get(fixture.processEndRequests)).toBe(0)
+      if (finalRead.runtime === null)
         return expect.fail("missing live quiescence observation before final tracker call")
       expect(finalRead.runtime.liveOwners).toEqual([])
       expect(finalRead.runtime.evaluation.taskWork.held).toEqual([])
@@ -74,28 +76,6 @@ it.effect(
         rootTaskId: "A",
         complete: true
       })
-    }).pipe(Effect.provide(NodeCrypto.layer)),
-  30_000
-)
-
-it.effect(
-  "proves seven tracker successes from Gfinal and seven exact claim absences",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeNormalTermination()
-      const process = yield* start(fixture)
-      yield* deliver(fixture, process)
-      yield* process.event((event) => event._tag === "WorkflowRunTerminated")
-      const records = yield* fixture.journal.read(fixture.runId)
-      const reads = yield* Ref.get(fixture.graphReads)
-      const finalRead = reads.find(
-        ({ intent, revision }) =>
-          revision.startsWith("Gfinal") &&
-          intent.event._tag === "TaskTrackerReadIntentRecorded" &&
-          intent.event.operation._tag === "ReadTrackerGraph" &&
-          intent.event.operation.cause._tag === "PostQuiescenceReconfirmation"
-      )
-      if (finalRead === undefined) return expect.fail("missing actual final tracker read")
       expect(finalRead.settledTaskIds).toEqual(allNames)
       expect(finalRead.snapshot.toWire().tasks.map(({ id, lifecycle }) => [id, lifecycle._tag])).toEqual(
         allNames.map((name) => [name, "CompletedSuccessfully"])

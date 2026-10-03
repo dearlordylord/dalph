@@ -4,11 +4,8 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
-for (const key of [
-  "dependentTasksCompleteInOneRun",
-  "productionShapedFiveTaskDiamond",
-  "deliveryInvariantStory"
-] as const) {
+// Two- and five-task examples exercise the same observation contract without replaying the ten-task story.
+for (const key of ["dependentTasksCompleteInOneRun", "productionShapedFiveTaskDiamond"] as const) {
   it.effect(
     `preserves maintained authored moments after fresh-claim integration progress in ${key}`,
     () =>
