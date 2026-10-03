@@ -4,7 +4,11 @@ import { resolveVitestConfig } from "./quality-gate-test-fixture.js"
 const resourceSensitiveFiles = [
   "packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts",
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
-  "scripts/quint-ci-contract.test.ts"
+  "scripts/quint-ci-contract.test.ts",
+  "packages/dalph/src/application/production-changing-graph-finality.test.ts",
+  "packages/dalph/test/cassettes/maintained-observations.test.ts",
+  "packages/dalph/test/cassettes/normal-termination.test.ts",
+  "packages/dalph/test/scenarios/hermetic-mvp.test.ts"
 ]
 
 it("runs resource-sensitive coverage files once after the ordinary batch without dropping root exclusions", () => {

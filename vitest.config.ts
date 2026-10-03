@@ -22,7 +22,11 @@ const liveLaunchPreflightIntegrationTestPattern =
 const lateCoverageTestPatterns = ["packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"]
 const serialCoverageTestPatterns = [
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
-  "scripts/quint-ci-contract.test.ts"
+  "scripts/quint-ci-contract.test.ts",
+  "packages/dalph/src/application/production-changing-graph-finality.test.ts",
+  "packages/dalph/test/cassettes/maintained-observations.test.ts",
+  "packages/dalph/test/cassettes/normal-termination.test.ts",
+  "packages/dalph/test/scenarios/hermetic-mvp.test.ts"
 ]
 const resourceSensitiveCoverageTestPatterns = [...lateCoverageTestPatterns, ...serialCoverageTestPatterns]
 const ordinaryTestTimeoutMilliseconds = 10_000
