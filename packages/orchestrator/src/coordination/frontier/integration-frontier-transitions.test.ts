@@ -3348,6 +3348,98 @@ it("fixes a FullRerun successor when the fresh lineage remains compatible", () =
   ])
 })
 
+it("retains an unavailable initial catch-up without reacquiring its target", () => {
+  const started = StartedIntegrationResponsibility.make({
+    ...responsibility,
+    queuedAt: JournalPosition.make(2),
+    startedAt: JournalPosition.make(3)
+  })
+  const correlation = remoteBaselineCorrelationFor(
+    runId,
+    integratorResponsibilityFactsFor(started),
+    target,
+    remotePublicationTargetForTest
+  )
+  const records = [
+    workflowRunBegan(),
+    ...firstStartedResponsibilityRecords(started),
+    record(
+      4,
+      RemoteBaselineReadIntendedEvent.make({
+        correlation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineReadIntendedRecordKey(correlation.baselineId).toString()
+    ),
+    record(
+      5,
+      RemoteBaselineObservedEvent.make({
+        correlation,
+        observation: RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: baseSha, remoteHead: fixedHead }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineObservedRecordKey(correlation.baselineId).toString()
+    ),
+    record(
+      6,
+      LocalTargetCatchUpIntendedEvent.make({
+        correlation,
+        expectedLocalHead: baseSha,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        remoteHead: fixedHead,
+        version: workflowJournalEventVersion
+      }),
+      localTargetCatchUpIntendedRecordKey(correlation.baselineId).toString()
+    ),
+    record(
+      7,
+      LocalTargetCatchUpObservedEvent.make({
+        correlation,
+        expectedLocalHead: baseSha,
+        occurrenceClassification: "NonActionOccurrence",
+        remoteHead: fixedHead,
+        result: LocalTargetCatchUpResult.cases.Unavailable.make({ reason: "TargetUnreadable" }),
+        version: workflowJournalEventVersion
+      }),
+      localTargetCatchUpObservedRecordKey(correlation.baselineId).toString()
+    )
+  ]
+  const runState: ReconstructedRunState = {
+    appliedThrough: JournalPosition.make(7),
+    controlPolicy: Option.none(),
+    graphKnowledge: { taskTrackerFacts: [] },
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    cancellation: notAppliedCancellation,
+    responsibility: { entries: [] },
+    runId,
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
+  }
+  const runtimeFacts = {
+    activeResponsibilities: [],
+    currentTrackerTaskIds: new Set([taskId]),
+    heldResponsibilities: [identity(started.queuedAt)],
+    integrationTarget: Option.some(target),
+    remotePublicationConfigured: true,
+    targetPromotionConfigured: true,
+    taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
+  }
+  const transitions = (held: boolean) =>
+    deriveStartedIntegrationFrontier(
+      runState,
+      { ...runtimeFacts, heldResponsibilities: held ? [identity(started.queuedAt)] : [] },
+      [started]
+    ).transitions()
+  expect(transitions(true)).toEqual([
+    RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: started })
+  ])
+  expect(transitions(false)).toEqual([])
+  expect(transitions(false)).toEqual([])
+})
+
 it("releases the target when Retry keeps its fixed head but loses lineage ancestry", () => {
   const scenario = retryHistory("ConclusiveResult", fixedHead)
   const incompatibleLineage = TargetLineageObservation.make({

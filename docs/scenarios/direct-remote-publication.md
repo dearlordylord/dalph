@@ -115,6 +115,18 @@ executor owns execution observations, and the Journal owns workflow history.
    one Git boundary and records its result before returning. The frontier
    re-derives catch-up under a fresh owner, so Pause or Exit can prevent that
    next action while preserving an already-produced result.
+
+   If Git refuses catch-up because the local target branch is checked out,
+   Dalph records `Unavailable(TargetUnreadable)`. The started integration
+   releases its process-local target position. Reprojecting that retained
+   result, including after restart, must not reacquire and immediately release
+   the position in a loop, start an Integrator, or retry the refused mutation.
+   Alice sees the retained baseline and can repair the Git checkout before a
+   new, explicitly authorized attempt. No result is inferred from a later Git
+   change; the original Run remains unfinished. This is proved by
+   `integration-frontier-transitions.test.ts::retains an unavailable initial
+   catch-up without reacquiring its target` for held, released, and restarted
+   resource projections.
 4. Record one session S fixed to H and C with its distinct candidate worktree.
    The Integrator performs its normal merge, review and repository checks and
    reports M. Git must prove exact ordered parents `[H, C]`. Neither provider

@@ -452,6 +452,27 @@ const releaseStartedIntegrationTargetFor = (
 ): ReadonlyArray<RunnableFrontierTransitionType> =>
   held ? [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })] : []
 
+/** A conclusive initial baseline cannot authorize another local target acquisition. */
+const initialBaselineIsRetainedFor = (
+  runState: ReconstructedRunState,
+  responsibility: StartedIntegrationResponsibility,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  integratorState: CurrentIntegratorState
+): boolean => {
+  if (integratorState._tag !== "Absent" || runtimeFacts.remotePublicationConfigured !== true) return false
+  const source = workflowHistorySource(runState)
+  const began = Array.from(journalRecordsOfKind(source, "WorkflowRunBegan"))[0]
+  if (began?.event._tag !== "WorkflowRunBegan") return false
+  const correlation = remoteBaselineCorrelationFor(
+    responsibility.plannedAttempt.runId,
+    integratorResponsibilityFactsFor(responsibility),
+    responsibility.integrationTarget,
+    began.event.remotePublicationTarget
+  )
+  const baseline = deriveRemoteBaselineState(remoteBaselineEventsFor(source, correlation))
+  return baseline._tag === "Retained" || baseline._tag === "Contradiction"
+}
+
 const explanationAfterPrerequisitesFor = (
   runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
@@ -646,6 +667,8 @@ const transitionsBeforeStartedIntegrationAdmission = (
   if (!claimIsExactFor(responsibility)) return []
   if (waiting) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (retryProgress._tag === "Blocked") return releaseStartedIntegrationTargetFor(responsibility, held)
+  if (initialBaselineIsRetainedFor(runState, responsibility, runtimeFacts, integratorState))
+    return releaseStartedIntegrationTargetFor(responsibility, held)
   if (
     retryProgress._tag === "AwaitingLineage" ||
     retryProgress._tag === "SuccessorReady" ||
