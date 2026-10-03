@@ -500,6 +500,7 @@ export const journaledRunBootstrapLayer = (
       )
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
       const activation = yield* Semaphore.make(1)
+      const executorDrainRegistered = yield* Ref.make(false)
       const processRuntimeCapabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
         yield* makeIntegrationTargetResourceController(),
         admission
@@ -737,11 +738,28 @@ export const journaledRunBootstrapLayer = (
                 )
               }
               const journal = processJournal.journal
-              yield* applicationExit.registerExecutorDrain({
-                suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
-                  Effect.provide(context)
+              // Executor work survives a bounded activation. Its Exit drain must
+              // remain registered while the process Journal and executor are alive,
+              // including the interval before the next activation.
+              if (!(yield* Ref.get(executorDrainRegistered))) {
+                yield* applicationExit
+                  .registerExecutorDrain({
+                    suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
+                      Effect.provide(context)
+                    )
+                  })
+                  .pipe(Scope.provide(bootstrapScope))
+                yield* Ref.set(executorDrainRegistered, true)
+              }
+              // A cutoff during this activation still keeps its scoped services
+              // alive until suspension settles; ordinary interval returns do not wait.
+              yield* Effect.addFinalizer(() =>
+                admission.snapshot.pipe(
+                  Effect.flatMap(({ cutoffClosed }) =>
+                    cutoffClosed ? applicationExit.awaitExecutorDrains.pipe(Effect.ignore) : Effect.void
+                  )
                 )
-              })
+              )
               const controls: RuntimeControls = {
                 attemptChoice: Context.get(context, AttemptChoiceControl),
                 controlDirection: Context.get(context, ControlDirectionApplication),

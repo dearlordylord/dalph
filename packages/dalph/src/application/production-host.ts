@@ -73,7 +73,7 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Option, Schema, type Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Logger, Option, Schema, type Scope } from "effect"
 // eslint-disable-next-line import/no-nodejs-modules -- The production host selects its own Node executable for task preparation.
 import nodeProcess from "node:process"
 import {
@@ -621,6 +621,8 @@ const observedIntegratorLayer = <E, R>(
   )
 }
 
+const applicationExitDiagnosticLogger = Logger.withConsoleError(Logger.make(({ message }) => String(message)))
+
 /**
  * Keeps the coordinator lock held until the host scope closes after its caller
  * reports the exact lifecycle result and returns. The application shell owns
@@ -631,7 +633,14 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
 ) {
   const trace = {
     emit: (event: Parameters<ProductionApplicationExitTraceObserver>[0]) =>
-      options.traceObserver?.(event) ?? Effect.void
+      Effect.gen(function* () {
+        if (event._tag === "ExitResultReported" && event.result._tag !== "Succeeded") {
+          yield* Effect.logError(JSON.stringify({ _tag: "DalphApplicationExitDiagnostic", result: event.result })).pipe(
+            Effect.provide(Logger.layer([applicationExitDiagnosticLogger]))
+          )
+        }
+        yield* options.traceObserver?.(event) ?? Effect.void
+      })
   }
   const shell: ProductionHostApplicationExitShellService = yield* makeProductionHostApplicationExitShell(
     { emit: trace.emit },

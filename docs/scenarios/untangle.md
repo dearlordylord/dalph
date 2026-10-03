@@ -116,8 +116,45 @@ unanswerable `item/commandExecution/requestApproval` request.
 While the task is executing, the production CLI must keep status and history
 publication bounded. A Ctrl-C request must produce the existing precise
 `Succeeded`, `Failed`, or `TimedOut` Exit disposition. If a drain fails, the
-process log retains the concrete drain diagnostic while the public NDJSON keeps
+process log emits one `DalphApplicationExitDiagnostic` with the concrete command
+correlation and failure detail while the public NDJSON keeps
 its redacted stable lifecycle code.
+
+## Alice interrupts a production executor between activations
+
+Governing behavior: this composes [running executor Exit](running-executor-application-exit.md#alice-exits-while-one-exact-planned-attempt-is-running)
+and the [five-second application Exit contract](graceful-application-exit.md).
+It preserves their exact suspension intent/report and resource-preservation rules;
+it adds production CLI/host evidence while an activation interval is waiting.
+
+Alice starts one production Run at capacity one with a one-minute activation
+interval. The configured remote branch exists at Base. Dalph journals the Run,
+claims the task, prepares its exact Git worktree, and starts the production
+executor. The executor reports `ExecutorWorkExecuting`. A bounded activation
+may return while this work continues; its process Journal, executor and Exit
+drain remain available during the wait for another activation.
+
+The CLI passively observes status and accepted history. It publishes current
+status and history at most once per second per source, coalesces intermediate
+values, suppresses duplicates, and limits full historical snapshots by the
+existing record and total byte budgets. Reading status does not trigger work.
+
+Alice sends SIGINT while the executor is still executing. Dalph closes admission,
+records the exact `Suspend` intent, asks the executor to interrupt the turn,
+and records its exact safe-or-terminal response before reporting `Succeeded`.
+The CLI closes current status and emits one application Exit disposition, with
+no Run completion. The task claim, exact worktree/WIP, executor state/transcript,
+and evidence root remain for ordinary recovery. No tracker release, issue close,
+commit, replacement attempt, or durable cleanup is authorized by Exit.
+
+If the suspension response is lost, no safe evidence is invented; the existing
+failure/timeout protocol preserves the unmatched intent. Process death before
+the Exit result proves no successful Exit. Redelivered Exit joins the same
+five-second deadline; no automatic dogfood retry is authorized.
+
+The focused tests use a real child process, production CLI/host, SQLite and Git,
+with a controlled Codex protocol peer and controlled GitHub. They do not certify
+a live hosted provider or repeat the historical disposable dogfood run.
 
 ## Acceptance-test mapping
 
@@ -143,5 +180,18 @@ its redacted stable lifecycle code.
 - `launches the Codex child with unattended production flags` proves the child
   receives the YOLO flag before `app-server` and that the durable launch
   command records the same arguments.
+- `one-minute production activation keeps stdout bounded while executor work remains active`
+  in [production public recovery tests](../../packages/dalph/src/application/production-public-recovery.integration.test.ts)
+  counts stdout lines and bytes after an executing report, verifies the turn
+  remains active, and forbids fabricated Run completion.
+- `SIGINT suspends active production executor work and preserves the exact unfinished Run evidence`
+  in the same file proves the production signal disposition, exact suspension
+  intent/report, retained claim/worktree/WIP/private executor evidence, and no
+  fabricated completion or tracker release. It reuses the cancellation
+  fixture's resource-preservation assertions without invoking cancellation.
+- `SIGINT reports the exact failed suspension boundary and retains unmatched intent without completion`
+  proves the stderr diagnostic identifies `Suspend`, the exact Run/attempt and
+  malformed turns-page boundary; stdout remains redacted, the unmatched intent
+  and latest executing report remain durable, and exact resources remain intact.
 - Existing production CLI and application Exit tests continue to prove public
   redaction and exact lifecycle dispositions.

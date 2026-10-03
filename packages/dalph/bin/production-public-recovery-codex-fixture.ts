@@ -41,7 +41,7 @@ const respond = (message: unknown) => {
       write(request.id, {
         codexHome: nodeProcess.env["CODEX_HOME"] ?? "/tmp",
         platformFamily: "unix",
-        platformOs: "linux",
+        platformOs: nodeProcess.platform === "darwin" ? "macos" : "linux",
         userAgent: "dalph-public-recovery-qualification"
       })
       return
@@ -98,6 +98,14 @@ const respond = (message: unknown) => {
       }
       saveThread()
       write(request.id, {})
+      return
+    case "thread/turns/list":
+      write(
+        request.id,
+        nodeProcess.env["DALPH_QUALIFICATION_FAIL_SUSPENSION"] === "true"
+          ? {}
+          : { data: thread["turns"], nextCursor: null }
+      )
       return
     case "thread/list":
       write(request.id, { data: [thread] })

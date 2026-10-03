@@ -5,6 +5,7 @@ import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
   AcceptedJournalReader,
+  ApplicationExitResult,
   appendReplacementProvenance,
   freshWorkflowRunId,
   GitCommand,
@@ -85,6 +86,9 @@ const CleanupGitObservation = Schema.TaggedStruct("CleanupGitObservationStarted"
 })
 
 interface PublicProcess {
+  readonly exitDiagnostics: Ref.Ref<ReadonlyArray<ApplicationExitResult>>
+  readonly completionTraces: Ref.Ref<ReadonlyArray<string>>
+  readonly outputCount: Ref.Ref<{ readonly lines: number; readonly bytes: number }>
   readonly diagnostics: Ref.Ref<ReadonlyArray<DalphRuntimeDiagnostic>>
   readonly events: Queue.Queue<FixtureEvent>
   readonly handle: ChildProcessSpawner.ChildProcessHandle
@@ -121,7 +125,8 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   commonDirectory: string,
   gitFixtureDirectory: string,
   mode: "first" | "recovered" | "terminal" | "exit-during-attachment" | "cancellation",
-  operation: "run" | "cancel" = "run"
+  operation: "run" | "cancel" = "run",
+  failSuspension = false
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const command = ChildProcess.make(
@@ -138,6 +143,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
         DALPH_QUALIFICATION_CLEANUP_WORKTREE: cleanupWorktree,
         DALPH_QUALIFICATION_COMMON_DIRECTORY: commonDirectory,
         DALPH_QUALIFICATION_MODE: mode,
+        DALPH_QUALIFICATION_FAIL_SUSPENSION: String(failSuspension),
         GITHUB_TOKEN: "controlled-github-token",
         PATH: `${gitFixtureDirectory}:${nodeProcess.env["PATH"] ?? ""}`
       }
@@ -149,10 +155,17 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   const recordLog = yield* Ref.make<ReadonlyArray<ProductionCliRecordType>>([])
   const eventLog = yield* Ref.make<ReadonlyArray<FixtureEvent>>([])
   const diagnostics = yield* Ref.make<ReadonlyArray<DalphRuntimeDiagnostic>>([])
+  const outputCount = yield* Ref.make({ lines: 0, bytes: 0 })
   const stdoutFiber = yield* handle.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
     Stream.filter((line) => line.length > 0),
+    Stream.tap((line) =>
+      Ref.update(outputCount, (count) => ({
+        lines: count.lines + 1,
+        bytes: count.bytes + new TextEncoder().encode(line).byteLength + 1
+      }))
+    ),
     Stream.mapEffect((line) =>
       Schema.decodeUnknownEffect(Schema.fromJsonString(ProductionCliRecord))(line).pipe(
         Effect.mapError((cause) => new InvalidPublicStdoutRecord({ cause, line }))
@@ -165,6 +178,8 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
     ),
     Effect.forkScoped
   )
+  const exitDiagnostics = yield* Ref.make<ReadonlyArray<ApplicationExitResult>>([])
+  const completionTraces = yield* Ref.make<ReadonlyArray<string>>([])
   const stderrFiber = yield* handle.stderr.pipe(
     Stream.decodeText(),
     Stream.splitLines,
@@ -178,13 +193,39 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
               })
             )
           )
-        : Schema.decodeUnknownEffect(Schema.fromJsonString(DalphRuntimeDiagnostic))(line).pipe(
-            Effect.flatMap((diagnostic) => Ref.update(diagnostics, (current) => [...current, diagnostic]))
+        : Schema.decodeUnknownEffect(
+            Schema.fromJsonString(
+              Schema.Union([
+                DalphRuntimeDiagnostic,
+                Schema.TaggedStruct("DalphApplicationExitDiagnostic", { result: ApplicationExitResult }),
+                Schema.TaggedStruct("CodexExecutorCompletionTrace", { phase: Schema.NonEmptyString })
+              ])
+            )
+          )(line).pipe(
+            Effect.flatMap((diagnostic) =>
+              diagnostic._tag === "DalphRuntimeDiagnostic"
+                ? Ref.update(diagnostics, (current) => [...current, diagnostic])
+                : diagnostic._tag === "DalphApplicationExitDiagnostic"
+                  ? Ref.update(exitDiagnostics, (current) => [...current, diagnostic.result])
+                  : Ref.update(completionTraces, (current) => [...current, line])
+            )
           )
     ),
     Effect.forkScoped
   )
-  return { diagnostics, eventLog, events, handle, recordLog, records, stderrFiber, stdoutFiber } satisfies PublicProcess
+  return {
+    exitDiagnostics,
+    completionTraces,
+    outputCount,
+    diagnostics,
+    eventLog,
+    events,
+    handle,
+    recordLog,
+    records,
+    stderrFiber,
+    stdoutFiber
+  } satisfies PublicProcess
 })
 
 const stopAbruptly = (process: PublicProcess) =>
@@ -212,7 +253,9 @@ const publicFixture = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const git = yield* GitCommand
-  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-public-recovery-" })
+  const root = yield* fileSystem
+    .makeTempDirectoryScoped({ prefix: "dalph-public-recovery-" })
+    .pipe(Effect.flatMap((directory) => fileSystem.realPath(directory)))
   const repository = path.join(root, "repository")
   yield* fileSystem.makeDirectory(repository, { recursive: true })
   yield* git.runInWorktree(repository, ["init"])
@@ -221,6 +264,10 @@ const publicFixture = Effect.gen(function* () {
   yield* git.runInWorktree(repository, ["commit", "--allow-empty", "-m", "initial"])
   yield* git.runInWorktree(repository, ["branch", "-M", "master"])
   const baseSha = GitCommitSha.make((yield* git.runInWorktree(repository, ["rev-parse", "HEAD"])).stdout.trim())
+  const remote = path.join(root, "remote.git")
+  yield* git.runInWorktree(root, ["init", "--bare", remote])
+  yield* git.runInWorktree(repository, ["remote", "add", "origin", remote])
+  yield* git.runInWorktree(repository, ["push", "origin", "master"])
   const directories = ["codex-executor-private", "evidence", "planned-attempts", "integrator-candidates"]
   yield* Effect.forEach(directories, (directory) => fileSystem.makeDirectory(path.join(root, directory)))
   yield* fileSystem.chmod(path.join(root, "codex-executor-private"), 0o700)
@@ -260,6 +307,7 @@ const publicFixture = Effect.gen(function* () {
       plannedAttemptBaseSha: baseSha,
       plannedAttemptExecutor: "codex:production",
       plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
+      remotePublicationTarget: { branch: "refs/heads/master", endpoint: remote },
       repository,
       taskWorkCapacity: 1
     })
@@ -297,6 +345,205 @@ it.effect("the shipped binary and recovery qualification select the same CLI and
     expect(qualification).toContain("codexProcessNative: isolatedCodexProcessNativeService")
     expect(qualification).toContain("githubClient: () => publicRecoveryGithubLayer")
   }).pipe(Effect.provide(NodeServices.layer))
+)
+
+const startExecutingPublicRun = Effect.fn("ProductionPublicRecovery.startExecuting")(function* (
+  failSuspension = false
+) {
+  const fixture = yield* publicFixture
+  const child = yield* spawnPublicProcess(
+    fixture.config,
+    fixture.claimState,
+    fixture.cleanupObservation,
+    fixture.cleanupRelease,
+    fixture.cleanupWorktree,
+    fixture.commonDirectory,
+    fixture.gitFixtureDirectory,
+    "cancellation",
+    "run",
+    failSuspension
+  )
+  const selected = yield* takeMatching(child.records, ({ _tag }) => _tag === "RunSelected")
+  if (selected._tag !== "RunSelected") return yield* Effect.die("missing selected Run")
+  const fileSystem = yield* FileSystem.FileSystem
+  const started = yield* Effect.gen(function* () {
+    while (
+      !(yield* fileSystem.exists(fixture.codexTranscript)) ||
+      !(yield* fileSystem.readFileString(fixture.codexTranscript)).includes('"status":"inProgress"')
+    ) {
+      yield* Effect.sleep("20 millis")
+    }
+  }).pipe(Effect.timeoutOption("8 seconds"))
+  if (started._tag === "None")
+    return expect.fail(
+      `executor did not start: ${JSON.stringify(yield* Ref.get(child.diagnostics))} records=${JSON.stringify(yield* Ref.get(child.recordLog))}`
+    )
+  yield* takeMatching(
+    child.records,
+    (record) =>
+      record._tag === "HistoricalSnapshot" &&
+      record.snapshot.items.some(
+        ({ occurrence }) =>
+          occurrence._tag === "PlannedAttemptExecutorWorkReported" && occurrence.report._tag === "ExecutorWorkExecuting"
+      )
+  )
+  return { child, fixture, selected }
+})
+
+it.live(
+  "one-minute production activation keeps stdout bounded while executor work remains active",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { child, fixture } = yield* startExecutingPublicRun()
+        const fileSystem = yield* FileSystem.FileSystem
+        const before = yield* Ref.get(child.outputCount)
+        // This is an observation of a real child, not a simulated workflow timer.
+        yield* Effect.sleep("2200 millis")
+        const after = yield* Ref.get(child.outputCount)
+        expect(after.lines - before.lines).toBeLessThanOrEqual(8)
+        expect(after.bytes - before.bytes).toBeLessThan(1024 * 1024)
+        expect(yield* fileSystem.readFileString(fixture.codexTranscript)).toContain('"status":"inProgress"')
+        expect((yield* Ref.get(child.recordLog)).filter(({ _tag }) => _tag === "RunDisposition")).toEqual([])
+        yield* stopAbruptly(child)
+      }).pipe(Effect.provide(NodeServices.layer))
+    ),
+  20_000
+)
+
+it.live(
+  "SIGINT suspends active production executor work and preserves the exact unfinished Run evidence",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { child, fixture, selected } = yield* startExecutingPublicRun()
+        const fileSystem = yield* FileSystem.FileSystem
+        const claimBefore = yield* fileSystem.readFileString(fixture.claimState)
+        yield* Effect.sync(() => nodeProcess.kill(child.handle.pid, "SIGINT"))
+        const exited = yield* Effect.exit(awaitGraceful(child).pipe(Effect.timeout("7 seconds")))
+        if (exited._tag === "Failure")
+          return expect.fail(
+            `Exit failed: diagnostics=${JSON.stringify(yield* Ref.get(child.exitDiagnostics))} records=${JSON.stringify((yield* Ref.get(child.recordLog)).filter(({ _tag }) => _tag === "Failure" || _tag === "ApplicationExitDisposition"))} traces=${JSON.stringify((yield* Ref.get(child.completionTraces)).slice(-3))}`
+          )
+        const exitCode = exited.value
+        expect(exitCode).toBe(0)
+        expect(yield* Ref.get(child.exitDiagnostics)).toEqual([])
+        const records = yield* Ref.get(child.recordLog)
+        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+          {
+            _tag: "ApplicationExitDisposition",
+            disposition: { _tag: "Succeeded", requestedStatus: 0 },
+            runId: selected.runId,
+            version: 1
+          }
+        ])
+        expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toEqual([])
+        expect(records.filter(isClosedStatusRecord)).toHaveLength(1)
+        expect(yield* fileSystem.readFileString(fixture.claimState)).toBe(claimBefore)
+        expect((yield* Ref.get(child.eventLog)).filter(({ _tag }) => _tag === "DeleteClaimLabelApplied")).toEqual([])
+        const journalContext = yield* Layer.build(
+          sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
+        )
+        const journal = yield* Context.get(journalContext, JournalStore).read(selected.runId)
+        expect(journal.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+        expect(journal.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toEqual([])
+        const plans = journal.filter(({ event }) => event._tag === "TaskAttemptPlanned")
+        expect(plans).toHaveLength(1)
+        const plan = plans[0]
+        if (plan?.event._tag !== "TaskAttemptPlanned") return expect.fail("missing exact attempt")
+        expect(
+          yield* fileSystem.readFileString(
+            `${plan.event.operation.plannedAttempt.worktree}/cancellation-work-in-progress.txt`
+          )
+        ).toBe("preserved\n")
+        expect(yield* fileSystem.exists(fixture.executorState)).toBe(true)
+        expect(yield* fileSystem.exists(fixture.codexTranscript)).toBe(true)
+        expect(yield* fileSystem.readFileString(fixture.evidenceMarker)).toBe("preserved\n")
+        const suspension = journal.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended").at(-1)
+        expect(suspension?.event).toMatchObject({
+          command: "Suspend",
+          plannedAttempt: plan.event.operation.plannedAttempt
+        })
+        const reports = journal.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
+        expect(reports.at(-1)?.event).toMatchObject({
+          report: {
+            _tag: "ExecutorWorkSafelySuspended",
+            correlation: { runId: selected.runId, attemptId: plan.event.operation.plannedAttempt.attemptId }
+          }
+        })
+        const commands = journal.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+        expect(
+          commands.map(({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandIntended" ? event.command : undefined
+          )
+        ).toEqual(["Begin", "Suspend"])
+        expect(journal.findIndex(({ event }) => event === suspension?.event)).toBeLessThan(
+          journal.findLastIndex(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
+        )
+        expect(yield* fileSystem.readFileString(fixture.codexTranscript)).toContain('"status":"interrupted"')
+      }).pipe(Effect.provide(NodeServices.layer))
+    ),
+  20_000
+)
+
+it.live(
+  "SIGINT reports the exact failed suspension boundary and retains unmatched intent without completion",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { child, fixture, selected } = yield* startExecutingPublicRun(true)
+        const fileSystem = yield* FileSystem.FileSystem
+        const claimBefore = yield* fileSystem.readFileString(fixture.claimState)
+        yield* Effect.sync(() => nodeProcess.kill(child.handle.pid, "SIGINT"))
+        expect(yield* child.handle.exitCode.pipe(Effect.timeout("7 seconds"))).toBe(1)
+        yield* Effect.all([Fiber.join(child.stdoutFiber), Fiber.join(child.stderrFiber)])
+        const diagnostics = yield* Ref.get(child.exitDiagnostics)
+        expect(diagnostics).toHaveLength(1)
+        const diagnostic = diagnostics[0]
+        if (diagnostic?._tag !== "Failed") return expect.fail("missing typed failed Exit diagnostic")
+        expect(diagnostic.diagnostics[0]).toContain("Suspend (")
+        expect(diagnostic.diagnostics[0]).toContain(selected.runId)
+        expect(diagnostic.diagnostics[0]).toContain("thread turns page is invalid")
+        const records = yield* Ref.get(child.recordLog)
+        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+          {
+            _tag: "ApplicationExitDisposition",
+            disposition: { _tag: "Failed", requestedStatus: 1 },
+            runId: selected.runId,
+            version: 1
+          }
+        ])
+        expect(records.filter(({ _tag }) => _tag === "Failure")).toMatchObject([{ code: "lifecycle.exit_failed" }])
+        expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toEqual([])
+        expect(JSON.stringify(records)).not.toContain("thread turns page is invalid")
+        const journalContext = yield* Layer.build(
+          sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
+        )
+        const journal = yield* Context.get(journalContext, JournalStore).read(selected.runId)
+        const commands = journal.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+        expect(commands).toHaveLength(2)
+        const command = commands.at(-1)
+        if (command?.event._tag !== "PlannedAttemptExecutorCommandIntended")
+          return expect.fail("missing suspension intent")
+        expect(command.event.command).toBe("Suspend")
+        expect(diagnostic.diagnostics[0]).toContain(command.event.plannedAttempt.attemptId)
+        expect(
+          journal.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
+        ).toHaveLength(1)
+        expect(journal.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toEqual([])
+        expect(
+          journal.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported").at(-1)?.event
+        ).toMatchObject({ report: { _tag: "ExecutorWorkExecuting" } })
+        expect(yield* fileSystem.readFileString(fixture.claimState)).toBe(claimBefore)
+        expect(
+          yield* fileSystem.readFileString(`${command.event.plannedAttempt.worktree}/cancellation-work-in-progress.txt`)
+        ).toBe("preserved\n")
+        expect(yield* fileSystem.exists(fixture.executorState)).toBe(true)
+        expect(yield* fileSystem.exists(fixture.codexTranscript)).toBe(true)
+        expect(yield* fileSystem.readFileString(fixture.evidenceMarker)).toBe("preserved\n")
+      }).pipe(Effect.provide(NodeServices.layer))
+    ),
+  20_000
 )
 
 it.live(
