@@ -30,13 +30,17 @@ const request = {
   operation: { _tag: "ReadSnapshot" }
 }
 
-it.effect("decodes only passive selected-Run requests before dispatch", () =>
+it.effect("decodes selected-Run reads and explicit wake and Unpause before dispatch", () =>
   Effect.gen(function* () {
     expect(yield* decodeRunningHostRequest(request, descriptor)).toEqual(request)
+    for (const tag of ["StartWork", "Unpause"]) {
+      const command = { ...request, operation: { _tag: tag } }
+      expect(yield* decodeRunningHostRequest(command, descriptor)).toEqual(command)
+    }
     for (const input of [
       { ...request, root: "other" },
       { ...request, operation: { _tag: "ReadSnapshot", root: "other" } },
-      { ...request, operation: { _tag: "Unpause" } },
+      { ...request, operation: { _tag: "Unpause", direction: "Pause" } },
       { ...request, runId: "" },
       { ...request, protocolVersion: NaN }
     ])
@@ -145,4 +149,35 @@ it("rejects a response that crosses Run identity or safe-position boundaries", (
       }
     })
   ).toThrow()
+})
+
+it("rejects command evidence with foreign Run, unsafe ordinal or wrong request correlation", () => {
+  const decode = Schema.decodeUnknownSync(RunningHostEnvelope)
+  const partial = {
+    _tag: "UnpausePartiallyApplied",
+    ordinal: 2,
+    acceptedAt: { runId: "R", position: 3 },
+    causeTag: "Controlled",
+    detail: "controlled"
+  }
+  const envelope = (error: unknown) => ({
+    protocolVersion: 1,
+    requestId: "req",
+    runId: "R",
+    result: { _tag: "Failure", error }
+  })
+  expect(decode(envelope(partial))).toMatchObject({ result: { error: partial } })
+  for (const error of [
+    { ...partial, ordinal: Number.MAX_SAFE_INTEGER + 1 },
+    { ...partial, acceptedAt: { runId: "other", position: 3 } },
+    { ...partial, acceptedAt: { runId: "R", position: Number.MAX_SAFE_INTEGER + 1 } },
+    {
+      _tag: "CommandOutcomeUnknown",
+      operation: "Unpause",
+      requestId: "other",
+      phase: "AdmissionUnconfirmed",
+      acceptedAt: null
+    }
+  ])
+    expect(() => decode(envelope(error))).toThrow()
 })

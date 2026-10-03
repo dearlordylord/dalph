@@ -16,6 +16,7 @@ import {
   runningHostSuccessEnvelope
 } from "./running-host-contract.js"
 import { projectRunningHostRunControl, projectRunningHostSnapshot } from "./running-host-projection.js"
+import { makeRunningHostCommandOwnership } from "./running-host-command-ownership.js"
 
 const httpStatus = { success: 200, badRequest: 400, conflict: 409, tooLarge: 413, unavailable: 503 } as const
 
@@ -109,7 +110,13 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
     selectedRun: { runId: observation.selection.runId, target: observation.target },
     limits: runningHostLimits
   })
-  const dispatch = Effect.fn("RunningHostHttp.dispatch")(function* (input: unknown) {
+  const command = yield* makeRunningHostCommandOwnership(
+    descriptor.hostInstanceId,
+    observation.commandAdmission,
+    observation.awaitExitResult,
+    observation.executeAttachedCommand
+  )
+  const dispatch = Effect.fn("RunningHostHttp.dispatch")(function* (input: unknown, response: ServerResponse) {
     const request = yield* decodeRunningHostRequest(input, descriptor)
     if (yield* observation.closing)
       return yield* Effect.fail<RunningHostError>({
@@ -117,6 +124,38 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         hostInstanceId: descriptor.hostInstanceId,
         cutoff: "AdmissionClosed"
       })
+    if (request.operation._tag === "StartWork" || request.operation._tag === "Unpause") {
+      const control = yield* observation.readRunControl.pipe(
+        Effect.mapError(
+          (): RunningHostError => ({
+            _tag: "CommandFailed",
+            operation: request.operation._tag === "StartWork" ? "StartWork" : "Unpause",
+            stage: "PreAdmission",
+            causeTag: "RunControlUnavailable",
+            detail: "Accepted Run control is unavailable."
+          })
+        )
+      )
+      if (control.termination !== null)
+        return yield* Effect.fail<RunningHostError>({ _tag: "RunClosed", runId: request.runId, ...control.termination })
+      if (Option.isSome(yield* observation.activationFailure))
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "CommandFailed",
+          operation: request.operation._tag,
+          stage: "PreAdmission",
+          causeTag: "ActivationFailed",
+          detail: "The host retains an activation failure."
+        })
+      if (response.destroyed)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "CommandFailed",
+          operation: request.operation._tag,
+          stage: "PreAdmission",
+          causeTag: "ClientDisconnected",
+          detail: "The connection closed before command admission."
+        })
+      return runningHostSuccessEnvelope(request, yield* command({ ...request, operation: request.operation }))
+    }
     const value =
       request.operation._tag === "ReadSnapshot"
         ? yield* observation.current.get.pipe(
@@ -179,7 +218,7 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
             RunningHostError.guards.FrameTooLarge(error) ? error : invalid("RequestJsonInvalid")
         )
       )
-      const envelope = yield* dispatch(input)
+      const envelope = yield* dispatch(input, response)
       return { _tag: "Envelope" as const, envelope, text: yield* encodeRunningHostEnvelope(envelope) }
     }).pipe(
       Effect.catch((error) => {

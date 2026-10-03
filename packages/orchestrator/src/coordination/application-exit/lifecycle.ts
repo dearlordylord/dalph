@@ -127,6 +127,8 @@ export interface ApplicationExitLifecycleService {
   readonly awaitForwardOwnersReleased: Effect.Effect<void>
   /** Lets the application runtime stop its ordinary scope without persisting an Exit fact. */
   readonly awaitExitRequested: Effect.Effect<void>
+  /** Passive settlement signal for owners using the original application drain. */
+  readonly awaitExitResult: Effect.Effect<ApplicationExitResult>
 }
 
 const makeApplicationExitLifecycleEffect = Effect.fn("ApplicationExitLifecycle.make")(function* () {
@@ -316,6 +318,7 @@ const makeApplicationExitLifecycleEffect = Effect.fn("ApplicationExitLifecycle.m
     admission,
     awaitExitDriverFinished: Deferred.await(exitDriverFinished),
     awaitExitRequested: Deferred.await(exitRequested),
+    awaitExitResult: Deferred.await(result),
     awaitForwardOwnersReleased: Deferred.await(forwardOwnersReleased),
     completeExitDriver: Deferred.succeed(exitDriverFinished, undefined),
     completeExit: (exitResult) => Deferred.succeed(result, exitResult),

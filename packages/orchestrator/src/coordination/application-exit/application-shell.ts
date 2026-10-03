@@ -298,6 +298,7 @@ interface ApplicationExitExecutorDrainRegistry {
 export interface ApplicationExitShellService {
   readonly admission: ApplicationExitAdmissionService
   readonly awaitExitRequested: Effect.Effect<void>
+  readonly awaitExitResult: Effect.Effect<ApplicationExitResultType>
   /** Every admitted executor drain has settled, including registrations that raced the cutoff. */
   readonly awaitExecutorDrains: Effect.Effect<void, ApplicationExitDrainFailure>
   readonly registerExecutorDrain: (drain: ApplicationExitExecutorDrain) => Effect.Effect<void, never, Scope.Scope>
@@ -529,6 +530,7 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
   return {
     admission: lifecycle.admission,
     awaitExitRequested: lifecycle.awaitExitRequested,
+    awaitExitResult: lifecycle.awaitExitResult,
     awaitExecutorDrains,
     registerExecutorDrain: (drain) =>
       Effect.gen(function* () {

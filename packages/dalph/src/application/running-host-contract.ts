@@ -1,6 +1,7 @@
 import { PlannedAttemptExecutorCorrelation, PlannedTaskAttempt, RunId, TaskId, TaskRevision } from "@dalph/contracts"
 import {
   BoundedTicketRank,
+  ControlDirectionApplicationOrdinal,
   RunControlPolicy,
   RunTerminationDisposition,
   TaskDagWire,
@@ -68,10 +69,15 @@ export const RunningHostReady = Schema.TaggedStruct("HostReady", {
   descriptor: RunningHostDescriptor
 })
 
-const Operation = Schema.TaggedUnion({ ReadSnapshot: {}, ReadRunControl: {} })
+const Operation = Schema.TaggedUnion({ ReadSnapshot: {}, ReadRunControl: {}, StartWork: {}, Unpause: {} })
+const CommandOperation = Schema.Literals(["StartWork", "Unpause"])
 const requestFields = { hostInstanceId: HostInstanceId, requestId: RequestId, runId: RunId, operation: Operation }
 export const RunningHostRequest = Schema.Struct({ protocolVersion: Schema.Literal(1), ...requestFields })
 export type RunningHostRequest = typeof RunningHostRequest.Type
+/** Only explicit commands may acquire host operation ownership. */
+export type RunningHostCommandRequest = Omit<RunningHostRequest, "operation"> & {
+  readonly operation: { readonly _tag: "StartWork" } | { readonly _tag: "Unpause" }
+}
 const VersionedRequest = Schema.Struct({ protocolVersion: SafeInteger, ...requestFields })
 
 export const RunningHostError = Schema.TaggedUnion({
@@ -81,6 +87,25 @@ export const RunningHostError = Schema.TaggedUnion({
   HostUnavailable: { address: LocalHostAddress, reason: Schema.NonEmptyString },
   ProtocolVersionUnsupported: { requestedVersion: SafeInteger, supportedVersions: Schema.Tuple([Schema.Literal(1)]) },
   HostClosing: { hostInstanceId: HostInstanceId, cutoff: Schema.Literal("AdmissionClosed") },
+  RunClosed: { runId: RunId, disposition: RunTerminationDisposition, terminatedAt: TraceCursor },
+  CommandFailed: {
+    operation: CommandOperation,
+    causeTag: Schema.NonEmptyString,
+    detail: Schema.NonEmptyString,
+    stage: Schema.Literals(["PreAdmission", "BeforeApplication"])
+  },
+  UnpausePartiallyApplied: {
+    ordinal: ControlDirectionApplicationOrdinal,
+    acceptedAt: TraceCursor,
+    causeTag: Schema.NonEmptyString,
+    detail: Schema.NonEmptyString
+  },
+  CommandOutcomeUnknown: {
+    operation: CommandOperation,
+    requestId: RequestId,
+    phase: Schema.Literals(["AdmissionUnconfirmed", "AdmittedCompletionUnconfirmed"]),
+    acceptedAt: Schema.NullOr(TraceCursor)
+  },
   ReadFailed: { causeTag: Schema.NonEmptyString, detail: Schema.NonEmptyString },
   ProjectionFailed: { causeTag: Schema.NonEmptyString, detail: Schema.NonEmptyString },
   FrameTooLarge: {
@@ -136,10 +161,10 @@ const ReadySnapshotShape = Schema.TaggedStruct("Ready", {
   held: Schema.Array(Schema.Struct({ taskId: TaskId, correlation: PlannedAttemptExecutorCorrelation }))
 })
 /** Reject inconsistent identities or unsafe numeric encodings anywhere in a public value. */
-const coherentWire = (value: unknown, runId: RunId): boolean => {
+const coherentWire = (value: unknown, runId: RunId | null): boolean => {
   if (typeof value === "number") return Number.isSafeInteger(value)
   if (value === null || typeof value !== "object") return true
-  if ("runId" in value && value.runId !== runId) return false
+  if (runId !== null && "runId" in value && value.runId !== runId) return false
   return Object.values(value).every((nested) => coherentWire(nested, runId))
 }
 const ReadySnapshot = ReadySnapshotShape.check(
@@ -181,8 +206,14 @@ export const RunningHostRunControl = Schema.TaggedUnion({
   }
 })
 export type RunningHostRunControl = typeof RunningHostRunControl.Type
-const Value = Schema.Union([RunningHostSnapshot, RunningHostRunControl])
+const Value = Schema.Union([
+  RunningHostSnapshot,
+  RunningHostRunControl,
+  Schema.TaggedStruct("WakeSubmitted", {}),
+  Schema.TaggedStruct("UnpauseApplied", { ordinal: ControlDirectionApplicationOrdinal, acceptedAt: TraceCursor })
+])
 export type RunningHostValue = typeof Value.Type
+export type RunningHostCommandValue = Extract<RunningHostValue, { readonly _tag: "WakeSubmitted" | "UnpauseApplied" }>
 const RunningHostEnvelopeShape = Schema.Union([
   Schema.Struct({
     protocolVersion: Schema.Literal(1),
@@ -200,8 +231,13 @@ const RunningHostEnvelopeShape = Schema.Union([
 export const RunningHostEnvelope = RunningHostEnvelopeShape.check(
   Schema.makeFilter(
     (envelope) =>
-      envelope.result._tag === "Failure" ||
-      (envelope.runId !== null && coherentWire(envelope.result.value, envelope.runId)) ||
+      (envelope.result._tag === "Failure" &&
+        coherentWire(envelope.result.error, envelope.runId) &&
+        (envelope.result.error._tag !== "CommandOutcomeUnknown" ||
+          envelope.result.error.requestId === envelope.requestId)) ||
+      (envelope.result._tag === "Success" &&
+        envelope.runId !== null &&
+        coherentWire(envelope.result.value, envelope.runId)) ||
       "response evidence must belong to the selected Run and use safe integer positions"
   )
 )

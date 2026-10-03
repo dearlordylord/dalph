@@ -403,6 +403,17 @@ MCP cancellation, client SIGTERM, CLI timeout or broken stdout after admission
 cannot cancel that operation. No durable command receipt or replay service is
 introduced. Transport request IDs are not idempotency keys.
 
+Run Pause and Unpause serialize their complete append/publication/callback
+boundary, so an intervening Pause cannot publish and notify the owner before
+the earlier accepted Unpause callback settles. This preserves S5's latest
+direction; task controls retain their separate membership boundary.
+If SQLite commits but its acknowledgement is unavailable, Unpause reports
+Unknown and retains a process-local reconciliation fence. Passive control still
+labels the last acknowledged accepted prefix and does not claim rollback or
+callback completion. Another attached Unpause is rejected before application
+until an explicitly reopened exact host reconstructs its Journal; StartWork
+cannot repair that uncertainty. No pending direction is replayed by a reader.
+
 The existing graceful Exit cutoff rejects **all new** descriptor/read/watch and
 mutating requests with HostClosing. Existing passive watches remain alive only
 to deliver final Closed within the existing drain budget. MCP resource reads
@@ -688,3 +699,29 @@ Mutating commands and watches remain owned by the later slices above.
 
 The full changing-graph settlement and abrupt host death remain #375 and #374
 respectively. These future owners do not replace the passive assertions above.
+
+## Maintained wake and Unpause implementation (#369)
+
+Alice attaches CLI or MCP to the existing host. `attach start` / `dalph_start_work`
+submits the original owner's wake hint and returns `WakeSubmitted` without changing
+Pause. `attach unpause` (`resume` alias) / `dalph_unpause` transfers the whole
+append/publication/owner-callback operation to the host; only its result waiter
+belongs to the client. `UnpauseApplied` identifies the accepted ordinal and cursor
+only after the actual callback completes. The original Exit admission and drain
+own these operations, including their uncertain outcomes.
+
+| Owned scenario or boundary | Maintained proof |
+| --- | --- |
+| S4: wake preserves Pause; complete Unpause survives clients | `running-host-command.acceptance.test.ts`, separately for CLI and MCP, uses the maintained production fixture with real SQLite, bootstrap and owner. Actual children submit wake, then die after INSERT, after COMMIT, or after callback completion. Each case proves one additional ordinal, one actual callback, timer restart, ordinary tracker checks, safe delivery and the accepted Completed suffix. Its recorded-cassette projection round trip preserves this chronology. |
+| S5: partial completion and uncertain storage | The same per-adapter tests retain ordinal/cursor after an actual owner callback defect and preserve a subsequent deliberate Pause without replay. Lost commit acknowledgement returns Unknown, invokes no callback, preserves the last acknowledged read prefix, and fences another attached Unpause until Journal reconstruction. |
+| S9: admission and original Exit | Per-adapter production tests hold SQLite INSERT, close the original admission, reject a later command, then complete the admitted callback and original Exit. `running-host-command-ownership.test.ts` proves waiter cancellation, cutoff refusal and actual five-second drain timeout with Unknown and stopped operation. |
+| S11/S12: refusals and exact terminal evidence | `running-host-http.test.ts` proves incomplete-request cancellation before admission, known terminal refusal with exact cursor, transport loss without replay, and a client deadline leaving the host operation alive. CLI/MCP parser tests reject malformed and foreign-Run commands before dispatch; `running-host-client-parity.test.ts` compares actual child responses for shared command failures, partial and unknown evidence. |
+| Existing control and startup owners | `journaled-run-bootstrap.test.ts` proves paused startup readiness without activation, exact callback-failure evidence, and serialization of the complete Run control callback so a later Pause cannot be overtaken. |
+
+These tests refine concrete transport, SQLite acknowledgement and callback lifetime
+below the existing Run-control and application-Exit model boundaries. No Quint
+state or action changes: the accepted direction and lifecycle cutoff remain their
+existing authorities. Full quality and fresh model gates qualify the candidate;
+callback completion is proved by the concrete tests, not inferred from a model.
+Capacity remains #370, paused Refresh #371, watch #372, abrupt killed-host
+reconstruction #374, and full changing-graph qualification #375.

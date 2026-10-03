@@ -1,7 +1,10 @@
 /* eslint-disable import/no-nodejs-modules -- Tests exercise the exact local network boundary. */
 import { RunId } from "@dalph/contracts"
+import { ControlDirectionApplicationOrdinal, JournalPosition, TraceCursor } from "@dalph/orchestrator"
+import { request as httpRequest } from "node:http"
 import { it } from "@effect/vitest"
-import { Effect, Option, Ref } from "effect"
+import { Deferred, Effect, Fiber, Option, Ref } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { runningHostLimits } from "./running-host-contract.js"
@@ -94,4 +97,137 @@ it.live("a missing explicit host fails without discovery or a production acquisi
       result: { _tag: "Failure", error: { _tag: "HostUnavailable" } }
     })
   })
+)
+
+it.live("a completed command with a lost HTTP reply is unknown and is never automatically replayed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const calls = yield* Ref.make(0)
+      const address = yield* availableLocalHostAddress
+      let loseReply = () => {}
+      const listening = yield* serveRunningHost(address, {
+        ...probe.observation,
+        executeAttachedCommand: (request) =>
+          Ref.update(calls, (count) => count + 1).pipe(
+            Effect.andThen(Effect.sync(() => loseReply())),
+            Effect.as(
+              request.operation._tag === "StartWork"
+                ? { _tag: "WakeSubmitted" as const }
+                : {
+                    _tag: "UnpauseApplied" as const,
+                    ordinal: ControlDirectionApplicationOrdinal.make(1),
+                    acceptedAt: TraceCursor.make({ runId: probe.runId, position: JournalPosition.make(2) })
+                  }
+            )
+          )
+      })
+      loseReply = () => listening.server.closeAllConnections()
+      for (const operation of ["StartWork", "Unpause"] as const) {
+        expect(yield* callRunningHost(address, probe.runId, { _tag: operation })).toMatchObject({
+          result: {
+            _tag: "Failure",
+            error: { _tag: "CommandOutcomeUnknown", operation, phase: "AdmissionUnconfirmed", acceptedAt: null }
+          }
+        })
+      }
+      expect(yield* Ref.get(calls)).toBe(2)
+      expect(yield* callRunningHost(address, probe.runId, { _tag: "ReadRunControl" })).toMatchObject({
+        result: { value: { _tag: "RunUnpaused" } }
+      })
+      expect(yield* Ref.get(calls)).toBe(2)
+    })
+  )
+)
+
+it.live("a client cancelled before sending a complete request performs no command", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const calls = yield* Ref.make(0)
+      const address = yield* availableLocalHostAddress
+      yield* serveRunningHost(address, {
+        ...probe.observation,
+        executeAttachedCommand: () =>
+          Ref.update(calls, (count) => count + 1).pipe(Effect.as({ _tag: "WakeSubmitted" as const }))
+      })
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve) => {
+            const pending = httpRequest(`${address}/dalph/v1/request`, {
+              method: "POST",
+              headers: { "content-type": "application/json", "content-length": "1000" }
+            })
+            pending.on("error", () => {})
+            pending.once("close", resolve)
+            pending.flushHeaders()
+            pending.write('{"protocolVersion":1', () => pending.destroy())
+          })
+      )
+      yield* readRunningHostDescriptor(address)
+      expect(yield* Ref.get(calls)).toBe(0)
+      expect((yield* probe.observation.commandAdmission.snapshot).registeredOwnerCount).toBe(0)
+    })
+  )
+)
+
+it.live("known terminal evidence rejects wake and Unpause before host command admission", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const calls = yield* Ref.make(0)
+      const address = yield* availableLocalHostAddress
+      const terminatedAt = TraceCursor.make({ runId: probe.runId, position: JournalPosition.make(4) })
+      yield* serveRunningHost(address, {
+        ...probe.observation,
+        readRunControl: Effect.succeed({
+          direction: "RunTerminated" as const,
+          observedAt: terminatedAt,
+          termination: { disposition: "Completed" as const, terminatedAt }
+        }),
+        executeAttachedCommand: () =>
+          Ref.update(calls, (count) => count + 1).pipe(Effect.as({ _tag: "WakeSubmitted" as const }))
+      })
+      for (const operation of ["StartWork", "Unpause"] as const)
+        expect(yield* callRunningHost(address, probe.runId, { _tag: operation })).toMatchObject({
+          result: {
+            _tag: "Failure",
+            error: { _tag: "RunClosed", runId: probe.runId, disposition: "Completed", terminatedAt }
+          }
+        })
+      expect(yield* Ref.get(calls)).toBe(0)
+      expect((yield* probe.observation.commandAdmission.snapshot).registeredOwnerCount).toBe(0)
+    })
+  )
+)
+
+it.effect("the client's response deadline stops its wait while the host completes the admitted command", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const completed = yield* Deferred.make<void>()
+      const address = yield* availableLocalHostAddress
+      yield* serveRunningHost(address, {
+        ...probe.observation,
+        executeAttachedCommand: () =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(Deferred.succeed(completed, undefined)),
+            Effect.as({ _tag: "WakeSubmitted" as const })
+          )
+      })
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined).pipe(Effect.asVoid))
+      const client = yield* callRunningHost(address, probe.runId, { _tag: "StartWork" }).pipe(Effect.forkChild)
+      yield* Deferred.await(entered)
+      yield* TestClock.adjust(runningHostLimits.responseDeadlineMillis)
+      expect(yield* Fiber.join(client)).toMatchObject({
+        result: { _tag: "Failure", error: { _tag: "CommandOutcomeUnknown" } }
+      })
+      expect((yield* probe.observation.commandAdmission.snapshot).registeredOwnerCount).toBe(1)
+      yield* Deferred.succeed(release, undefined)
+      yield* Deferred.await(completed)
+    })
+  )
 )

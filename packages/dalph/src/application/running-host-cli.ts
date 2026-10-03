@@ -67,7 +67,10 @@ const writeLine = Effect.fn("RunningHostCli.write")(function* (text: string, cha
   )
 })
 const exitFor = (error: RunningHostError): typeof requestFailureExitStatus | typeof transportFailureExitStatus =>
-  error._tag === "HostUnavailable" || error._tag === "TransportFailed" || error._tag === "WriteTimedOut"
+  error._tag === "HostUnavailable" ||
+  error._tag === "TransportFailed" ||
+  error._tag === "WriteTimedOut" ||
+  error._tag === "CommandOutcomeUnknown"
     ? transportFailureExitStatus
     : requestFailureExitStatus
 const presentEnvelope = Effect.fn("RunningHostCli.present")(function* (envelope: RunningHostEnvelope) {
@@ -85,7 +88,7 @@ const decodeClient = Effect.fn("RunningHostCli.decode")((host: string, run?: str
   )
 )
 
-/** Adds only the passive #368 slice; watches and mutating tools have later owners. */
+/** Attached reads and explicit wake/Unpause reuse the separately acquired host. */
 export const makeRunningHostCommands = <E, R>(
   runHost: ProductionListeningHostRunner<E, R>,
   signals: ApplicationExitSignalBoundary,
@@ -149,7 +152,7 @@ export const makeRunningHostCommands = <E, R>(
         Effect.provide(outputLayer)
       )
   )
-  const passive = (name: "snapshot" | "control") =>
+  const attached = (name: "snapshot" | "control" | "start" | "unpause" | "resume") =>
     Command.make(
       name,
       { host: Flag.string("host"), run: Flag.string("run"), json: Flag.boolean("json") },
@@ -170,7 +173,14 @@ export const makeRunningHostCommands = <E, R>(
             })
           yield* presentEnvelope(
             yield* callRunningHost(decoded.address, decoded.runId, {
-              _tag: name === "snapshot" ? "ReadSnapshot" : "ReadRunControl"
+              _tag:
+                name === "snapshot"
+                  ? "ReadSnapshot"
+                  : name === "control"
+                    ? "ReadRunControl"
+                    : name === "start"
+                      ? "StartWork"
+                      : "Unpause"
             })
           )
         }).pipe(
@@ -183,7 +193,14 @@ export const makeRunningHostCommands = <E, R>(
         )
     )
   const attach = Command.make("attach").pipe(
-    Command.withSubcommands([descriptor, passive("snapshot"), passive("control")])
+    Command.withSubcommands([
+      descriptor,
+      attached("snapshot"),
+      attached("control"),
+      attached("start"),
+      attached("unpause"),
+      attached("resume")
+    ])
   )
   const mcp = Command.make("mcp", { host: Flag.string("host"), run: Flag.string("run") }, ({ host, run }) =>
     Effect.gen(function* () {

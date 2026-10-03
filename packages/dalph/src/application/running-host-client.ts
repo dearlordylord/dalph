@@ -17,6 +17,37 @@ import {
 
 const redirectStatusMinimum = 300
 const redirectStatusMaximum = 400
+const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], ReadonlyArray<string>>> = {
+  ReadSnapshot: ["NotReady", "Ready", "Closed"],
+  ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
+  StartWork: ["WakeSubmitted"],
+  Unpause: ["UnpauseApplied"]
+}
+const compatibleFailure = (request: RunningHostRequest, error: RunningHostError): boolean => {
+  if ("operation" in error && error.operation !== request.operation._tag) return false
+  const command = request.operation._tag === "StartWork" || request.operation._tag === "Unpause"
+  switch (error._tag) {
+    case "UnpausePartiallyApplied":
+      return request.operation._tag === "Unpause"
+    case "RunClosed":
+      return command
+    case "ReadFailed":
+    case "ProjectionFailed":
+      return !command
+    case "CommandFailed":
+    case "CommandOutcomeUnknown":
+    case "FrameTooLarge":
+    case "HostClosing":
+    case "HostInstanceMismatch":
+    case "HostUnavailable":
+    case "InvalidRequest":
+    case "ProtocolVersionUnsupported":
+    case "RunMismatch":
+    case "TransportFailed":
+    case "WriteTimedOut":
+      return true
+  }
+}
 
 const transportError = (error: unknown, phase: "Handshake" | "Response"): RunningHostError => {
   const known = Schema.decodeUnknownOption(RunningHostError)(error)
@@ -55,30 +86,34 @@ const responseJson = Effect.fn("RunningHostClient.decodeResponse")(function* (
   return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(text)
 })
 
-const jsonRequest = Effect.fn("RunningHostClient.request")(function* (
-  address: LocalHostAddress,
-  path: string,
-  body?: RunningHostRequest
-) {
-  const request =
-    body === undefined
-      ? HttpClientRequest.get(`${address}${path}`)
-      : yield* HttpClientRequest.bodyJson(HttpClientRequest.post(`${address}${path}`), body)
-  const response = yield* HttpClient.execute(request).pipe(Effect.timeout("5 seconds"))
-  if (response.status >= redirectStatusMinimum && response.status < redirectStatusMaximum) {
-    return yield* Effect.fail<RunningHostError>({
-      _tag: "TransportFailed",
-      phase: "Handshake",
-      reason: "RedirectForbidden"
-    })
-  }
-  return yield* responseJson(response).pipe(Effect.timeout("30 seconds"))
-})
+const jsonRequest = Effect.fn("RunningHostClient.request")(
+  function* (address: LocalHostAddress, path: string, body?: RunningHostRequest) {
+    const request =
+      body === undefined
+        ? HttpClientRequest.get(`${address}${path}`)
+        : yield* HttpClientRequest.bodyJson(HttpClientRequest.post(`${address}${path}`), body)
+    const response = yield* HttpClient.execute(request)
+    if (response.status >= redirectStatusMinimum && response.status < redirectStatusMaximum) {
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "TransportFailed",
+        phase: "Handshake",
+        reason: "RedirectForbidden"
+      })
+    }
+    return yield* responseJson(response)
+  },
+  (effect, _address, _path, body) =>
+    effect.pipe(
+      Effect.timeout(
+        body === undefined ? runningHostLimits.connectDeadlineMillis : runningHostLimits.responseDeadlineMillis
+      )
+    )
+)
 
 /** Reads one explicit local descriptor without acquiring production authorities. */
 export const readRunningHostDescriptor = Effect.fn("RunningHostClient.descriptor")(
   function* (address: LocalHostAddress) {
-    const input = yield* jsonRequest(address, "/dalph/v1/descriptor").pipe(
+    const input = yield* jsonRequest(address, "/dalph/v1/descriptor", undefined).pipe(
       Effect.mapError(
         (error): RunningHostError =>
           HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError"
@@ -122,6 +157,7 @@ export const readRunningHostDescriptor = Effect.fn("RunningHostClient.descriptor
 /** Both attached interfaces call this direct HTTP boundary; no MCP indirection or retry. */
 export const callRunningHost = Effect.fn("RunningHostClient.call")(
   function* (address: LocalHostAddress, runId: RunId, operation: RunningHostRequest["operation"]) {
+    let submitted = false
     const requestId = RequestId.make(
       yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(
         Effect.mapError(
@@ -157,6 +193,7 @@ export const callRunningHost = Effect.fn("RunningHostClient.call")(
           measuredBytes: new TextEncoder().encode(JSON.stringify(request)).byteLength
         })
       }
+      submitted = true
       const input = yield* jsonRequest(address, "/dalph/v1/request", request).pipe(
         Effect.mapError((error): RunningHostError => transportError(error, "Response"))
       )
@@ -173,9 +210,36 @@ export const callRunningHost = Effect.fn("RunningHostClient.call")(
           phase: "Response",
           reason: "ResponseCorrelationMismatch"
         })
+      const compatible =
+        envelope.result._tag === "Success"
+          ? successTags[operation._tag].includes(envelope.result.value._tag)
+          : compatibleFailure(request, envelope.result.error)
+      if (!compatible)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "TransportFailed",
+          phase: "Response",
+          reason: "ResponseOperationMismatch"
+        })
       yield* encodeRunningHostEnvelope(envelope)
       return envelope
-    }).pipe(Effect.catch((error) => Effect.succeed(runningHostFailureEnvelope(correlation, error))))
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          runningHostFailureEnvelope(
+            correlation,
+            submitted && (operation._tag === "StartWork" || operation._tag === "Unpause")
+              ? {
+                  _tag: "CommandOutcomeUnknown",
+                  operation: operation._tag,
+                  requestId,
+                  phase: "AdmissionUnconfirmed",
+                  acceptedAt: null
+                }
+              : error
+          )
+        )
+      )
+    )
   },
   (effect) =>
     Effect.scoped(

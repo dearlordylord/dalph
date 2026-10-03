@@ -9,6 +9,7 @@ import {
   GithubRepositoryName,
   GithubRepositoryOwner,
   JournalPosition,
+  makeApplicationExitLifecycle,
   ProductionRunSelection,
   TraceCursor,
   type DeliveryRuntimeObservationState
@@ -39,6 +40,7 @@ export const availableLocalHostAddress = Effect.tryPromise({
 })
 
 export const makeRunningHostReadProbe = Effect.fn("RunningHostTest.readProbe")(function* () {
+  const lifecycle = yield* makeApplicationExitLifecycle()
   const reads = yield* Ref.make(0)
   const closing = yield* Ref.make(false)
   const current = yield* Ref.make<DeliveryRuntimeObservationState>({ _tag: "NotReady" })
@@ -57,6 +59,9 @@ export const makeRunningHostReadProbe = Effect.fn("RunningHostTest.readProbe")(f
     ),
     activationFailure: Ref.get(failure),
     closing: Ref.get(closing),
+    commandAdmission: lifecycle.admission,
+    awaitExitResult: lifecycle.awaitExitResult.pipe(Effect.asVoid),
+    executeAttachedCommand: () => Effect.die("passive probe cannot execute commands"),
     runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
     applicationExitRequestBoundary: { requestExit: Effect.die("read cannot request Exit") },
     traceReader: { readAt: () => Effect.die("read cannot request historical trace") }

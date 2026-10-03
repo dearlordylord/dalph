@@ -5,7 +5,7 @@ import process from "node:process"
 import { setTimeout, clearTimeout } from "node:timers"
 import { fileURLToPath } from "node:url"
 import { RunId } from "@dalph/contracts"
-import { FixtureTarget } from "@dalph/orchestrator"
+import { FixtureTarget, ControlDirectionApplicationOrdinal, JournalPosition, TraceCursor } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
 import { Clock, Effect, Schema } from "effect"
 import { expect } from "vitest"
@@ -51,141 +51,225 @@ const child = (args: ReadonlyArray<string>, input = "") =>
     catch: (error) => new ParityFixtureError({ detail: String(error) })
   })
 const normalize = (error: RunningHostError) =>
-  error._tag === "WriteTimedOut" ? { ...error, subject: { _tag: "Request", requestId: "per-client-request" } } : error
+  error._tag === "WriteTimedOut"
+    ? { ...error, subject: { _tag: "Request", requestId: "per-client-request" } }
+    : error._tag === "CommandOutcomeUnknown"
+      ? { ...error, requestId: "per-client-request" }
+      : error
 
-it.live(
-  "actual CLI and MCP preserve every passive failure from the same HTTP peer",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let current: (request: RunningHostRequest) => RunningHostError = () => ({
-          _tag: "ReadFailed",
-          causeTag: "Fixture",
-          detail: "fixture"
-        })
-        const server = createServer((request, response) => {
-          response.setHeader("content-type", "application/json")
-          if (request.url === "/dalph/v1/descriptor") {
-            response.end(JSON.stringify(descriptor))
-            return
-          }
-          const chunks: Array<Buffer> = []
-          request.on("data", (chunk: Buffer) => {
-            chunks.push(chunk)
+for (const selectedOperation of ["snapshot", "control", "start", "unpause"] as const) {
+  it.live(
+    `actual CLI and MCP preserve ${selectedOperation} failures from the same HTTP peer`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let current: (request: RunningHostRequest) => RunningHostError = () => ({
+            _tag: "ReadFailed",
+            causeTag: "Fixture",
+            detail: "fixture"
           })
-          request.on("end", () => {
-            const decoded = Schema.decodeUnknownSync(RunningHostRequest)(
-              JSON.parse(Buffer.concat(chunks).toString("utf8"))
-            )
-            response.end(JSON.stringify(runningHostFailureEnvelope(decoded, current(decoded))))
-          })
-        })
-        yield* Effect.addFinalizer(() =>
-          Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                server.close(() => resolve())
-                server.closeAllConnections()
-              })
-          )
-        )
-        const address = yield* Effect.tryPromise({
-          try: () =>
-            new Promise<LocalHostAddress>((resolve, reject) => {
-              server.once("error", reject)
-              server.listen(0, "127.0.0.1", () => {
-                const bound = server.address()
-                if (bound === null || typeof bound === "string") {
-                  reject(new Error("LocalPortUnavailable"))
-                  return
-                }
-                resolve(LocalHostAddress.make(`http://127.0.0.1:${bound.port}`))
-              })
-            }),
-          catch: (error) => new ParityFixtureError({ detail: String(error) })
-        })
-        const errors: ReadonlyArray<RunningHostError> = [
-          { _tag: "InvalidRequest", fieldPath: "operation", code: "Invalid" },
-          { _tag: "RunMismatch", requestedRunId: RunId.make("other"), selectedRunId: runId },
-          {
-            _tag: "HostInstanceMismatch",
-            requestedHostInstanceId: HostInstanceId.make("old"),
-            actualHostInstanceId: instance
-          },
-          { _tag: "HostUnavailable", address, reason: "NoListener" },
-          { _tag: "ProtocolVersionUnsupported", requestedVersion: 2, supportedVersions: [1] },
-          { _tag: "HostClosing", hostInstanceId: instance, cutoff: "AdmissionClosed" },
-          { _tag: "ReadFailed", causeTag: "JournalRead", detail: "unavailable" },
-          { _tag: "ProjectionFailed", causeTag: "Projection", detail: "invalid" },
-          {
-            _tag: "FrameTooLarge",
-            direction: "Outgoing",
-            maximumBytes: runningHostLimits.resultBytes,
-            measuredBytes: runningHostLimits.resultBytes + 1
-          },
-          {
-            _tag: "WriteTimedOut",
-            subject: { _tag: "Request", requestId: RequestId.make("replaced-per-request") },
-            deadlineMillis: runningHostLimits.writeDeadlineMillis
-          },
-          { _tag: "TransportFailed", phase: "Response", reason: "ConnectionLost" }
-        ]
-        for (const error of errors) {
-          current = (request) =>
-            error._tag === "WriteTimedOut"
-              ? { ...error, subject: { _tag: "Request", requestId: request.requestId } }
-              : error
-          for (const operation of ["snapshot", "control"] as const) {
-            const source = yield* callRunningHost(address, runId, {
-              _tag: operation === "snapshot" ? "ReadSnapshot" : "ReadRunControl"
+          const server = createServer((request, response) => {
+            response.setHeader("content-type", "application/json")
+            if (request.url === "/dalph/v1/descriptor") {
+              response.end(JSON.stringify(descriptor))
+              return
+            }
+            const chunks: Array<Buffer> = []
+            request.on("data", (chunk: Buffer) => {
+              chunks.push(chunk)
             })
-            if (source.result._tag !== "Failure") return expect.fail("source client must return the shared failure")
-            expect(normalize(source.result.error)).toEqual(normalize(error))
-            const cli = yield* child(["attach", operation, "--host", address, "--run", runId, "--json"])
-            const expectedStatus = ["HostUnavailable", "WriteTimedOut", "TransportFailed"].includes(error._tag) ? 3 : 2
-            expect(cli.status, `${operation}/${error._tag}: ${cli.stderr}`).toBe(expectedStatus)
-            const cliEnvelope = Schema.decodeUnknownSync(RunningHostEnvelope)(JSON.parse(cli.stdout))
-            expect(cliEnvelope.result._tag).toBe("Failure")
-            const messages = [
-              {
-                jsonrpc: "2.0",
-                id: 1,
-                method: "initialize",
-                params: {
-                  protocolVersion: "2025-11-25",
-                  capabilities: {},
-                  clientInfo: { name: "parity", version: "1" }
-                }
-              },
-              { jsonrpc: "2.0", method: "notifications/initialized" },
-              {
-                jsonrpc: "2.0",
-                id: 2,
-                method: "tools/call",
-                params: {
-                  name: operation === "snapshot" ? "dalph_read_snapshot" : "dalph_read_run_control",
-                  arguments: { runId }
-                }
-              }
-            ]
-            const mcp = yield* child(
-              ["mcp", "--host", address, "--run", runId],
-              messages.map((message) => JSON.stringify(message)).join("\n") + "\n"
+            request.on("end", () => {
+              const decoded = Schema.decodeUnknownSync(RunningHostRequest)(
+                JSON.parse(Buffer.concat(chunks).toString("utf8"))
+              )
+              response.end(JSON.stringify(runningHostFailureEnvelope(decoded, current(decoded))))
+            })
+          })
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(
+              () =>
+                new Promise<void>((resolve) => {
+                  server.close(() => resolve())
+                  server.closeAllConnections()
+                })
             )
-            expect(mcp.status, mcp.stderr).toBe(0)
-            const result = JSON.parse(mcp.stdout.trim().split("\n").at(-1) ?? "").result
-            expect(result.isError).toBe(true)
-            const mcpEnvelope = Schema.decodeUnknownSync(RunningHostEnvelope)(result.structuredContent)
-            if (cliEnvelope.result._tag !== "Failure" || mcpEnvelope.result._tag !== "Failure")
-              return expect.fail("both clients must return shared failures")
-            expect(normalize(cliEnvelope.result.error)).toEqual(normalize(error))
-            expect(normalize(mcpEnvelope.result.error)).toEqual(normalize(error))
+          )
+          const address = yield* Effect.tryPromise({
+            try: () =>
+              new Promise<LocalHostAddress>((resolve, reject) => {
+                server.once("error", reject)
+                server.listen(0, "127.0.0.1", () => {
+                  const bound = server.address()
+                  if (bound === null || typeof bound === "string") {
+                    reject(new Error("LocalPortUnavailable"))
+                    return
+                  }
+                  resolve(LocalHostAddress.make(`http://127.0.0.1:${bound.port}`))
+                })
+              }),
+            catch: (error) => new ParityFixtureError({ detail: String(error) })
+          })
+          const errors: ReadonlyArray<RunningHostError> = [
+            { _tag: "InvalidRequest", fieldPath: "operation", code: "Invalid" },
+            { _tag: "RunMismatch", requestedRunId: RunId.make("other"), selectedRunId: runId },
+            {
+              _tag: "HostInstanceMismatch",
+              requestedHostInstanceId: HostInstanceId.make("old"),
+              actualHostInstanceId: instance
+            },
+            { _tag: "HostUnavailable", address, reason: "NoListener" },
+            { _tag: "ProtocolVersionUnsupported", requestedVersion: 2, supportedVersions: [1] },
+            { _tag: "HostClosing", hostInstanceId: instance, cutoff: "AdmissionClosed" },
+            { _tag: "ReadFailed", causeTag: "JournalRead", detail: "unavailable" },
+            { _tag: "ProjectionFailed", causeTag: "Projection", detail: "invalid" },
+            {
+              _tag: "FrameTooLarge",
+              direction: "Outgoing",
+              maximumBytes: runningHostLimits.resultBytes,
+              measuredBytes: runningHostLimits.resultBytes + 1
+            },
+            {
+              _tag: "WriteTimedOut",
+              subject: { _tag: "Request", requestId: RequestId.make("replaced-per-request") },
+              deadlineMillis: runningHostLimits.writeDeadlineMillis
+            },
+            { _tag: "TransportFailed", phase: "Response", reason: "ConnectionLost" },
+            {
+              _tag: "RunClosed",
+              runId,
+              disposition: "Completed",
+              terminatedAt: TraceCursor.make({ runId, position: JournalPosition.make(4) })
+            },
+            ...(["StartWork", "Unpause"] as const).flatMap(
+              (operation): ReadonlyArray<RunningHostError> => [
+                {
+                  _tag: "CommandFailed",
+                  operation,
+                  stage: "PreAdmission",
+                  causeTag: "NoControl",
+                  detail: "unavailable"
+                },
+                {
+                  _tag: "CommandFailed",
+                  operation,
+                  stage: "BeforeApplication",
+                  causeTag: "Rejected",
+                  detail: "not applied"
+                },
+                {
+                  _tag: "CommandOutcomeUnknown",
+                  operation,
+                  requestId: RequestId.make("replaced-per-request"),
+                  phase: "AdmissionUnconfirmed",
+                  acceptedAt: null
+                },
+                {
+                  _tag: "CommandOutcomeUnknown",
+                  operation,
+                  requestId: RequestId.make("replaced-per-request"),
+                  phase: "AdmittedCompletionUnconfirmed",
+                  acceptedAt: TraceCursor.make({ runId, position: JournalPosition.make(3) })
+                }
+              ]
+            ),
+            {
+              _tag: "UnpausePartiallyApplied",
+              ordinal: ControlDirectionApplicationOrdinal.make(2),
+              acceptedAt: TraceCursor.make({ runId, position: JournalPosition.make(3) }),
+              causeTag: "AcceptedRunControlCallbackFailed",
+              detail: "callback did not complete"
+            }
+          ]
+          for (const error of errors) {
+            current = (request) =>
+              error._tag === "WriteTimedOut"
+                ? { ...error, subject: { _tag: "Request", requestId: request.requestId } }
+                : error._tag === "CommandOutcomeUnknown"
+                  ? { ...error, requestId: request.requestId }
+                  : error
+            const operations =
+              error._tag === "CommandFailed" || error._tag === "CommandOutcomeUnknown"
+                ? [error.operation === "StartWork" ? ("start" as const) : ("unpause" as const)]
+                : error._tag === "UnpausePartiallyApplied"
+                  ? ["unpause" as const]
+                  : error._tag === "RunClosed"
+                    ? (["start", "unpause"] as const)
+                    : error._tag === "ReadFailed" || error._tag === "ProjectionFailed"
+                      ? (["snapshot", "control"] as const)
+                      : (["snapshot", "control", "start", "unpause"] as const)
+            for (const operation of operations.filter((operation) => operation === selectedOperation)) {
+              const source = yield* callRunningHost(address, runId, {
+                _tag:
+                  operation === "snapshot"
+                    ? "ReadSnapshot"
+                    : operation === "control"
+                      ? "ReadRunControl"
+                      : operation === "start"
+                        ? "StartWork"
+                        : "Unpause"
+              })
+              if (source.result._tag !== "Failure") return expect.fail("source client must return the shared failure")
+              expect(normalize(source.result.error)).toEqual(normalize(error))
+              const cli = yield* child(["attach", operation, "--host", address, "--run", runId, "--json"])
+              const expectedStatus = [
+                "HostUnavailable",
+                "WriteTimedOut",
+                "TransportFailed",
+                "CommandOutcomeUnknown"
+              ].includes(error._tag)
+                ? 3
+                : 2
+              expect(cli.status, `${operation}/${error._tag}: ${cli.stderr}`).toBe(expectedStatus)
+              const cliEnvelope = Schema.decodeUnknownSync(RunningHostEnvelope)(JSON.parse(cli.stdout))
+              expect(cliEnvelope.result._tag).toBe("Failure")
+              const messages = [
+                {
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "initialize",
+                  params: {
+                    protocolVersion: "2025-11-25",
+                    capabilities: {},
+                    clientInfo: { name: "parity", version: "1" }
+                  }
+                },
+                { jsonrpc: "2.0", method: "notifications/initialized" },
+                {
+                  jsonrpc: "2.0",
+                  id: 2,
+                  method: "tools/call",
+                  params: {
+                    name:
+                      operation === "snapshot"
+                        ? "dalph_read_snapshot"
+                        : operation === "control"
+                          ? "dalph_read_run_control"
+                          : operation === "start"
+                            ? "dalph_start_work"
+                            : "dalph_unpause",
+                    arguments: { runId }
+                  }
+                }
+              ]
+              const mcp = yield* child(
+                ["mcp", "--host", address, "--run", runId],
+                messages.map((message) => JSON.stringify(message)).join("\n") + "\n"
+              )
+              expect(mcp.status, mcp.stderr).toBe(0)
+              const result = JSON.parse(mcp.stdout.trim().split("\n").at(-1) ?? "").result
+              expect(result.isError).toBe(true)
+              const mcpEnvelope = Schema.decodeUnknownSync(RunningHostEnvelope)(result.structuredContent)
+              if (cliEnvelope.result._tag !== "Failure" || mcpEnvelope.result._tag !== "Failure")
+                return expect.fail("both clients must return shared failures")
+              expect(normalize(cliEnvelope.result.error)).toEqual(normalize(error))
+              expect(normalize(mcpEnvelope.result.error)).toEqual(normalize(error))
+            }
           }
-        }
-      })
-    ),
-  60000
-)
+        })
+      ),
+    60000
+  )
+}
 
 it.live(
   "blocked CLI and MCP stdout aborts the exact sink within its deadline and leaves the host available",

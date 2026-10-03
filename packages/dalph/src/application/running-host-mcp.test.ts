@@ -1,7 +1,7 @@
 import { RunId } from "@dalph/contracts"
-import { FixtureTarget } from "@dalph/orchestrator"
+import { FixtureTarget, ControlDirectionApplicationOrdinal, TraceCursor, JournalPosition } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Ref, Stream } from "effect"
+import { Deferred, Effect, Fiber, Queue, Ref, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
@@ -31,7 +31,56 @@ const init = {
   params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } }
 }
 
-it.effect("MCP exposes only passive standard tools and resources with identical shared results", () =>
+it.live("MCP cancellation stops only the accepted command waiter and keeps processing requests", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const input = yield* Queue.unbounded<Uint8Array>()
+      const entered = yield* Deferred.make<void>()
+      const cancelled = yield* Deferred.make<void>()
+      const ping = yield* Deferred.make<void>()
+      const calls = yield* Ref.make(0)
+      const bridge = yield* runRunningHostMcp(
+        address,
+        runId,
+        {
+          input: Stream.fromQueue(input),
+          write: (line) =>
+            line.includes('"id":3') ? Deferred.succeed(ping, undefined).pipe(Effect.asVoid) : Effect.void
+        },
+        {
+          descriptor: () => Effect.succeed(descriptor),
+          call: () =>
+            Ref.update(calls, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(entered, undefined)),
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(cancelled, undefined))
+            )
+        }
+      ).pipe(Effect.forkScoped)
+      const send = (...messages: ReadonlyArray<unknown>) =>
+        Queue.offer(
+          input,
+          new TextEncoder().encode(messages.map((message) => JSON.stringify(message)).join("\n") + "\n")
+        )
+      yield* send(
+        init,
+        { jsonrpc: "2.0", method: "notifications/initialized" },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "dalph_unpause", arguments: { runId } } }
+      )
+      yield* Deferred.await(entered).pipe(Effect.timeout("1 second"))
+      yield* send(
+        { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 2 } },
+        { jsonrpc: "2.0", id: 3, method: "ping" }
+      )
+      yield* Deferred.await(cancelled).pipe(Effect.timeout("1 second"))
+      yield* Deferred.await(ping).pipe(Effect.timeout("1 second"))
+      expect(yield* Ref.get(calls)).toBe(1)
+      yield* Fiber.interrupt(bridge)
+    })
+  )
+)
+
+it.effect("MCP exposes reads and explicit wake and Unpause with shared results", () =>
   Effect.gen(function* () {
     const calls: Array<string> = []
     const output: Array<string> = []
@@ -48,7 +97,15 @@ it.effect("MCP exposes only passive standard tools and resources with identical 
               runId: selected,
               operation
             },
-            { _tag: "NotReady", runId: selected }
+            operation._tag === "StartWork"
+              ? { _tag: "WakeSubmitted" }
+              : operation._tag === "Unpause"
+                ? {
+                    _tag: "UnpauseApplied",
+                    ordinal: ControlDirectionApplicationOrdinal.make(2),
+                    acceptedAt: TraceCursor.make({ runId: selected, position: JournalPosition.make(3) })
+                  }
+                : { _tag: "NotReady", runId: selected }
           )
         })
     }
@@ -58,7 +115,9 @@ it.effect("MCP exposes only passive standard tools and resources with identical 
       { jsonrpc: "2.0", id: 2, method: "tools/list" },
       { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "dalph_read_snapshot", arguments: { runId } } },
       { jsonrpc: "2.0", id: 4, method: "resources/read", params: { uri: "dalph://runs/R/snapshot" } },
-      { jsonrpc: "2.0", id: 5, method: "resources/subscribe", params: { uri: "dalph://runs/R/snapshot" } }
+      { jsonrpc: "2.0", id: 5, method: "resources/subscribe", params: { uri: "dalph://runs/R/snapshot" } },
+      { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "dalph_start_work", arguments: { runId } } },
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "dalph_unpause", arguments: { runId } } }
     ]
     const encoded = new TextEncoder().encode(messages.map((message) => JSON.stringify(message)).join("\n") + "\n")
     yield* runRunningHostMcp(
@@ -80,13 +139,21 @@ it.effect("MCP exposes only passive standard tools and resources with identical 
     })
     expect(replies[1].result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "dalph_read_snapshot",
-      "dalph_read_run_control"
+      "dalph_read_run_control",
+      "dalph_start_work",
+      "dalph_unpause"
     ])
     expect(replies[1].result.tools[0].outputSchema.type).toBe("object")
     expect(replies[2].result.structuredContent).toEqual(JSON.parse(replies[2].result.content[0].text))
     expect(replies[2].result.structuredContent).toEqual(JSON.parse(replies[3].result.contents[0].text))
     expect(replies[4].error.code).toBe(-32601)
-    expect(calls).toEqual(["ReadSnapshot", "ReadSnapshot"])
+    expect(replies.find(({ id }) => id === 6).result.structuredContent.result.value).toEqual({ _tag: "WakeSubmitted" })
+    expect(replies.find(({ id }) => id === 7).result.structuredContent.result.value).toMatchObject({
+      _tag: "UnpauseApplied",
+      ordinal: 2,
+      acceptedAt: { runId, position: 3 }
+    })
+    expect(calls).toEqual(["ReadSnapshot", "ReadSnapshot", "StartWork", "Unpause"])
   })
 )
 
@@ -117,7 +184,16 @@ it.effect("MCP rejects incompatible versions, extra tool arguments and wrong Run
         id: 3,
         method: "tools/call",
         params: { name: "dalph_read_snapshot", arguments: { runId: "X" } }
-      }
+      },
+      ...["dalph_start_work", "dalph_unpause"].flatMap((name, index) => [
+        {
+          jsonrpc: "2.0",
+          id: 4 + index * 2,
+          method: "tools/call",
+          params: { name, arguments: { runId, root: "other" } }
+        },
+        { jsonrpc: "2.0", id: 5 + index * 2, method: "tools/call", params: { name, arguments: { runId: "X" } } }
+      ])
     ]
     yield* runRunningHostMcp(
       address,
@@ -140,6 +216,9 @@ it.effect("MCP rejects incompatible versions, extra tool arguments and wrong Run
       isError: true,
       structuredContent: { result: { _tag: "Failure", error: { _tag: "RunMismatch" } } }
     })
+    for (const id of [4, 6]) expect(replies.find((reply) => reply.id === id).error.code).toBe(-32602)
+    for (const id of [5, 7])
+      expect(replies.find((reply) => reply.id === id).result.structuredContent.result.error._tag).toBe("RunMismatch")
     expect(calls).toBe(0)
   })
 )

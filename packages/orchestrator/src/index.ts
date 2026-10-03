@@ -710,6 +710,7 @@ export {
 } from "./coordination/run/production-run-selection.js"
 export {
   JournaledRunBootstrap,
+  AcceptedRunControlCallbackFailed,
   type JournaledRunBootstrapError,
   type InitialControlPolicySource,
   JournaledRunIdentityMismatch,

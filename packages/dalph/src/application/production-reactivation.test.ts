@@ -178,6 +178,7 @@ it.effect("reports both recoverable and unhandled non-retryable production activ
           snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
         },
         awaitExitRequested: Effect.never,
+        awaitExitResult: Effect.never,
         awaitExecutorDrains: Effect.void,
         registerExecutorDrain: () => Effect.void,
         registerProcessLocalDrain: () => Effect.void,
@@ -338,6 +339,7 @@ const runTerminalProductionOwner = Effect.fn("ProductionReactivationTest.runTerm
       snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
     },
     awaitExitRequested: Effect.never,
+    awaitExitResult: Effect.never,
     awaitExecutorDrains: Effect.void,
     registerExecutorDrain: () => Effect.void,
     registerProcessLocalDrain: () => Effect.void,
@@ -520,6 +522,7 @@ it.effect("production composition wires current-first tracker notifications and 
           snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
         },
         awaitExitRequested: Effect.never,
+        awaitExitResult: Effect.never,
         awaitExecutorDrains: Effect.void,
         registerExecutorDrain: () => Effect.void,
         registerProcessLocalDrain: ({ closeProcessLocalResources }) =>

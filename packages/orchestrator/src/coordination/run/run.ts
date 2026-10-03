@@ -8,6 +8,8 @@ import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import type { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import type { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
+import { ControlDirectionApplicationOrdinal } from "../../workflow/protocols/control-direction-application/events.js"
+import { TraceCursor } from "../../presentation/trace-reader.js"
 import type { TaskControlSubjectOutsideRun } from "../../workflow/protocols/control-direction-application/task-subject.js"
 import type { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import type { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
@@ -109,6 +111,12 @@ export type AcceptedRunControlDirection = "Pause" | "Unpause"
 
 /** A process-local observer for an already accepted Run-level control fact. */
 export type AcceptedRunControlObserver = (direction: AcceptedRunControlDirection) => Effect.Effect<void>
+
+/** The Run direction is accepted, but its process-local owner callback did not complete. */
+export class AcceptedRunControlCallbackFailed extends Schema.TaggedError<AcceptedRunControlCallbackFailed>()(
+  "AcceptedRunControlCallbackFailed",
+  { ordinal: ControlDirectionApplicationOrdinal, acceptedAt: TraceCursor }
+) {}
 
 /** A process-local observer for one accepted Journal publication. */
 export type AcceptedRunFactPublicationObserver = (publication: AcceptedRunFactPublication) => Effect.Effect<void>
@@ -279,6 +287,7 @@ export interface JournaledRunBootstrapService {
       | JournaledRunIdentityMismatch
       | ApplicationExiting
       | TaskControlSubjectOutsideRun
+      | AcceptedRunControlCallbackFailed
     >
     readonly applyTaskClaimReacquisition: (
       input: unknown

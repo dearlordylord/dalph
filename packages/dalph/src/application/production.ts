@@ -11,6 +11,7 @@ import {
 } from "@dalph/contracts"
 import {
   type JournaledRunObservationSource,
+  type AcceptedRunControlDirection,
   type ApplicationExitTraceEvent,
   type ApplicationProcessEndDecision,
   AllocatedWorkflowRunId,
@@ -106,6 +107,8 @@ export interface ProductionRunReactivationOptions {
   readonly failureCooldown?: ProductionRunReactivationInterval
   /** Optional process-local timer lifecycle observation for diagnostics. */
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+  /** Qualification observes each invocation of the registered owner callback. */
+  readonly onAcceptedRunControl?: (direction: AcceptedRunControlDirection) => Effect.Effect<void>
   /** Optional process-local activation-finalization observation for diagnostics. */
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
   /** Optional process-local idle-handoff observation for diagnostics. */
@@ -384,7 +387,11 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
     installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
       Effect.gen(function* () {
         const bootstrap = yield* JournaledRunBootstrap
-        yield* bootstrap.registerAcceptedRunReactivationObservers({ control, acceptedFactPublication })
+        yield* bootstrap.registerAcceptedRunReactivationObservers({
+          control: (direction) =>
+            (options.onAcceptedRunControl?.(direction) ?? Effect.void).pipe(Effect.andThen(control(direction))),
+          acceptedFactPublication
+        })
       }),
     isTerminationFailure: isWorkflowRunAlreadyTerminated,
     isNonRetryableFailure: isNonRetryableProductionActivationFailure,

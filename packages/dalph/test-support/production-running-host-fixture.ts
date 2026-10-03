@@ -1,4 +1,4 @@
-import { GitCommitSha, RemotePublicationTarget, RemotePublicationEndpoint } from "@dalph/contracts"
+import { GitCommitSha, RemotePublicationTarget, RemotePublicationEndpoint, RunId } from "@dalph/contracts"
 import {
   RunReactivationOwner,
   GithubIssueNodeId,
@@ -6,7 +6,17 @@ import {
   GitCommand,
   GithubGraphqlClient,
   nodeGitCommandLayer,
-  type GithubGraphqlRequest
+  type GithubGraphqlRequest,
+  JournalStore,
+  journalStoreCapabilities,
+  sqliteJournalTestLayer,
+  productionCoordinatorOwnershipLayer,
+  GitCommonDirectoryTarget,
+  InitialControlPolicy,
+  ControlDirectionAppliedEvent,
+  ControlDirectionApplicationOrdinal,
+  workflowJournalEventVersion,
+  JournaledRunBootstrap
 } from "@dalph/orchestrator"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { Context, Deferred, Duration, Effect, FileSystem, Layer, Ref, Stream } from "effect"
@@ -22,6 +32,14 @@ import { ProductionRepositoryHostConfiguration } from "../src/application/produc
 import { hermeticQualificationTrackerIdentity } from "../src/application/production-hermetic-contract.js"
 import { ProductionRunReactivationInterval } from "../src/application/production.js"
 import { productionRepositoryHostGraph } from "../src/application/production-host.js"
+import { controlDirectionAppliedRecordKey } from "../../orchestrator/src/workflow-journal/record-key.js"
+
+interface PausedRunningHostFixture {
+  readonly afterInsert?: () => Effect.Effect<void>
+  readonly afterCommit?: () => Effect.Effect<void, string>
+  readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+  readonly onAcceptedRunControl?: (direction: "Pause" | "Unpause") => Effect.Effect<void>
+}
 
 export const runningHostFixtureLayer = nodeGitCommandLayer.pipe(
   Layer.provideMerge(NodeServices.layer),
@@ -45,7 +63,8 @@ const providerBodyFor = (request: GithubGraphqlRequest) => {
 /** One production composition keeps real Git/SQLite and substitutes only provider responses. */
 export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(function* (
   builtEntry: string,
-  includeBlockedChildren = false
+  includeBlockedChildren = false,
+  paused?: PausedRunningHostFixture
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const git = yield* GitCommand
@@ -229,6 +248,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   yield* Effect.addFinalizer(() => Deferred.succeed(releaseObservationCut, undefined).pipe(Effect.asVoid))
   const ownerReady = yield* Deferred.make<RunReactivationOwner["Service"]>()
   const productionGraph = productionRepositoryHostGraph({
+    ...(paused?.onTimerStateChange === undefined ? {} : { onTimerStateChange: paused.onTimerStateChange }),
+    ...(paused?.onAcceptedRunControl === undefined ? {} : { onAcceptedRunControl: paused.onAcceptedRunControl }),
     githubRequestCircuitMaxRequests: 2000,
     onActivationFinalizationStart: () =>
       Deferred.succeed(activationFinalizing, undefined).pipe(Effect.andThen(Deferred.await(releaseObservationCut))),
@@ -242,17 +263,74 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
       ),
     githubClient: () => Layer.succeed(GithubGraphqlClient, github)
   })
+  const bootstrapReady = yield* Deferred.make<JournaledRunBootstrap["Service"]>()
+  const pausedStore = yield* Deferred.make<JournalStore["Service"]>()
+  const afterInsert = paused?.afterInsert
   const graph = {
     ...productionGraph,
+    ...(paused === undefined
+      ? {}
+      : {
+          foundation: (configuration: ProductionRepositoryHostConfiguration) =>
+            journalStoreCapabilities(
+              sqliteJournalTestLayer({
+                filename: configuration.journalDatabase,
+                ...(afterInsert === undefined ? {} : { onAppendInserted: () => afterInsert() }),
+                ...(paused.afterCommit === undefined ? {} : { afterAppendCommit: paused.afterCommit })
+              })
+            ).pipe(
+              Layer.provideMerge(
+                productionCoordinatorOwnershipLayer(GitCommonDirectoryTarget.make(configuration.commonDirectory)).pipe(
+                  Layer.provide(NodeServices.layer)
+                )
+              ),
+              Layer.tap((context) =>
+                Effect.gen(function* () {
+                  const store = Context.get(context, JournalStore)
+                  yield* Deferred.succeed(pausedStore, store)
+                  const runId = RunId.make("paused-client-run")
+                  yield* store.beginRun(
+                    runId,
+                    configuration.target,
+                    InitialControlPolicy.make({ taskExecutionCapacity: configuration.taskWorkCapacity }),
+                    configuration.remotePublicationTarget
+                  )
+                  const ordinal = ControlDirectionApplicationOrdinal.make(1)
+                  yield* store.append(
+                    runId,
+                    controlDirectionAppliedRecordKey(ordinal),
+                    ControlDirectionAppliedEvent.make({
+                      direction: "Pause",
+                      initiatedBy: { _tag: "Operator" },
+                      occurrenceClassification: "InitiatedAction",
+                      ordinal,
+                      subject: { _tag: "Run", runId },
+                      version: workflowJournalEventVersion
+                    })
+                  )
+                })
+              )
+            )
+        }),
     run: (...args: Parameters<typeof productionGraph.run>) =>
-      productionGraph
-        .run(...args)
-        .pipe(Layer.tap((context) => Deferred.succeed(ownerReady, Context.get(context, RunReactivationOwner))))
+      productionGraph.run(...args).pipe(
+        Layer.tap((context) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(ownerReady, Context.get(context, RunReactivationOwner))
+            const bootstrap = Context.getOption(context, JournaledRunBootstrap)
+            if (bootstrap._tag === "Some") yield* Deferred.succeed(bootstrapReady, bootstrap.value)
+          })
+        )
+      )
   }
   return {
     configuration,
     graph,
     taskIds,
+    bootstrap: Deferred.await(bootstrapReady),
+    readPausedHistory: Deferred.await(pausedStore).pipe(
+      Effect.flatMap((store) => store.read(RunId.make("paused-client-run")))
+    ),
     releaseObservationCut: Deferred.succeed(releaseObservationCut, undefined).pipe(Effect.asVoid),
     activationFinalizing,
     provider,

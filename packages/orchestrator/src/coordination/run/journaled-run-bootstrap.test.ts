@@ -3908,6 +3908,99 @@ it.effect("rejects another Run's task subject before reading this Run's target",
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("an intervening Pause cannot overtake the complete accepted Unpause callback", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("complete-run-control-order")
+      const runId = yield* freshWorkflowRunId(target)
+      const storage = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      yield* bootstrap.operatorControl.applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const local = yield* Ref.make("Pause")
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: (direction) =>
+          (direction === "Unpause"
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void
+          ).pipe(Effect.andThen(Ref.set(local, direction))),
+        acceptedFactPublication: () => Effect.void
+      })
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined).pipe(Effect.asVoid))
+      const unpause = yield* bootstrap.operatorControl
+        .applyControlDirection({ direction: "Unpause", subject: { _tag: "Run", runId } })
+        .pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      const pause = yield* bootstrap.operatorControl
+        .applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+        .pipe(Effect.forkScoped)
+      yield* TestClock.adjust("1 millis")
+      expect((yield* storage.read(runId)).filter(({ event }) => event._tag === "ControlDirectionApplied")).toHaveLength(
+        2
+      )
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(unpause)
+      yield* Fiber.join(pause)
+      expect(yield* Ref.get(local)).toBe("Pause")
+      expect((yield* storage.read(runId)).at(-1)?.event).toMatchObject({
+        _tag: "ControlDirectionApplied",
+        direction: "Pause",
+        ordinal: 3
+      })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("an already paused Run announces establishment without activation or another beginning", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("paused-host-establishment")
+      const runId = yield* freshWorkflowRunId(target)
+      const storage = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      yield* bootstrap.operatorControl.applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunPaused")
+      const established = yield* bootstrap.awaitEstablished.pipe(Effect.timeoutOption("1 second"), Effect.forkChild)
+      yield* TestClock.adjust("1 second")
+      expect(yield* Fiber.join(established)).toMatchObject({ _tag: "Some", value: { runId, acceptedAt: 2 } })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "ControlDirectionApplied"
+      ])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("retains accepted Unpause evidence when the owner callback fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("failed-unpause-callback")
+      const runId = yield* freshWorkflowRunId(target)
+      const storage = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: () => Effect.die("owner callback failed"),
+        acceptedFactPublication: () => Effect.void
+      })
+      const failed = yield* bootstrap.operatorControl
+        .applyControlDirection({ direction: "Unpause", subject: { _tag: "Run", runId } })
+        .pipe(Effect.result)
+      expect(failed).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "AcceptedRunControlCallbackFailed", ordinal: 1, acceptedAt: { runId, position: 2 } }
+      })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "ControlDirectionApplied"
+      ])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("applies Alice's Run Pause without a task-membership read", () =>
   Effect.scoped(
     Effect.gen(function* () {
