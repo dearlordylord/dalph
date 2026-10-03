@@ -18,6 +18,7 @@ import {
 import { projectRunningHostRunControl, projectRunningHostSnapshot } from "./running-host-projection.js"
 import { makeRunningHostCommandOwnership } from "./running-host-command-ownership.js"
 
+const defaultHttpPort = 80
 const httpStatus = { success: 200, badRequest: 400, conflict: 409, tooLarge: 413, unavailable: 503 } as const
 
 const invalid = (code: string): RunningHostError => ({ _tag: "InvalidRequest", fieldPath: "", code })
@@ -259,7 +260,8 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
             )
           )
           listener.once("error", reject)
-          listener.listen(Number(new URL(address).port), "127.0.0.1", () => resolve(listener))
+          const origin = new URL(address)
+          listener.listen(Number(origin.port || defaultHttpPort), origin.hostname, () => resolve(listener))
         }),
       catch: (): RunningHostError => ({ _tag: "HostUnavailable", address, reason: "ListenerBindFailed" })
     }),

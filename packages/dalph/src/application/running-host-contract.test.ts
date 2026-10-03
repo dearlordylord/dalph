@@ -63,11 +63,20 @@ it.effect("decodes selected-Run reads and explicit wake and Unpause before dispa
   })
 )
 
-it("rejects nonlocal origins without normalization or discovery", () => {
+it("accepts explicit IPv4 origins without normalization or discovery", () => {
   const decode = Schema.decodeUnknownSync(LocalHostAddress)
-  expect(decode("http://127.0.0.1:43127")).toBe("http://127.0.0.1:43127")
+  for (const address of ["http://127.0.0.1:43127", "http://192.168.215.3:43127", "http://172.17.0.2:80"])
+    expect(decode(address)).toBe(address)
   for (const address of [
     "http://localhost:43127",
+    "http://0.0.0.0:43127",
+    "http://255.255.255.255:43127",
+    "http://256.168.1.1:43127",
+    "http://192.168.01.1:43127",
+    "http://192.168.1:43127",
+    "http://192.168.1.1:43127?query",
+    "http://192.168.1.1:43127#fragment",
+    "http://[::1]:43127",
     "http://127.0.0.1:0",
     "http://127.0.0.1:65536",
     "http://127.0.0.1:12/",
