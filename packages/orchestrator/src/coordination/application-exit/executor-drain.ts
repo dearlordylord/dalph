@@ -1,4 +1,5 @@
 import {
+  PlannedAttemptExecutorCommandFailure,
   plannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorCorrelation,
   type PlannedTaskAttempt
@@ -56,7 +57,9 @@ const diagnosticFor = (error: { readonly _tag?: string }): ApplicationExitDiagno
   ApplicationExitDiagnostic.make(
     `Executor suspension during application Exit failed: ${
       /* v8 ignore next -- every typed journal and executor failure carries an Effect tag. */
-      error._tag ?? "UnknownExecutorSuspensionFailure"
+      error instanceof PlannedAttemptExecutorCommandFailure
+        ? `${error.command} (${error.correlation.runId}/${error.correlation.attemptId}): ${error.detail}`
+        : (error._tag ?? "UnknownExecutorSuspensionFailure")
     }`
   )
 
