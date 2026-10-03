@@ -576,7 +576,7 @@ describe("capability registration gate", () => {
       "outer-integrator controlled contract implementation binding is stale: controlledIntegratorContractService",
       "journal production contract implementation binding is stale: productionJournalStoreLayer",
       "task-tracker-graph-read production contract implementation binding is stale: githubTrackerGraphReaderLayer",
-      "planned-attempt-executor production contract implementation binding is stale: codexPlannedAttemptExecutorLayer",
+      "planned-attempt-executor production contract implementation binding is stale: codexPlannedAttemptExecutorLayerWithOptions",
       "immutable-evidence production contract implementation binding is stale: nodeEvidenceStoreLayer",
       "planned-worktree-cleanup controlled contract implementation binding is stale: worktreeCleanupTestLayer",
       "planned-worktree-cleanup production contract implementation binding is stale: gitDispositionCleanupBoundaryLayer",

@@ -620,9 +620,9 @@ const executorContract = contract("PlannedAttemptExecutor", [
     role: "production",
     source: "packages/orchestrator/test/contracts/planned-attempt-executor-contract.ts",
     implementation: implementationBinding(
-      "codexPlannedAttemptExecutorLayer",
+      "codexPlannedAttemptExecutorLayerWithOptions",
       "packages/dalph/src/application/codex-planned-attempt-executor.ts",
-      "codexPlannedAttemptExecutorLayer",
+      "codexPlannedAttemptExecutorLayerWithOptions",
       { _tag: "ObjectProperty", property: "layer" }
     )
   }
@@ -999,10 +999,13 @@ export const capabilityRegistrationInventory = {
       contract: executorContract,
       family: "planned-attempt-executor",
       production: implementation(
-        "codexPlannedAttemptExecutorLayer",
+        "codexPlannedAttemptExecutorLayerWithOptions",
         "packages/dalph/src/application/codex-planned-attempt-executor.ts",
-        "codexPlannedAttemptExecutorLayer",
-        composed("packages/dalph/src/application/codex-planned-attempt-executor.ts", "codexPlannedAttemptExecutorLayer")
+        "codexPlannedAttemptExecutorLayerWithOptions",
+        composed(
+          "packages/dalph/src/application/codex-planned-attempt-executor.ts",
+          "codexPlannedAttemptExecutorLayerWithOptions"
+        )
       )
     },
     {
