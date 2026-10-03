@@ -12,6 +12,15 @@ worktree can use it. Nested admitted commands validate the active run and regist
 beneath it rather than acquiring again. `DALPH_GATE_SLOT` alone grants no admission.
 Set `DALPH_GATE_SLOTS` for another machine size. Development tiers remain unadmitted.
 
+`test:gate-resume` runs at most four test files concurrently because its process
+fixtures also launch nested gate owners. The subreaper timeout fixture allows
+ten seconds for startup and begins its intentional one-second timeout only
+after the descendant identity is published. The historical-absence fixture
+likewise starts its 30-second watchdog after its controlled child is ready.
+Termination and absence checks
+and the full gate's 120-second stage limit remain unchanged. These test-harness
+controls do not change Dalph runtime behavior or application Exit budgets.
+
 #### Parallel work during a full gate
 
 Freeze the full gate's exact candidate worktree. Independent work may continue

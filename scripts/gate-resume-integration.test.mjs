@@ -64,7 +64,7 @@ const fixture = () => {
   writeFileSync(join(root, ".scratch", "controlled-formal-path"), seedQualityFormalBoundary(root))
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
-const launch = (root, script, resumeRunId, reap = false, reaperSeconds = 30) => {
+const launch = (root, script, resumeRunId, reap = false, reaperSeconds = 30, timeoutReadinessPath) => {
   const env = withoutInheritedCustody(process.env)
   for (const key of [
     "DALPH_COVERAGE_BASE_SHA",
@@ -107,7 +107,9 @@ else:
     root_start=None
 code=None
 phase='running'
-deadline=time.monotonic()+${reaperSeconds}
+readiness_path=${timeoutReadinessPath === undefined ? "None" : JSON.stringify(timeoutReadinessPath)}
+awaiting_readiness=readiness_path is not None
+deadline=time.monotonic()+(10 if awaiting_readiness else ${reaperSeconds})
 next_signal=0
 def descendants():
     processes=snapshot()
@@ -140,8 +142,13 @@ while True:
     except ChildProcessError: break
     if pid==p.pid: code=os.waitstatus_to_exitcode(status)
     now=time.monotonic()
+    if phase=='running' and awaiting_readiness and os.path.exists(readiness_path):
+        awaiting_readiness=False
+        deadline=now+${reaperSeconds}
     if now>=deadline:
         if phase=='running':
+            if awaiting_readiness:
+                sys.stderr.write('subreaper startup readiness not observed\\n')
             signal_owned(signal.SIGTERM)
             phase='terminating'
             deadline=now+2
@@ -165,7 +172,7 @@ sys.exit(124 if phase!='running' else (code if code is not None else 1))
     cwd: root,
     env,
     encoding: "utf8",
-    timeout: reap ? (reaperSeconds + 10) * 1_000 : 20_000
+    timeout: reap ? (reaperSeconds + (timeoutReadinessPath === undefined ? 0 : 10) + 10) * 1_000 : 20_000
   })
 }
 const launchAdmitted = (root, commandArguments) => {
@@ -645,7 +652,8 @@ void test("the bounded subreaper stops a detached descendant before returning it
       script,
       `import {spawn} from 'node:child_process';import fs from 'node:fs';const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');const start=stat.slice(stat.lastIndexOf(') ')+2).split(' ')[19];fs.writeFileSync(${JSON.stringify(pidPath)},child.pid+':'+start);child.unref();setInterval(()=>{},1000)`
     )
-    const result = launch(f.root, script, undefined, true, 1)
+    // The intentional timeout measures a live descendant, not gate admission or Node startup.
+    const result = launch(f.root, script, undefined, true, 1, pidPath)
     loadRecordedIdentity()
     assert.equal(result.status, 124, result.stderr)
     assert.notEqual(descendantPid, undefined)
@@ -673,7 +681,7 @@ void test("an enclosing negative test proves later cleanup while preserving the 
 const sources=${JSON.stringify([negative, late])};const manifest=sources.map((source,ordinal)=>({id:['negative-cleanup','late'][ordinal],name:'cleanup '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['--input-type=module','-e',source],cwd:process.cwd(),name:'cleanup '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
-    const failed = launch(f.root, script, undefined, true)
+    const failed = launch(f.root, script, undefined, true, 30, pidPath)
     assert.equal(failed.status, 1, failed.stderr)
     const prior = runs(f.root)[0]
     const historical = prior.stages.find((stage) => stage.command.name === "expected historical absence failure")
