@@ -546,7 +546,12 @@ const routeFixtures = (
     recordedAt: JournalPosition.make(4)
   }
   const routes: ReadonlyArray<DeliveryActionProposal["route"]> = [
-    { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph", target: context.configuration.target },
+    {
+      _tag: "TrackerGraphReadRoute",
+      predecessorOperationIds: [],
+      purpose: "EstablishCurrentGraph",
+      target: context.configuration.target
+    },
     { _tag: "FreshWorkflowRoute", step: { _tag: "AcquireTaskClaim", task, predecessorOperationId: operationId } },
     { _tag: "FreshWorkflowRoute", step: { _tag: "ReadCurrentTaskGraph", task, predecessorOperationId: operationId } },
     {

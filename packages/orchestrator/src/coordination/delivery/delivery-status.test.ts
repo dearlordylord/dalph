@@ -1340,7 +1340,10 @@ it("compares only the recovered evaluation position while preserving exact causa
       ...current,
       route: { ...current.route, action: { ...current.route.action, taskId: TaskId.make("different-read-payload") } }
     },
-    { ...current, route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph", target } },
+    {
+      ...current,
+      route: { _tag: "TrackerGraphReadRoute", predecessorOperationIds: [], purpose: "EstablishCurrentGraph", target }
+    },
     { ...current, waitsForLiveOperationId: OperationId.make("different-recovered-wait") },
     { ...current, order: { _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(2) } },
     { ...current, order: { ...current.order, acceptedAt: JournalPosition.make(3) } }

@@ -100,14 +100,11 @@ describe("exact worktree preparation before a Codex Begin", () => {
       const correlation = plannedAttemptExecutorCorrelation(entry.attempt)
       const executor = PlannedAttemptExecutor.of({
         begin: () =>
-          Effect.tryPromise({
-            try: async () => {
-              const store = await stat(join(entry.worktree, "node_modules", ".pnpm"))
-              expect(store.isDirectory()).toBe(true)
-              return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
-            },
-            catch: (error) => (error instanceof Error ? error : new Error(String(error)))
-          }).pipe(Effect.orDie),
+          Effect.promise(async () => {
+            const store = await stat(join(entry.worktree, "node_modules", ".pnpm"))
+            expect(store.isDirectory()).toBe(true)
+            return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+          }),
         observe: () => Effect.die("unused"),
         requestSuspension: () => Effect.die("unused"),
         resume: () => Effect.die("unused")

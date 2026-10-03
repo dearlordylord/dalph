@@ -25,8 +25,13 @@ const application = Effect.scoped(
       .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
     const manifest = yield* decodeProductionLiveQualificationManifest(input)
     const outcome = yield* runProductionLiveQualificationRuntime(manifest, { githubToken }).pipe(
-      Effect.provide(productionLiveLaunchPreflightLayer),
-      Effect.provide(githubGraphqlClientLayer({ token: githubToken }).pipe(Layer.provide(NodeHttpClient.layerUndici)))
+      Effect.provide(
+        productionLiveLaunchPreflightLayer.pipe(
+          Layer.provideMerge(
+            githubGraphqlClientLayer({ token: githubToken }).pipe(Layer.provide(NodeHttpClient.layerUndici))
+          )
+        )
+      )
     )
     return outcome._tag === "Qualified" ? outcome : yield* Effect.fail(outcome)
   })

@@ -2545,7 +2545,22 @@ it.effect("keeps an unfinished Integrator session dormant when a blocker appears
     if (blockerIntent?.event._tag !== "TaskTrackerReadIntentRecorded") {
       return yield* Effect.die("missing blocker read intent")
     }
-    const unfinished = [blockerIntent.event, blockerOutcome.event].reduce<ReadonlyArray<JournalRecord>>(
+    const retainedPrefix = prepared.records.slice(0, runStartedAt + 1)
+    // This controlled read consumes the destination Run's graph, not the source cassette's history.
+    const localBlockerIntent = {
+      ...blockerIntent.event,
+      operation: {
+        ...blockerIntent.event.operation,
+        predecessorOperationIds: retainedPrefix.flatMap(({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          (event.observation._tag === "CompleteTaskTrackerFacts" ||
+            event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+            ? [event.operationId]
+            : []
+        )
+      }
+    }
+    const unfinished = [localBlockerIntent, blockerOutcome.event].reduce<ReadonlyArray<JournalRecord>>(
       (records, event) => [
         ...records,
         {
@@ -2555,7 +2570,7 @@ it.effect("keeps an unfinished Integrator session dormant when a blocker appears
           runId: prepared.runId
         }
       ],
-      prepared.records.slice(0, runStartedAt + 1)
+      retainedPrefix
     )
     const history = reduceWorkflowJournalHistory(prepared.runId, unfinished)
     if (history._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(history)

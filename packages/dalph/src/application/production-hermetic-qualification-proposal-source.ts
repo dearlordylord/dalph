@@ -2,6 +2,7 @@
 import {
   deliveryProposalIdOf,
   WorkflowOperation,
+  OperationId,
   TrackerTarget,
   IntegratorSessionCorrelation,
   RemotePublicationCorrelation,
@@ -393,8 +394,18 @@ const validateRoute = Effect.fn("HermeticQualification.validateRoute")(function*
   context: QualificationContext
 ) {
   switch (route._tag) {
-    case "TrackerGraphReadRoute":
-      return { _tag: route._tag, purpose: "EstablishCurrentGraph" as const, target: context.configuration.target }
+    case "TrackerGraphReadRoute": {
+      const predecessorOperationIds = yield* Schema.decodeUnknownEffect(
+        Schema.Array(OperationId).check(Schema.isUnique())
+      )(route.predecessorOperationIds).pipe(Effect.mapError(sourceRejected))
+      yield* Effect.forEach(predecessorOperationIds, (id) => validateWorkflowOperationId(id, context))
+      return {
+        _tag: route._tag,
+        predecessorOperationIds,
+        purpose: "EstablishCurrentGraph" as const,
+        target: context.configuration.target
+      }
+    }
     case "FreshWorkflowRoute":
     case "FreshExecutorWorkflowRoute":
       return yield* validateFreshRoute(route, context)

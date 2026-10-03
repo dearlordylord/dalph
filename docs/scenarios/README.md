@@ -16,6 +16,7 @@ Git history.
 ## Run entry, task facts, admission, and controls
 
 - [Terminate one globally settled Run](terminate-settled-run.md)
+- [Alice's changing graph settles as Blocked](changing-graph-finality.md)
 - [Define control-plane latency and responsiveness budgets](control-plane-latency-and-responsiveness.md)
 - [Keep one position for one admitted planned task attempt](conflicting-capacity-observation.md)
 - [Pause or unpause a whole Run](pause-whole-run.md)

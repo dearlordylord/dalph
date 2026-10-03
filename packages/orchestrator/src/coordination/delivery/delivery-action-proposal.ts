@@ -218,6 +218,8 @@ export type FreshOperationOnlyRoute =
   | {
       readonly _tag: "TrackerGraphReadRoute"
       readonly purpose: "EstablishCurrentGraph"
+      /** Exact accepted graph observations consumed by the decision to replace current graph knowledge. */
+      readonly predecessorOperationIds: ReadonlyArray<OperationId>
       readonly target: TrackerTarget
     }
 
@@ -771,6 +773,7 @@ export interface DeliveryProposalsInput {
 
 export interface TrackerGraphReadProposalInput {
   readonly acceptedAt: JournalPosition | null
+  readonly predecessorOperationIds?: ReadonlyArray<OperationId>
   readonly purpose: "EstablishCurrentGraph"
   readonly runId: RunId
   readonly target: TrackerTarget
@@ -793,7 +796,12 @@ export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal
 
 /** Describes one fresh complete-graph read without allocating or recording its OperationId. */
 export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput): TrackerGraphActionProposal => {
-  const route: FreshOperationRoute = { _tag: "TrackerGraphReadRoute", purpose: input.purpose, target: input.target }
+  const route: FreshOperationRoute = {
+    _tag: "TrackerGraphReadRoute",
+    predecessorOperationIds: [...(input.predecessorOperationIds ?? [])],
+    purpose: input.purpose,
+    target: input.target
+  }
   return {
     _tag: "DeliveryActionProposal",
     actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } },

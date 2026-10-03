@@ -214,7 +214,21 @@ const trackerGraphProposalsOf = (
   if (runIsPaused) return []
   if (journal.graph._tag === "GraphNotEstablished" && (recoveredTransitionCount === 0 || currentGraphRequired)) {
     return [
-      trackerGraphReadProposalOf({ acceptedAt: journal.position, purpose: "EstablishCurrentGraph", runId, target })
+      trackerGraphReadProposalOf({
+        acceptedAt: journal.position,
+        predecessorOperationIds: Array.from(journalRecordsOfKind(journal.prefix, "TaskTrackerFactsObserved")).flatMap(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            (event.observation._tag === "CompleteTaskTrackerFacts" ||
+              event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+            taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(target)
+              ? [event.operationId]
+              : []
+        ),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
     ]
   }
   return []

@@ -50,6 +50,7 @@ import {
 } from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  TaskTrackerFactsReadFailed,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
@@ -2056,4 +2057,85 @@ it.effect("fails an accepted-fact waiter when the journal signal fails", () =>
       expect(Cause.squash(failure.cause)).toEqual(journalFailure)
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
+)
+
+it.effect("captures only accepted same-target graph observations before proposing replacement", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const appendGraph = Effect.fn("S10.appendGraph")(function* (id: string, graphTarget = target) {
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make(id),
+          graphTarget
+        )
+        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          taskTrackerFactsObservedEvent(
+            operation.operationId,
+            makeCompleteTaskTrackerFactsObserved(
+              operation,
+              validSnapshot({
+                revision: id,
+                rootTaskId: "A",
+                tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+              })
+            )
+          )
+        )
+        return operation
+      })
+      yield* appendGraph("g1")
+      yield* appendGraph("other-target", FixtureTarget.make("other-target"))
+      const failed = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("failed"),
+        target
+      )
+      yield* journal.append(runId, intentRecordKey(failed.operationId), taskTrackerReadIntent(failed))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(failed.operationId),
+        taskTrackerFactsObservedEvent(
+          failed.operationId,
+          TaskTrackerFactsReadFailed.make({
+            completeness: "Unreadable",
+            failure: { _tag: "TrackerReadError", detail: "controlled" },
+            operationId: failed.operationId,
+            target
+          })
+        )
+      )
+      const pending = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("pending"),
+        target
+      )
+      yield* journal.append(runId, intentRecordKey(pending.operationId), taskTrackerReadIntent(pending))
+      yield* appendGraph("g2")
+      const bundles = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
+      const observer = DeliveryRelationPublicationObserver.of({
+        observe: (bundle) => Ref.update(bundles, (current) => [...current, bundle])
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const layer = yield* makeProductionReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie)),
+        integrationTargets,
+        (yield* journal.state.get).position
+      ).pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      yield* relation.get
+      const captured = (yield* Ref.get(bundles))[0]?.actionInputs.trackerGraphProposals[0]
+      expect(captured?.route).toMatchObject({ _tag: "TrackerGraphReadRoute", predecessorOperationIds: ["g1", "g2"] })
+      yield* appendGraph("later")
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      yield* publication.awaitCurrent
+      expect(captured?.route).toMatchObject({ predecessorOperationIds: ["g1", "g2"] })
+    })
+  ).pipe(Effect.provide(memoryJournalStoreLayer))
 )

@@ -784,6 +784,89 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       }).pipe(Effect.provide(makeLayer()))
     )
 
+    it.effect("rejects S10 g10 and predecessor-free changed g11 without terminating", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("S10-changing-graph")
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+        const graphIds = Array.from({ length: 11 }, (_, index) => OperationId.make(`g${index + 1}`))
+        const beforeDelivery = validSnapshot({
+          revision: "S10-before-delivery",
+          rootTaskId: "A",
+          tasks: [
+            { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+            { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: "A", prerequisiteIds: ["C"] },
+            { id: "C", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
+            { id: "D", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: "A", prerequisiteIds: [] }
+          ]
+        })
+        const afterDelivery = validSnapshot({
+          ...beforeDelivery.toWire(),
+          revision: "S10-after-delivery",
+          rootTaskId: "A",
+          tasks: beforeDelivery
+            .toWire()
+            .tasks.map((task) => (task.id === "A" ? { ...task, lifecycle: { _tag: "CompletedSuccessfully" } } : task))
+        })
+        for (const [index, operationId] of graphIds.entries()) {
+          const priorGraphId = graphIds[index - 1]
+          const cause =
+            index === 9 && priorGraphId !== undefined
+              ? { _tag: "PostQuiescenceReconfirmation" as const, quiescentGraphOperationId: priorGraphId }
+              : { _tag: "WorkflowEstablishment" as const }
+          const operation = makeTrackerGraphObservationOperation(
+            cause,
+            operationId,
+            target,
+            index === 9 ? graphIds.slice(0, 9) : []
+          )
+          yield* journal.append(runId, intentRecordKey(operationId), taskTrackerReadIntent(operation))
+          const snapshot = index === 10 ? afterDelivery : beforeDelivery
+          const observed = yield* journal.append(
+            runId,
+            outcomeRecordKey(operationId),
+            taskTrackerFactsObservedEvent(operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
+          )
+          if (index !== 10) continue
+          const evidence = makeRunFinalityEvidence({
+            observedAt: observed.position,
+            operationId,
+            readShape: operation.readShape,
+            rootTaskId: TaskId.make("A"),
+            runId,
+            snapshot,
+            target
+          })
+          const beforeTermination = yield* journal.read(runId)
+          const graphIntents = beforeTermination.flatMap(({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+              ? [event.operation]
+              : []
+          )
+          expect(graphIntents.at(-2)).toMatchObject({
+            operationId: "g10",
+            cause: { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: "g9" },
+            predecessorOperationIds: ["g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8", "g9"]
+          })
+          expect(graphIntents.at(-1)).toMatchObject({
+            operationId: "g11",
+            cause: { _tag: "WorkflowEstablishment" },
+            predecessorOperationIds: []
+          })
+          expect(evidence.graphOutcome).toBe("Blocked")
+          expect(evidence.observedAt).toBe(23)
+          const failure = yield* Effect.flip(journal.terminateRun(runId, "Blocked", evidence))
+          expect(failure).toBeInstanceOf(WorkflowRunTerminationEvidenceInvalid)
+          expect(failure).toMatchObject({
+            detail: "termination requires tracker graph observations to be causally comparable"
+          })
+          const retained = yield* journal.read(runId)
+          expect(retained).toEqual(beforeTermination)
+          expect(retained.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(0)
+        }
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
     it.effect("accepts a graph read that causally supersedes historical facts", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore
