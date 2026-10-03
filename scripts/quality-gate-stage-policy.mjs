@@ -157,7 +157,11 @@ export const qualificationQualityGates = () => [
     name: "tests and coverage",
     processGroupAbsenceTimeout: DEFAULT_PROCESS_GROUP_ABSENCE_TIMEOUT,
     terminationGrace: DEFAULT_TERMINATION_GRACE,
-    timeout: 20 * 60 * SECOND
+    // The ordinary/late groups reached twenty minutes before the serial group,
+    // whose retained native-client and recovery proofs take about nine more.
+    // Keep all test deadlines and custody checks; bound the complete suite with
+    // headroom for V8 report generation instead of truncating its final group.
+    timeout: 35 * 60 * SECOND
   }
 ]
 

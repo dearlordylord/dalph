@@ -21,6 +21,14 @@ Termination and absence checks
 and the full gate's 120-second stage limit remain unchanged. These test-harness
 controls do not change Dalph runtime behavior or application Exit budgets.
 
+The full coverage stage has a finite 35-minute allowance. Candidate
+`843511df5a2c3664947c86659c32b9d038d6a200` reached the former 20-minute boundary
+after recording 427 ordinary/late coverage chunks, before completing its serial
+group. Focused V8 runs observed 93 passing tests in six serial files before the
+seven-minute diagnostic stop, then the remaining five tests passed in 92.94
+seconds. The allowance covers the complete suite and report generation; no
+individual test deadline, assertion, exclusion, or custody requirement changes.
+
 #### Parallel work during a full gate
 
 Freeze the full gate's exact candidate worktree. Independent work may continue
