@@ -46,3 +46,35 @@ export const githubGraphqlTestClient = (
 
   return GithubGraphqlClient.of({ execute })
 }
+
+const FieldEnvelope = Schema.Struct({
+  data: Schema.optionalKey(Schema.NullOr(Schema.Struct({ node: Schema.Unknown }))),
+  errors: Schema.optionalKey(Schema.Array(Schema.Unknown))
+})
+
+/** Controlled providers interpret each batch field against their existing independent task facts. */
+export const interpretGithubGraphBatch = <E>(
+  request: Extract<GithubGraphqlRequest, { readonly _tag: "ReadGraphBatch" }>,
+  interpret: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, E>
+): Effect.Effect<GithubGraphqlResponse, E> =>
+  Effect.gen(function* () {
+    const fields = yield* Effect.forEach(request.reads, (read) =>
+      interpret(read).pipe(
+        Effect.flatMap((response) => Schema.decodeUnknownEffect(FieldEnvelope)(response.body).pipe(Effect.orDie))
+      )
+    )
+    return {
+      body: {
+        data: Object.fromEntries(fields.map((field, index) => [`field${index}`, field.data?.node ?? null])),
+        errors: fields.flatMap((field) => field.errors ?? [])
+      }
+    }
+  })
+
+/** Explicit batch-capable provider for tests whose facts are defined one field at a time. */
+export const githubGraphqlBatchTestClient = (
+  interpret: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlTestFailure>
+): GithubGraphqlClient["Service"] =>
+  githubGraphqlTestClient((request) =>
+    request._tag === "ReadGraphBatch" ? interpretGithubGraphBatch(request, interpret) : interpret(request)
+  )

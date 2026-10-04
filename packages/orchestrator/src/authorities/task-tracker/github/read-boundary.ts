@@ -14,7 +14,15 @@ import { isGithubRateLimitErrorMessage } from "./graphql-read-throttle.js"
 /** The closed GitHub requests from which the tracker graph reader may construct facts. */
 export type GithubTrackerGraphReadRequest = Extract<
   GithubGraphqlRequest,
-  { readonly _tag: "ReadBlockedBy" | "ReadIssue" | "ReadSubIssues" | "ReadTaskWorkSpecification" | "ResolveIssue" }
+  {
+    readonly _tag:
+      | "ReadGraphBatch"
+      | "ReadBlockedBy"
+      | "ReadIssue"
+      | "ReadSubIssues"
+      | "ReadTaskWorkSpecification"
+      | "ResolveIssue"
+  }
 >
 
 export const adapterError = (
@@ -73,6 +81,7 @@ export const githubTarget = (target: TrackerTarget): Effect.Effect<GithubIssueTa
 
 export const operationForRequest = (request: GithubTrackerGraphReadRequest): GithubTrackerReadOperation =>
   Match.valueTags(request, {
+    ReadGraphBatch: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readIssue",
     ResolveIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.resolveIssue",
     ReadIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readIssue",
     ReadTaskWorkSpecification: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readTaskWorkSpecification",

@@ -1,4 +1,6 @@
+import { githubGraphBatchSize } from "./read-limits.js"
 import { Effect, Layer, Option } from "effect"
+import { makeGraphBatchExecute } from "./graph-batch.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../graph.js"
 import {
   type GithubTrackerReadOperation,
@@ -205,11 +207,58 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
     /** Produces an all-or-nothing bounded observation, not a GitHub point-in-time transaction. */
     const read = Effect.fn("GithubTrackerGraphReader.read")(function* (target: TrackerTarget) {
       const resolved = yield* resolveTarget(target)
+      const executeBatch = makeGraphBatchExecute(execute)
+      const issues = new Map<GithubIssueNodeId, IssueProjection>()
+      const relations = new Map<string, ReadonlyArray<GithubIssueNodeId>>()
+      const issueRead = Effect.fn("GithubTrackerGraphReader.batchedIssue")(function* (id: GithubIssueNodeId) {
+        const existing = issues.get(id)
+        if (existing !== undefined) return existing
+        const issue = yield* readIssueProjection(
+          (request) => (request._tag === "ReadIssue" ? executeBatch(request) : execute(request)),
+          resolved.repositoryNodeId,
+          id
+        )
+        issues.set(id, issue)
+        return issue
+      })
+      const connectionRead = Effect.fn("GithubTrackerGraphReader.batchedConnection")(function* (
+        id: GithubIssueNodeId,
+        relation: GithubIssueRelation
+      ) {
+        const key = `${id}/${relation}`
+        const existing = relations.get(key)
+        if (existing !== undefined) return existing
+        const nodes = yield* readConnection(
+          (request) =>
+            request._tag === "ReadBlockedBy" || request._tag === "ReadSubIssues"
+              ? executeBatch(request)
+              : execute(request),
+          id,
+          relation
+        )
+        relations.set(key, nodes)
+        return nodes
+      })
+      const preparePending = Effect.fn("GithubTrackerGraphReader.preparePending")(function* (
+        pending: ReadonlyArray<{ readonly issueNodeId: GithubIssueNodeId; readonly expandChildren: boolean }>
+      ) {
+        const subjects = new Map<GithubIssueNodeId, boolean>()
+        for (const item of pending)
+          subjects.set(item.issueNodeId, item.expandChildren || subjects.get(item.issueNodeId) === true)
+        const reads: Array<Effect.Effect<unknown, TrackerAdapterReadError>> = []
+        for (const [id, expandChildren] of subjects) {
+          if (!issues.has(id)) reads.push(issueRead(id))
+          if (!relations.has(`${id}/blockedBy`)) reads.push(connectionRead(id, "blockedBy"))
+          if (expandChildren && !relations.has(`${id}/subIssues`)) reads.push(connectionRead(id, "subIssues"))
+        }
+        yield* Effect.all(reads, { concurrency: githubGraphBatchSize, discard: true })
+      })
       const traversal = yield* traverseGithubTargetClosure({
+        preparePending,
         closureDescription: "tracker target closure",
         invalid: (stage, detail) => Effect.fail(incomplete(operationForClosureStage(stage), detail)),
-        readConnection: (issueNodeId, relation) => readConnection(execute, issueNodeId, relation),
-        readIssue: (issueNodeId) => readIssueProjection(execute, resolved.repositoryNodeId, issueNodeId),
+        readConnection: connectionRead,
+        readIssue: issueRead,
         resourceLimit: (stage, detail) => Effect.fail(resourceLimitExceeded(operationForRelation(stage), detail)),
         rootIssueNodeId: resolved.rootIssueNodeId
       })

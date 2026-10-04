@@ -1,3 +1,5 @@
+import { graphBatchRequestBody } from "./graph-batch-query.js"
+import { githubGraphBatchSize } from "./read-limits.js"
 import { NodeHttpClient } from "@effect/platform-node"
 import { Config, Context, Effect, Layer, Match, Option, type Redacted, Schema } from "effect"
 import * as HttpClient from "effect/unstable/http/HttpClient"
@@ -37,7 +39,17 @@ export type GithubLabelName = typeof GithubLabelName.Type
 export const GithubCursor = Schema.NonEmptyString.pipe(Schema.brand("GithubCursor"))
 export type GithubCursor = typeof GithubCursor.Type
 
+/** One required graph field/page, used both alone and inside a bounded wire batch. */
+const graphFieldReadCases = {
+  ReadIssue: { issueNodeId: GithubIssueNodeId },
+  ReadSubIssues: { cursor: Schema.NullOr(GithubCursor), issueNodeId: GithubIssueNodeId },
+  ReadBlockedBy: { cursor: Schema.NullOr(GithubCursor), issueNodeId: GithubIssueNodeId }
+}
+export const GithubGraphFieldRead = Schema.TaggedUnion(graphFieldReadCases)
+export type GithubGraphFieldRead = typeof GithubGraphFieldRead.Type
+
 export const GithubGraphqlRequest = Schema.TaggedUnion({
+  ...graphFieldReadCases,
   AddBlockedBy: { blockingIssueNodeId: GithubIssueNodeId, issueNodeId: GithubIssueNodeId, operationId: OperationId },
   AddIssueComment: { body: Schema.NonEmptyString, issueNodeId: GithubIssueNodeId, operationId: OperationId },
   AddSubIssue: { operationId: OperationId, parentIssueNodeId: GithubIssueNodeId, subIssueNodeId: GithubIssueNodeId },
@@ -57,14 +69,14 @@ export const GithubGraphqlRequest = Schema.TaggedUnion({
   },
   DeleteIssue: { issueNodeId: GithubIssueNodeId, operationId: OperationId },
   DeleteClaimLabel: { labelNodeId: GithubLabelNodeId, operationId: OperationId },
+  ReadGraphBatch: {
+    reads: Schema.Array(GithubGraphFieldRead).check(Schema.isMinLength(1), Schema.isMaxLength(githubGraphBatchSize))
+  },
   ReadIssueDetails: { issueNodeId: GithubIssueNodeId },
   ReadTaskWorkSpecification: { issueNodeId: GithubIssueNodeId },
   ReopenIssue: { issueNodeId: GithubIssueNodeId, operationId: OperationId },
   ResolveRepository: { owner: GithubRepositoryOwner, repository: GithubRepositoryName },
-  ResolveIssue: { target: GithubIssueTarget },
-  ReadIssue: { issueNodeId: GithubIssueNodeId },
-  ReadSubIssues: { cursor: Schema.NullOr(GithubCursor), issueNodeId: GithubIssueNodeId },
-  ReadBlockedBy: { cursor: Schema.NullOr(GithubCursor), issueNodeId: GithubIssueNodeId }
+  ResolveIssue: { target: GithubIssueTarget }
 })
 export type GithubGraphqlRequest = typeof GithubGraphqlRequest.Type
 
@@ -331,6 +343,7 @@ const requestBody = (
       query: deleteClaimLabelMutation,
       variables: { labelNodeId: request.labelNodeId, operationId: request.operationId }
     }),
+    ReadGraphBatch: (request) => graphBatchRequestBody(request, connectionPageSize),
     ReadIssueDetails: (request) => ({ query: readIssueDetailsQuery, variables: { issueNodeId: request.issueNodeId } }),
     ReadTaskWorkSpecification: (request) => ({
       query: readTaskWorkSpecificationQuery,

@@ -1,3 +1,4 @@
+import { interpretGithubGraphBatch } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import {
   remotePublicationGitLayerForProductionTest,
   remotePublicationTargetForTest
@@ -302,6 +303,7 @@ const githubInstructionResponse = (request: GithubGraphqlRequest, focusedBody: u
         }
       }
     }),
+    ReadGraphBatch: () => unexpectedGithubInstructionResponse,
     ReadIssue: () => ({
       body: {
         data: {
@@ -370,7 +372,13 @@ const runFreshGithubInstructionVertical = (scenario: string, focusedBody: unknow
       GithubGraphqlClient.of({
         execute: (request) =>
           Ref.update(githubCalls, (calls) => [...calls, request._tag]).pipe(
-            Effect.as(githubInstructionResponse(request, focusedBody))
+            Effect.andThen(
+              request._tag === "ReadGraphBatch"
+                ? interpretGithubGraphBatch(request, (read) =>
+                    Effect.succeed(githubInstructionResponse(read, focusedBody))
+                  )
+                : Effect.succeed(githubInstructionResponse(request, focusedBody))
+            )
           )
       })
     )
@@ -2469,7 +2477,14 @@ it.effect("reads exact GitHub title and body before planning one claimed task", 
       ])
       expect(
         result.githubCalls.every((tag) =>
-          ["ReadBlockedBy", "ReadIssue", "ReadSubIssues", "ReadTaskWorkSpecification", "ResolveIssue"].includes(tag)
+          [
+            "ReadGraphBatch",
+            "ReadBlockedBy",
+            "ReadIssue",
+            "ReadSubIssues",
+            "ReadTaskWorkSpecification",
+            "ResolveIssue"
+          ].includes(tag)
         )
       ).toBe(true)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
@@ -2563,7 +2578,14 @@ it.effect(
           ).toBe(false)
           expect(
             result.githubCalls.every((tag) =>
-              ["ReadBlockedBy", "ReadIssue", "ReadSubIssues", "ReadTaskWorkSpecification", "ResolveIssue"].includes(tag)
+              [
+                "ReadGraphBatch",
+                "ReadBlockedBy",
+                "ReadIssue",
+                "ReadSubIssues",
+                "ReadTaskWorkSpecification",
+                "ResolveIssue"
+              ].includes(tag)
             ),
             scenario.name
           ).toBe(true)

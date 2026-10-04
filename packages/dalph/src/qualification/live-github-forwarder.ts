@@ -20,6 +20,7 @@ export const productionLiveGithubOperationTags = [
   "ResolveIssue",
   "ResolveRepository",
   "ReadIssue",
+  "ReadGraphBatch",
   "ReadIssueDetails",
   "ReadTaskWorkSpecification",
   "ReadSubIssues",

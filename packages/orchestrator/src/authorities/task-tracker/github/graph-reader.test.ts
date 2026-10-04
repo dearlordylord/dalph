@@ -1,6 +1,6 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { expect, it } from "@effect/vitest"
-import { Effect, Layer, Match, Ref } from "effect"
+import { Effect, Layer, Match, Option, Ref } from "effect"
 import { trackerGraphReaderContract } from "../../../../test/contracts/tracker-graph-reader-contract.js"
 import { FixtureTarget } from "../fixture/target.js"
 import { TaskLifecycle } from "../task.js"
@@ -10,13 +10,18 @@ import { type TrackerTarget } from "../target.js"
 import {
   GithubGraphqlClient,
   type GithubGraphqlRequest,
+  type GithubGraphqlReadExecution,
   GithubGraphqlRequestError,
   type GithubGraphqlResponse,
   GithubIssueNodeId,
   GithubRepositoryNodeId
 } from "./graphql-client.js"
 import { GithubGraphqlReadThrottled, GithubGraphqlThrottleEvidence } from "./graphql-read-throttle.js"
-import { githubGraphqlTestClient } from "./graphql-client.test-fixture.js"
+import {
+  githubGraphqlTestClient,
+  githubGraphqlBatchTestClient,
+  interpretGithubGraphBatch
+} from "./graphql-client.test-fixture.js"
 import { githubTaskIdFor } from "./task-identity.js"
 import { githubTrackerGraphReaderLayer } from "./graph-reader.js"
 import { githubConnectionPageLimit, githubSnapshotTaskLimit } from "./read-limits.js"
@@ -61,7 +66,7 @@ const connection = (
     }
   })
 
-const responseFor = (request: GithubGraphqlRequest) => {
+const responseFor = (request: GithubGraphqlRequest): GithubGraphqlResponse => {
   return Match.valueTags(request, {
     AddBlockedBy: () => page({ errors: [{ message: "unexpected mutation request" }] }),
     AddIssueComment: () => page({ errors: [{ message: "unexpected mutation request" }] }),
@@ -72,6 +77,7 @@ const responseFor = (request: GithubGraphqlRequest) => {
     CreateIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
     DeleteIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
     DeleteClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
+    ReadGraphBatch: () => page({ errors: [{ message: "batch must be interpreted by controlled client" }] }),
     ReadIssueDetails: () => page({ errors: [{ message: "unexpected detail request" }] }),
     ReadTaskWorkSpecification: (request) =>
       page({
@@ -125,7 +131,11 @@ const clientLayerFor = (handler: (request: GithubGraphqlRequest) => GithubGraphq
   Layer.succeed(
     GithubGraphqlClient,
     GithubGraphqlClient.of({
-      execute: Effect.fn("GithubGraphqlClient.Test.execute")((request) => Effect.succeed(handler(request)))
+      execute: Effect.fn("GithubGraphqlClient.Test.execute")((request) =>
+        request._tag === "ReadGraphBatch"
+          ? interpretGithubGraphBatch(request, (read) => Effect.succeed(handler(read)))
+          : Effect.succeed(handler(request))
+      )
     })
   )
 
@@ -839,5 +849,226 @@ it.effect("repeats only the read-only GitHub instruction protocol after a lost r
       "ResolveIssue",
       "ReadTaskWorkSpecification"
     ])
+  })
+)
+
+it.effect("reads a six-task closure with shared prerequisites in fewer than sixteen provider requests", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const layer = Layer.succeed(
+      GithubGraphqlClient,
+      GithubGraphqlClient.of({
+        execute: (request) =>
+          Ref.update(calls, (n) => n + 1).pipe(
+            Effect.andThen(
+              request._tag === "ReadGraphBatch"
+                ? interpretGithubGraphBatch(request, (read) => Effect.succeed(sixTaskResponse(read)))
+                : Effect.succeed(sixTaskResponse(request))
+            )
+          )
+      })
+    )
+    const graph = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerGraphReader).read(target)
+    }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(layer))
+    expect(graph.taskIds()).toHaveLength(6)
+    expect(graph.childrenOf(root)).toEqual([child, taskIdFor("other-child-node")].sort())
+    expect(graph.prerequisitesOf(child)).toEqual([firstBlocker, secondBlocker])
+    expect(graph.prerequisitesOf(taskIdFor("other-child-node"))).toEqual([firstBlocker])
+    expect(graph.prerequisitesOf(firstBlocker)).toEqual([transitiveBlocker])
+    expect(Option.getOrThrow(graph.lifecycleOf(firstBlocker))).toEqual(
+      TaskLifecycle.cases.CompletedSuccessfully.make({})
+    )
+    expect(yield* Ref.get(calls)).toBeLessThan(16)
+  })
+)
+
+const sixTaskResponse = (request: GithubGraphqlRequest) =>
+  request._tag === "ReadSubIssues" && request.issueNodeId === "root-node"
+    ? connection("subIssues", ["child-node", "other-child-node"])
+    : request._tag === "ReadIssue" && request.issueNodeId === "other-child-node"
+      ? issue("other-child-node", "root-node")
+      : request._tag === "ReadBlockedBy" && request.issueNodeId === "other-child-node"
+        ? connection("blockedBy", ["first-blocker-node"], false, null, "other-child-node")
+        : responseFor(request)
+
+it.effect("deduplicates discovered fields and batches exact independent pagination cursors", () =>
+  Effect.gen(function* () {
+    const requests = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest>>([])
+    const layer = Layer.succeed(
+      GithubGraphqlClient,
+      GithubGraphqlClient.of({
+        execute: (request) =>
+          Ref.update(requests, (all) => [...all, request]).pipe(
+            Effect.andThen(
+              request._tag === "ReadGraphBatch"
+                ? interpretGithubGraphBatch(request, (read) => Effect.succeed(sixTaskResponse(read)))
+                : Effect.succeed(sixTaskResponse(request))
+            )
+          )
+      })
+    )
+    yield* Effect.gen(function* () {
+      return yield* (yield* TrackerGraphReader).read(target)
+    }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(layer))
+    const all = yield* Ref.get(requests)
+    const fields = all.flatMap((request) => (request._tag === "ReadGraphBatch" ? request.reads : []))
+    const keys = fields.map(
+      (field) => `${field._tag}/${field.issueNodeId}/${"cursor" in field ? field.cursor : "identity"}`
+    )
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(
+      fields.filter((field) => field._tag === "ReadIssue" && field.issueNodeId === "first-blocker-node")
+    ).toHaveLength(1)
+    expect(fields).toContainEqual({ _tag: "ReadBlockedBy", issueNodeId: "child-node", cursor: "next-blocker" })
+    expect(fields.some((field) => field._tag === "ReadSubIssues" && field.issueNodeId === "first-blocker-node")).toBe(
+      false
+    )
+    expect(all.every((request) => request._tag === "ResolveIssue" || request._tag === "ReadGraphBatch")).toBe(true)
+  })
+)
+
+it.effect("rejects missing and partial batch fields without returning a graph", () =>
+  Effect.gen(function* () {
+    for (const body of [
+      { data: {} },
+      { data: { field0: null, field1: null, field2: null } },
+      { data: { field0: { __typename: "Issue", id: "root-node" } }, errors: [{ message: "partial read" }] },
+      { errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] }
+    ]) {
+      const error = yield* failedRead(
+        Layer.succeed(
+          GithubGraphqlClient,
+          GithubGraphqlClient.of({
+            execute: (request) => Effect.succeed(request._tag === "ReadGraphBatch" ? page(body) : responseFor(request))
+          })
+        )
+      )
+      expect(error._tag).toBe("TrackerGraphReader.AdapterReadError")
+    }
+  })
+)
+
+it.effect("reads changed lifecycle and edges afresh through the same reader", () =>
+  Effect.gen(function* () {
+    const changed = yield* Ref.make(false)
+    const interpret = (request: GithubGraphqlRequest) =>
+      Ref.get(changed).pipe(
+        Effect.map((fresh) => {
+          if (!fresh) return responseFor(request)
+          if (request._tag === "ReadSubIssues" && request.issueNodeId === "root-node")
+            return connection("subIssues", [])
+          if (request._tag === "ReadBlockedBy" && request.issueNodeId === "root-node")
+            return connection("blockedBy", ["first-blocker-node"])
+          if (request._tag === "ReadIssue" && request.issueNodeId === "root-node")
+            return issue("root-node", null, "CLOSED", "COMPLETED")
+          return responseFor(request)
+        })
+      )
+    yield* Effect.gen(function* () {
+      const reader = yield* TrackerGraphReader
+      const first = yield* reader.read(target)
+      yield* Ref.set(changed, true)
+      const next = yield* reader.read(target)
+      expect(next.childrenOf(root)).toEqual([])
+      expect(next.prerequisitesOf(root)).toEqual([firstBlocker])
+      expect(next.taskIds()).toHaveLength(3)
+      expect(next.revision).not.toBe(first.revision)
+    }).pipe(
+      Effect.provide(githubTrackerGraphReaderLayer),
+      Effect.provide(Layer.succeed(GithubGraphqlClient, githubGraphqlBatchTestClient(interpret)))
+    )
+  })
+)
+
+it.effect("abandons partial batch state after transport failure and throttling before a fresh read", () =>
+  Effect.gen(function* () {
+    for (const failure of ["transport", "throttle"] as const) {
+      const failNext = yield* Ref.make(true)
+      const calls = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest["_tag"]>>([])
+      const interpret = (request: GithubGraphqlRequest): GithubGraphqlReadExecution =>
+        Ref.update(calls, (all) => [...all, request._tag]).pipe(
+          Effect.andThen(
+            request._tag === "ReadGraphBatch"
+              ? (request.reads.some((read) => read.issueNodeId === "child-node")
+                  ? Ref.getAndSet(failNext, false)
+                  : Effect.succeed(false)
+                ).pipe(
+                  Effect.flatMap(
+                    (fail): GithubGraphqlReadExecution =>
+                      fail
+                        ? failure === "transport"
+                          ? Effect.fail(
+                              new GithubGraphqlRequestError({ operation: request._tag, detail: "response lost" })
+                            )
+                          : Effect.fail(
+                              new GithubGraphqlReadThrottled({
+                                operation: request._tag,
+                                detail: "throttled",
+                                retry: GithubGraphqlThrottleEvidence.cases.Unavailable.make({})
+                              })
+                            )
+                        : interpretGithubGraphBatch(request, (read) => Effect.succeed(responseFor(read)))
+                  )
+                )
+              : Effect.succeed(responseFor(request))
+          )
+        )
+      yield* Effect.gen(function* () {
+        const reader = yield* TrackerGraphReader
+        const error = yield* reader.read(target).pipe(Effect.flip, Effect.orDie)
+        expect(error).toMatchObject({ reason: { _tag: failure === "transport" ? "Transport" : "Throttled" } })
+        expect((yield* Ref.get(calls)).filter((tag) => tag === "ResolveIssue")).toHaveLength(1)
+        const next = yield* reader.read(target)
+        expect(next.taskIds()).toHaveLength(5)
+        expect((yield* Ref.get(calls)).filter((tag) => tag === "ResolveIssue")).toHaveLength(2)
+      }).pipe(
+        Effect.provide(githubTrackerGraphReaderLayer),
+        Effect.provide(Layer.succeed(GithubGraphqlClient, githubGraphqlTestClient(interpret)))
+      )
+    }
+  })
+)
+
+it.effect("bounds wide closure batches and follows both relation cursors together", () =>
+  Effect.gen(function* () {
+    const batches = yield* Ref.make<ReadonlyArray<Extract<GithubGraphqlRequest, { readonly _tag: "ReadGraphBatch" }>>>(
+      []
+    )
+    const children = Array.from({ length: 45 }, (_, index) => `wide-child-${index}`)
+    const interpret = (read: GithubGraphqlRequest) => {
+      if (read._tag === "ReadIssue" && children.includes(read.issueNodeId)) return issue(read.issueNodeId, "root-node")
+      if (read._tag === "ReadSubIssues" && read.issueNodeId === "root-node")
+        return read.cursor === null
+          ? connection("subIssues", children, true, "children-page")
+          : connection("subIssues", [])
+      if (read._tag === "ReadBlockedBy" && read.issueNodeId === "root-node")
+        return read.cursor === null ? connection("blockedBy", [], true, "blockers-page") : connection("blockedBy", [])
+      return responseFor(read)
+    }
+    const layer = Layer.succeed(
+      GithubGraphqlClient,
+      GithubGraphqlClient.of({
+        execute: (request) =>
+          request._tag === "ReadGraphBatch"
+            ? Ref.update(batches, (all) => [...all, request]).pipe(
+                Effect.andThen(interpretGithubGraphBatch(request, (read) => Effect.succeed(interpret(read))))
+              )
+            : Effect.succeed(interpret(request))
+      })
+    )
+    const graph = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerGraphReader).read(target)
+    }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(layer))
+    expect(graph.taskIds()).toHaveLength(46)
+    const all = yield* Ref.get(batches)
+    expect(all.every((batch) => batch.reads.length <= 30)).toBe(true)
+    expect(
+      all.some(
+        (batch) =>
+          batch.reads.some((read) => read._tag === "ReadSubIssues" && read.cursor === "children-page") &&
+          batch.reads.some((read) => read._tag === "ReadBlockedBy" && read.cursor === "blockers-page")
+      )
+    ).toBe(true)
   })
 )

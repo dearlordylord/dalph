@@ -98,6 +98,7 @@ const githubClaimFixtureLayer = Layer.effectContext(
           ReopenIssue: () => Effect.die("unexpected ReopenIssue request"),
           ResolveRepository: () => Effect.die("unexpected ResolveRepository request"),
           ResolveIssue: () => Effect.die("unexpected ResolveIssue request"),
+          ReadGraphBatch: () => Effect.die("unexpected ReadGraphBatch request"),
           ReadIssue: () => Effect.die("unexpected ReadIssue request"),
           ReadSubIssues: () => Effect.die("unexpected ReadSubIssues request"),
           ReadBlockedBy: () => Effect.die("unexpected ReadBlockedBy request")

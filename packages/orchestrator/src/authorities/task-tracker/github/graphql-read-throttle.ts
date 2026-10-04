@@ -6,6 +6,7 @@ import type * as HttpClientResponse from "effect/unstable/http/HttpClientRespons
 export const GithubGraphqlReadOperation = Schema.Literals([
   "FindClaimLabel",
   "ReadBlockedBy",
+  "ReadGraphBatch",
   "ReadIssueDetails",
   "ReadTaskWorkSpecification",
   "ReadIssue",

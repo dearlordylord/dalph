@@ -1540,42 +1540,40 @@ const restartHostProcesses = Effect.scoped(
   }).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeServices.layer, NodeCrypto.layer)))
 )
 
-it.effect("unfinished SQLite public restart reports the same recovered Run and no second beginning", () =>
-  restartHostProcesses.pipe(
-    Effect.map(({ first, records, second, seededRunId }) => {
-      const firstCompleted = eventsWithTag(first, "HostCompleted")[0]
-      const secondCompleted = eventsWithTag(second, "HostCompleted")[0]
-      expect(firstCompleted).toMatchObject({
-        label: "first-host-process",
-        selection: { _tag: "Recovered", runId: seededRunId }
-      })
-      expect(secondCompleted).toMatchObject({
-        label: "second-host-process",
-        selection: { _tag: "Recovered", runId: seededRunId }
-      })
-      const started = [...eventsWithTag(first, "RestartChildStarted"), ...eventsWithTag(second, "RestartChildStarted")]
-      expect(started).toHaveLength(2)
-      expect(started[0]?.pid).not.toBe(started[1]?.pid)
-      const beginnings = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
-      expect(beginnings).toHaveLength(1)
-      expect(beginnings[0]?.event).toMatchObject({
-        _tag: "WorkflowRunBegan",
-        initialControlPolicy: { taskExecutionCapacity: 2 }
-      })
-      expect(records).toContainEqual(
-        expect.objectContaining({
-          event: expect.objectContaining({ _tag: "TaskWorkCapacityChanged", revision: 2, capacity: 7 })
-        })
-      )
-    })
-  )
-)
-
+// All three public recovery observations use the same two process incarnations.
+// Reusing their evidence avoids repeating four expensive child-process launches.
 it.effect(
-  "recovered CLI status uses the new process-local source and never reconstructs a live owner from history",
+  "unfinished SQLite public restart preserves Run identity, process-local status, and reconciliation before requests",
   () =>
     restartHostProcesses.pipe(
-      Effect.map(({ first, input, second }) => {
+      Effect.map(({ first, input, records, second, seededRunId }) => {
+        const firstCompleted = eventsWithTag(first, "HostCompleted")[0]
+        const secondCompleted = eventsWithTag(second, "HostCompleted")[0]
+        expect(firstCompleted).toMatchObject({
+          label: "first-host-process",
+          selection: { _tag: "Recovered", runId: seededRunId }
+        })
+        expect(secondCompleted).toMatchObject({
+          label: "second-host-process",
+          selection: { _tag: "Recovered", runId: seededRunId }
+        })
+        const started = [
+          ...eventsWithTag(first, "RestartChildStarted"),
+          ...eventsWithTag(second, "RestartChildStarted")
+        ]
+        expect(started).toHaveLength(2)
+        expect(started[0]?.pid).not.toBe(started[1]?.pid)
+        const beginnings = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
+        expect(beginnings).toHaveLength(1)
+        expect(beginnings[0]?.event).toMatchObject({
+          _tag: "WorkflowRunBegan",
+          initialControlPolicy: { taskExecutionCapacity: 2 }
+        })
+        expect(records).toContainEqual(
+          expect.objectContaining({
+            event: expect.objectContaining({ _tag: "TaskWorkCapacityChanged", revision: 2, capacity: 7 })
+          })
+        )
         const processIds = [first, second].map((events) => {
           const publicRecords = eventsWithTag(events, "PublicRecoveryStatusObserved")
           const selected = publicRecords.find(({ record }) => record._tag === "RunSelected")
@@ -1606,65 +1604,60 @@ it.effect(
         })
         expect(processIds).toHaveLength(2)
         expect(processIds[0]).not.toBe(processIds[1])
-      })
-    )
-)
-
-it.effect("public restart reconciles an acknowledged boundary intent before any duplicate request", () =>
-  restartHostProcesses.pipe(
-    Effect.map(({ first, input, second }) => {
-      for (const events of [first, second]) {
-        const expectedPosition = eventsWithTag(events, "RestartChildStarted")[0]?.label === "first-host-process" ? 5 : 7
-        const reconstructed = eventsWithTag(events, "RecoveryReconstructed")[0]
-        const selected = eventsWithTag(events, "TaskClaimCheckSelected")[0]
-        const githubRead = eventsWithTag(events, "GithubReadStarted")[0]
-        const reconstructionIndex = events.findIndex(({ _tag }) => _tag === "RecoveryReconstructed")
-        const selectedIndex = events.findIndex(({ _tag }) => _tag === "TaskClaimCheckSelected")
-        const githubReadIndex = events.findIndex(({ _tag }) => _tag === "GithubReadStarted")
-        expect(events.filter(({ _tag }) => _tag !== "PublicRecoveryStatusObserved").map(({ _tag }) => _tag)).toEqual([
-          "RestartChildStarted",
-          "RecoveryReconstructed",
-          "TaskClaimCheckSelected",
-          "GithubReadStarted",
-          "HostCompleted"
-        ])
-        expect(reconstructed).toMatchObject({
-          acceptedPosition: expectedPosition,
-          policy: { revision: 2, taskExecutionCapacity: 7 },
-          responsibilities: [
-            {
-              _tag: "TaskClaimResponsibility",
-              acquisition: {
-                operationId: "production-restart-claim-acquisition",
-                owner: "dalph:production-restart",
-                taskId: input.taskId,
-                token: "production-restart-token"
-              },
-              beganAt: 5,
-              taskId: input.taskId
-            }
-          ],
-          runId: input.runId
-        })
-        expect(selected).toEqual({
-          _tag: "TaskClaimCheckSelected",
-          operationId: input.responsibilityOperationId,
-          taskId: input.taskId
-        })
-        if (selected === undefined) return
-        expect(githubRead).toEqual(
-          expect.objectContaining({
-            _tag: "GithubReadStarted",
-            operationId: selected.operationId,
-            target: input.target
+        for (const events of [first, second]) {
+          const expectedPosition =
+            eventsWithTag(events, "RestartChildStarted")[0]?.label === "first-host-process" ? 5 : 7
+          const reconstructed = eventsWithTag(events, "RecoveryReconstructed")[0]
+          const selected = eventsWithTag(events, "TaskClaimCheckSelected")[0]
+          const githubRead = eventsWithTag(events, "GithubReadStarted")[0]
+          const reconstructionIndex = events.findIndex(({ _tag }) => _tag === "RecoveryReconstructed")
+          const selectedIndex = events.findIndex(({ _tag }) => _tag === "TaskClaimCheckSelected")
+          const githubReadIndex = events.findIndex(({ _tag }) => _tag === "GithubReadStarted")
+          expect(events.filter(({ _tag }) => _tag !== "PublicRecoveryStatusObserved").map(({ _tag }) => _tag)).toEqual([
+            "RestartChildStarted",
+            "RecoveryReconstructed",
+            "TaskClaimCheckSelected",
+            "GithubReadStarted",
+            "HostCompleted"
+          ])
+          expect(reconstructed).toMatchObject({
+            acceptedPosition: expectedPosition,
+            policy: { revision: 2, taskExecutionCapacity: 7 },
+            responsibilities: [
+              {
+                _tag: "TaskClaimResponsibility",
+                acquisition: {
+                  operationId: "production-restart-claim-acquisition",
+                  owner: "dalph:production-restart",
+                  taskId: input.taskId,
+                  token: "production-restart-token"
+                },
+                beganAt: 5,
+                taskId: input.taskId
+              }
+            ],
+            runId: input.runId
           })
-        )
-        expect(reconstructionIndex).toBeGreaterThanOrEqual(0)
-        expect(reconstructionIndex).toBeLessThan(selectedIndex)
-        expect(selectedIndex).toBeLessThan(githubReadIndex)
-      }
-    })
-  )
+          expect(selected).toEqual({
+            _tag: "TaskClaimCheckSelected",
+            operationId: input.responsibilityOperationId,
+            taskId: input.taskId
+          })
+          if (selected === undefined) return
+          expect(githubRead).toEqual(
+            expect.objectContaining({
+              _tag: "GithubReadStarted",
+              operationId: selected.operationId,
+              target: input.target
+            })
+          )
+          expect(reconstructionIndex).toBeGreaterThanOrEqual(0)
+          expect(reconstructionIndex).toBeLessThan(selectedIndex)
+          expect(selectedIndex).toBeLessThan(githubReadIndex)
+        }
+      })
+    ),
+  { timeout: 30_000 }
 )
 
 interface UnsafeDiscoveryBoundaryCalls {

@@ -1,3 +1,4 @@
+import { githubGraphqlBatchTestClient } from "../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import { GitCommitSha, RemotePublicationTarget, RemotePublicationEndpoint, RunId } from "@dalph/contracts"
 import {
   RunReactivationOwner,
@@ -193,60 +194,55 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const trackerCalls = yield* Ref.make(0)
   const gitCalls = yield* Ref.make(0)
   const exitCalls = yield* Ref.make(0)
-  const github = GithubGraphqlClient.of({
-    execute: (request: GithubGraphqlRequest) =>
-      Effect.gen(function* () {
-        yield* Ref.update(trackerCalls, (count) => count + 1)
-        const connection = (field: "subIssues" | "blockedBy", ids: ReadonlyArray<GithubIssueNodeId>) => ({
+  const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
+    Effect.gen(function* () {
+      yield* Ref.update(trackerCalls, (count) => count + 1)
+      const connection = (field: "subIssues" | "blockedBy", ids: ReadonlyArray<GithubIssueNodeId>) => ({
+        body: {
+          data: {
+            node: {
+              __typename: "Issue",
+              id: "issueNodeId" in request ? request.issueNodeId : rootNode,
+              [field]: { nodes: ids.map((id) => ({ id })), pageInfo: { endCursor: null, hasNextPage: false } }
+            }
+          }
+        }
+      })
+      if (request._tag === "ReadSubIssues")
+        return connection(
+          "subIssues",
+          includeBlockedChildren && request.issueNodeId === rootNode ? [childB, childC] : []
+        )
+      if (includeBlockedChildren && request._tag === "ReadBlockedBy")
+        return connection("blockedBy", request.issueNodeId === childC ? [rootNode, childB] : [])
+      if (includeBlockedChildren && request._tag === "ReadIssue" && request.issueNodeId !== rootNode)
+        return {
           body: {
             data: {
               node: {
                 __typename: "Issue",
-                id: "issueNodeId" in request ? request.issueNodeId : rootNode,
-                [field]: { nodes: ids.map((id) => ({ id })), pageInfo: { endCursor: null, hasNextPage: false } }
+                id: request.issueNodeId,
+                parent: { id: rootNode },
+                repository: { id: hermeticQualificationTrackerIdentity.repositoryNodeId },
+                state: "OPEN",
+                stateReason: null
               }
             }
           }
-        })
-        if (request._tag === "ReadSubIssues")
-          return connection(
-            "subIssues",
-            includeBlockedChildren && request.issueNodeId === rootNode ? [childB, childC] : []
-          )
-        if (includeBlockedChildren && request._tag === "ReadBlockedBy")
-          return connection("blockedBy", request.issueNodeId === childC ? [rootNode, childB] : [])
-        if (includeBlockedChildren && request._tag === "ReadIssue" && request.issueNodeId !== rootNode)
-          return {
-            body: {
-              data: {
-                node: {
-                  __typename: "Issue",
-                  id: request.issueNodeId,
-                  parent: { id: rootNode },
-                  repository: { id: hermeticQualificationTrackerIdentity.repositoryNodeId },
-                  state: "OPEN",
-                  stateReason: null
-                }
-              }
-            }
-          }
-        if (
-          includeBlockedChildren &&
-          request._tag === "ReadTaskWorkSpecification" &&
-          request.issueNodeId !== rootNode
-        ) {
-          return yield* Effect.die("blocked child must not reach a work-specification read")
         }
-        return yield* provider.github(providerBodyFor(request)).pipe(
-          Effect.orDie,
-          Effect.flatMap((response) =>
-            response.status === successfulHttpStatus
-              ? Effect.succeed({ body: response.body })
-              : Effect.die(`controlled GitHub returned ${response.status}`)
-          )
+      if (includeBlockedChildren && request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNode) {
+        return yield* Effect.die("blocked child must not reach a work-specification read")
+      }
+      return yield* provider.github(providerBodyFor(request)).pipe(
+        Effect.orDie,
+        Effect.flatMap((response) =>
+          response.status === successfulHttpStatus
+            ? Effect.succeed({ body: response.body })
+            : Effect.die(`controlled GitHub returned ${response.status}`)
         )
-      })
-  })
+      )
+    })
+  )
   const failures = yield* Ref.make<ReadonlyArray<unknown>>([])
   const activationFinalizing = yield* Deferred.make<void>()
   const releaseObservationCut = yield* Deferred.make<void>()

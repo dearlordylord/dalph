@@ -1,5 +1,6 @@
+import { decodeHermeticGraphqlRequest } from "./production-hermetic-graphql-request.js"
 import { makeTaskWorkSpecification, type TaskWorkSpecification } from "@dalph/contracts"
-import { GithubGraphqlRequest, GithubLabelName, GithubLabelNodeId, githubTaskIdFor } from "@dalph/orchestrator"
+import { type GithubGraphqlRequest, GithubLabelName, GithubLabelNodeId, githubTaskIdFor } from "@dalph/orchestrator"
 import { Effect, Match, MutableList, Ref, Schema, Stream } from "effect"
 import {
   CodexThreadListSummary,
@@ -49,10 +50,6 @@ type ProviderCallTag =
   | "QualificationDeleteIssue"
   | "QualificationDeleteLabel"
 type ProviderCounts = ReadonlyArray<{ readonly tag: ProviderCallTag; readonly count: ProviderCallCount }>
-const GraphqlBody = Schema.Struct({
-  query: Schema.NonEmptyString,
-  variables: Schema.Record(Schema.String, Schema.Unknown)
-})
 const FixtureLabel = Schema.Struct({ id: GithubLabelNodeId, name: GithubLabelName, description: Schema.NonEmptyString })
 type FixtureLabel = typeof FixtureLabel.Type
 
@@ -152,18 +149,27 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
       return yield* badRequest("foreign issue locator")
   })
   const github = Effect.fn("HermeticProvider.github")(function* (input: unknown) {
-    const body = yield* Schema.decodeUnknownEffect(GraphqlBody)(input).pipe(
-      Effect.mapError(() => badRequest("malformed GraphQL request body"))
+    const request = yield* decodeHermeticGraphqlRequest(input).pipe(
+      Effect.mapError(() => badRequest("unsupported or malformed named GraphQL request"))
     )
-    const operation = /^(?:query|mutation) ([A-Za-z]+)\(/u.exec(body.query)?.[1]
-    const request = yield* Schema.decodeUnknownEffect(GithubGraphqlRequest)(
-      operation === "ResolveIssue"
-        ? { _tag: operation, target: { ...body.variables, _tag: "GithubIssue" } }
-        : { ...body.variables, _tag: operation }
-    ).pipe(Effect.mapError(() => badRequest("unsupported or malformed named GraphQL request")))
     yield* requireRequestIdentity(request)
     yield* count(request._tag)
     const data = yield* Match.valueTags(request, {
+      ReadGraphBatch: (batch) =>
+        Effect.gen(function* () {
+          const fields = yield* Effect.forEach(batch.reads, (read) =>
+            requireRequestIdentity(read).pipe(
+              Effect.andThen(
+                Match.valueTags(read, {
+                  ReadIssue: graphHandlers.ReadIssue,
+                  ReadBlockedBy: graphHandlers.ReadBlockedBy,
+                  ReadSubIssues: graphHandlers.ReadSubIssues
+                })
+              )
+            )
+          )
+          return Object.fromEntries(fields.map((field, index) => [`field${index}`, field.node]))
+        }),
       ResolveIssue: () => Effect.succeed({ repository: { id: repositoryId, issue: { id: issueId } } }),
       ResolveRepository: () => Effect.succeed({ repository: { id: repositoryId } }),
       ...graphHandlers,

@@ -67,6 +67,9 @@ interface GithubTargetClosureReadOperations<
   Issue extends GithubTargetClosureIssue,
   Failure
 > extends GithubReadFailureBoundary<Failure> {
+  readonly preparePending?: (
+    pending: ReadonlyArray<{ readonly expandChildren: boolean; readonly issueNodeId: GithubIssueNodeId }>
+  ) => Effect.Effect<void, Failure>
   readonly readConnection: (
     issueNodeId: GithubIssueNodeId,
     relation: GithubIssueRelation
@@ -311,6 +314,7 @@ export function traverseGithubTargetClosure<Issue extends GithubTargetClosureIss
     }
 
     while (scratch.pending.length > 0) {
+      if (boundary.preparePending !== undefined) yield* boundary.preparePending(scratch.pending)
       const next = Option.getOrThrow(Option.fromUndefinedOr(scratch.pending.shift()))
       const issue = yield* readClosureIssue(scratch, next.issueNodeId, boundary)
       yield* validateObservedParent(scratch, issue, boundary.invalid)
