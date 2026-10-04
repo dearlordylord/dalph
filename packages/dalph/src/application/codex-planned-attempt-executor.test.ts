@@ -7019,7 +7019,9 @@ it.live("does not schedule reconciliation after an exact hint meets a contradict
   Effect.scoped(
     Effect.gen(function* () {
       const hints = yield* PubSub.unbounded<CodexTurnCompletedHint>()
+      const censusObserved = yield* Deferred.make<void>()
       const harness = makeHarness({
+        afterActivityCensus: () => Deferred.succeed(censusObserved, undefined).pipe(Effect.asVoid),
         lifecycleHints: PubSub.subscribe(hints).pipe(
           Effect.map((subscription) =>
             Stream.unfold(undefined, () =>
@@ -7037,7 +7039,7 @@ it.live("does not schedule reconciliation after an exact hint meets a contradict
         harness.complete("{invalid}")
         harness.setActivityCensus({ _tag: "Contradictory", detail: "contradictory process identity" })
         yield* PubSub.publish(hints, exactCompletionHint())
-        yield* Effect.sleep("50 millis")
+        yield* Deferred.await(censusObserved).pipe(Effect.timeout("2 seconds"))
         const reads = harness.resumeCwds.length + harness.threadReads()
         expect(reads).toBeGreaterThan(0)
         yield* Effect.sleep("1100 millis")
