@@ -309,6 +309,52 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   return { inputs: [...new Set(paths)], transientCoordinationRoots: [...new Set(transientCoordinationRoots)] }
 }
 
+/** Build/test owners; research reports and editor state are outside candidate inputs.
+ * Update this scope when a command starts consuming another input owner.
+ */
+const verificationSourceRoots = (root) =>
+  [
+    "src",
+    "packages",
+    "scripts",
+    "specs",
+    "test",
+    "patches",
+    "prototypes/reducer-lab",
+    "docs",
+    "node_modules",
+    ".github",
+    ".husky",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "mise.toml",
+    "tsconfig.json",
+    "tsconfig.base.json",
+    "tsconfig.lint.json",
+    "tsconfig.artifacts.json",
+    ...["vite", "vitest"].flatMap((tool) =>
+      ["ts", "mts", "cts", "js", "mjs", "cjs"].map((extension) => `${tool}.config.${extension}`)
+    ),
+    "dprint.json",
+    "knip.jsonc",
+    "lychee.toml",
+    "oxlint-complexity-suppressions.json",
+    "oxlint.complexity.json",
+    ".oxlintrc.json",
+    ".jscpd.json",
+    ".gitleaks.toml",
+    ".editorconfig",
+    ".eslintrc",
+    ".gitignore",
+    ".npmrc",
+    ".env",
+    ".env.local",
+    ".env.test",
+    "README.md",
+    "AGENTS.md"
+  ].map((path) => join(root, path))
+
 const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvocation, worktree }) => {
   const root = realpathSync(worktree)
   if (!Array.isArray(logicalInvocation.toolExecutables))
@@ -363,6 +409,7 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
   return {
     commonConfig,
     root,
+    sourceRoots: verificationSourceRoots(root),
     tools,
     gitInputs,
     configurations,
@@ -385,7 +432,7 @@ const stagedIndexEntries = (root, environment) => {
 const snapshot = ({ effectiveEnvironment, layout, logicalInvocation }) => {
   const index = stagedIndexEntries(layout.root, effectiveEnvironment)
   const head = git(layout.root, ["rev-parse", "HEAD"], effectiveEnvironment).trim()
-  const source = manifest([layout.root], layout.sourceExclusions)
+  const source = manifest(layout.sourceRoots, layout.sourceExclusions)
   const gitConfiguration = candidateGitConfiguration(layout.root, effectiveEnvironment)
   const projectGitConfiguration = (entries) =>
     entries.map((entry) =>
@@ -423,7 +470,7 @@ export const startInputGuard = async ({
 }) => {
   const layout = inputLayout({ worktree, logicalInvocation, effectiveEnvironment, generatedOutputRoots })
   const observer = await startInputObserver({
-    roots: [layout.root, ...layout.gitInputs, ...layout.tools, ...layout.configurations],
+    roots: [...layout.sourceRoots, ...layout.gitInputs, ...layout.tools, ...layout.configurations],
     excludedRoots: layout.sourceExclusions,
     protectedRoots: layout.gitInputs,
     replaceableRoots: [],

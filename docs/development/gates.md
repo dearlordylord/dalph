@@ -234,3 +234,23 @@ Ordinary `check:all` runs every selected stage once for its exact candidate.
 Interrupted runs retain custody until reconciliation and restart without prefix
 credit. Standalone formal reuse is governed separately by
 [formal verification](formal.md#formal-reuse-and-handoff).
+
+
+### Verification input scope
+
+The quality input guard observes the build/test owners declared in
+[`gate-resume-inputs.mjs`](../../scripts/gate-resume-inputs.mjs), using the same
+roots for filesystem observation and content snapshots. Source and workspace
+packages, scripts, maintained documentation, specifications, the maintained
+Reducer Lab, test fixtures, dependencies and build/test configuration remain
+inputs. Dirty files, new files under these roots, deletion and edit/restore
+remain observable. Update the declared roots when commands acquire a new input
+owner. Independent `research/` content, root reports such as `REPORT.md`, editor
+state and unrelated `quint-specs/quint.lock` files do not invalidate quality
+qualification. Git candidate/index authority, external tools and effective
+configuration keep their existing independent guards; committing or staging
+while qualifying a frozen candidate can still invalidate it.
+
+This selection changes verification tooling only; Dalph runtime behavior and
+its accepted operational scenarios are unchanged. Formal input policy owns its
+separate model/toolchain scope.
