@@ -9,6 +9,7 @@ import { installApplicationExitSignalAdapter, type ApplicationExitSignalBoundary
 import {
   encodeRunningHostEnvelope,
   LocalHostAddress,
+  RefreshInterest,
   type RunningHostError,
   type RunningHostEnvelope,
   runningHostFailureEnvelope
@@ -192,9 +193,58 @@ export const makeRunningHostCommands = <E, R>(
           Effect.provide(outputLayer)
         )
     )
+  const refresh = Command.make(
+    "refresh",
+    {
+      host: Flag.string("host"),
+      run: Flag.string("run"),
+      json: Flag.boolean("json"),
+      wholeGraph: Flag.boolean("whole-graph"),
+      tasks: Flag.string("task").pipe(Flag.atLeast(0))
+    },
+    ({ host, json, run, tasks, wholeGraph }) =>
+      Effect.gen(function* () {
+        if (!json)
+          return yield* Effect.fail<RunningHostError>({
+            _tag: "InvalidRequest",
+            fieldPath: "/json",
+            code: "JsonRequired"
+          })
+        if (wholeGraph === tasks.length > 0)
+          return yield* Effect.fail<RunningHostError>({
+            _tag: "InvalidRequest",
+            fieldPath: "/interest",
+            code: "RefreshInterestRequired"
+          })
+        const interest = yield* Schema.decodeUnknownEffect(RefreshInterest)(
+          wholeGraph ? { _tag: "WholeGraph" } : { _tag: "AdvisoryTasks", taskIds: tasks },
+          { onExcessProperty: "error" }
+        ).pipe(
+          Effect.mapError(
+            (): RunningHostError => ({ _tag: "InvalidRequest", fieldPath: "/interest", code: "RequestSchemaInvalid" })
+          )
+        )
+        const decoded = yield* decodeClient(host, run)
+        if (decoded.runId === null)
+          return yield* Effect.fail<RunningHostError>({
+            _tag: "InvalidRequest",
+            fieldPath: "/run",
+            code: "RunRequired"
+          })
+        yield* presentEnvelope(yield* callRunningHost(decoded.address, decoded.runId, { _tag: "Refresh", interest }))
+      }).pipe(
+        Effect.catch((error) =>
+          error instanceof DalphCommandExit
+            ? Effect.fail(error)
+            : presentEnvelope(runningHostFailureEnvelope(null, error))
+        ),
+        Effect.provide(outputLayer)
+      )
+  )
   const attach = Command.make("attach").pipe(
     Command.withSubcommands([
       descriptor,
+      refresh,
       attached("snapshot"),
       attached("control"),
       attached("start"),

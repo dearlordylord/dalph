@@ -70,7 +70,13 @@ const providerBodyFor = (request: GithubGraphqlRequest) => {
 export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(function* (
   builtEntry: string,
   includeBlockedChildren = false,
-  paused?: PausedRunningHostFixture
+  paused?: PausedRunningHostFixture,
+  discovery?: {
+    readonly startupIncludesE?: boolean
+    readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+    readonly onRootGraphRead?: () => Effect.Effect<void>
+    readonly onActivationIdle?: () => Effect.Effect<void>
+  }
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const git = yield* GitCommand
@@ -189,7 +195,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const rootNode = hermeticQualificationTrackerIdentity.issueNodeId
   const childB = GithubIssueNodeId.make("running-host-B")
   const childC = GithubIssueNodeId.make("running-host-C")
-  const nodeIds = [rootNode, childB, childC]
+  const childE = GithubIssueNodeId.make("running-host-E")
+  const includesE = yield* Ref.make(discovery?.startupIncludesE === true)
+  const nodeIds = [rootNode, childB, childC, childE]
   const taskIds = nodeIds.map((node) => githubTaskIdFor(hermeticQualificationTrackerIdentity.repositoryNodeId, node))
   const trackerCalls = yield* Ref.make(0)
   const gitCalls = yield* Ref.make(0)
@@ -208,13 +216,23 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
           }
         }
       })
-      if (request._tag === "ReadSubIssues")
+      if (request._tag === "ReadSubIssues") {
+        if (request.issueNodeId === rootNode && discovery?.onRootGraphRead !== undefined)
+          yield* discovery.onRootGraphRead()
         return connection(
           "subIssues",
-          includeBlockedChildren && request.issueNodeId === rootNode ? [childB, childC] : []
+          includeBlockedChildren && request.issueNodeId === rootNode
+            ? [childB, childC, ...((yield* Ref.get(includesE)) ? [childE] : [])]
+            : []
         )
+      }
       if (includeBlockedChildren && request._tag === "ReadBlockedBy")
-        return connection("blockedBy", request.issueNodeId === childC ? [rootNode, childB] : [])
+        return connection(
+          "blockedBy",
+          request.issueNodeId === childC
+            ? [rootNode, childB, ...((yield* Ref.get(includesE)) ? [childE] : [])]
+            : request.issueNodeId === childE ? [rootNode] : []
+        )
       if (includeBlockedChildren && request._tag === "ReadIssue" && request.issueNodeId !== rootNode)
         return {
           body: {
@@ -229,6 +247,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
               }
             }
           }
+
         }
       if (includeBlockedChildren && request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNode) {
         return yield* Effect.die("blocked child must not reach a work-specification read")
@@ -250,6 +269,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const ownerReady = yield* Deferred.make<RunReactivationOwner["Service"]>()
   const productionGraph = productionRepositoryHostGraph({
     ...reactivationObserversFor(paused),
+    ...(discovery?.onTimerStateChange === undefined ? {} : { onTimerStateChange: discovery.onTimerStateChange }),
+    ...(discovery?.onActivationIdle === undefined ? {} : { onActivationHandoffIdle: discovery.onActivationIdle }),
     githubRequestCircuitMaxRequests: 2000,
     onActivationFinalizationStart: () =>
       Deferred.succeed(activationFinalizing, undefined).pipe(Effect.andThen(Deferred.await(releaseObservationCut))),
@@ -269,7 +290,12 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const graph = {
     ...productionGraph,
     ...(paused === undefined
-      ? {}
+      ? {
+          foundation: (configuration: ProductionRepositoryHostConfiguration) =>
+            productionGraph
+              .foundation(configuration)
+              .pipe(Layer.tap((context) => Deferred.succeed(pausedStore, Context.get(context, JournalStore))))
+        }
       : {
           foundation: (configuration: ProductionRepositoryHostConfiguration) =>
             journalStoreCapabilities(
@@ -327,7 +353,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     configuration,
     graph,
     taskIds,
+    authorE: Ref.set(includesE, true),
     bootstrap: Deferred.await(bootstrapReady),
+    readHistory: (runId: RunId) => Deferred.await(pausedStore).pipe(Effect.flatMap((store) => store.read(runId))),
     readPausedHistory: Deferred.await(pausedStore).pipe(
       Effect.flatMap((store) => store.read(RunId.make("paused-client-run")))
     ),

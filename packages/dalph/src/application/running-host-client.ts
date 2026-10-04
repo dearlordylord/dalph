@@ -21,26 +21,27 @@ const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], Read
   ReadSnapshot: ["NotReady", "Ready", "Closed"],
   ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
   StartWork: ["WakeSubmitted"],
+  Refresh: ["RefreshSubmitted"],
   Unpause: ["UnpauseApplied"]
 }
 const compatibleFailures: Readonly<
   Record<RunningHostError["_tag"], ReadonlyArray<RunningHostRequest["operation"]["_tag"]>>
 > = {
   UnpausePartiallyApplied: ["Unpause"],
-  RunClosed: ["StartWork", "Unpause"],
+  RunClosed: ["StartWork", "Unpause", "Refresh"],
   ReadFailed: ["ReadSnapshot", "ReadRunControl"],
   ProjectionFailed: ["ReadSnapshot", "ReadRunControl"],
-  CommandFailed: ["StartWork", "Unpause"],
-  CommandOutcomeUnknown: ["StartWork", "Unpause"],
-  FrameTooLarge: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  HostClosing: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  HostInstanceMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  HostUnavailable: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  InvalidRequest: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  ProtocolVersionUnsupported: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  RunMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  TransportFailed: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"],
-  WriteTimedOut: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause"]
+  CommandFailed: ["StartWork", "Unpause", "Refresh"],
+  CommandOutcomeUnknown: ["StartWork", "Unpause", "Refresh"],
+  FrameTooLarge: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  HostClosing: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  HostInstanceMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  HostUnavailable: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  InvalidRequest: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  ProtocolVersionUnsupported: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  RunMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  TransportFailed: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
+  WriteTimedOut: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"]
 }
 const compatibleFailure = (request: RunningHostRequest, error: RunningHostError): boolean =>
   (!("operation" in error) || error.operation === request.operation._tag) &&
@@ -185,7 +186,7 @@ const failureAfterSubmission = (
 ) =>
   runningHostFailureEnvelope(
     correlation,
-    submitted && (operation._tag === "StartWork" || operation._tag === "Unpause")
+    submitted && (operation._tag === "StartWork" || operation._tag === "Unpause" || operation._tag === "Refresh")
       ? {
           _tag: "CommandOutcomeUnknown",
           operation: operation._tag,

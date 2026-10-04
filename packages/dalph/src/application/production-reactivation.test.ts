@@ -3364,3 +3364,22 @@ it.effect("production refresh reconciles an accepted suspension when its respons
     ).toBe(true)
   })
 )
+
+it.effect("a tracker notification without a qualifying executing subject does not invent an executing-work read", () =>
+  Effect.gen(function* () {
+    for (const report of ["SafelySuspended", "Terminal"] as const) {
+      const result = yield* runProductionRefreshHarness({ source: "TrackerNotification", report })
+      expect(result.activeSources).toEqual(["TrackerNotification"])
+      expect(result.executorCalls).toEqual([])
+      expect(
+        result.journalRecords.filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph" &&
+            event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+        )
+      ).toEqual([])
+      expect(result.journalRecords.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    }
+  })
+)

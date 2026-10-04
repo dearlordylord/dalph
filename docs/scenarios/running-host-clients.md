@@ -637,6 +637,42 @@ required future public evidence; the owner issues are implementation scopes.
 | S11 | Override: no host/no client-created history, or host fixed to R. Client uses unavailable address, malformed payload, unsupported version, stale host instance, or Run X. Decode/handshake/identity checks precede operation. | Retry only after correcting configuration/new handshake; never auto-start, switch roots or append. Reject excess fields and remote address. No workflow/provider call in any rejection. | Exact common error union in CLI/MCP, including JSON-RPC versus application distinction. #368 `Unavailable host and wrong Run cause no workflow effects`. |
 | S12 | From shared facts let active lease end with unfinished R. Read/set capacity; then deliberate StartWork may offer ordinary unpaused activation. Separate case accepts Run termination. | Inactive read/set does not activate or synthesize policy; later set retains chosen expected revision. Known terminal returns RunClosed with exact position; racing inactive may remain RunInactive. No reopening/append. Current source may remain open after Accepted. No crash here; response loss follows S5. | RunInactive/RunClosed and passive Pending/Accepted independent from snapshot Closed. #368, #370, #375 `Inactive capacity is explicit and a terminal Run never reopens`. |
 
+## Refresh discovery acceptance ownership
+
+[#371](https://github.com/dearlordylord/dalph/issues/371) adds the public
+`Refresh` operation to the complete host-owned command boundary from #369.
+Both clients decode the same closed `RefreshInterest` alternatives. The host
+passes only `TrackerNotification` to the existing owner; IDs are echoed as
+requested interest, never passed to tracker graph readers or work selection.
+
+The maintained recorded cassette **trackerRefreshDiscoveryPrefix** is generated
+from the real Git/SQLite/production-host fixture in
+[`running-host-refresh.acceptance.test.ts`](../../packages/dalph/src/application/running-host-refresh.acceptance.test.ts).
+Its startup, timer, whole-graph CLI/MCP, advisory CLI/MCP and coalesced variants
+record ordinary read intents and qualified observations. Every recording is
+projected and round-tripped through all four existing equivalence checks. This
+is a discovery prefix, not the A/B/E-to-C completion cassette owned by #375.
+The fixture authors E and its explicit blocker in its controlled GitHub adapter;
+the public hint never authors tracker data.
+
+| Owned scenario | Maintained assertion and boundary |
+| --- | --- |
+| S6 startup/timer discovery | `tracker edits appear through Startup/Timer as complete qualified E-to-C facts, independently of submission`: no notification, complete rooted observation, intent before the provider read, accepted E-to-C blocker, unchanged root and one Begin. |
+| S6 public active discovery | The same CLIWhole/CLIAdvisory/MCPWhole/MCPAdvisory variants return only `RefreshSubmitted { interest }` while the graph provider is held. Later accepted observations and independently read snapshots show all four tasks and the blocker. Advisory C/E plus an outside-root ID neither narrow coverage nor expand scope. |
+| S6 idle/coalesced owner | Discovery variants wait for the actual initial idle handoff before submitting; Coalesced submits both clients repeatedly while the read is held, without another concurrent read, and permits at most one trailing executing-work read. |
+| S6 no executing subject | [`production-reactivation.test.ts`](../../packages/dalph/src/application/production-reactivation.test.ts): `a tracker notification without a qualifying executing subject does not invent an executing-work read`, with safely suspended and terminal attempt reports. An ordinary establishment read remains possible; no executor command or Run termination is inferred. |
+| S4 public paused refresh | CLI/MCP `public refresh preserves durable Pause without timer, polling, journal append or fresh work`: both interest forms, real paused owner/SQLite, then two hours of controlled time; zero tracker/Git calls, timer starts, Begin or control append. Wake/Unpause remains #369's scope. |
+| S11/S12 refresh rejection | Both clients reject wrong Run, closing and known terminal before notification, retaining the exact accepted terminal position. Native malformed-interest/task-ID and extra-root/graph tests assert zero command/control effects. Closed schemas reject missing, conflicting and duplicate advisory interests; CLI unknown flags and malformed MCP calls retain their transport-specific parser failures. |
+| S12 stopped-owner race | Each native client captures an unterminated control read, then the real owner completes and stops before admission. Submission may still succeed; the accepted terminal journal remains identical and tracker calls do not increase. |
+| Refresh result parity | [`running-host-client-parity.test.ts`](../../packages/dalph/src/application/running-host-client-parity.test.ts) compares native CLI/MCP normalized refresh failures, including both unknown-outcome phases; inconsistent replies remain unknown without retry. Schema/CLI/MCP tests separately own decoding and advertised tools. |
+
+No correlated refresh receipt, synchronous read promise, task publication barrier,
+new retry policy or authority is introduced. Temporary `GraphNotEstablished`
+publications may occur during subsequent reads; discovery tests observe later
+publications and read snapshots independently. Accepted `Completed` after all
+A/B/E and C deliveries remains #375, blocked on #367; this prefix does not claim
+that suffix.
+
 ## Bounded implementation split and qualification
 
 Use one reusable production-host fixture with real Git, SQLite, coordinator,

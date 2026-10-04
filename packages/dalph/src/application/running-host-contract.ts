@@ -78,14 +78,30 @@ export const RunningHostReady = Schema.TaggedStruct("HostReady", {
   descriptor: RunningHostDescriptor
 })
 
-const Operation = Schema.TaggedUnion({ ReadSnapshot: {}, ReadRunControl: {}, StartWork: {}, Unpause: {} })
-const CommandOperation = Schema.Literals(["StartWork", "Unpause"])
+/** Requested interest only: never tracker facts, graph coverage, root expansion or task selection. */
+export const RefreshInterest = Schema.TaggedUnion({
+  WholeGraph: {},
+  AdvisoryTasks: {
+    taskIds: Schema.NonEmptyArray(TaskId).check(
+      Schema.makeFilter((ids) => new Set(ids).size === ids.length || "advisory task IDs must be distinct")
+    )
+  }
+})
+export type RefreshInterest = typeof RefreshInterest.Type
+const Operation = Schema.TaggedUnion({
+  ReadSnapshot: {},
+  ReadRunControl: {},
+  StartWork: {},
+  Unpause: {},
+  Refresh: { interest: RefreshInterest }
+})
+const CommandOperation = Schema.Literals(["StartWork", "Unpause", "Refresh"])
 const requestFields = { hostInstanceId: HostInstanceId, requestId: RequestId, runId: RunId, operation: Operation }
 export const RunningHostRequest = Schema.Struct({ protocolVersion: Schema.Literal(1), ...requestFields })
 export type RunningHostRequest = typeof RunningHostRequest.Type
 /** Only explicit commands may acquire host operation ownership. */
 export type RunningHostCommandRequest = Omit<RunningHostRequest, "operation"> & {
-  readonly operation: { readonly _tag: "StartWork" } | { readonly _tag: "Unpause" }
+  readonly operation: Extract<RunningHostRequest["operation"], { readonly _tag: "StartWork" | "Unpause" | "Refresh" }>
 }
 const VersionedRequest = Schema.Struct({ protocolVersion: SafeInteger, ...requestFields })
 
@@ -219,10 +235,14 @@ const Value = Schema.Union([
   RunningHostSnapshot,
   RunningHostRunControl,
   Schema.TaggedStruct("WakeSubmitted", {}),
+  Schema.TaggedStruct("RefreshSubmitted", { interest: RefreshInterest }),
   Schema.TaggedStruct("UnpauseApplied", { ordinal: ControlDirectionApplicationOrdinal, acceptedAt: TraceCursor })
 ])
 export type RunningHostValue = typeof Value.Type
-export type RunningHostCommandValue = Extract<RunningHostValue, { readonly _tag: "WakeSubmitted" | "UnpauseApplied" }>
+export type RunningHostCommandValue = Extract<
+  RunningHostValue,
+  { readonly _tag: "WakeSubmitted" | "UnpauseApplied" | "RefreshSubmitted" }
+>
 const RunningHostEnvelopeShape = Schema.Union([
   Schema.Struct({
     protocolVersion: Schema.Literal(1),

@@ -5,6 +5,7 @@ import { Effect, FiberMap, Schema, Stream } from "effect"
 import {
   type LocalHostAddress,
   RequestId,
+  RefreshInterest,
   RunningHostEnvelope,
   type RunningHostDescriptor,
   type RunningHostError,
@@ -85,7 +86,13 @@ const Initialize = Schema.Struct({
   clientInfo: Schema.Struct({ name: Schema.String, version: Schema.String, title: Schema.optionalKey(Schema.String) })
 })
 const ToolArguments = Schema.Struct({ runId: RunId })
-const ToolCall = Schema.Struct({ name: Schema.String, arguments: ToolArguments })
+const ToolCall = Schema.Union([
+  Schema.Struct({ name: Schema.String, arguments: ToolArguments }),
+  Schema.Struct({
+    name: Schema.Literal("dalph_refresh"),
+    arguments: Schema.Struct({ runId: RunId, interest: RefreshInterest })
+  })
+])
 const ResourceRead = Schema.Struct({ uri: Schema.String })
 const document = Schema.toJsonSchemaDocument(RunningHostEnvelope, { additionalProperties: false })
 const outputSchema = { ...document.schema, type: "object", $defs: document.definitions }
@@ -95,7 +102,17 @@ const inputSchema = {
   required: ["runId"],
   additionalProperties: false
 }
+const refreshInput = Schema.toJsonSchemaDocument(Schema.Struct({ runId: RunId, interest: RefreshInterest }), {
+  additionalProperties: false
+})
 const tools = [
+  {
+    name: "dalph_refresh",
+    description:
+      "Submit a tracker notification with whole-graph or advisory task interest; preserves Pause and promises no completed read.",
+    inputSchema: { ...refreshInput.schema, $defs: refreshInput.definitions },
+    outputSchema
+  },
   {
     name: "dalph_read_snapshot",
     description: "Read one coherent passive publication from the selected Run.",
@@ -234,17 +251,19 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
             Effect.result
           )
           if (call._tag === "Failure")
-            return yield* reject(rpcInvalidParams, "Tool arguments must contain only the exact RunId.")
+            return yield* reject(rpcInvalidParams, "Tool arguments must satisfy the closed operation schema.")
           const operation =
-            call.success.name === "dalph_read_snapshot"
-              ? { _tag: "ReadSnapshot" as const }
-              : call.success.name === "dalph_read_run_control"
-                ? { _tag: "ReadRunControl" as const }
-                : call.success.name === "dalph_start_work"
-                  ? { _tag: "StartWork" as const }
-                  : call.success.name === "dalph_unpause"
-                    ? { _tag: "Unpause" as const }
-                    : null
+            call.success.name === "dalph_refresh" && "interest" in call.success.arguments
+              ? { _tag: "Refresh" as const, interest: call.success.arguments.interest }
+              : call.success.name === "dalph_read_snapshot"
+                ? { _tag: "ReadSnapshot" as const }
+                : call.success.name === "dalph_read_run_control"
+                  ? { _tag: "ReadRunControl" as const }
+                  : call.success.name === "dalph_start_work"
+                    ? { _tag: "StartWork" as const }
+                    : call.success.name === "dalph_unpause"
+                      ? { _tag: "Unpause" as const }
+                      : null
           if (operation === null) return yield* reject(rpcInvalidParams, "Unknown tool")
           sequence += 1
           const execute = Effect.gen(function* () {
@@ -261,7 +280,7 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
               isError: envelope.result._tag === "Failure"
             })
           })
-          if (operation._tag === "StartWork" || operation._tag === "Unpause") {
+          if (operation._tag === "StartWork" || operation._tag === "Unpause" || operation._tag === "Refresh") {
             if (yield* FiberMap.has(commands, id))
               return yield* reject(rpcInvalidRequest, "Request ID is already pending")
             yield* FiberMap.run(commands, id, execute, { startImmediately: true })

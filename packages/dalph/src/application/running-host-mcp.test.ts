@@ -138,6 +138,7 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       capabilities: { tools: {}, resources: {} }
     })
     expect(replies[1].result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "dalph_refresh",
       "dalph_read_snapshot",
       "dalph_read_run_control",
       "dalph_start_work",

@@ -190,3 +190,34 @@ it("rejects command evidence with foreign Run, unsafe ordinal or wrong request c
   ])
     expect(() => decode(envelope(error))).toThrow()
 })
+
+it.effect("refresh decodes only whole graph or distinct advisory IDs without client graph or root facts", () =>
+  Effect.gen(function* () {
+    for (const interest of [{ _tag: "WholeGraph" }, { _tag: "AdvisoryTasks", taskIds: ["C", "E"] }]) {
+      const refresh = { ...request, operation: { _tag: "Refresh", interest } }
+      expect(yield* decodeRunningHostRequest(refresh, descriptor)).toEqual(refresh)
+    }
+    for (const interest of [
+      { _tag: "Unknown" },
+      { _tag: "AdvisoryTasks", taskIds: [] },
+      { _tag: "AdvisoryTasks", taskIds: [""] },
+      { _tag: "AdvisoryTasks", taskIds: [1] },
+      { _tag: "AdvisoryTasks", taskIds: ["C", "C"] },
+      { _tag: "WholeGraph", taskIds: ["C"] },
+      { _tag: "WholeGraph", root: "E" },
+      { _tag: "WholeGraph", graph: {} }
+    ])
+      expect(
+        yield* decodeRunningHostRequest({ ...request, operation: { _tag: "Refresh", interest } }, descriptor).pipe(
+          Effect.flip
+        )
+      ).toMatchObject({ _tag: "InvalidRequest" })
+    for (const extra of [{ root: "E" }, { graph: {} }, { taskIds: ["C"] }])
+      expect(
+        yield* decodeRunningHostRequest(
+          { ...request, operation: { _tag: "Refresh", interest: { _tag: "WholeGraph" }, ...extra } },
+          descriptor
+        ).pipe(Effect.flip)
+      ).toMatchObject({ _tag: "InvalidRequest" })
+  })
+)

@@ -125,12 +125,17 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         hostInstanceId: descriptor.hostInstanceId,
         cutoff: "AdmissionClosed"
       })
-    if (request.operation._tag === "StartWork" || request.operation._tag === "Unpause") {
+    if (
+      request.operation._tag === "StartWork" ||
+      request.operation._tag === "Unpause" ||
+      request.operation._tag === "Refresh"
+    ) {
+      const commandOperation = request.operation._tag
       const control = yield* observation.readRunControl.pipe(
         Effect.mapError(
           (): RunningHostError => ({
             _tag: "CommandFailed",
-            operation: request.operation._tag === "StartWork" ? "StartWork" : "Unpause",
+            operation: commandOperation,
             stage: "PreAdmission",
             causeTag: "RunControlUnavailable",
             detail: "Accepted Run control is unavailable."
