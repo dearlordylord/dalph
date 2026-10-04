@@ -1,6 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only a local protocol fixture, never OpenAI. */
 import nodeProcess from "node:process"
 import { userInfo } from "node:os"
+import { resolveCodexProviderHome } from "./codex-provider-home.js"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Ref, Schema } from "effect"
@@ -39,7 +40,6 @@ import { controlledCodexProcessNativeLayer, nodeCodexProcessNativeService } from
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import { CodexStartupAdmissionRecord, openCodexStartupAdmission } from "./codex-startup-admission.js"
 import { CodexServerStartupId } from "./codex-server-startup-record.js"
-import { resolveCodexProviderHome } from "./codex-provider-home.js"
 import { ExecutorModelAlias } from "./executor-profile.js"
 
 const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
@@ -468,7 +468,7 @@ it.effect("starts codex app-server without provider credential or CODEX_HOME ove
         )
         expect(captured.arguments).toEqual([...codexAppServerLaunchArguments])
         expect(captured.codexHome).toBe(
-          yield* fileSystem.realPath(
+          yield* resolveCodexProviderHome(
             nodeProcess.env["CODEX_HOME"] ?? path.join(nodeProcess.env["HOME"] ?? userInfo().homedir, ".codex")
           )
         )
@@ -521,7 +521,7 @@ it.effect("launches a selected Codex model without changing provider or credenti
         )
         expect(captured.arguments).toEqual(expectedArguments)
         expect(captured.codexHome).toBe(
-          yield* fileSystem.realPath(
+          yield* resolveCodexProviderHome(
             nodeProcess.env["CODEX_HOME"] ?? path.join(nodeProcess.env["HOME"] ?? userInfo().homedir, ".codex")
           )
         )
