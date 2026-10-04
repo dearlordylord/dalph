@@ -319,6 +319,9 @@ const verificationSourceRoots = (root) =>
     "packages",
     "scripts",
     "specs",
+    // A formal server writing its unmanaged default output into the candidate
+    // must still invalidate handoff; managed output lives under gate custody.
+    "_apalache-out",
     "test",
     "patches",
     "prototypes/reducer-lab",

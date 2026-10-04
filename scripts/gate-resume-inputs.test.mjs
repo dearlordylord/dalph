@@ -1477,9 +1477,9 @@ void test("moving a root configuration away and restoring it invalidates qualifi
   }
 })
 
-for (const [kind, makeLink] of [
-  ["symbolic", symlinkSync],
-  ["hard", linkSync]
+for (const { kind, makeLink } of [
+  { kind: "symbolic", makeLink: symlinkSync },
+  { kind: "hard", makeLink: linkSync }
 ]) {
   void test(`a root configuration ${kind} link observes target edits restored before validation`, async () => {
     const f = fixture()

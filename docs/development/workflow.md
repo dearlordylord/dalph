@@ -21,6 +21,11 @@
      Keep one composed replay for each distinct ordering or authority requirement;
      put additional readback assertions into that replay instead of starting the
      same graph again.
+     When a verification helper gains an import, update its shared copied-runtime
+     fixture and run the composed consumer tests; an isolated helper test cannot
+     prove that dependency closure. After JavaScript fixture changes, run the
+     full type-aware lint census once: selecting only those files can omit types
+     discovered in the complete program.
   3. Run one bounded diagnostic that supplies the recorded observation. A passing
      isolated test leaves an order-dependent cause unresolved. Choose a different
      observation when the diagnostic cannot discriminate; an unchanged rerun,
