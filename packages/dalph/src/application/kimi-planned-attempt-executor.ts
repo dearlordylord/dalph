@@ -21,7 +21,7 @@ import {
   samePlannedAttemptExecutorProjection
 } from "@dalph/contracts"
 import { EvidenceStore, GitCommand } from "@dalph/orchestrator"
-import { Context, Crypto, Effect, Layer, Option, Ref, Stream } from "effect"
+import { Context, Crypto, Data, Effect, Layer, Option, Ref, Stream } from "effect"
 import { KimiAcpClient, KimiAcpFailure, type KimiAcpSessionId, type KimiAcpSessionObservation } from "./kimi-acp.js"
 import type { KimiAttemptPrivatePhase, KimiAttemptStoreFailure } from "./kimi-attempt-store.js"
 import { KimiAttemptPrivateRecord, KimiAttemptPrivateStore } from "./kimi-attempt-store.js"
@@ -72,13 +72,29 @@ const semanticTaskText = (body: string): string => `${body}\n\n${semanticCandida
 
 const textFrom = (observation: KimiAcpSessionObservation): string | undefined => observation.lastMessage
 
+/** Absence preserves legacy prose completion; an explicit invalid proposal fails closed. */
+type TerminalCandidate = Data.TaggedEnum<{
+  NoCandidate: Record<never, never>
+  InvalidCandidate: Record<never, never>
+  Candidate: { readonly commit: GitCommitSha }
+}>
+const TerminalCandidate = Data.taggedEnum<TerminalCandidate>()
+
 const commitFromMessage = (
   message: string | undefined,
   correlation: PlannedAttemptExecutorCorrelation
-): GitCommitSha | undefined => {
-  if (message === undefined) return undefined
+): TerminalCandidate => {
+  if (message === undefined || message.trim() === "") return TerminalCandidate.NoCandidate()
   const candidate = decodeOwnedSemanticCandidate(message, correlation)
-  return Option.isSome(candidate) ? candidate.value.commit : undefined
+  if (Option.isSome(candidate)) return TerminalCandidate.Candidate({ commit: candidate.value.commit })
+  try {
+    JSON.parse(message)
+    return TerminalCandidate.InvalidCandidate()
+  } catch {
+    return ["{", "[", '"', "`"].some((prefix) => message.trim().startsWith(prefix))
+      ? TerminalCandidate.InvalidCandidate()
+      : TerminalCandidate.NoCandidate()
+  }
 }
 
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -137,22 +153,20 @@ const resultForTerminal = Effect.fn("KimiPlannedAttemptExecutor.resultForTermina
   crypto: Option.Option<Crypto.Crypto>
 ): Effect.fn.Return<PlannedAttemptExecutorResult, unknown, never> {
   const correlation = correlationForContext(state.attempt)
-  const commit = commitFromMessage(textFrom(observation), correlation)
+  const candidate = commitFromMessage(textFrom(observation), correlation)
+  if (candidate._tag === "InvalidCandidate") return PlannedAttemptExecutorResult.cases.Failed.make({})
   if (Option.isNone(git) || Option.isNone(evidence) || Option.isNone(crypto)) {
     return PlannedAttemptExecutorResult.cases.Completed.make({})
   }
   const head = yield* readHead(git.value, state.attempt)
   if (Option.isNone(head)) return PlannedAttemptExecutorResult.cases.Failed.make({})
-  const acceptedCommit =
-    commit === undefined
-      ? head.value === state.attempt.baseSha
-        ? undefined
-        : null
-      : head.value === commit
-        ? commit
-        : null
-  if (acceptedCommit === undefined) return PlannedAttemptExecutorResult.cases.Completed.make({})
-  if (acceptedCommit === null) return PlannedAttemptExecutorResult.cases.Failed.make({})
+  if (candidate._tag === "NoCandidate") {
+    return head.value === state.attempt.baseSha
+      ? PlannedAttemptExecutorResult.cases.Completed.make({})
+      : PlannedAttemptExecutorResult.cases.Failed.make({})
+  }
+  const acceptedCommit = candidate.commit
+  if (head.value !== acceptedCommit) return PlannedAttemptExecutorResult.cases.Failed.make({})
   const lineage = yield* git.value.runInWorktree(state.attempt.worktree, [
     "merge-base",
     "--is-ancestor",

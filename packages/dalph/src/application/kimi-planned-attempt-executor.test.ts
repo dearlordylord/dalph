@@ -521,12 +521,13 @@ it.effect("reports no state and maps unknown and provider-failed command boundar
   })
 })
 
-it.effect("ignores malformed terminal commit markers and retains the completed result", () => {
+it.effect("distinguishes legacy prose completion from invalid terminal candidates", () => {
   const markers: ReadonlyArray<{
     readonly label: string
     readonly message: (correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>) => string
   }> = [
     { label: "syntax", message: () => "not-json" },
+    { label: "malformed-json", message: () => '{"version":1,' },
     { label: "non-record", message: () => "null" },
     { label: "missing-correlation", message: () => JSON.stringify({ commit: "a".repeat(40) }) },
     {
@@ -554,7 +555,10 @@ it.effect("ignores malformed terminal commit markers and retains the completed r
             PlannedAttemptExecutorProjection.cases.Exact.make({
               report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
                 correlation,
-                result: PlannedAttemptExecutorResult.cases.Completed.make({})
+                result:
+                  label === "syntax"
+                    ? PlannedAttemptExecutorResult.cases.Completed.make({})
+                    : PlannedAttemptExecutorResult.cases.Failed.make({})
               })
             })
           )
@@ -791,8 +795,8 @@ it.effect("rejects semantic results from another Kimi session or worktree", () =
     ["Session", "Worktree"] as const,
     (foreign) => {
       const controlled = makeService()
-      const { correlation, request } = makeRequest()
-      const boundaries = makeAcceptanceBoundaries(GitCommitSha.make("a".repeat(40)), acceptedDigest)
+      const { attempt, correlation, request } = makeRequest()
+      const boundaries = makeAcceptanceBoundaries(attempt.baseSha, acceptedDigest)
       const service: KimiAcpClientServiceType = {
         ...controlled.service,
         observe: (id) =>
@@ -866,11 +870,14 @@ it.effect("rejects invalid semantic results without a HEAD fallback", () =>
         correlation: { runId: "foreign", attemptId: "foreign" }
       },
       { commit: "a".repeat(40), correlation: { runId: "foreign", attemptId: "foreign" } }
-    ],
-    (payload) => {
+    ].flatMap((payload) => [true, false].map((unchanged) => ({ payload, unchanged }))),
+    ({ payload, unchanged }) => {
       const controlled = makeService()
-      const { correlation, request } = makeRequest()
-      const boundaries = makeAcceptanceBoundaries(GitCommitSha.make("a".repeat(40)), acceptedDigest)
+      const { attempt, correlation, request } = makeRequest()
+      const boundaries = makeAcceptanceBoundaries(
+        unchanged ? attempt.baseSha : GitCommitSha.make("a".repeat(40)),
+        acceptedDigest
+      )
       return Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
         yield* executor.begin(request, { _tag: "InitialDelivery" })

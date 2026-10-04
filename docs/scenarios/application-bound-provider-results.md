@@ -75,7 +75,7 @@ is introduced.
    malformed correlation; never discard a supplied correlation. Sealed Accepted,
    Failed and Completed records keep their existing meaning. In particular a
    sealed Failed is not reparsed as success. Legacy Kimi completion at an
-   unchanged Base remains Completed when no candidate is proposed; changed HEAD
+   unchanged Base remains Completed when no candidate is proposed (absent message or legacy prose). Explicit malformed JSON or an invalid structured candidate is Failed even at unchanged Base; changed HEAD
    without a valid semantic or exactly correlated legacy candidate is Failed,
    never implicitly Accepted. Tests: legacy exact/foreign result
    cases and `preserves a sealed failure after semantic output changes`.
