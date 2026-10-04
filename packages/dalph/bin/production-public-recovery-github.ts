@@ -27,7 +27,7 @@ const observe = (event: unknown) =>
 
 const closedIssue = environment.DALPH_QUALIFICATION_MODE === "terminal"
 
-const graphResponse = (request: GithubGraphqlRequest) =>
+const graphResponse = (request: GithubGraphqlRequest): Effect.Effect<{ readonly body: unknown }> =>
   Match.valueTags(request, {
     AddBlockedBy: () => Effect.die("qualification must not add a blocker"),
     AddIssueComment: () => Effect.die("qualification must not add a comment"),
@@ -106,6 +106,20 @@ const graphResponse = (request: GithubGraphqlRequest) =>
             }
           }
         }
+      }),
+    ReadGraphBatch: (batch) =>
+      Effect.gen(function* () {
+        const fields = yield* Effect.forEach(batch.reads, (read) =>
+          graphResponse(read).pipe(
+            Effect.flatMap((response) =>
+              Schema.decodeUnknownEffect(Schema.Struct({ data: Schema.Struct({ node: Schema.Unknown }) }))(
+                response.body
+              )
+            ),
+            Effect.orDie
+          )
+        )
+        return { body: { data: Object.fromEntries(fields.map((field, index) => [`field${index}`, field.data.node])) } }
       }),
     ReadIssue: (read) =>
       Effect.gen(function* () {

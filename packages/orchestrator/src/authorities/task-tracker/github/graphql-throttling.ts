@@ -21,6 +21,7 @@ export const GithubGraphqlOperation = Schema.Literals([
   "DeleteClaimLabel",
   "FindClaimLabel",
   "ReadBlockedBy",
+  "ReadGraphBatch",
   "ReadIssueDetails",
   "ReadTaskWorkSpecification",
   "ReadIssue",

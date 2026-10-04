@@ -470,3 +470,91 @@ it.effect("loads the GitHub token through injected Effect configuration", () => 
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "configured-token" })))
   )
 })
+
+it.effect("serializes graph fields and independent page cursors into one bounded read-only request", () =>
+  Effect.gen(function* () {
+    const observed = yield* Ref.make<ReadonlyArray<string>>([])
+    const http = HttpClient.make((request) =>
+      Effect.gen(function* () {
+        yield* Ref.update(observed, (all) => [
+          ...all,
+          Schema.decodeUnknownSync(EncodedRequestBody)(request.body.toJSON()).body
+        ])
+        return HttpClientResponse.fromWeb(request, new Response(JSON.stringify({ data: {} }), { status: 200 }))
+      })
+    )
+    yield* Effect.gen(function* () {
+      const client = yield* GithubGraphqlClient
+      yield* client.execute(
+        GithubGraphqlRequest.cases.ReadGraphBatch.make({
+          reads: [
+            GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: GithubIssueNodeId.make("first") }),
+            GithubGraphqlRequest.cases.ReadBlockedBy.make({
+              issueNodeId: GithubIssueNodeId.make("first"),
+              cursor: GithubCursor.make("first-page")
+            }),
+            GithubGraphqlRequest.cases.ReadSubIssues.make({
+              issueNodeId: GithubIssueNodeId.make("second"),
+              cursor: GithubCursor.make("second-page")
+            })
+          ]
+        })
+      )
+    }).pipe(
+      Effect.provide(
+        githubGraphqlClientLayer({ token: Redacted.make("secret") }).pipe(
+          Layer.provide(Layer.succeed(HttpClient.HttpClient, http))
+        )
+      )
+    )
+    const requests = yield* Ref.get(observed)
+    expect(requests).toHaveLength(1)
+    const body = yield* Schema.decodeUnknownEffect(
+      Schema.Struct({ query: Schema.String, variables: Schema.Record(Schema.String, Schema.Unknown) })
+    )(JSON.parse(requests[0] ?? "{}"))
+    expect(body.query).toContain("query ReadGraphBatch")
+    expect(body.query).toContain("field0: node(id: $id0)")
+    expect(body.query).toContain("stateReason(enableDuplicate: true)")
+    expect(body.query).toContain("blockedBy(first: $pageSize, after: $cursor1)")
+    expect(body.query).toContain("subIssues(first: $pageSize, after: $cursor2)")
+    expect(body.variables).toEqual({
+      pageSize: 100,
+      id0: "first",
+      id1: "first",
+      cursor1: "first-page",
+      id2: "second",
+      cursor2: "second-page"
+    })
+    expect(body.query).not.toContain("mutation")
+    expect(requests[0]).not.toContain("secret")
+  })
+)
+
+it.effect("omits unused connection variables from identity-only graph batches", () =>
+  Effect.gen(function* () {
+    const http = HttpClient.make((request) =>
+      Effect.gen(function* () {
+        const body = (yield* Schema.decodeUnknownEffect(EncodedRequestBody)(request.body.toJSON()).pipe(Effect.orDie))
+          .body
+        expect(body).toContain("query ReadGraphBatch($id0: ID!)")
+        expect(body).not.toContain("pageSize")
+        expect(body).not.toContain("cursor")
+        return HttpClientResponse.fromWeb(request, new Response(JSON.stringify({ data: {} }), { status: 200 }))
+      })
+    )
+    yield* Effect.gen(function* () {
+      const client = yield* GithubGraphqlClient
+      yield* client.execute(
+        GithubGraphqlRequest.cases.ReadGraphBatch.make({
+          reads: [GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: GithubIssueNodeId.make("issue") })]
+        })
+      )
+    }).pipe(
+      Effect.provide(
+        githubGraphqlClientLayer({ token: Redacted.make("secret") }).pipe(
+          Layer.provide(Layer.succeed(HttpClient.HttpClient, http))
+        )
+      )
+    )
+  })
+)

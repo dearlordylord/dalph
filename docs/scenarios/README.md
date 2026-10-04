@@ -128,6 +128,7 @@ Git history.
 - [Alice's integration reads the exact configured Git target](target-repository-git-boundary.md)
 - [Alice restarts after GitHub rejects completion with a throttle](throttled-completion-restart.md)
 - [Alice receives an exact, safe qualification artifact](qualified-artifact-publication.md)
+- [Batch complete GitHub tracker graph reads](batch-github-tracker-graph.md)
 - [Qualify real GitHub graph, membership, and claim behavior](qualify-real-github-graph-membership-claims.md)
 - [Qualify GitHub evidence and completion behavior](qualify-github-completion.md)
 - [Qualify real Git lineage, candidate shape, and ref mutation](qualify-real-git-lineage-candidate-ref.md)

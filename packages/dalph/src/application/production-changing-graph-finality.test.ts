@@ -1,3 +1,4 @@
+import { githubGraphqlBatchTestClient } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import { GitCommitSha, RemotePublicationTarget, RemotePublicationEndpoint } from "@dalph/contracts"
 import {
   GitCommand,
@@ -229,60 +230,59 @@ it.live(
             }
           }
         })
-        const github = GithubGraphqlClient.of({
-          execute: (request: GithubGraphqlRequest) =>
-            Effect.gen(function* () {
-              const phase = yield* Ref.get(graphPhase)
-              if (phase === "Initial") {
-                if (request._tag === "ReadSubIssues") return connection(request.issueNodeId, "subIssues", [])
-                return yield* delegateGithub(request)
+        const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
+          Effect.gen(function* () {
+            const phase = yield* Ref.get(graphPhase)
+            if (phase === "Initial") {
+              if (request._tag === "ReadSubIssues") return connection(request.issueNodeId, "subIssues", [])
+              return yield* delegateGithub(request)
+            }
+            if (request._tag === "ReadSubIssues") {
+              if (request.issueNodeId === rootNodeId) {
+                yield* Ref.update(changedGraphReads, (current) => current + 1)
+                yield* Deferred.succeed(changedGraphReadEntered, undefined)
+                return connection(rootNodeId, "subIssues", [childNodeId, independentNodeId])
               }
-              if (request._tag === "ReadSubIssues") {
-                if (request.issueNodeId === rootNodeId) {
-                  yield* Ref.update(changedGraphReads, (current) => current + 1)
-                  yield* Deferred.succeed(changedGraphReadEntered, undefined)
-                  return connection(rootNodeId, "subIssues", [childNodeId, independentNodeId])
-                }
-                return connection(request.issueNodeId, "subIssues", [])
+              return connection(request.issueNodeId, "subIssues", [])
+            }
+            if (request._tag === "ReadBlockedBy") {
+              return connection(
+                request.issueNodeId,
+                "blockedBy",
+                request.issueNodeId === childNodeId ? [blockerNodeId] : []
+              )
+            }
+            if (request._tag === "ReadIssue" && request.issueNodeId !== rootNodeId) {
+              const isChild = request.issueNodeId === childNodeId
+              const isIndependent = request.issueNodeId === independentNodeId
+              if (!isChild && !isIndependent && request.issueNodeId !== blockerNodeId) {
+                return yield* Effect.die(`unexpected changing-graph issue ${request.issueNodeId}`)
               }
-              if (request._tag === "ReadBlockedBy") {
-                return connection(
-                  request.issueNodeId,
-                  "blockedBy",
-                  request.issueNodeId === childNodeId ? [blockerNodeId] : []
-                )
-              }
-              if (request._tag === "ReadIssue" && request.issueNodeId !== rootNodeId) {
-                const isChild = request.issueNodeId === childNodeId
-                const isIndependent = request.issueNodeId === independentNodeId
-                if (!isChild && !isIndependent && request.issueNodeId !== blockerNodeId) {
-                  return yield* Effect.die(`unexpected changing-graph issue ${request.issueNodeId}`)
-                }
-                return {
-                  body: {
-                    data: {
-                      node: {
-                        __typename: "Issue",
-                        id: request.issueNodeId,
-                        parent: isChild || isIndependent ? { id: rootNodeId } : null,
-                        repository: { id: repositoryNodeId },
-                        state: isChild || (isIndependent && phase === "Expanded") ? "OPEN" : "CLOSED",
-                        stateReason: isChild || (isIndependent && phase === "Expanded") ? null : "NOT_PLANNED"
-                      }
+              return {
+                body: {
+                  data: {
+                    node: {
+                      __typename: "Issue",
+                      id: request.issueNodeId,
+                      parent: isChild || isIndependent ? { id: rootNodeId } : null,
+                      repository: { id: repositoryNodeId },
+                      state: isChild || (isIndependent && phase === "Expanded") ? "OPEN" : "CLOSED",
+                      stateReason: isChild || (isIndependent && phase === "Expanded") ? null : "NOT_PLANNED"
                     }
                   }
                 }
               }
-              if (request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNodeId) {
-                yield* Ref.update(forbiddenChildWorkReads, (current) => [
-                  ...current,
-                  `${request._tag}:${request.issueNodeId}`
-                ])
-                return yield* Effect.die("blocked or terminal task reached a work-specification read")
-              }
-              return yield* delegateGithub(request)
-            })
-        })
+            }
+            if (request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNodeId) {
+              yield* Ref.update(forbiddenChildWorkReads, (current) => [
+                ...current,
+                `${request._tag}:${request.issueNodeId}`
+              ])
+              return yield* Effect.die("blocked or terminal task reached a work-specification read")
+            }
+            return yield* delegateGithub(request)
+          })
+        )
         const failures = yield* Ref.make<ReadonlyArray<unknown>>([])
         const graph = productionRepositoryHostGraph({
           githubRequestCircuitMaxRequests: 2_000,
