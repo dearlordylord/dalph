@@ -86,3 +86,15 @@ reread, not a model restart; after the terminal seal, duplicate observations do
 not replace that seal. This scope neither integrates a retained failed candidate
 nor changes publication, cleanup, claims or attempt Base. Explicit recovery is
 owned by #428.
+
+## Real-host qualification
+
+`codex-real-host-qualification.test.ts` supplies identity-free semantic results
+through the real pinned app-server and built Dalph host. Its foreign legacy
+correlation remains an independent negative control. Real crash/restart,
+interruption and application Exit cases retain their existing assertions.
+The escaped/stuck child fixture creates a separate OS session; backgrounding
+a shell in the app-server's own group does not establish the required survivor.
+This fixture correction changes no production process-ownership, shutdown or
+workflow decision. Local qualification exercises all 23 real-host scenarios;
+Linux/macOS hosted qualification remains a separate exact-head obligation.
