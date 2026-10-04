@@ -721,6 +721,7 @@ type CodexAttemptStoreSnapshot = typeof CodexAttemptStoreSnapshot.Type
 const CodexAttemptStoreOperation = Schema.Literals([
   "configure",
   "readAttempt",
+  "readAttemptInventory",
   "writeAttempt",
   "readServerLaunch",
   "writeServerLaunch",
@@ -753,6 +754,8 @@ export const nativeFailureDetail = (failure: CodexAttemptStoreNativeFailure): st
 
 /** Private durable state authority for Codex associations and app-server ownership. */
 export interface CodexAttemptStoreService {
+  /** Reads store-owned custody inventory before admitting a storage-topology change. */
+  readonly hasRetainedAttempts?: () => Effect.Effect<boolean, CodexAttemptStoreFailure>
   readonly readAttempt: (
     runId: RunId,
     attemptId: AttemptId
@@ -980,6 +983,7 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         yield* Ref.set(lease, Option.none())
       })
       return Context.make(CodexAttemptStore, {
+        hasRetainedAttempts: () => Ref.get(attempts).pipe(Effect.map((current) => current.size > 0)),
         readAttempt,
         writeAttempt,
         readServerLaunch,
@@ -1784,7 +1788,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
       ) =>
         Effect.gen(function* () {
           const existing = yield* readLeaseRecord(file).pipe(Effect.result)
-          yield* closeDescriptor(file, "acquireServerLease")
+          // The store scope owns this descriptor, including a refused acquisition.
+          // Closing it here would make its finalizer unlock a closed descriptor.
           if (Result.isFailure(existing)) return yield* existing.failure
           if (Option.isNone(existing.success)) {
             return yield* new CodexAttemptStoreFailure({
@@ -1883,6 +1888,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
           yield* Ref.set(heldLease, Option.none())
         })
       return Context.make(CodexAttemptStore, {
+        hasRetainedAttempts: () =>
+          guard("readAttemptInventory", Ref.get(attempts).pipe(Effect.map((current) => current.size > 0))),
         readAttempt,
         writeAttempt,
         readServerLaunch,

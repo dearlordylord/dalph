@@ -418,6 +418,15 @@ executor records an attempt-local intent, runs the bounded repository helper
 in the exact worktree, and requires its terminal receipt before forwarding
 Begin. An unresolved preparation retains that attempt's fence. The shared
 Codex app-server and independent executor work keep their own lifecycles.
+The production host gives each exact Codex executor attempt its own app-server
+process and launch/lease store. The integrator uses a separate provider.
+Observations, commands, lifecycle subscriptions and work-unit replacement route
+through the same attempt owner. Terminal owners retire after their last user
+leaves; suspended and unresolved owners retain their custody. Host Exit reaches
+all providers through the existing process-local drain registrations.
+The state root from a former shared-provider host refuses admission when it
+contains retained attempts; migration must prove that custody explicitly.
+See [isolated Codex containment](scenarios/isolated-codex-containment.md).
 See [prepare the exact Codex task worktree](scenarios/prepare-exact-codex-task-worktree.md).
 
 The current controlled executor shares Dalph's process lifetime; it does not

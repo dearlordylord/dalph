@@ -133,6 +133,13 @@ database, evidence root, Codex executor-private state directory, and Integrator 
 file must also be pairwise disjoint. Every path below is normalized and
 absolute because it is derived from the absolute `mktemp` root.
 
+The Codex state directory is the custody root: executor attempts use separate
+stores below it, and the integrator has its own provider. Reusing an older root
+with retained shared-provider attempts refuses startup until custody migration
+is proved; keep its records, worktrees and commits intact. See
+[isolated containment and retained-state admission](../scenarios/isolated-codex-containment.md).
+
+
 ```bash
 export DALPH_DEMO_JOURNAL="${DALPH_DEMO_ROOT}/journal.sqlite"
 export DALPH_DEMO_EVIDENCE="${DALPH_DEMO_ROOT}/evidence"

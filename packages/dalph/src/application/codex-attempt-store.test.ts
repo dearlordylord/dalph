@@ -322,6 +322,9 @@ it.effect("fails closed when the private snapshot is malformed", () =>
       yield* writePrivateFile(fileSystem, storePath, "{not-json")
       const result = yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
+        if (store.hasRetainedAttempts === undefined) return yield* Effect.die("node store requires custody inventory")
+        const inventory = yield* store.hasRetainedAttempts().pipe(Effect.exit)
+        expect(Exit.isFailure(inventory)).toBe(true)
         return yield* store.readAttempt(attempt.runId, attempt.attemptId)
       }).pipe(Effect.provide(nodeLayer(storePath)), Effect.exit)
       expect(Exit.isFailure(result)).toBe(true)

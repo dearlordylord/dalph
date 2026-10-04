@@ -7,6 +7,7 @@ import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpa
 import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { Scope } from "effect"
 import {
+  Channel,
   Context,
   Crypto,
   Data,
@@ -2391,9 +2392,9 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           pending: []
         })
         const stream = yield* PubSub.subscribe(hints).pipe(
-          Effect.map((queue) =>
-            Stream.unfold(undefined, () => PubSub.take(queue).pipe(Effect.map((hint) => [hint, undefined] as const)))
-          )
+          // Closing a provider subscription ends this hint source; it must not
+          // interrupt a sibling stream that is persisting stopped-writer proof.
+          Effect.map((subscription) => Stream.fromChannel(Channel.fromSubscriptionArray(subscription)))
         )
         const subscriber: TurnCompletionSubscriber = {
           publish: (hint) =>

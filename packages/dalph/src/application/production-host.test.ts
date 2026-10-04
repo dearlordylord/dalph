@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AttemptId, RunId, WorktreeLocator } from "@dalph/contracts"
+import { AttemptId, PlannedAttemptExecutorCorrelation, RunId, WorktreeLocator } from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
@@ -82,6 +82,7 @@ import {
   type ProductionRepositoryHostGraph,
   ProductionCancellationRunNotFound,
   productionRepositoryHostGraph,
+  acquireProductionCodexAttemptProvider,
   withDecodedProductionRepositoryHost,
   withProductionRepositoryHost
 } from "./production-host.js"
@@ -187,6 +188,8 @@ process.stdin.on("data", (chunk) => {
       })
     } else if (message.method === "config/read") {
       write(message.id, { config: { approval_policy: "never", sandbox_mode: "danger-full-access" } })
+    } else if (message.method === "thread/start") {
+      write(message.id, { thread: { id: "fixture-thread-" + process.pid, cwd: message.params.cwd, status: "idle", turns: [] } })
     }
   }
 })
@@ -221,7 +224,7 @@ const ownershipLayer = Layer.succeed(
   CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 )
 
-it.effect("production provider cleanup preserves safe suspension across close and restart", () =>
+it.effect("production provider refuses retained shared attempts before spawning and preserves their custody", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -244,7 +247,6 @@ it.effect("production provider cleanup preserves safe suspension across close an
         worktree: WorktreeLocator.make(input.repository)
       }
       const running = CodexAttemptRecord.cases.Running.make(fields)
-      const suspended = CodexAttemptRecord.cases.SafelySuspended.make(fields)
       const diskStore = nodeCodexAttemptStoreLayer({ stateDirectory: input.codexExecutorPrivateStateDirectory })
       yield* Effect.scoped(
         Effect.flatMap(CodexAttemptStore, (store) => store.writeAttempt(running)).pipe(Effect.provide(diskStore))
@@ -253,28 +255,107 @@ it.effect("production provider cleanup preserves safe suspension across close an
       yield* Effect.scoped(
         Effect.gen(function* () {
           const shell = yield* graph.makeApplicationExit()
-          const provider = yield* graph.acquireProvider(configuration, shell)
-          if (provider._tag !== "CodexAppServer") return yield* Effect.die("expected Codex provider")
-          const store = provider.attemptStore
-          expect(yield* store.readAttempt(fields.correlationRunId, fields.correlationAttemptId)).toEqual(
-            Option.some(running)
-          )
-          expect(Option.isSome(yield* store.readServerLaunch())).toBe(true)
-          // The executor receives this exact service from the retained provider.
-          yield* store.writeAttempt(suspended)
-          yield* provider.appServer.close
-          yield* provider.appServer.close
+          const result = yield* graph.acquireProvider(configuration, shell).pipe(Effect.result)
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: {
+              _tag: "CodexAppServerFailure",
+              kind: "Ownership",
+              operation: "initialize",
+              detail: "retained shared-provider attempts require explicit custody migration; no provider was started"
+            }
+          })
+          expect(yield* fs.exists(`${executable}.capture.json`)).toBe(false)
         })
       )
       yield* Effect.scoped(
         Effect.gen(function* () {
           const store = yield* CodexAttemptStore
           expect(yield* store.readAttempt(fields.correlationRunId, fields.correlationAttemptId)).toEqual(
-            Option.some(suspended)
+            Option.some(running)
           )
           expect(yield* store.readServerLaunch()).toEqual(Option.none())
         }).pipe(Effect.provide(diskStore))
       )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("production isolates executor A, executor B and integrator processes and stops all owners on host Exit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const input = yield* makeTemporaryProductionInput
+      const executable = `${input.repository}/fixture-codex`
+      yield* fs.writeFileString(executable, fakeProductionCodex)
+      yield* fs.chmod(executable, 0o755)
+      const configuration = yield* decodeProductionRepositoryHostConfiguration({
+        ...input,
+        codexExecutable: executable
+      })
+      const adapters = { codexProcessNative: isolatedCodexProcessNativeService }
+      const graph = productionRepositoryHostTestGraph(adapters)
+      const attemptCorrelation = (id: string) =>
+        PlannedAttemptExecutorCorrelation.make({
+          runId: RunId.make("isolated-production-run"),
+          attemptId: AttemptId.make(id)
+        })
+      const directories = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const shell = yield* graph.makeApplicationExit()
+          const integrator = yield* graph.acquireProvider(configuration, shell)
+          if (integrator._tag !== "CodexAppServer") return yield* Effect.die("expected Codex integrator provider")
+          const a = yield* acquireProductionCodexAttemptProvider(
+            configuration,
+            shell,
+            attemptCorrelation("a"),
+            adapters
+          )
+          const b = yield* acquireProductionCodexAttemptProvider(
+            configuration,
+            shell,
+            attemptCorrelation("b"),
+            adapters
+          )
+          expect(new Set([a.app.serverPid, b.app.serverPid, integrator.appServer.serverPid]).size).toBe(3)
+          expect(new Set([a.app.incarnation, b.app.incarnation, integrator.appServer.incarnation]).size).toBe(3)
+          expect(a.configuration.codexExecutorPrivateStateDirectory).not.toBe(
+            b.configuration.codexExecutorPrivateStateDirectory
+          )
+          expect(a.configuration.codexExecutorPrivateStateDirectory).not.toBe(
+            configuration.codexExecutorPrivateStateDirectory
+          )
+          const duplicate = yield* Effect.scoped(
+            acquireProductionCodexAttemptProvider(configuration, shell, attemptCorrelation("a"), adapters)
+          ).pipe(Effect.result)
+          expect(duplicate).toMatchObject({
+            _tag: "Failure",
+            failure: {
+              _tag: "CodexAttemptStoreFailure",
+              operation: "acquireServerLease",
+              detail: "server lease is held by a live owner"
+            }
+          })
+          expect((yield* a.app.startThread(input.repository)).cwd).toBe(input.repository)
+          yield* a.app.close
+          expect((yield* b.app.startThread(input.repository)).cwd).toBe(input.repository)
+          expect((yield* integrator.appServer.startThread(input.repository)).cwd).toBe(input.repository)
+          expect((yield* shell.requestBoundary.requestExit)._tag).toBe("Succeeded")
+          return [
+            a.configuration.codexExecutorPrivateStateDirectory,
+            b.configuration.codexExecutorPrivateStateDirectory,
+            configuration.codexExecutorPrivateStateDirectory
+          ]
+        })
+      )
+      for (const directory of directories) {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const store = yield* CodexAttemptStore
+            expect(yield* store.readServerLaunch()).toEqual(Option.none())
+          }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: directory })))
+        )
+      }
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

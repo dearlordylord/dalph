@@ -2,9 +2,11 @@
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
 import {
   type GitCommitSha,
+  type PlannedAttemptExecutorCorrelation,
   IntegrationTarget,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
+  plannedAttemptExecutorCorrelationKey,
   type RunId
 } from "@dalph/contracts"
 import {
@@ -80,9 +82,10 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Logger, Option, Ref, Schema, Semaphore, type Scope } from "effect"
+import { Context, Crypto, Deferred, Effect, Layer, Logger, Option, Ref, Schema, Semaphore, type Scope } from "effect"
 // eslint-disable-next-line import/no-nodejs-modules -- The production host selects its own Node executable for task preparation.
 import nodeProcess from "node:process"
+import { isolatedPlannedAttemptExecutorLayer } from "./isolated-planned-attempt-executor.js"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -99,7 +102,12 @@ import {
   ExecutorProviderConfigReference,
   resolveExecutorProfileLocator
 } from "./executor-profile.js"
-import { CodexAttemptStore, type CodexAttemptStoreService, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import {
+  type CodexAttemptStoreFailure,
+  CodexAttemptStore,
+  type CodexAttemptStoreService,
+  nodeCodexAttemptStoreLayer
+} from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 import {
   defaultCodexTaskInstructions,
@@ -118,6 +126,7 @@ import { nodeKimiIntegratorLayer } from "./kimi-integrator-provider.js"
 import { CodexIntegratorConfiguration, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
 import {
   type ProductionRepositoryHostConfiguration,
+  ProductionCodexExecutorPrivateStateDirectory,
   decodeProductionRepositoryHostConfiguration,
   productionExecutorLocator,
   productionKimiExecutorPrivateStateDirectory,
@@ -540,6 +549,68 @@ const selectedProductionExecutorProfile = Effect.fn("ProductionRepositoryHost.se
     : yield* resolveExecutorProfileLocator(configuredProfiles, executorLocator)
 })
 
+const hexadecimalRadix = 16
+const hexadecimalByteWidth = 2
+
+/** Acquires the process and private custody for one exact executor attempt. */
+export const acquireProductionCodexAttemptProvider = <ECodex, EGithub, ETrace>(
+  configuration: ProductionRepositoryHostConfiguration,
+  applicationExit: ProductionHostApplicationExitShellService,
+  correlation: PlannedAttemptExecutorCorrelation,
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
+) =>
+  Effect.gen(function* () {
+    const profile = yield* selectedProductionExecutorProfile(configuration)
+    const native = adapters.codexProcessNative ?? nodeCodexProcessNativeService
+    const crypto = yield* Crypto.Crypto
+    const digest = yield* crypto.digest(
+      "SHA-256",
+      new TextEncoder().encode(plannedAttemptExecutorCorrelationKey(correlation))
+    )
+    const directory = yield* Schema.decodeUnknownEffect(ProductionCodexExecutorPrivateStateDirectory)(
+      `${configuration.codexExecutorPrivateStateDirectory}/attempts/${Array.from(digest, (byte) => byte.toString(hexadecimalRadix).padStart(hexadecimalByteWidth, "0")).join("")}`
+    )
+    const scopedConfiguration = {
+      ...configuration,
+      codexExecutable: profile.adapter === "codex-app-server" ? profile.executable : configuration.codexExecutable,
+      codexExecutorPrivateStateDirectory: directory
+    }
+    const privateStore = nodeCodexAttemptStoreLayer({ stateDirectory: directory }).pipe(
+      Layer.provide(NodeServices.layer)
+    )
+    const context = yield* Layer.build(privateStore)
+    const store = Layer.succeed(CodexAttemptStore, Context.get(context, CodexAttemptStore))
+    const requestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
+      onOpen: (operation) =>
+        new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
+      policy: codexRequestCircuitPolicy
+    })
+    const supplied = adapters.codexAppServer?.(scopedConfiguration, requestBoundary)
+    const providerLayer: Layer.Layer<
+      CodexAppServer,
+      ECodex | CodexAppServerFailure | CodexAttemptStoreFailure,
+      ApplicationExitShell
+    > =
+      supplied === undefined
+        ? defaultCodexAppServerLayer(scopedConfiguration, profile, store, native, requestBoundary)
+        : guardedCodexAppServerLayer(supplied, requestBoundary)
+    const providerContext = yield* Layer.build(
+      providerLayer.pipe(
+        Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
+      )
+    )
+    const app = Context.get(providerContext, CodexAppServer)
+    if (app.unattendedPolicyAdmission === undefined) {
+      return yield* new CodexAppServerFailure({
+        detail: "isolated provider did not expose unattended-policy admission",
+        kind: "Protocol",
+        operation: "config/read"
+      })
+    }
+    yield* app.unattendedPolicyAdmission
+    return { app, store, configuration: scopedConfiguration }
+  }).pipe(Effect.provide(NodeCrypto.layer))
+
 const observedLayerBuild = <A, E, R>(
   layer: Layer.Layer<A, E, R>,
   boundary: ProductionRepositoryHostBoundary,
@@ -688,7 +759,7 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
 /**
  * Complete production repository graph. Optional adapters replace only named
  * network or process edges for qualification; the mutation capability topology,
- * one shared Codex service, and Run chronology remain unchanged. The optional
+ * exact provider custody, and Run chronology remain unchanged. The optional
  * boundary observer only taps those real production services.
  */
 export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, ETrace = never>(
@@ -708,6 +779,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         )
       )
       const attemptStore = Context.get(storeContext, CodexAttemptStore)
+      if (attemptStore.hasRetainedAttempts === undefined || (yield* attemptStore.hasRetainedAttempts())) {
+        return yield* new CodexAppServerFailure({
+          detail: "retained shared-provider attempts require explicit custody migration; no provider was started",
+          kind: "Ownership",
+          operation: "initialize"
+        })
+      }
       const attemptStoreLayer = Layer.succeed(CodexAttemptStore, attemptStore)
       const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
       const requestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
@@ -808,14 +886,6 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver
         )
-        // The app-server finalizer and executor must mutate one snapshot owner.
-        // Reopening this file here would let launch cleanup overwrite newer attempt evidence.
-        const attemptStoreLayer =
-          provider._tag === "CodexAppServer"
-            ? Layer.succeed(CodexAttemptStore, provider.attemptStore)
-            : nodeCodexAttemptStoreLayer({ stateDirectory: configuration.codexExecutorPrivateStateDirectory }).pipe(
-                Layer.provide(NodeServices.layer)
-              )
         const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
         if (selectedProfile.adapter === "codex-app-server" && provider._tag !== "CodexAppServer") {
           return yield* Effect.fail(
@@ -871,6 +941,42 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                 )
               ).pipe(Layer.provide(realPromotion))
         const activityCensusLayer = codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(appLayer))
+        const codexExecutorLayer = isolatedPlannedAttemptExecutorLayer(
+          (correlation) =>
+            Effect.gen(function* () {
+              const { app, store } = yield* acquireProductionCodexAttemptProvider(
+                configuration,
+                applicationExit,
+                correlation,
+                adapters
+              )
+              const isolatedApp = Layer.succeed(CodexAppServer, app)
+              return yield* Layer.build(
+                nodeCodexPlannedAttemptExecutorLayerWithOptions({
+                  ...(configuration.codexToolEffectPolicy === undefined
+                    ? {}
+                    : { toolEffectPolicy: configuration.codexToolEffectPolicy }),
+                  ...(selectedProfile.worktreePreparation === undefined
+                    ? {}
+                    : {
+                        taskInstructions: [
+                          "Dalph already prepared this exact worktree with its repository Node and frozen dependencies. Run every later Node and pnpm check through `mise exec --` so a login shell cannot select the host Node.",
+                          ...defaultCodexTaskInstructions
+                        ]
+                      })
+                }).pipe(
+                  Layer.provide(isolatedApp),
+                  Layer.provide(codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(isolatedApp))),
+                  Layer.provide(store),
+                  Layer.provide(evidenceLayer),
+                  Layer.provide(gitCommandLayer),
+                  Layer.provide(NodeCrypto.layer),
+                  Layer.provide(NodeServices.layer)
+                )
+              )
+            }).pipe(Effect.provide(NodeCrypto.layer)),
+          () => "isolated Codex containment could not be acquired; retained custody must be reconciled"
+        )
         const executorLayer =
           selectedProfile.adapter === "kimi-acp"
             ? observedPlannedAttemptExecutorLayer(
@@ -894,27 +1000,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                 adapters.boundaryObserver
               )
             : observedPlannedAttemptExecutorLayer(
-                nodeCodexPlannedAttemptExecutorLayerWithOptions({
-                  ...(configuration.codexToolEffectPolicy === undefined
-                    ? {}
-                    : { toolEffectPolicy: configuration.codexToolEffectPolicy }),
-                  ...(selectedProfile.worktreePreparation === undefined
-                    ? {}
-                    : {
-                        taskInstructions: [
-                          "Dalph already prepared this exact worktree with its repository Node and frozen dependencies. Run every later Node and pnpm check through `mise exec --` so a login shell cannot select the host Node.",
-                          ...defaultCodexTaskInstructions
-                        ]
-                      })
-                }).pipe(
-                  Layer.provide(appLayer),
-                  Layer.provide(activityCensusLayer),
-                  Layer.provide(attemptStoreLayer),
-                  Layer.provide(evidenceLayer),
-                  Layer.provide(gitCommandLayer),
-                  Layer.provide(NodeCrypto.layer),
-                  Layer.provide(NodeServices.layer)
-                ),
+                codexExecutorLayer,
                 adapters.boundaryObserver,
                 selectedProfile.worktreePreparation === undefined
                   ? undefined

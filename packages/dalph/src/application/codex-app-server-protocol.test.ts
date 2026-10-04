@@ -1950,6 +1950,21 @@ it.effect("fails closed when the pre-response identity buffer is full before the
   )
 )
 
+it.effect("provider notification closure does not interrupt a sibling publishing stopped-writer proof", () =>
+  withFixture("happy", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const attachment = yield* attachExactCompletionHints(app)
+        const proof = Stream.fromEffect(app.close.pipe(Effect.as("stopped-writers-proved")))
+        const outcome = yield* Stream.runCollect(
+          Stream.merge(attachment.hints.pipe(Stream.map(() => "completion-hint")), proof)
+        )
+        expect(Array.from(outcome)).toEqual(["stopped-writers-proved"])
+      })
+    )
+  )
+)
+
 it.effect("rejects a request after the transport closes and joins repeated close calls", () =>
   withFixture("happy", (app) =>
     Effect.gen(function* () {

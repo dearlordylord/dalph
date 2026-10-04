@@ -5,6 +5,11 @@ Issue: [#398](https://github.com/dearlordylord/dalph/issues/398).
 Status: accepted executor scenarios on 2026-10-02; implementation evidence is
 mapped below. The chronologies remain the acceptance contract.
 
+The accepted [per-attempt containment extension](isolated-codex-containment.md)
+requires a distinct owned provider for each concurrent attempt and a separate
+integrator provider. Closing a shared host-wide app-server cannot satisfy a
+task-local stop while unrelated work continues.
+
 ## Governing behavior
 
 When an item limit expires, read [the exact Codex attempt and recovery

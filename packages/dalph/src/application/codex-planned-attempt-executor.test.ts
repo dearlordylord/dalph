@@ -57,6 +57,7 @@ import {
   Option,
   PlatformError,
   PubSub,
+  Channel,
   Ref,
   Schema,
   Stream
@@ -319,6 +320,7 @@ const makeHarness = (
     readonly activityHints?: CodexAppServerService["attachOwnedActivityHints"]
     readonly toolEffects?: CodexAppServerService["attachToolEffects"]
     readonly failContainmentClose?: boolean
+    readonly onContainmentClose?: Effect.Effect<void>
     readonly onToolEffectWrite?: (record: CodexToolEffectRecord) => Effect.Effect<void>
     readonly beforeTurnStart?: () => Effect.Effect<void>
     readonly beforeAttemptRead?: () => Effect.Effect<void>
@@ -573,7 +575,8 @@ const makeHarness = (
               )
             : Effect.void
         )
-      )
+      ),
+      Effect.andThen(options.onContainmentClose ?? Effect.void)
     )
   }
 
@@ -1382,8 +1385,13 @@ it.effect("cuts a self-matching Codex item at its exact default deadline and ret
   Effect.scoped(
     Effect.gen(function* () {
       const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+      const completionHints = yield* PubSub.unbounded<CodexTurnCompletedHint>()
       const itemWritten = yield* Deferred.make<void>()
       const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(completionHints).pipe(
+          Effect.map((subscription) => Stream.fromChannel(Channel.fromSubscriptionArray(subscription)))
+        ),
+        onContainmentClose: PubSub.shutdown(completionHints),
         onToolEffectWrite: (record) =>
           record._tag === "Started" ? Deferred.succeed(itemWritten, undefined).pipe(Effect.asVoid) : Effect.void,
         toolEffects: PubSub.subscribe(notifications).pipe(
