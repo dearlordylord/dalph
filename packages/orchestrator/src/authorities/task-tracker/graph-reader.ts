@@ -19,12 +19,27 @@ export class TrackerReadError extends Schema.TaggedError<TrackerReadError>()("Tr
   detail: Schema.String
 }) {}
 
+/** Whole seconds supplied by a tracker provider; no local deadline is inferred. */
+export const TrackerReadRetrySeconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("TrackerReadRetrySeconds")
+)
+/** Provider reset time in whole Unix epoch seconds, distinct from a duration. */
+export const TrackerReadResetEpochSeconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("TrackerReadResetEpochSeconds")
+)
+export const TrackerReadRetryEvidence = Schema.TaggedUnion({
+  Unavailable: {},
+  RetryAfterSeconds: { seconds: TrackerReadRetrySeconds },
+  RateLimitResetEpochSeconds: { epochSeconds: TrackerReadResetEpochSeconds }
+})
+export type TrackerReadRetryEvidence = typeof TrackerReadRetryEvidence.Type
+
 export const TrackerAdapterReadFailureReason = Schema.TaggedUnion({
   BoundaryDecode: {},
   IncompleteSnapshot: {},
   ResourceLimitExceeded: {},
   /** The provider proved a request limit, so Dalph must not infer missing tracker facts. */
-  Throttled: {},
+  Throttled: { retry: Schema.optionalKey(TrackerReadRetryEvidence) },
   /** Dalph locally stopped a request storm before crossing the provider boundary. */
   CircuitOpen: {},
   Transport: {},

@@ -150,6 +150,8 @@ const readIssueQuery = `query ReadIssue($issueNodeId: ID!) {
     ... on Issue {
       __typename
       id
+      title
+      number
       state
       stateReason(enableDuplicate: true)
       repository { id }

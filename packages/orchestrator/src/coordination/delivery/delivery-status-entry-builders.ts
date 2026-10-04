@@ -28,6 +28,7 @@ import {
   type OrderedStatusEntry
 } from "./delivery-status-support.js"
 import { addAcceptedStandingSettlementEntryFor } from "./delivery-status-settlement.js"
+import { executorFailureFor } from "./delivery-status-responsibility-semantics.js"
 
 const nonEmptyTaskIdsFor = (taskIds: ReadonlyArray<TaskId>): readonly [TaskId, ...ReadonlyArray<TaskId>] | null => {
   const [first, ...rest] = taskIds
@@ -207,6 +208,19 @@ const addResponsibilityEntriesFor = (
   addTrackerFactEntryFor(subject, delivery, standing, taskOrder, entries)
   addUnavailableEvidenceEntryFor(subject, delivery, standing, taskOrder, entries)
   addRelinquishmentEntryFor(subject, delivery, standing, taskOrder, entries)
+  const failure = executorFailureFor(standing.facts)
+  if (failure !== null) {
+    addEntry(
+      entries,
+      {
+        _tag: "ExecutorFailure",
+        classification: "Blocked",
+        subject: taskStatusSubject(subject, delivery.taskId),
+        ...failure
+      },
+      taskOrder
+    )
+  }
   addAcceptedStandingSettlementEntryFor(subject, delivery, standing, taskOrder, entries)
 }
 

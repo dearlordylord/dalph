@@ -116,6 +116,7 @@ import {
   type LocalTargetCatchUpResult,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
+  type TrackerIssueNumber,
   type WorkflowOperation,
   GitWorktreeReadFailure,
   UntrackedWorktreePath,
@@ -207,6 +208,7 @@ type PreservedCassetteBrand =
   | TaskId
   | TaskRevision
   | TrackerRevision
+  | TrackerIssueNumber
   | BranchCleanupEvidenceRevision
   | CleanupMutationOrdinal
   | CleanupObservationOrdinal

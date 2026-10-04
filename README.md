@@ -25,6 +25,17 @@ exact allocated or recovered Run and immutable historical snapshots. Passive
 current-status attachment, bounded SIGINT/SIGTERM Exit, and same-Run recovery
 after process loss are also available.
 
+Attached CLI snapshots, MCP and watch updates keep failed attempts visible with
+safe failure categories, retained candidate/worktree facts and observed task
+identity. `lastSubstantiveAt` identifies the accepted observation of actual
+progress; repeated lifecycle reports do not advance it. Tracker waits distinguish
+provider throttling from a local circuit and retain retry timing only when the
+provider supplied it. Unknown facts and unsupported recovery are explicit.
+Task delivery and Run completion remain separate from application finalization:
+a provider-close failure can leave a completed Run while the process exits
+nonzero with a sanitized stderr diagnosis. See the
+[diagnostic scenarios](docs/scenarios/actionable-failure-diagnostics.md).
+
 ## Repository map
 
 - `docs/` — stable Dalph context and architecture.

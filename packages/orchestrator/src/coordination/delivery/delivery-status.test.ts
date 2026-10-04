@@ -797,6 +797,45 @@ it("maps responsibility dispositions by meaning without turning terminal or paus
   }
 })
 
+it("retains a failed executor task in passive delivery status", () => {
+  const plannedAttempt = integrationFinalityFixture.plannedAttempt
+  const responsibility = {
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: JournalPosition.make(2),
+    plannedAttempt
+  }
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  const status = statusFor(
+    evaluationOf({
+      runtimeRunId: plannedAttempt.runId,
+      tasks: [{ id: String(plannedAttempt.taskId) }],
+      evidence: [
+        {
+          _tag: "ResponsibilityFacts",
+          facts: {
+            _tag: "PlannedAttemptExecutorFreshFacts",
+            responsibility,
+            disposition: ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                correlation,
+                result: { _tag: "Failed" }
+              })
+            })
+          }
+        }
+      ]
+    }),
+    { _tag: "Task", runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
+  )
+  expect(status).toMatchObject({
+    _tag: "DeliveryStatusAvailable",
+    entries: [{ _tag: "ExecutorFailure", classification: "Blocked", responsibility }]
+  })
+  if (status._tag !== "DeliveryStatusAvailable") return
+  expect(status.entries).toHaveLength(1)
+  expect(status.entries.some(({ _tag }) => _tag === "Settlement")).toBe(false)
+})
+
 it("projects cancelled and stopped accepted standings as distinct public settlements", () => {
   const cases = [
     ["cancelled-status", ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })],

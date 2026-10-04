@@ -92,6 +92,13 @@ const queuedIntegration = QueuedIntegrationResponsibility.make({
 
 const entries = [
   {
+    _tag: "ExecutorFailure",
+    classification: "Blocked",
+    subject: task("failure"),
+    responsibility: executorResponsibility("failure"),
+    failureCode: null
+  },
+  {
     _tag: "DependencyWait",
     classification: "Waiting",
     subject: task("dependency"),
@@ -209,6 +216,7 @@ const available = {
 } satisfies Extract<CurrentDeliveryStatus, { readonly _tag: "DeliveryStatusAvailable" }>
 
 const exactLabels: Readonly<Record<DeliveryStatusEntry["_tag"], string>> = {
+  ExecutorFailure: "Executor failed",
   DependencyWait: "Waiting for prerequisites",
   TrackerFactWait: "Waiting for tracker facts",
   TaskWorkCapacityWait: "Waiting for task-work capacity",
@@ -223,6 +231,7 @@ const exactLabels: Readonly<Record<DeliveryStatusEntry["_tag"], string>> = {
 }
 
 const expectedEntryOrder = [
+  "ExecutorFailure",
   "DependencyWait",
   "TrackerFactWait",
   "TaskWorkCapacityWait",
@@ -239,6 +248,9 @@ const inputEntriesJson = JSON.stringify(entries)
 
 const assertEntryEvidence = (entry: DeliveryStatusEntry): void => {
   switch (entry._tag) {
+    case "ExecutorFailure":
+      assert.equal(entry.responsibility.plannedAttempt.taskId, taskId("failure"))
+      return
     case "DependencyWait":
       assert.deepEqual(entry.prerequisiteTaskIds, [taskId("prerequisite")])
       return

@@ -7,6 +7,7 @@ import {
   type Task,
   TaskLifecycle,
   TrackerRevision,
+  TrackerTaskDescriptor,
   TrackerSnapshot,
   type TrackerTask
 } from "./task.js"
@@ -32,6 +33,7 @@ export class GraphProjectionError extends Schema.TaggedError<GraphProjectionErro
 const taskDagSchemaVersion = 1 as const
 
 const TaskDagWireTaskV1 = Schema.Struct({
+  descriptor: Schema.optionalKey(TrackerTaskDescriptor),
   id: TaskId,
   lifecycle: TaskLifecycle,
   parentTaskId: Schema.NullOr(TaskId),
@@ -51,6 +53,7 @@ type ProjectionResult =
 
 /** A tracker task represented as one node in the normalized task graph. */
 interface TaskGraphNode {
+  readonly descriptor?: TrackerTaskDescriptor
   readonly id: TaskId
   readonly lifecycle: TaskLifecycle
 }
@@ -69,6 +72,7 @@ const groupingEdge = TaskGraphEdge.cases.Grouping.make({})
 const taskProjectionRevision = (task: Task): TaskRevision =>
   encodeTaskRevisionFingerprint(
     JSON.stringify({
+      ...(task.descriptor === undefined ? {} : { descriptor: task.descriptor }),
       id: task.id,
       lifecycle: task.lifecycle._tag,
       parentTaskId: task.parentTaskId,
@@ -157,7 +161,14 @@ const taskGraphRepresentationFrom = (recordsById: ReadonlyMap<TaskId, TrackerTas
   const graph = Graph.directed<TaskGraphNode, TaskGraphEdge>((mutable) => {
     for (const taskId of taskIds) {
       const task = getMapValueOrThrow(recordsById, taskId)
-      indexesByTaskId.set(taskId, Graph.addNode(mutable, { id: taskId, lifecycle: task.lifecycle }))
+      indexesByTaskId.set(
+        taskId,
+        Graph.addNode(mutable, {
+          id: taskId,
+          lifecycle: task.lifecycle,
+          ...(task.descriptor === undefined ? {} : { descriptor: task.descriptor })
+        })
+      )
     }
 
     for (const taskId of taskIds) {
@@ -323,6 +334,7 @@ export class TaskDagSnapshot {
     return this.eligibleTaskIds().map((taskId) => {
       const node = taskNodeAt(this.graph, HashMap.getUnsafe(this.nodeIndexByTaskId, taskId))
       return {
+        ...(node.descriptor === undefined ? {} : { descriptor: node.descriptor }),
         id: taskId,
         lifecycle: node.lifecycle,
         parentTaskId: Option.getOrNull(this.parentTaskIdOf(taskId)),
@@ -418,6 +430,7 @@ export class TaskDagSnapshot {
       tasks: this.taskIds().map((id) => {
         const node = taskNodeAt(this.graph, HashMap.getUnsafe(this.nodeIndexByTaskId, id))
         return {
+          ...(node.descriptor === undefined ? {} : { descriptor: node.descriptor }),
           id,
           lifecycle: node.lifecycle,
           parentTaskId: Option.getOrNull(this.parentTaskIdOf(id)),

@@ -1,4 +1,11 @@
-import { RunId, TaskId, type IntegrationTarget, type PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import type { DeliveryDiagnostics } from "./delivery-diagnostics.js"
+import {
+  RunId,
+  TaskId,
+  type IntegrationTarget,
+  type PlannedAttemptExecutorCorrelation,
+  type PlannedAttemptExecutorFailureCode
+} from "@dalph/contracts"
 import { Schema } from "effect"
 import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
@@ -207,6 +214,17 @@ export interface DeliveryStatusGraphSource {
 /** One Run-wide or task-local status entry. Every variant keeps its exact supporting fact. */
 export type DeliveryStatusEntry =
   | {
+      /** An executor failure is retained evidence, never a successful delivery settlement. */
+      readonly _tag: "ExecutorFailure"
+      readonly classification: "Blocked"
+      readonly subject: Extract<DeliveryStatusSubject, { readonly _tag: "Task" }>
+      readonly responsibility: Extract<
+        WorkflowResponsibilityEntry,
+        { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
+      >
+      readonly failureCode: PlannedAttemptExecutorFailureCode | null
+    }
+  | {
       readonly _tag: "DependencyWait"
       readonly classification: "Waiting"
       readonly subject: DeliveryStatusSubject
@@ -291,6 +309,7 @@ export type DeliveryStatusSnapshot =
   | { readonly _tag: "DeliveryStatusNotReady"; readonly subject: DeliveryStatusSubject }
   | {
       readonly _tag: "DeliveryStatusAvailable"
+      readonly diagnostics?: DeliveryDiagnostics
       readonly subject: DeliveryStatusSubject
       readonly acceptedAt: JournalPosition | null
       readonly entries: ReadonlyArray<DeliveryStatusEntry>

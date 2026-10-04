@@ -5,17 +5,24 @@ import type { CompleteTaskTrackerFactsObserved } from "./observation.js"
 
 const graphTasksFrom = (observation: CompleteTaskTrackerFactsObserved): ReadonlyArray<TrackerTask> => {
   const [, lifecycles, prerequisites, groupings] = observation.factFamilies
+  const descriptors = new Map(
+    observation.factFamilies[0].descriptors?.map(({ descriptor, taskId }) => [taskId, descriptor])
+  )
   const lifecycleByTaskId = new Map(lifecycles.lifecycles.map(({ lifecycle, taskId }) => [taskId, lifecycle]))
   const prerequisitesByTaskId = new Map(
     prerequisites.prerequisites.map(({ prerequisiteTaskIds, taskId }) => [taskId, prerequisiteTaskIds])
   )
   const parentByTaskId = new Map(groupings.groupings.map(({ parentTaskId, taskId }) => [taskId, parentTaskId]))
-  return observation.factFamilies[0].taskIds.map((id) => ({
-    id,
-    lifecycle: Option.getOrThrow(Option.fromUndefinedOr(lifecycleByTaskId.get(id))),
-    parentTaskId: Option.getOrThrow(Option.fromUndefinedOr(parentByTaskId.get(id))),
-    prerequisiteIds: Option.getOrThrow(Option.fromUndefinedOr(prerequisitesByTaskId.get(id)))
-  }))
+  return observation.factFamilies[0].taskIds.map((id) => {
+    const descriptor = descriptors.get(id)
+    return {
+      ...(descriptor === undefined ? {} : { descriptor }),
+      id,
+      lifecycle: Option.getOrThrow(Option.fromUndefinedOr(lifecycleByTaskId.get(id))),
+      parentTaskId: Option.getOrThrow(Option.fromUndefinedOr(parentByTaskId.get(id))),
+      prerequisiteIds: Option.getOrThrow(Option.fromUndefinedOr(prerequisitesByTaskId.get(id)))
+    }
+  })
 }
 
 /** Derives selector input from one complete tracker observation, without introducing tracker authority. */

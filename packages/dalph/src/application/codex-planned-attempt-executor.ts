@@ -13,6 +13,7 @@ import {
   type PlannedAttemptExecutorObservationPurpose,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorResult,
+  type PlannedAttemptExecutorFailureCode,
   PlannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
@@ -1300,11 +1301,17 @@ const makeCodexPlannedAttemptExecutorContext = (
       const commit = commitFromTurn(turn, correlation)
       const head = yield* readHead(attempt)
       if (commit === undefined) {
-        return { _tag: "Report" as const, outcome: yield* failed(attempt, correlation, record, turn.id, thread) }
+        return {
+          _tag: "Report" as const,
+          outcome: yield* failed(attempt, correlation, record, turn.id, thread, "ResultEnvelopeInvalid", head)
+        }
       }
       if (head === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       if (commit !== head) {
-        return { _tag: "Report" as const, outcome: yield* failed(attempt, correlation, record, turn.id, thread) }
+        return {
+          _tag: "Report" as const,
+          outcome: yield* failed(attempt, correlation, record, turn.id, thread, "CandidateHeadMismatch", head)
+        }
       }
       return { _tag: "Commit" as const, commit }
     })
@@ -1412,14 +1419,19 @@ const makeCodexPlannedAttemptExecutorContext = (
       correlation: PlannedAttemptExecutorCorrelation,
       record: OwnedTurnRecord,
       observedTurnId: CodexTurnId,
-      thread: CodexThreadSnapshot
+      thread: CodexThreadSnapshot,
+      failureCode: PlannedAttemptExecutorFailureCode,
+      observedHead?: GitCommitSha
     ) {
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
         return { continueLifecycleObservation: finalCensus._tag === "ExactLive", report: running(correlation) }
       }
-      yield* save(terminalRecordFor(attempt, record, observedTurnId, CodexSealedTerminal.cases.Failed.make({}), null))
-      return { continueLifecycleObservation: false, report: terminal(correlation, { _tag: "Failed" }) }
+      const result = { _tag: "Failed" as const, failureCode, ...(observedHead === undefined ? {} : { observedHead }) }
+      yield* save(
+        terminalRecordFor(attempt, record, observedTurnId, CodexSealedTerminal.cases.Failed.make(result), null)
+      )
+      return { continueLifecycleObservation: false, report: terminal(correlation, result) }
     })
 
     const observedRecordForTerminal = Effect.fn("CodexPlannedAttemptExecutor.observedRecordForTerminal")(function* (
@@ -1468,16 +1480,17 @@ const makeCodexPlannedAttemptExecutorContext = (
     ) {
       const turn = reconciliation.turn
       if (observedRecord._tag === "Terminal") {
-        if (isAcceptedTerminalRecord(observedRecord)) {
-          if (turn.status !== "completed") return yield* Effect.fail(new CodexEvidenceInvalid({}))
-          return yield* rereadAccepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
+        if (observedRecord.terminal._tag === "Failed") {
+          return { continueLifecycleObservation: false, report: terminal(correlation, observedRecord.terminal) }
         }
-        return { continueLifecycleObservation: false, report: terminal(correlation, { _tag: "Failed" }) }
+        if (!isAcceptedTerminalRecord(observedRecord) || turn.status !== "completed")
+          return yield* Effect.fail(new CodexEvidenceInvalid({}))
+        return yield* rereadAccepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
       }
       if (turn.status === "completed") {
         return yield* accepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
       }
-      return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread)
+      return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread, "ProviderFailed")
     })
 
     const terminalOrRunningOutcome = Effect.fn("CodexPlannedAttemptExecutor.terminalOrRunningOutcome")(function* (

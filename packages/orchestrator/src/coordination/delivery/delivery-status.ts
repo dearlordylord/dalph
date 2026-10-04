@@ -78,7 +78,17 @@ const readyFor = (
     _tag: "DeliveryStatusAvailable",
     subject,
     acceptedAt: ready.evaluation.acceptedAt,
-    entries: entriesForReady(subject, ready, projectedEntries)
+    entries: entriesForReady(subject, ready, projectedEntries),
+    ...(ready.evaluation.diagnostics === undefined
+      ? {}
+      : {
+          diagnostics: {
+            ...ready.evaluation.diagnostics,
+            tasks: ready.evaluation.diagnostics.tasks.filter(
+              ({ taskId }) => subject._tag === "Run" || taskId === subject.taskId
+            )
+          }
+        })
   }
 }
 

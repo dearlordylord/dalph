@@ -558,7 +558,7 @@ it.effect("distinguishes legacy prose completion from invalid terminal candidate
                 result:
                   label === "syntax"
                     ? PlannedAttemptExecutorResult.cases.Completed.make({})
-                    : PlannedAttemptExecutorResult.cases.Failed.make({})
+                    : PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "ResultEnvelopeInvalid" })
               })
             })
           )
@@ -593,7 +593,7 @@ it.effect("fails closed when Git cannot prove the terminal head or reread eviden
             PlannedAttemptExecutorProjection.cases.Exact.make({
               report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
                 correlation,
-                result: PlannedAttemptExecutorResult.cases.Failed.make({})
+                result: PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "GitUnavailable" })
               })
             })
           )
@@ -884,7 +884,11 @@ it.effect("rejects invalid semantic results without a HEAD fallback", () =>
         controlled.complete(JSON.stringify(payload))
         expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
           _tag: "Exact",
-          report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Failed" } }
+          report: {
+            _tag: "ExecutorWorkTerminal",
+            correlation,
+            result: { _tag: "Failed", failureCode: "ResultEnvelopeInvalid" }
+          }
         })
         expect(boundaries.evidencePutCalls()).toBe(0)
       }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
@@ -929,7 +933,7 @@ it.effect("does not report Accepted when the terminal commit differs from Git HE
       PlannedAttemptExecutorProjection.cases.Exact.make({
         report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation,
-          result: { _tag: "Failed" }
+          result: { _tag: "Failed", failureCode: "CandidateHeadMismatch", observedHead: head }
         })
       })
     )

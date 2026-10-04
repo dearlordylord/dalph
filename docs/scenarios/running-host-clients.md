@@ -48,6 +48,20 @@ The core S10 correction has its own maintained chronology and test mapping in
 proof remains required here; neither this document nor a successful core test
 qualifies either public adapter.
 
+## Compact diagnostics
+
+Snapshot, CLI, MCP and bounded watch use the same
+[accepted-history diagnostic projection](actionable-failure-diagnostics.md).
+Failed executor attempts remain visible after their active responsibility ends.
+Their safe reason and retained commit/worktree do not authorize acceptance or
+recovery. The compact projection omits authored bodies and provider payloads;
+exact Run/attempt/task identities remain structured fields. Task identity, phase,
+last substantive source position and tracker wait have their own observations.
+Repeated lifecycle reports cannot fabricate progress. Tracker wait distinguishes
+Throttled from CircuitOpen and marks unknown retry timing explicitly. Updates
+follow accepted history even when the execution activation has returned idle;
+reading status introduces no tracker poll, provider turn or mutation.
+
 ## Explicit startup and selected-Run handshake
 
 The following spellings are the selected future interface:
