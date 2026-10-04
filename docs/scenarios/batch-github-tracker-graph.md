@@ -8,12 +8,24 @@ chronological scenarios and read-only scope.
 ## Governing behavior
 
 A complete graph remains the only graph result returned to the workflow.
-This preserves [journal-first tracker observations](journal-first-tracker-observations.md)
-and the [active-work authority refresh](active-work-authority-refresh.md): one
+This preserves [journal-first tracker observations](journal-first-tracker-observations.md#a-graph-read-cannot-authorize-work-before-the-journal-append)
+and the [active-work authority refresh](active-work-authority-refresh.md#alice-changes-b-while-a1-b1-and-c1-execute-autonomously): one
 logical intent and outcome, one shared graph boundary for executing attempts,
 and unchanged focused specification and claim checks. The adapter changes
 provider requests only; activation cadence, admission, retries, recovery,
 normalized fingerprints, and workflow operations retain their existing owners.
+
+The returned graph preserves D9's fresh eligibility facts in
+[Graph and selection](../DELIVERY-INVARIANTS.md#graph-and-selection), and
+D21's intent-before-effect and D23's refusal to infer absence from incomplete
+reads in [Ambiguity and evidence](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence).
+The governing model remains [taskFactReconciliation.qnt](../../specs/taskFactReconciliation.qnt),
+including `activeRefreshUnreadableAuthorizesNoExecutorAction`. Its executable
+scenarios `incompleteReadCannotProveMembershipLossTest` and
+`activeRefreshUnreadableDoesNotSuspendOrContinueTest` in
+[taskFactReconciliation_test.qnt](../../specs/taskFactReconciliation_test.qnt)
+constrain the consequences of failed graph evidence. Batching preserves those
+rules; these models do not claim to prove the HTTP query implementation.
 
 ## Provider requests and limits
 
