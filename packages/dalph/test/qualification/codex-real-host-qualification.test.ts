@@ -587,6 +587,8 @@ const makeFixture = async (mode: ModelMode): Promise<Fixture> => {
   await writeFile(
     nodePath.join(codexHome, "config.toml"),
     [
+      // Plugin marketplace cloning is outside this local provider/process qualification.
+      "features.plugins = false",
       'model_provider = "dalph-fixture"',
       'model = "dalph-fixture-model"',
       'approval_policy = "never"',
