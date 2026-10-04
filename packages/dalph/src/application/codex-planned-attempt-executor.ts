@@ -2147,7 +2147,14 @@ const makeCodexPlannedAttemptExecutorContext = (
       completionHintAuthorized = false
     ) {
       if (reconciliation._tag === "Running") {
-        return projectionOutcome(exact(running(correlation)), false, reconciliation.thread.id, reconciliation.turn.id)
+        // Recovery need not replay completion notifications for a sealed turn.
+        // Only its exact retained association permits paced terminal reconciliation.
+        return projectionOutcome(
+          exact(running(correlation)),
+          record._tag === "Terminal" || completionHintAuthorized,
+          reconciliation.thread.id,
+          reconciliation.turn.id
+        )
       }
       if (reconciliation._tag === "Terminal") {
         const outcome = yield* terminalOrRunningOutcome(
@@ -3470,8 +3477,9 @@ const makeCodexPlannedAttemptExecutorContext = (
               )
             )
           const current = yield* readLifecycle(true)
-          // Paced rereads are limited to terminal turns whose exact owned
-          // activity census is the sole reason the projection remains Executing.
+          // Paced rereads follow an exact sealed turn during stale recovery,
+          // a matching completion hint ahead of the provider census, or a
+          // terminal turn still held by its exact owned activity census.
           // A later hint-triggered reread may discover this state, so start the
           // cadence from the first eligible projection rather than attach time.
           const lifecycleCadence = Stream.fromEffect(Deferred.await(heldTerminalActivity)).pipe(
