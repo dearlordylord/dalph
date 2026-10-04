@@ -1336,6 +1336,7 @@ qualificationTest(
       expect(failed.event).toBe("failure")
       if (failed.event !== "failure") throw new Error("expected the bounded observation failure")
       expect(failed.detail).toContain("last projection=Exact/ExecutorWorkExecuting")
+      expect(failed.detail).toContain("retained state=Running")
       expect(
         host.events.some((event) => event.event === "report" && event.report._tag === "ExecutorWorkTerminal")
       ).toBe(false)

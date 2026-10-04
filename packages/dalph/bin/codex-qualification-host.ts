@@ -46,6 +46,7 @@ import {
 import {
   CodexAttemptRecord,
   CodexAttemptStore,
+  type CodexAttemptStoreService,
   nodeCodexAttemptStoreLayer
 } from "../src/application/codex-attempt-store.js"
 import { nodeCodexPlannedAttemptExecutorLayer } from "../src/application/codex-planned-attempt-executor.js"
@@ -137,7 +138,8 @@ const terminalObservationAttempts = 600
 
 const settleAttempt = (
   lifecycle: PlannedAttemptExecutorLifecycleObservationService,
-  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>
+  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
+  store: CodexAttemptStoreService
 ): Effect.Effect<PlannedAttemptExecutorReport, unknown> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -159,9 +161,21 @@ const settleAttempt = (
       if (Option.isNone(terminalProjection)) {
         const last = yield* Ref.get(latest)
         const observation = last._tag === "Exact" ? `${last._tag}/${last.report._tag}` : last._tag
+        const retainedState = yield* store.readAttempt(correlation.runId, correlation.attemptId).pipe(
+          Effect.map((record) =>
+            Option.isNone(record)
+              ? "Missing"
+              : record.value._tag === "Terminal"
+                ? `Terminal/${record.value.terminal._tag}`
+                : record.value._tag
+          ),
+          Effect.catch(() => Effect.succeed("Unreadable")),
+          Effect.timeoutOption("1 second"),
+          Effect.map(Option.getOrElse(() => "Unavailable"))
+        )
         return yield* Effect.fail(
           new QualificationConfigurationFailure({
-            detail: `real Codex turn did not settle within the qualification observation bound; last projection=${observation}`
+            detail: `real Codex turn did not settle within the qualification observation bound; last projection=${observation}; retained state=${retainedState}`
           })
         )
       }
@@ -326,7 +340,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(
             projectionEvent(
               configuration.waitForTerminalProjection
-                ? { _tag: "Exact", report: yield* settleAttempt(lifecycle, correlation) }
+                ? { _tag: "Exact", report: yield* settleAttempt(lifecycle, correlation, store) }
                 : yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
             )
           )
@@ -337,7 +351,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(reportEvent("Begin", initial))
           if (initial._tag === "ExecutorWorkExecuting") {
             yield* Effect.sleep("100 millis")
-            yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation)))
+            yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation, store)))
           }
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
@@ -356,7 +370,7 @@ const configurationProgram = Effect.gen(function* () {
                 nodeProcess.stdin.resume()
               })
           )
-          yield* settleAttempt(lifecycle, correlation)
+          yield* settleAttempt(lifecycle, correlation, store)
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
