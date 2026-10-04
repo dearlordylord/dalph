@@ -22,11 +22,13 @@ const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], Read
   ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
   StartWork: ["WakeSubmitted"],
   Refresh: ["RefreshSubmitted"],
-  Unpause: ["UnpauseApplied"]
+  Unpause: ["UnpauseApplied"],
+  WatchSnapshots: []
 }
 const compatibleFailures: Readonly<
   Record<RunningHostError["_tag"], ReadonlyArray<RunningHostRequest["operation"]["_tag"]>>
 > = {
+  SubscriptionLimitExceeded: ["WatchSnapshots"],
   UnpausePartiallyApplied: ["Unpause"],
   RunClosed: ["StartWork", "Unpause", "Refresh"],
   ReadFailed: ["ReadSnapshot", "ReadRunControl"],
@@ -52,7 +54,8 @@ const transportError = (error: unknown, phase: "Handshake" | "Response"): Runnin
   return known._tag === "Some" ? known.value : { _tag: "TransportFailed", phase, reason: "ResponseUnavailable" }
 }
 
-const responseJson = Effect.fn("RunningHostClient.decodeResponse")(function* (
+/** Shared bounded JSON decoding for unary replies and watch rejection envelopes. */
+export const decodeRunningHostResponseJson = Effect.fn("RunningHostClient.decodeResponse")(function* (
   response: HttpClientResponse.HttpClientResponse
 ) {
   const collected = yield* response.stream.pipe(
@@ -98,7 +101,7 @@ const jsonRequest = Effect.fn("RunningHostClient.request")(
         reason: "RedirectForbidden"
       })
     }
-    return yield* responseJson(response)
+    return yield* decodeRunningHostResponseJson(response)
   },
   (effect, _address, _path, body) =>
     effect.pipe(

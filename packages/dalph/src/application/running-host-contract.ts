@@ -17,6 +17,11 @@ const SafeInteger = Schema.Int.check(
 )
 const Count = SafeInteger.check(Schema.isGreaterThanOrEqualTo(0))
 const PositiveCount = SafeInteger.check(Schema.isGreaterThanOrEqualTo(1))
+/** Process-local watch identity, with no replay or workflow authority. */
+export const SubscriptionId = Schema.NonEmptyString.pipe(Schema.brand("RunningHostSubscriptionId"))
+export type SubscriptionId = typeof SubscriptionId.Type
+/** Counts emitted frames only, independently of accepted journal positions. */
+export const WatchSequence = Count.pipe(Schema.brand("WatchSequence"))
 /** A particular listening process, never a durable Run or command receipt. */
 export const HostInstanceId = Schema.NonEmptyString.pipe(Schema.brand("HostInstanceId"))
 export type HostInstanceId = typeof HostInstanceId.Type
@@ -93,7 +98,8 @@ const Operation = Schema.TaggedUnion({
   ReadRunControl: {},
   StartWork: {},
   Unpause: {},
-  Refresh: { interest: RefreshInterest }
+  Refresh: { interest: RefreshInterest },
+  WatchSnapshots: {}
 })
 const CommandOperation = Schema.Literals(["StartWork", "Unpause", "Refresh"])
 const requestFields = { hostInstanceId: HostInstanceId, requestId: RequestId, runId: RunId, operation: Operation }
@@ -138,7 +144,14 @@ export const RunningHostError = Schema.TaggedUnion({
     maximumBytes: PositiveCount,
     measuredBytes: Schema.NullOr(Count)
   },
-  WriteTimedOut: { subject: Schema.TaggedStruct("Request", { requestId: RequestId }), deadlineMillis: PositiveCount },
+  SubscriptionLimitExceeded: { scope: Schema.Literals(["Host", "McpSession"]), limit: PositiveCount, current: Count },
+  WriteTimedOut: {
+    subject: Schema.Union([
+      Schema.TaggedStruct("Request", { requestId: RequestId }),
+      Schema.TaggedStruct("Subscription", { subscriptionId: SubscriptionId })
+    ]),
+    deadlineMillis: PositiveCount
+  },
   TransportFailed: {
     phase: Schema.Literals(["Connect", "Handshake", "Response", "Watch", "Write"]),
     reason: Schema.NonEmptyString
@@ -214,6 +227,42 @@ export const RunningHostSnapshot = Schema.Union([
   )
 ])
 export type RunningHostSnapshot = typeof RunningHostSnapshot.Type
+export const RunningHostWatchFrame = Schema.Struct({
+  protocolVersion: Schema.Literal(1),
+  requestId: RequestId,
+  runId: RunId,
+  subscriptionId: SubscriptionId,
+  sequence: WatchSequence,
+  frame: Schema.TaggedUnion({ Snapshot: { value: RunningHostSnapshot }, Failure: { error: RunningHostError } })
+}).check(
+  Schema.makeFilter((value) => coherentWire(value.frame, value.runId) || "watch publication belongs to another Run")
+)
+export type RunningHostWatchFrame = typeof RunningHostWatchFrame.Type
+export const watchFrameEnds = (value: RunningHostWatchFrame) =>
+  value.frame._tag === "Failure" || value.frame.value._tag === "Closed"
+export const encodeRunningHostWatchFrame = Effect.fn("RunningHost.encodeWatchFrame")(function* (
+  frame: RunningHostWatchFrame
+) {
+  const encoded = yield* Schema.encodeUnknownEffect(RunningHostWatchFrame)(frame, { onExcessProperty: "error" }).pipe(
+    Effect.mapError(
+      (): RunningHostError => ({
+        _tag: "ProjectionFailed",
+        causeTag: "WatchSchemaInvalid",
+        detail: "The watch does not satisfy the public schema."
+      })
+    )
+  )
+  const text = JSON.stringify(encoded)
+  const measuredBytes = new TextEncoder().encode(text).byteLength
+  if (measuredBytes > runningHostLimits.resultBytes)
+    return yield* Effect.fail<RunningHostError>({
+      _tag: "FrameTooLarge",
+      direction: "Outgoing",
+      maximumBytes: runningHostLimits.resultBytes,
+      measuredBytes
+    })
+  return text
+})
 const PendingEvidence = Schema.TaggedUnion({
   Pending: {},
   FinalityFailed: {
@@ -236,6 +285,8 @@ const Value = Schema.Union([
   RunningHostRunControl,
   Schema.TaggedStruct("WakeSubmitted", {}),
   Schema.TaggedStruct("RefreshSubmitted", { interest: RefreshInterest }),
+  Schema.TaggedStruct("WatchOpened", { subscriptionId: SubscriptionId, uri: Schema.NonEmptyString }),
+  Schema.TaggedStruct("WatchClosed", { subscriptionId: SubscriptionId }),
   Schema.TaggedStruct("UnpauseApplied", { ordinal: ControlDirectionApplicationOrdinal, acceptedAt: TraceCursor })
 ])
 export type RunningHostValue = typeof Value.Type

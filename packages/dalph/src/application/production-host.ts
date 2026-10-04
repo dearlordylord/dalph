@@ -175,6 +175,7 @@ export interface ProductionRunningHostObservation<E> extends ProductionHostObser
   readonly closing: Effect.Effect<boolean>
   readonly commandAdmission: ApplicationExitAdmissionService
   readonly awaitExitResult: Effect.Effect<void>
+  readonly registerObservationDrain: ProductionHostApplicationExitShellService["registerProcessLocalDrain"]
   readonly executeAttachedCommand: (
     request: RunningHostCommandRequest
   ) => Effect.Effect<RunningHostCommandValue, RunningHostError>
@@ -1172,6 +1173,7 @@ export const withDecodedProductionRepositoryHost = <
         closing: applicationExit.admission.snapshot.pipe(Effect.map((state) => state.cutoffClosed)),
         commandAdmission: applicationExit.admission,
         awaitExitResult: applicationExit.awaitExitResult.pipe(Effect.asVoid),
+        registerObservationDrain: applicationExit.registerProcessLocalDrain,
         executeAttachedCommand: Effect.fn("ProductionHost.executeAttachedCommand")(function* (request) {
           const owner = Context.getOption(run, RunReactivationOwner)
           if (request.operation._tag === "StartWork" || request.operation._tag === "Refresh") {

@@ -17,6 +17,7 @@ import {
 } from "./running-host-contract.js"
 import { projectRunningHostRunControl, projectRunningHostSnapshot } from "./running-host-projection.js"
 import { makeRunningHostCommandOwnership } from "./running-host-command-ownership.js"
+import { makeRunningHostHttpWatch, type writeRunningHostWatchFrame } from "./running-host-http-watch.js"
 
 const defaultHttpPort = 80
 const httpStatus = { success: 200, badRequest: 400, conflict: 409, tooLarge: 413, unavailable: 503 } as const
@@ -96,7 +97,8 @@ const write = Effect.fn("RunningHostHttp.write")(
 /** One listener dispatches passive requests against the already acquired host. */
 export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>(
   address: LocalHostAddress,
-  observation: ProductionRunningHostObservation<E>
+  observation: ProductionRunningHostObservation<E>,
+  watchWriter?: typeof writeRunningHostWatchFrame
 ) {
   const descriptor = RunningHostDescriptor.make({
     _tag: "HostDescriptor",
@@ -117,6 +119,7 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
     observation.awaitExitResult,
     observation.executeAttachedCommand
   )
+  const watch = yield* makeRunningHostHttpWatch(observation, watchWriter)
   const dispatch = Effect.fn("RunningHostHttp.dispatch")(function* (input: unknown, response: ServerResponse) {
     const request = yield* decodeRunningHostRequest(input, descriptor)
     if (yield* observation.closing)
@@ -213,7 +216,7 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       if (request.method === "GET" && request.url === "/dalph/v1/descriptor") {
         return { _tag: "Descriptor" as const, text: JSON.stringify(descriptor) }
       }
-      if (request.method !== "POST" || request.url !== "/dalph/v1/request")
+      if (request.method !== "POST" || (request.url !== "/dalph/v1/request" && request.url !== "/dalph/v1/watch"))
         return yield* Effect.fail(invalid("RouteUnsupported"))
       if (request.headers["content-type"] !== "application/json")
         return yield* Effect.fail(invalid("ContentTypeUnsupported"))
@@ -224,6 +227,13 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
             RunningHostError.guards.FrameTooLarge(error) ? error : invalid("RequestJsonInvalid")
         )
       )
+      const decoded = yield* decodeRunningHostRequest(input, descriptor)
+      if (request.url === "/dalph/v1/watch") {
+        if (decoded.operation._tag !== "WatchSnapshots") return yield* Effect.fail(invalid("WatchOperationRequired"))
+        yield* Effect.scoped(watch(decoded, response))
+        return { _tag: "Watch" as const }
+      }
+      if (decoded.operation._tag === "WatchSnapshots") return yield* Effect.fail(invalid("WatchRouteRequired"))
       const envelope = yield* dispatch(input, response)
       return { _tag: "Envelope" as const, envelope, text: yield* encodeRunningHostEnvelope(envelope) }
     }).pipe(
@@ -234,6 +244,7 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         )
       })
     )
+    if (outcome._tag === "Watch") return
     const error =
       outcome._tag === "Envelope" && outcome.envelope.result._tag === "Failure" ? outcome.envelope.result.error : null
     const status =
@@ -256,6 +267,13 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
           const listener = createServer((request, response) =>
             runRequest(
               handle(request, response).pipe(
+                Effect.raceFirst(
+                  Effect.callback<never>((resume) => {
+                    const disconnected = () => resume(Effect.interrupt)
+                    response.once("close", disconnected)
+                    return Effect.sync(() => response.removeListener("close", disconnected))
+                  })
+                ),
                 Effect.catch(() =>
                   Effect.sync(() => {
                     response.destroy()

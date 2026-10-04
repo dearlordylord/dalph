@@ -762,3 +762,24 @@ Capacity remains #370, paused Refresh #371, watch #372, abrupt killed-host
 reconstruction #374, and full changing-graph qualification #375.
 
 The accepted [Docker-IP attachment extension](running-host-docker-ip.md) supersedes the original loopback-only address restriction. Existing loopback commands remain valid.
+
+## Watch delivery implementation test ownership
+
+The watch slice (#372, executed by #426) extends the existing production
+running-host delivery cassette and keeps transport/process proofs separate.
+The table names maintained tests, not a qualification claim for a candidate.
+
+| Owned chronology | Maintained assertion owner |
+| --- | --- |
+| S1: one current-first attachment; unread initial survives later publication | `running-host-watch-stage.test.ts`: attachment/current/latest and same-position states. `running-host-watch-http.test.ts`: an actual held HTTP writer drains 100 later publications and releases its source before flushing Closed. |
+| S2: actual CLI/MCP watch child loss while A executes; original host completes promotion, confirmation and exact dispositions | `production-running-host.test.ts` extends its real Git/SQLite/provider-controlled recorded delivery cassette; compares journal position, task holders, authority counts and zero Exit requests before releasing A. `running-host-cli.test.ts` separately exercises cancellation and failed stdout through the public watch command. |
+| S8: same accepted position does not deduplicate runtime states; latest coalescing, exact retained Closed and closed reconnect | `running-host-watch-stage.test.ts`, `running-host-watch-http.test.ts`, and `running-host-mcp-watch.test.ts`. Source finalization is asserted independently of downstream consumption. |
+| S8: finite frame/count/write/unread/resource limits | `running-host-watch-contract.test.ts` checks the exact shared byte ceiling and its next byte. `running-host-watch-http.test.ts` checks 32/33 host leases before attachment and 4999/5000 ms writer behavior. `running-host-mcp-watch.test.ts` checks eight/nine active and retained-final resources, failed-allocation rollback, exact release, thirty-second initial and subscribed pending expiry, replacement updates preserving the deadline, timely reads starting the next pending interval, retained diagnostic and final resource expiry. |
+| S8: actual host graceful Exit keeps observations through source closure | `running-host-watch-shutdown.test.ts` uses the production host, real Git/SQLite and controlled executor interruption. Its initial active execution reaches the idle handoff before Exit; the public CLI consumes exact Closed before successful termination, and the admitted MCP watch reads retained Closed after the host cutoff. A held final writer produces correlated transport failures in both adapters under the original lifecycle budget. |
+| S8: established watch correlation and shared MCP transport failure | `running-host-cli.test.ts` and `running-host-mcp-watch.test.ts` assert initial → abrupt disconnect → correlated Failure. `running-host-mcp.test.ts` holds notification output with stdin open, asserts the 4999/5000 ms boundary, then proves both session sources are released. |
+| S11/S12: actual source lifecycle stays separate from accepted Run disposition | Existing projection, HTTP and production client tests remain the owners. Watch transport failure never supplies accepted termination evidence. Crash reconstruction remains #374, broader composed qualification #375. |
+
+The upstream subscription remains loss-free and may retain an unbounded queue
+when its pump is unscheduled or projection is delayed. These tests qualify
+independent draining and exact finalization, plus bounded adapter retention;
+they do not establish a global memory bound or durable observation history.

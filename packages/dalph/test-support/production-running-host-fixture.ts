@@ -76,7 +76,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
     readonly onRootGraphRead?: () => Effect.Effect<void>
     readonly onActivationIdle?: () => Effect.Effect<void>
-  }
+  },
+  interruptStopsTurn = false
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const git = yield* GitCommand
@@ -121,16 +122,24 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         : Effect.void,
     fixture.manifest.invocationId
   )
-  const maskThread = (thread: CodexThreadSnapshot, visible: boolean): CodexThreadSnapshot =>
-    visible
-      ? thread
-      : {
-          ...thread,
-          status: "active" as const,
-          turns: thread.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
-        }
+  // The shutdown fixture acknowledges interrupt, then reconciliation observes an idle interrupted turn.
+  const interrupted = yield* Ref.make(false)
+  const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean): CodexThreadSnapshot =>
+    stopped
+      ? { ...thread, status: "idle", turns: thread.turns.map((turn) => ({ ...turn, status: "interrupted" as const })) }
+      : visible
+        ? thread
+        : {
+            ...thread,
+            status: "active" as const,
+            turns: thread.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
+          }
   const codex = CodexAppServer.of({
     ...provider.codex,
+    interruptTurn: (threadId, turnId) =>
+      provider.codex
+        .interruptTurn(threadId, turnId)
+        .pipe(Effect.andThen(interruptStopsTurn ? Ref.set(interrupted, true) : Effect.void)),
     unattendedPolicyAdmission: Effect.void,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
@@ -171,7 +180,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .readThread(id)
         .pipe(
           Effect.flatMap((thread) =>
-            Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
+            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted)]).pipe(
+              Effect.map(([visible, stopped]) => maskThread(thread, visible, stopped))
+            )
           )
         ),
     resumeThread: (id, cwd) =>
@@ -179,7 +190,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .resumeThread(id, cwd)
         .pipe(
           Effect.flatMap((thread) =>
-            Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
+            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted)]).pipe(
+              Effect.map(([visible, stopped]) => maskThread(thread, visible, stopped))
+            )
           )
         ),
     startTurn: (...args) =>
@@ -202,6 +215,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const trackerCalls = yield* Ref.make(0)
   const gitCalls = yield* Ref.make(0)
   const exitCalls = yield* Ref.make(0)
+  const exitEvents = yield* Ref.make<ReadonlyArray<unknown>>([])
   const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
     Effect.gen(function* () {
       yield* Ref.update(trackerCalls, (count) => count + 1)
@@ -265,6 +279,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   )
   const failures = yield* Ref.make<ReadonlyArray<unknown>>([])
   const activationFinalizing = yield* Deferred.make<void>()
+  const activationIdle = yield* Deferred.make<void>()
   const releaseObservationCut = yield* Deferred.make<void>()
   yield* Effect.addFinalizer(() => Deferred.succeed(releaseObservationCut, undefined).pipe(Effect.asVoid))
   const ownerReady = yield* Deferred.make<RunReactivationOwner["Service"]>()
@@ -275,8 +290,10 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     githubRequestCircuitMaxRequests: 2000,
     onActivationFinalizationStart: () =>
       Deferred.succeed(activationFinalizing, undefined).pipe(Effect.andThen(Deferred.await(releaseObservationCut))),
+    onActivationHandoffIdle: () => Deferred.succeed(activationIdle, undefined).pipe(Effect.asVoid),
     workflowGitCommandObserver: () => Ref.update(gitCalls, (count) => count + 1),
     applicationExitRequestObserver: () => Ref.update(exitCalls, (count) => count + 1),
+    applicationExitTraceObserver: (event) => Ref.update(exitEvents, (events) => [...events, event]),
     onActivationFailure: (failure) => Ref.update(failures, (all) => [...all, failure]),
     codexAppServer: () =>
       Layer.effect(
@@ -362,11 +379,13 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     ),
     releaseObservationCut: Deferred.succeed(releaseObservationCut, undefined).pipe(Effect.asVoid),
     activationFinalizing,
+    activationIdle,
     provider,
     failures,
     trackerCalls,
     gitCalls,
     exitCalls,
+    exitEvents,
     turnEntered,
     completionEntered,
     release: Deferred.succeed(releaseObservationCut, undefined).pipe(

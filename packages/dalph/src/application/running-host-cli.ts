@@ -1,6 +1,6 @@
 /* eslint-disable import/no-nodejs-modules -- This command owns only client stdout/stderr completion. */
 import { RunId } from "@dalph/contracts"
-import { Context, Effect, FileSystem, Layer, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Schema, Stream } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import type { ProductionRunningHostObservation } from "./production-host.js"
@@ -12,8 +12,16 @@ import {
   RefreshInterest,
   type RunningHostError,
   type RunningHostEnvelope,
-  runningHostFailureEnvelope
+  runningHostFailureEnvelope,
+  encodeRunningHostWatchFrame,
+  RequestId,
+  SubscriptionId,
+  type RunningHostWatchFrame,
+  WatchSequence,
+  watchFrameEnds
 } from "./running-host-contract.js"
+import { watchRunningHost } from "./running-host-watch-client.js"
+import { makeRunningHostWatchStage } from "./running-host-watch-stage.js"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { serveRunningHost } from "./running-host-http.js"
 import { runRunningHostMcp } from "./running-host-mcp.js"
@@ -243,6 +251,69 @@ export const makeRunningHostCommands = <E, R>(
   )
   const attach = Command.make("attach").pipe(
     Command.withSubcommands([
+      Command.make(
+        "watch",
+        { host: Flag.string("host"), run: Flag.string("run"), json: Flag.boolean("json") },
+        ({ host, json, run }) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              if (!json)
+                return yield* Effect.fail<RunningHostError>({
+                  _tag: "InvalidRequest",
+                  fieldPath: "/json",
+                  code: "JsonRequired"
+                })
+              const decoded = yield* decodeClient(host, run)
+              if (decoded.runId === null)
+                return yield* Effect.fail<RunningHostError>({
+                  _tag: "InvalidRequest",
+                  fieldPath: "/run",
+                  code: "RunRequired"
+                })
+              const watchRunId = decoded.runId
+              let correlation = {
+                requestId: RequestId.make("client-watch"),
+                subscriptionId: SubscriptionId.make("client-watch")
+              }
+              const stage = yield* makeRunningHostWatchStage(
+                watchRunningHost(decoded.address, watchRunId).pipe(
+                  Stream.tap((frame) =>
+                    Effect.sync(() => {
+                      correlation = { requestId: frame.requestId, subscriptionId: frame.subscriptionId }
+                    })
+                  )
+                ),
+                watchFrameEnds,
+                (error): RunningHostWatchFrame => ({
+                  protocolVersion: 1,
+                  ...correlation,
+                  runId: watchRunId,
+                  sequence: WatchSequence.make(0),
+                  frame: { _tag: "Failure", error }
+                })
+              )
+              let value = yield* stage.takeInitial
+              let sequence = 0
+              for (;;) {
+                yield* encodeRunningHostWatchFrame({ ...value, sequence: WatchSequence.make(sequence) }).pipe(
+                  Effect.flatMap((text) => writeLine(text))
+                )
+                if (value.frame._tag === "Failure")
+                  return yield* new DalphCommandExit({ status: exitFor(value.frame.error) })
+                if (value.frame.value._tag === "Closed") return
+                sequence += 1
+                value = yield* stage.take
+              }
+            })
+          ).pipe(
+            Effect.catch((error) =>
+              error instanceof DalphCommandExit
+                ? Effect.fail(error)
+                : presentEnvelope(runningHostFailureEnvelope(null, error))
+            ),
+            Effect.provide(outputLayer)
+          )
+      ),
       descriptor,
       refresh,
       attached("snapshot"),

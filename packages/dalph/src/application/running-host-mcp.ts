@@ -1,20 +1,23 @@
 /* eslint-disable import/no-nodejs-modules -- The MCP stdio adapter owns only its process-local byte streams. */
-import process from "node:process"
 import { RunId } from "@dalph/contracts"
 import { Effect, FiberMap, Schema, Stream } from "effect"
 import {
   type LocalHostAddress,
   RequestId,
   RefreshInterest,
-  RunningHostEnvelope,
+  SubscriptionId,
+  type RunningHostEnvelope,
   type RunningHostDescriptor,
   type RunningHostError,
+  type RunningHostWatchFrame,
   type RunningHostRequest,
   runningHostFailureEnvelope,
   runningHostLimits
 } from "./running-host-contract.js"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
-import { runningHostNodeOutput } from "./running-host-output.js"
+import { runningHostMcpStdioPorts as stdioPorts } from "./running-host-mcp-stdio.js"
+import { runningHostMcpTools as tools } from "./running-host-mcp-tools.js"
+import { makeRunningHostMcpWatches } from "./running-host-mcp-watch.js"
 
 const rpcParseError = -32700
 const rpcInvalidRequest = -32600
@@ -30,49 +33,13 @@ export interface RunningHostMcpPorts {
   readonly write: (line: string) => Effect.Effect<void, RunningHostError>
 }
 export interface RunningHostMcpClient {
+  readonly watch?: (address: LocalHostAddress, runId: RunId) => Stream.Stream<RunningHostWatchFrame, RunningHostError>
   readonly descriptor: (address: LocalHostAddress) => Effect.Effect<RunningHostDescriptor, RunningHostError>
   readonly call: (
     address: LocalHostAddress,
     runId: RunId,
     operation: RunningHostRequest["operation"]
   ) => Effect.Effect<RunningHostEnvelope>
-}
-const transportFailure = (reason: string): RunningHostError => ({ _tag: "TransportFailed", phase: "Write", reason })
-const stdioPorts: RunningHostMcpPorts = {
-  input: Stream.fromAsyncIterable(process.stdin, () => ({
-    _tag: "TransportFailed",
-    phase: "Response",
-    reason: "MCP input stream failed."
-  })),
-  write: (line) =>
-    Effect.try({
-      try: () => runningHostNodeOutput("stdout"),
-      catch: () => transportFailure("MCP output descriptor is unavailable.")
-    }).pipe(
-      Effect.flatMap((destination) =>
-        Effect.callback<void, RunningHostError>((resume) => {
-          let settled = false
-          const onError = () => {
-            settled = true
-            destination.destroy()
-            resume(Effect.fail(transportFailure("MCP output stream failed.")))
-          }
-          destination.once("error", onError)
-          destination.write(line, (error) => {
-            settled = true
-            destination.removeListener("error", onError)
-            if (error) destination.destroy()
-            resume(error ? Effect.fail(transportFailure("MCP output stream failed.")) : Effect.void)
-          })
-          return Effect.sync(() => {
-            // A timed-out Effect must also cancel its queued Node write. Otherwise
-            // pipe backpressure retains the client process after the deadline.
-            if (!settled) destination.destroy()
-            destination.removeListener("error", onError)
-          })
-        })
-      )
-    )
 }
 const Message = Schema.Struct({
   jsonrpc: Schema.Literal("2.0"),
@@ -86,59 +53,8 @@ const Initialize = Schema.Struct({
   clientInfo: Schema.Struct({ name: Schema.String, version: Schema.String, title: Schema.optionalKey(Schema.String) })
 })
 const ToolArguments = Schema.Struct({ runId: RunId })
-const ToolCall = Schema.Union([
-  Schema.Struct({ name: Schema.String, arguments: ToolArguments }),
-  Schema.Struct({
-    name: Schema.Literal("dalph_refresh"),
-    arguments: Schema.Struct({ runId: RunId, interest: RefreshInterest })
-  })
-])
+const ToolCall = Schema.Struct({ name: Schema.String, arguments: Schema.Unknown })
 const ResourceRead = Schema.Struct({ uri: Schema.String })
-const document = Schema.toJsonSchemaDocument(RunningHostEnvelope, { additionalProperties: false })
-const outputSchema = { ...document.schema, type: "object", $defs: document.definitions }
-const inputSchema = {
-  type: "object",
-  properties: { runId: { type: "string", minLength: 1 } },
-  required: ["runId"],
-  additionalProperties: false
-}
-const refreshInput = Schema.toJsonSchemaDocument(Schema.Struct({ runId: RunId, interest: RefreshInterest }), {
-  additionalProperties: false
-})
-const tools = [
-  {
-    name: "dalph_refresh",
-    description:
-      "Submit a tracker notification with whole-graph or advisory task interest; preserves Pause and promises no completed read.",
-    inputSchema: { ...refreshInput.schema, $defs: refreshInput.definitions },
-    outputSchema
-  },
-  {
-    name: "dalph_read_snapshot",
-    description: "Read one coherent passive publication from the selected Run.",
-    inputSchema,
-    outputSchema
-  },
-  {
-    name: "dalph_read_run_control",
-    description: "Read accepted Run control and separately labelled termination evidence.",
-    inputSchema,
-    outputSchema
-  },
-  {
-    name: "dalph_start_work",
-    description: "Submit a request to check for work; preserve Pause.",
-    inputSchema,
-    outputSchema
-  },
-  {
-    name: "dalph_unpause",
-    description: "Explicitly apply Run Unpause and await its owner callback; never automatically replay.",
-    inputSchema,
-    outputSchema
-  }
-]
-
 /** Implements the pinned read and wake/Unpause MCP surface. */
 export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
   function* (
@@ -185,6 +101,12 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
             })
           )
       })
+    const watches = yield* makeRunningHostMcpWatches(
+      address,
+      runId,
+      (uri) => write({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri } }),
+      client.watch
+    )
     const handle = (line: string) =>
       Effect.gen(function* () {
         const parsed = yield* Effect.try({ try: (): unknown => JSON.parse(line), catch: () => "InvalidJson" }).pipe(
@@ -237,7 +159,7 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
           initialized = true
           return yield* reply({
             protocolVersion: "2025-11-25",
-            capabilities: { tools: {}, resources: {} },
+            capabilities: { tools: {}, resources: { subscribe: true } },
             serverInfo: { name: "dalph", version: "1" }
           })
         }
@@ -251,10 +173,77 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
             Effect.result
           )
           if (call._tag === "Failure")
-            return yield* reject(rpcInvalidParams, "Tool arguments must satisfy the closed operation schema.")
+            return yield* reject(rpcInvalidParams, "Tool arguments must contain only the exact RunId.")
+          const args = yield* Schema.decodeUnknownEffect(
+            call.success.name === "dalph_close_watch"
+              ? Schema.Struct({ runId: RunId, subscriptionId: SubscriptionId })
+              : call.success.name === "dalph_refresh"
+                ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
+                : ToolArguments
+          )(call.success.arguments, { onExcessProperty: "error" }).pipe(Effect.result)
+          if (args._tag === "Failure")
+            return yield* reject(
+              rpcInvalidParams,
+              "Invalid tool arguments",
+              runningHostFailureEnvelope(null, {
+                _tag: "InvalidRequest",
+                fieldPath: "/arguments",
+                code: "ToolArgumentsInvalid"
+              })
+            )
+          if (call.success.name === "dalph_watch_snapshots" || call.success.name === "dalph_close_watch") {
+            sequence += 1
+            const correlation = { runId: args.success.runId, requestId: RequestId.make(`mcp-${sequence}`) }
+            const result: Effect.Effect<
+              | { _tag: "WatchOpened"; subscriptionId: SubscriptionId; uri: string }
+              | { _tag: "WatchClosed"; subscriptionId: SubscriptionId },
+              RunningHostError
+            > = Effect.gen(function* () {
+              if (args.success.runId !== runId)
+                return yield* Effect.fail<RunningHostError>({
+                  _tag: "RunMismatch",
+                  requestedRunId: args.success.runId,
+                  selectedRunId: runId
+                })
+              if (call.success.name === "dalph_watch_snapshots") return yield* watches.open()
+              if (!("subscriptionId" in args.success))
+                return yield* Effect.fail<RunningHostError>({
+                  _tag: "InvalidRequest",
+                  fieldPath: "/subscriptionId",
+                  code: "SubscriptionRequired"
+                })
+              const id = yield* Schema.decodeUnknownEffect(SubscriptionId)(args.success.subscriptionId).pipe(
+                Effect.mapError(
+                  (): RunningHostError => ({
+                    _tag: "InvalidRequest",
+                    fieldPath: "/subscriptionId",
+                    code: "SubscriptionInvalid"
+                  })
+                )
+              )
+              return yield* watches.close(id)
+            })
+            const value = yield* result.pipe(Effect.result)
+            const envelope =
+              value._tag === "Failure"
+                ? runningHostFailureEnvelope(correlation, value.failure)
+                : { protocolVersion: 1, ...correlation, result: { _tag: "Success", value: value.success } }
+            return yield* reply({
+              structuredContent: envelope,
+              content: [{ type: "text", text: JSON.stringify(envelope) }],
+              isError: value._tag === "Failure"
+            })
+          }
+          const refreshInterest =
+            call.success.name === "dalph_refresh"
+              ? yield* Schema.decodeUnknownEffect(RefreshInterest)(
+                  "interest" in args.success ? args.success.interest : undefined
+                ).pipe(Effect.result)
+              : null
+          if (refreshInterest?._tag === "Failure") return yield* reject(rpcInvalidParams, "Invalid refresh interest")
           const operation =
-            call.success.name === "dalph_refresh" && "interest" in call.success.arguments
-              ? { _tag: "Refresh" as const, interest: call.success.arguments.interest }
+            refreshInterest?._tag === "Success"
+              ? { _tag: "Refresh" as const, interest: refreshInterest.success }
               : call.success.name === "dalph_read_snapshot"
                 ? { _tag: "ReadSnapshot" as const }
                 : call.success.name === "dalph_read_run_control"
@@ -268,11 +257,11 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
           sequence += 1
           const execute = Effect.gen(function* () {
             const envelope =
-              call.success.arguments.runId === runId
+              args.success.runId === runId
                 ? yield* client.call(address, runId, operation)
                 : runningHostFailureEnvelope(
-                    { runId: call.success.arguments.runId, requestId: RequestId.make(`mcp-${sequence}`) },
-                    { _tag: "RunMismatch", requestedRunId: call.success.arguments.runId, selectedRunId: runId }
+                    { runId: args.success.runId, requestId: RequestId.make(`mcp-${sequence}`) },
+                    { _tag: "RunMismatch", requestedRunId: args.success.runId, selectedRunId: runId }
                   )
             return yield* reply({
               structuredContent: envelope,
@@ -288,12 +277,32 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
           }
           return yield* execute
         }
+        if (message.method === "resources/subscribe" || message.method === "resources/unsubscribe") {
+          const resource = yield* Schema.decodeUnknownEffect(ResourceRead)(message.params, {
+            onExcessProperty: "error"
+          }).pipe(Effect.result)
+          if (resource._tag === "Failure") return yield* reject(rpcInvalidParams, "A watch URI is required")
+          const result = yield* (
+            message.method === "resources/subscribe"
+              ? watches.subscribe(resource.success.uri)
+              : watches.unsubscribe(resource.success.uri)
+          ).pipe(Effect.result)
+          return yield* result._tag === "Failure"
+            ? reject(rpcResourceNotFound, "Watch not found", runningHostFailureEnvelope(null, result.failure))
+            : reply({})
+        }
         if (message.method === "resources/read") {
           const read = yield* Schema.decodeUnknownEffect(ResourceRead)(message.params, {
             onExcessProperty: "error"
           }).pipe(Effect.result)
           if (read._tag === "Failure") return yield* reject(rpcInvalidParams, "A resource URI is required.")
           const uri = read.success.uri
+          if (/^dalph:\/\/runs\/[^/]+\/watches\//.test(uri)) {
+            const frame = yield* watches.read(uri).pipe(Effect.result)
+            return yield* frame._tag === "Failure"
+              ? reject(rpcResourceNotFound, "Watch not found", runningHostFailureEnvelope(null, frame.failure))
+              : reply({ contents: [{ uri, mimeType: "application/json", text: JSON.stringify(frame.success) }] })
+          }
           if (uri === "dalph://host/descriptor") {
             const descriptor = yield* client.descriptor(address).pipe(Effect.result)
             if (descriptor._tag === "Failure")
@@ -373,7 +382,8 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
           }
         })
       ),
-      Effect.raceFirst(FiberMap.join(commands))
+      Effect.raceFirst(FiberMap.join(commands)),
+      Effect.raceFirst(watches.failure)
     )
     if (pending.byteLength > 0)
       return yield* Effect.fail<RunningHostError>({
