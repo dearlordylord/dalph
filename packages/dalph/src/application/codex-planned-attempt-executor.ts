@@ -1218,6 +1218,11 @@ const makeCodexPlannedAttemptExecutorContext = (
 
     const censusHasActivity = (census: CodexOwnedActivityCensusProjection): boolean => census._tag !== "Absent"
 
+    const canContinueActivityObservation = (
+      census: CodexOwnedActivityCensusProjection,
+      terminalReadAuthorized = false
+    ): boolean => census._tag === "ExactLive" || (terminalReadAuthorized && census._tag === "Unreadable")
+
     const terminateBackgroundActivities = (
       threadId: CodexThreadId,
       terminals: ReadonlyArray<{ readonly processId: string }>
@@ -1295,16 +1300,23 @@ const makeCodexPlannedAttemptExecutorContext = (
       correlation: PlannedAttemptExecutorCorrelation,
       record: OwnedTurnRecord,
       turn: CodexTurnSnapshot,
-      thread: CodexThreadSnapshot
+      thread: CodexThreadSnapshot,
+      terminalReadAuthorized = false
     ) {
       const commit = commitFromTurn(turn, correlation)
       const head = yield* readHead(attempt)
       if (commit === undefined) {
-        return { _tag: "Report" as const, outcome: yield* failed(attempt, correlation, record, turn.id, thread) }
+        return {
+          _tag: "Report" as const,
+          outcome: yield* failed(attempt, correlation, record, turn.id, thread, terminalReadAuthorized)
+        }
       }
       if (head === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       if (commit !== head) {
-        return { _tag: "Report" as const, outcome: yield* failed(attempt, correlation, record, turn.id, thread) }
+        return {
+          _tag: "Report" as const,
+          outcome: yield* failed(attempt, correlation, record, turn.id, thread, terminalReadAuthorized)
+        }
       }
       return { _tag: "Commit" as const, commit }
     })
@@ -1339,9 +1351,10 @@ const makeCodexPlannedAttemptExecutorContext = (
       correlation: PlannedAttemptExecutorCorrelation,
       record: OwnedTurnRecord,
       turn: CodexTurnSnapshot,
-      thread: CodexThreadSnapshot
+      thread: CodexThreadSnapshot,
+      terminalReadAuthorized = false
     ) {
-      const commitResult = yield* acceptedCommit(attempt, correlation, record, turn, thread)
+      const commitResult = yield* acceptedCommit(attempt, correlation, record, turn, thread, terminalReadAuthorized)
       if (commitResult._tag === "Report") return commitResult.outcome
       const commit = commitResult.commit
       if (Option.isNone(evidenceStore)) return yield* Effect.fail(new CodexEvidenceUnavailable({}))
@@ -1351,7 +1364,10 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (rereadHead !== commit) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
-        return { continueLifecycleObservation: finalCensus._tag === "ExactLive", report: running(correlation) }
+        return {
+          continueLifecycleObservation: canContinueActivityObservation(finalCensus, terminalReadAuthorized),
+          report: running(correlation)
+        }
       }
       const sealed = CodexSealedTerminal.cases.Accepted.make({ commit, evidenceManifest: reference })
       yield* save(terminalRecordFor(attempt, record, turn.id, sealed, reference))
@@ -1394,7 +1410,10 @@ const makeCodexPlannedAttemptExecutorContext = (
       }
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
-        return { continueLifecycleObservation: finalCensus._tag === "ExactLive", report: running(correlation) }
+        return {
+          continueLifecycleObservation: canContinueActivityObservation(finalCensus, true),
+          report: running(correlation)
+        }
       }
       return {
         continueLifecycleObservation: false,
@@ -1412,11 +1431,15 @@ const makeCodexPlannedAttemptExecutorContext = (
       correlation: PlannedAttemptExecutorCorrelation,
       record: OwnedTurnRecord,
       observedTurnId: CodexTurnId,
-      thread: CodexThreadSnapshot
+      thread: CodexThreadSnapshot,
+      terminalReadAuthorized = false
     ) {
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
-        return { continueLifecycleObservation: finalCensus._tag === "ExactLive", report: running(correlation) }
+        return {
+          continueLifecycleObservation: canContinueActivityObservation(finalCensus, terminalReadAuthorized),
+          report: running(correlation)
+        }
       }
       yield* save(terminalRecordFor(attempt, record, observedTurnId, CodexSealedTerminal.cases.Failed.make({}), null))
       return { continueLifecycleObservation: false, report: terminal(correlation, { _tag: "Failed" }) }
@@ -1464,7 +1487,8 @@ const makeCodexPlannedAttemptExecutorContext = (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       observedRecord: OwnedTurnRecord,
-      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
+      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>,
+      terminalReadAuthorized = false
     ) {
       const turn = reconciliation.turn
       if (observedRecord._tag === "Terminal") {
@@ -1475,9 +1499,16 @@ const makeCodexPlannedAttemptExecutorContext = (
         return { continueLifecycleObservation: false, report: terminal(correlation, { _tag: "Failed" }) }
       }
       if (turn.status === "completed") {
-        return yield* accepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
+        return yield* accepted(
+          attempt,
+          correlation,
+          observedRecord,
+          turn,
+          reconciliation.thread,
+          terminalReadAuthorized
+        )
       }
-      return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread)
+      return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread, terminalReadAuthorized)
     })
 
     const terminalOrRunningOutcome = Effect.fn("CodexPlannedAttemptExecutor.terminalOrRunningOutcome")(function* (
@@ -1492,6 +1523,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (exactCompletionHintRequired && hasUnsealedOwnedTurn && !completionHintAuthorized) {
         return { continueLifecycleObservation: false, report: running(correlation) }
       }
+      const terminalReadAuthorized = record._tag === "Terminal" || completionHintAuthorized
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
       const toolEffects = yield* listToolEffects(correlation)
       const census = yield* observeOwnedActivity(
@@ -1500,11 +1532,11 @@ const makeCodexPlannedAttemptExecutorContext = (
       )
       if (censusHasActivity(census)) {
         return {
-          continueLifecycleObservation: census._tag === "ExactLive",
+          continueLifecycleObservation: canContinueActivityObservation(census, terminalReadAuthorized),
           report: yield* runningAfterActivity(attempt, correlation, observedRecord)
         }
       }
-      return yield* finishTerminalOrFailed(attempt, correlation, observedRecord, reconciliation)
+      return yield* finishTerminalOrFailed(attempt, correlation, observedRecord, reconciliation, terminalReadAuthorized)
     })
 
     const terminalOrRunning = Effect.fn("CodexPlannedAttemptExecutor.terminalOrRunning")(function* (
