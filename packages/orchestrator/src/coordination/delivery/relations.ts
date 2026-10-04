@@ -1,3 +1,4 @@
+import type { DeliveryDiagnostics } from "./delivery-diagnostics.js"
 /* eslint-disable max-lines -- Delivery relationships, service colours, and composition vocabulary stay co-located for auditability. */
 import {
   PlannedAttemptExecutorReport,
@@ -544,6 +545,7 @@ export type PauseCoverageFacts =
 
 /** Runtime facts are descriptive inputs; the runtime never reconstructs them from route tags. */
 interface DeliveryRuntimeFactsBase {
+  readonly diagnostics?: DeliveryDiagnostics
   /** Latest failed WorkflowEstablishment graph read after this activation's accepted baseline. */
   readonly failedWorkflowEstablishmentGraphReadAt?: JournalPosition
   readonly pauseCoverage: PauseCoverageFacts
@@ -591,6 +593,7 @@ export interface DeliveryRelationInputBundle {
 
 /** One coherent value consumed by the runtime action owner. */
 export interface DeliveryRuntimeEvaluation {
+  readonly diagnostics?: DeliveryDiagnostics
   readonly _tag: "DeliveryRuntimeEvaluation"
   readonly acceptedAt: JournalPosition | null
   /** Latest failed WorkflowEstablishment graph read after this activation's accepted baseline. */

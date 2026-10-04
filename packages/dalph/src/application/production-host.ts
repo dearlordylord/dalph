@@ -11,6 +11,8 @@ import {
 } from "@dalph/contracts"
 import {
   AcceptedJournalReader,
+  currentSignalFromCurrentFirstStream,
+  projectDeliveryDiagnostics,
   type AcceptedRunControlDirection,
   acceptedJournalRecordsForKind,
   journalRecordAt,
@@ -82,7 +84,20 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
-import { Context, Crypto, Deferred, Effect, Layer, Logger, Option, Ref, Schema, Semaphore, type Scope } from "effect"
+import {
+  Context,
+  Crypto,
+  Deferred,
+  Effect,
+  Layer,
+  Logger,
+  Option,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+  type Scope
+} from "effect"
 // eslint-disable-next-line import/no-nodejs-modules -- The production host selects its own Node executable for task preparation.
 import nodeProcess from "node:process"
 import { isolatedPlannedAttemptExecutorLayer } from "./isolated-planned-attempt-executor.js"
@@ -184,6 +199,7 @@ export interface ProductionRunningHostObservation<E> extends ProductionHostObser
   readonly closing: Effect.Effect<boolean>
   readonly commandAdmission: ApplicationExitAdmissionService
   readonly awaitExitResult: Effect.Effect<void>
+  readonly registerObservationDrain: ProductionHostApplicationExitShellService["registerProcessLocalDrain"]
   readonly executeAttachedCommand: (
     request: RunningHostCommandRequest
   ) => Effect.Effect<RunningHostCommandValue, RunningHostError>
@@ -356,6 +372,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly onAcceptedRunControl?: (direction: AcceptedRunControlDirection) => Effect.Effect<void>
   /** Optional observation of each admitted activation finalization. */
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
+  /** Qualification-only observation of the existing owner idle handoff. */
+  readonly onActivationHandoffIdle?: () => Effect.Effect<void>
   /** Qualification synchronization immediately before the real expected-head Git mutation. */
   readonly targetPromotionCompareAndSetObserver?: (request: TargetPromotionGitRequest) => Effect.Effect<void>
   /** Qualification-only process view shared by app-server ownership and attempt activity observations. */
@@ -1153,6 +1171,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             ...(adapters.onActivationFinalizationStart === undefined
               ? {}
               : { onActivationFinalizationStart: adapters.onActivationFinalizationStart }),
+            ...(adapters.onActivationHandoffIdle === undefined
+              ? {}
+              : { onActivationHandoffIdle: adapters.onActivationHandoffIdle }),
             ...(adapters.onTimerStateChange === undefined ? {} : { onTimerStateChange: adapters.onTimerStateChange }),
             ...(adapters.onAcceptedRunControl === undefined
               ? {}
@@ -1262,9 +1283,33 @@ export const withDecodedProductionRepositoryHost = <
               : null
         } satisfies ProductionPassiveRunControl
       })
+      // An activation may finish immediately after retaining a failed read.
+      // Diagnostics follow accepted history even while execution is idle.
+      const readDiagnosticCurrent = Effect.gen(function* () {
+        const state = yield* source.current.get
+        if (state._tag !== "Ready" || Option.isNone(acceptedReader)) return state
+        const prefix = yield* acceptedReader.value.readAccepted(selection.runId).pipe(Effect.result)
+        if (prefix._tag === "Failure") return state
+        return {
+          ...state,
+          evaluation: {
+            ...state.evaluation,
+            diagnostics: projectDeliveryDiagnostics(selection.runId, prefix.success, undefined, configuration.target)
+          }
+        }
+      })
+      const diagnosticCurrent = currentSignalFromCurrentFirstStream(
+        Stream.merge(
+          source.current.changes.pipe(Stream.map(() => undefined)),
+          source.acceptedHistory.changes.pipe(Stream.map(() => undefined))
+        ).pipe(
+          Stream.mapEffect(() => readDiagnosticCurrent),
+          Stream.takeUntil((state) => state._tag === "Closed")
+        )
+      )
       const observation = {
         acceptedHistory: source.acceptedHistory,
-        current: source.current,
+        current: diagnosticCurrent,
         runTermination: source.runTermination,
         selection,
         traceReader,
@@ -1275,17 +1320,22 @@ export const withDecodedProductionRepositoryHost = <
         closing: applicationExit.admission.snapshot.pipe(Effect.map((state) => state.cutoffClosed)),
         commandAdmission: applicationExit.admission,
         awaitExitResult: applicationExit.awaitExitResult.pipe(Effect.asVoid),
+        registerObservationDrain: applicationExit.registerProcessLocalDrain,
         executeAttachedCommand: Effect.fn("ProductionHost.executeAttachedCommand")(function* (request) {
           const owner = Context.getOption(run, RunReactivationOwner)
-          if (request.operation._tag === "StartWork") {
+          if (request.operation._tag === "StartWork" || request.operation._tag === "Refresh") {
             if (Option.isNone(owner))
               return yield* Effect.fail<RunningHostError>({
                 _tag: "CommandFailed",
-                operation: "StartWork",
+                operation: request.operation._tag,
                 stage: "BeforeApplication",
                 causeTag: "RunOwnerUnavailable",
                 detail: "The Run owner is unavailable."
               })
+            if (request.operation._tag === "Refresh") {
+              yield* owner.value.hint(RunReactivationHint.TrackerNotification())
+              return { _tag: "RefreshSubmitted" as const, interest: request.operation.interest }
+            }
             yield* owner.value.hint(RunReactivationHint.OperatorWake())
             return { _tag: "WakeSubmitted" as const }
           }

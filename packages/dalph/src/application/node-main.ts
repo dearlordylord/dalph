@@ -12,7 +12,13 @@ const configuredSensitiveValues = () => [
 
 const runMainWithoutSignalInterruption = Runtime.makeRunMain(({ fiber, teardown }) => {
   fiber.addObserver((exit) => {
-    if (exit._tag === "Failure" && Cause.hasDies(exit.cause)) {
+    if (
+      exit._tag === "Failure" &&
+      exit.cause.reasons.some(
+        (reason) =>
+          Cause.isDieReason(reason) || (Cause.isFailReason(reason) && !(reason.error instanceof DalphCommandExit))
+      )
+    ) {
       try {
         nodeProcess.stderr.write(encodeRuntimeDiagnostic(projectRuntimeCause(exit.cause, configuredSensitiveValues())))
       } catch {

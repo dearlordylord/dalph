@@ -69,6 +69,14 @@ const dependencyWaitHasPrerequisites = (facts: ResponsibilityFreshFacts): boolea
 export const dependencyWaitIsEmpty = (facts: ResponsibilityFreshFacts): boolean =>
   facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length === 0
 
+/** Accepted terminal failure remains visible even after its live obligation ends. */
+export const executorFailureFor = (facts: ResponsibilityFreshFacts) =>
+  facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+  facts.disposition._tag === "PlannedAttemptExecutorWorkTerminal" &&
+  facts.disposition.report.result._tag === "Failed"
+    ? { responsibility: facts.responsibility, failureCode: facts.disposition.report.result.failureCode ?? null }
+    : null
+
 export const responsibilityHasStatusProjection = (
   facts: ResponsibilityFreshFacts,
   acceptedStanding: boolean

@@ -64,6 +64,7 @@ export const makeRunningHostReadProbe = Effect.fn("RunningHostTest.readProbe")(f
     closing: Ref.get(closing),
     commandAdmission: lifecycle.admission,
     awaitExitResult: lifecycle.awaitExitResult.pipe(Effect.asVoid),
+    registerObservationDrain: () => Effect.void,
     executeAttachedCommand: () => Effect.die("passive probe cannot execute commands"),
     runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
     applicationExitRequestBoundary: { requestExit: Effect.die("read cannot request Exit") },

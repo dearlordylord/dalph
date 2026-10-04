@@ -37,7 +37,7 @@ import {
   JournalDatabaseLocator,
   InRunJournal
 } from "@dalph/orchestrator"
-import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Ref, Schema, Stream } from "effect"
 import {
   CodexAppServer,
   codexAppServerNodeLayer,
@@ -46,9 +46,14 @@ import {
 import {
   CodexAttemptRecord,
   CodexAttemptStore,
+  type CodexAttemptStoreService,
   nodeCodexAttemptStoreLayer
 } from "../src/application/codex-attempt-store.js"
-import { nodeCodexPlannedAttemptExecutorLayer } from "../src/application/codex-planned-attempt-executor.js"
+import { codexPlannedAttemptExecutorLayerWithOptions } from "../src/application/codex-planned-attempt-executor.js"
+import {
+  makeQualificationCensusDiagnostic,
+  readQualificationRetainedAttemptState
+} from "../src/qualification/codex-census-diagnostic.js"
 import { qualificationWorkflowJournalLayer } from "../src/application/qualification-journal.js"
 import { CodexQualificationAction, CodexQualificationHostEvent } from "./codex-qualification-host-contract.js"
 
@@ -137,15 +142,19 @@ const terminalObservationAttempts = 600
 
 const settleAttempt = (
   lifecycle: PlannedAttemptExecutorLifecycleObservationService,
-  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>
+  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
+  store: CodexAttemptStoreService,
+  lastCensus: Ref.Ref<string>
 ): Effect.Effect<PlannedAttemptExecutorReport, unknown> =>
   Effect.scoped(
     Effect.gen(function* () {
       const attachment = yield* lifecycle.attach(correlation)
+      const latest = yield* Ref.make(attachment.current)
       const terminalProjection =
         attachment.current._tag === "Exact" && attachment.current.report._tag !== "ExecutorWorkExecuting"
           ? Option.some(attachment.current)
           : yield* attachment.changes.pipe(
+              Stream.tap((projection) => Ref.set(latest, projection)),
               Stream.filter(
                 (projection) => projection._tag === "Exact" && projection.report._tag !== "ExecutorWorkExecuting"
               ),
@@ -155,9 +164,13 @@ const settleAttempt = (
             )
       yield* attachment.close
       if (Option.isNone(terminalProjection)) {
+        const last = yield* Ref.get(latest)
+        const observation = last._tag === "Exact" ? `${last._tag}/${last.report._tag}` : last._tag
+        const retainedState = yield* readQualificationRetainedAttemptState(store, correlation)
+        const census = yield* Ref.get(lastCensus)
         return yield* Effect.fail(
           new QualificationConfigurationFailure({
-            detail: "real Codex turn did not settle within the qualification observation bound"
+            detail: `real Codex turn did not settle within the qualification observation bound; last projection=${observation}; retained state=${retainedState}; last census=${census}`
           })
         )
       }
@@ -182,6 +195,15 @@ const waitForOwnedChildPublication = (
         : Effect.sleep("25 millis").pipe(Effect.andThen(waitForOwnedChildPublication(worktree, remaining - 1)))
     )
   )
+
+/** The test releases a boundary only after observing its required provider facts. */
+const waitForFixtureContinuation = Effect.promise(
+  () =>
+    new Promise<void>((resolve) => {
+      nodeProcess.stdin.once("data", () => resolve())
+      nodeProcess.stdin.resume()
+    })
+)
 
 const specificationFor = (configuration: QualificationConfiguration) =>
   makeTaskWorkSpecification({ body: taskBody, taskId: configuration.taskId, title: "Real Codex qualification" })
@@ -263,7 +285,9 @@ const configurationProgram = Effect.gen(function* () {
       const evidenceLayer = nodeEvidenceStoreLayer(EvidenceStoreLocator.make(configuration.evidenceDirectory)).pipe(
         Layer.provide(NodeServices.layer)
       )
-      const runtimeLayer = nodeCodexPlannedAttemptExecutorLayer.pipe(
+      const { lastCensus, layer: diagnosticCensusLayer } = yield* makeQualificationCensusDiagnostic
+      const runtimeLayer = codexPlannedAttemptExecutorLayerWithOptions({}).pipe(
+        Layer.provide(diagnosticCensusLayer),
         Layer.provideMerge(Layer.mergeAll(appAndStoreLayer, gitLayer, evidenceLayer, exitLayer))
       )
       // eslint-disable-next-line complexity -- One disposable host interprets the accepted chronology's closed action vocabulary.
@@ -322,7 +346,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(
             projectionEvent(
               configuration.waitForTerminalProjection
-                ? { _tag: "Exact", report: yield* settleAttempt(lifecycle, correlation) }
+                ? { _tag: "Exact", report: yield* settleAttempt(lifecycle, correlation, store, lastCensus) }
                 : yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
             )
           )
@@ -333,26 +357,21 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(reportEvent("Begin", initial))
           if (initial._tag === "ExecutorWorkExecuting") {
             yield* Effect.sleep("100 millis")
-            yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation)))
+            yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation, store, lastCensus)))
           }
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
-          yield* Effect.sleep("100 millis")
+          yield* writeEvent({ event: "suspension-ready" })
+          yield* waitForFixtureContinuation
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
         } else if (configuration.action === "exercise-terminal-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           yield* writeEvent({ event: "suspension-ready" })
-          yield* Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                nodeProcess.stdin.once("data", () => resolve())
-                nodeProcess.stdin.resume()
-              })
-          )
-          yield* settleAttempt(lifecycle, correlation)
+          yield* waitForFixtureContinuation
+          yield* settleAttempt(lifecycle, correlation, store, lastCensus)
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))

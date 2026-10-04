@@ -1,6 +1,6 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { expect, it } from "@effect/vitest"
-import { Effect, Layer, Match, Option, Ref } from "effect"
+import { Effect, Layer, Match, Option, Ref, Schema } from "effect"
 import { trackerGraphReaderContract } from "../../../../test/contracts/tracker-graph-reader-contract.js"
 import { FixtureTarget } from "../fixture/target.js"
 import { TaskLifecycle } from "../task.js"
@@ -1070,5 +1070,58 @@ it.effect("bounds wide closure batches and follows both relation cursors togethe
           batch.reads.some((read) => read._tag === "ReadBlockedBy" && read.cursor === "blockers-page")
       )
     ).toBe(true)
+  })
+)
+
+it.effect("retains readable issue identity in the existing graph read", () =>
+  Effect.gen(function* () {
+    const reader = yield* TrackerGraphReader
+    const graph = yield* reader.read(target)
+    expect(graph.toWire().tasks.find(({ id }) => id === root)?.descriptor).toEqual({
+      title: "Readable root",
+      issueNumber: 430
+    })
+  }).pipe(
+    Effect.provide(githubTrackerGraphReaderLayer),
+    Effect.provide(
+      clientLayerFor((request) =>
+        request._tag === "ReadIssue" && request.issueNodeId === "root-node"
+          ? page({
+              data: {
+                node: {
+                  __typename: "Issue",
+                  id: "root-node",
+                  parent: null,
+                  repository: { id: "repository-node" },
+                  state: "OPEN",
+                  stateReason: null,
+                  title: "Readable root",
+                  number: 430
+                }
+              }
+            })
+          : responseFor(request)
+      )
+    )
+  )
+)
+
+it.effect("preserves provider throttle timing without inventing a retry deadline", () =>
+  Effect.gen(function* () {
+    const error = yield* failedRead(
+      Layer.succeed(
+        GithubGraphqlClient,
+        githubGraphqlTestClient((request) =>
+          Effect.fail(
+            new GithubGraphqlReadThrottled({
+              detail: "private response omitted",
+              operation: request._tag === "ReadGraphBatch" ? "ReadGraphBatch" : "ResolveIssue",
+              retry: Schema.decodeUnknownSync(GithubGraphqlThrottleEvidence)({ _tag: "RetryAfterSeconds", seconds: 12 })
+            })
+          )
+        )
+      )
+    )
+    expect(error).toMatchObject({ reason: { _tag: "Throttled", retry: { _tag: "RetryAfterSeconds", seconds: 12 } } })
   })
 )

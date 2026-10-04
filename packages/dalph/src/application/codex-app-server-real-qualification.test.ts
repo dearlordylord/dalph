@@ -370,6 +370,8 @@ const createGitFixture = async (mode: QualificationMode): Promise<GitFixture> =>
   const endpoint = await model.start()
   const config = [
     'model = "fixture-model"',
+    // Plugin marketplace cloning is outside this local provider/process qualification.
+    "features.plugins = false",
     'model_provider = "fixture"',
     'approval_policy = "on-request"',
     'sandbox_mode = "read-only"',

@@ -188,6 +188,7 @@ type NonActionStatusEntry = Exclude<
 >
 
 const statusEntryPosition = Match.typeTags<NonActionStatusEntry, StructuralOrderPosition>()({
+  ExecutorFailure: (entry) => orderPosition(entry.responsibility.beganAt),
   DependencyWait: (entry) => dependencyEntryPosition(entry.standing),
   TrackerFactWait: (entry) => optionalObligationPosition(entry.responsibility),
   TaskWorkCapacityWait: (entry) => orderPosition(entry.placement.rank),
@@ -220,6 +221,8 @@ const dependencyStandingIdentity = (
 }
 
 export const statusEntryIdentity = Match.typeTags<DeliveryStatusEntry, string>()({
+  ExecutorFailure: (entry) =>
+    canonicalIdentity([statusEntryPrefix(entry), workflowResponsibilityKey(entry.responsibility)]),
   DependencyWait: (entry) =>
     canonicalIdentity([
       statusEntryPrefix(entry),
@@ -386,7 +389,9 @@ const unavailableEvidencePhenomenonOrderValue = 8
 const evidenceConflictPhenomenonOrderValue = 9
 const settlementPhenomenonOrderValue = 10
 const relinquishmentPhenomenonOrderValue = 11
+const executorFailurePhenomenonOrderValue = 12
 const phenomenonOrder: Readonly<Record<DeliveryStatusEntry["_tag"], StatusComparisonRank>> = {
+  ExecutorFailure: comparisonRank(executorFailurePhenomenonOrderValue),
   DependencyWait: comparisonRank(1),
   TrackerFactWait: comparisonRank(trackerFactPhenomenonOrderValue),
   TaskWorkCapacityWait: comparisonRank(taskWorkCapacityPhenomenonOrderValue),

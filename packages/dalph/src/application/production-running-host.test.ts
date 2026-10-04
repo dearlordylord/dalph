@@ -1,13 +1,28 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification starts actual public client processes and allocates a local listener port. */
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { createServer } from "node:net"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
-import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Option, Ref, Schema, Stream } from "effect"
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FiberSet,
+  FileSystem,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream
+} from "effect"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import {
   JournalStore,
+  GithubGraphqlReadThrottled,
+  GithubGraphqlRequestError,
   GitCommand,
   completionOriginalTaskClaimReleaseFor,
   attachCurrentSignal,
@@ -19,6 +34,7 @@ import { LocalHostAddress, RunningHostDescriptor, RunningHostEnvelope } from "./
 import { serveRunningHost } from "./running-host-http.js"
 import { makeRunningHostFixture, runningHostFixtureLayer } from "../../test-support/production-running-host-fixture.js"
 
+import { projectRuntimeCause } from "./runtime-diagnostic.js"
 import { projectRecordedCassette, verifyRecordedCassetteRoundTrip } from "../cassettes/recorded.js"
 
 class RunningHostFixtureError extends Schema.TaggedError<RunningHostFixtureError>()("RunningHostFixtureError", {
@@ -98,6 +114,78 @@ const mcpEnvelope = (text: string) => {
   )(JSON.parse(text.trim().split("\n").at(-1) ?? ""))
   return reply.result.structuredContent
 }
+const loseWatchClient = (adapter: "CLI" | "MCP", address: string, runId: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const observed = yield* Deferred.make<void>()
+      const closed = yield* Deferred.make<void>()
+      const run = yield* FiberSet.makeRuntime<never, void, never>()
+      const child = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          spawn(
+            process.execPath,
+            [
+              builtEntry,
+              ...(adapter === "CLI"
+                ? ["attach", "watch", "--host", address, "--run", runId, "--json"]
+                : ["mcp", "--host", address, "--run", runId])
+            ],
+            { stdio: ["pipe", "pipe", "pipe"] }
+          )
+        ),
+        (child) =>
+          Effect.sync(() => {
+            child.kill("SIGTERM")
+          })
+      )
+      let pending = ""
+      child.stdout.on("data", (chunk: Buffer) => {
+        pending += chunk.toString("utf8")
+        while (pending.includes("\n")) {
+          const end = pending.indexOf("\n")
+          const value = JSON.parse(pending.slice(0, end))
+          pending = pending.slice(end + 1)
+          if (adapter === "CLI" && value.frame?._tag === "Snapshot")
+            run(Deferred.succeed(observed, undefined).pipe(Effect.asVoid))
+          const opened = value.result?.structuredContent?.result?.value
+          if (opened?._tag === "WatchOpened")
+            child.stdin.write(
+              JSON.stringify({ jsonrpc: "2.0", id: 3, method: "resources/read", params: { uri: opened.uri } }) + "\n"
+            )
+          if (adapter === "MCP" && value.id === 3) run(Deferred.succeed(observed, undefined).pipe(Effect.asVoid))
+        }
+      })
+      child.once("close", () => run(Deferred.succeed(closed, undefined).pipe(Effect.asVoid)))
+      if (adapter === "MCP")
+        child.stdin.write(
+          [
+            {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2025-11-25",
+                capabilities: {},
+                clientInfo: { name: "watch-loss", version: "1" }
+              }
+            },
+            { jsonrpc: "2.0", method: "notifications/initialized" },
+            {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "dalph_watch_snapshots", arguments: { runId } }
+            }
+          ]
+            .map((value) => JSON.stringify(value))
+            .join("\n") + "\n"
+        )
+      yield* Deferred.await(observed).pipe(Effect.timeout("10 seconds"))
+      child.kill("SIGTERM")
+      yield* Deferred.await(closed).pipe(Effect.timeout("10 seconds"))
+    })
+  )
+
 const awaitExecuting = (observation: ProductionRunningHostObservation<unknown>) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -223,6 +311,17 @@ it.live(
         expect(yield* observation.acceptedHistory.get).toEqual(historyBefore)
         expect(yield* Ref.get(fixture.trackerCalls)).toBe(trackerBefore)
         expect(yield* Ref.get(fixture.gitCalls)).toBe(gitBefore)
+        for (const adapter of ["CLI", "MCP"] as const) {
+          yield* loseWatchClient(adapter, address, runId)
+          expect(yield* observation.acceptedHistory.get).toEqual(historyBefore)
+          const afterWatch = yield* observation.current.get
+          expect(afterWatch._tag).toBe("Ready")
+          if (afterWatch._tag === "Ready")
+            expect(afterWatch.evaluation.taskWork.held).toEqual(executing.evaluation.taskWork.held)
+          expect(yield* Ref.get(fixture.trackerCalls)).toBe(trackerBefore)
+          expect(yield* Ref.get(fixture.gitCalls)).toBe(gitBefore)
+          expect(yield* Ref.get(fixture.exitCalls)).toBe(0)
+        }
         expect(yield* Ref.get(fixture.exitCalls)).toBe(0)
         expect(
           (yield* fixture.provider.snapshot()).operationCounts.find(({ tag }) => tag === "CodexStartTurn")?.count
@@ -450,4 +549,261 @@ it.live(
       })
     ).pipe(Effect.provide(runningHostFixtureLayer)),
   60000
+)
+
+it.live(
+  "shows an executor failure without accepting its retained candidate",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeRunningHostFixture(builtEntry, false, undefined, undefined, false, {
+          rejectResult: true
+        })
+        const address = yield* freeAddress
+        yield* withDecodedProductionRepositoryHost(
+          fixture.configuration,
+          fixture.graph,
+          (observation) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                yield* serveRunningHost(address, observation)
+                yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
+                const attached = yield* attachCurrentSignal(observation.current)
+                yield* fixture.release
+                const isFailed = (state: typeof attached.current): state is DeliveryRuntimeReadyObservation =>
+                  state._tag === "Ready" &&
+                  state.evaluation.diagnostics?.tasks.some((task) => task.phase === "Failed") === true
+                const state = isFailed(attached.current)
+                  ? attached.current
+                  : Option.getOrThrow(
+                      yield* attached.changes.pipe(
+                        Stream.filter(isFailed),
+                        Stream.runHead,
+                        Effect.timeout("20 seconds")
+                      )
+                    )
+                expect(state.evaluation.diagnostics?.tasks[0]).toMatchObject({
+                  phase: "Failed",
+                  failure: { _tag: "Known", code: "ResultEnvelopeInvalid" },
+                  candidateHead: { _tag: "Observed" },
+                  recovery: { _tag: "Unavailable" }
+                })
+                const cli = yield* childClient([
+                  "attach",
+                  "snapshot",
+                  "--host",
+                  address,
+                  "--run",
+                  observation.selection.runId,
+                  "--json"
+                ])
+                expect(cli.failed, cli.stderr).toBe(false)
+                const envelope = readEnvelope(cli.stdout)
+                expect(envelope.result).toMatchObject({
+                  _tag: "Success",
+                  value: {
+                    _tag: "Ready",
+                    delivery: {
+                      entries: expect.arrayContaining([
+                        expect.objectContaining({
+                          _tag: "ExecutorFailure",
+                          reason: { _tag: "Known", code: "ResultEnvelopeInvalid" }
+                        })
+                      ]),
+                      diagnostics: {
+                        tasks: expect.arrayContaining([
+                          expect.objectContaining({
+                            phase: "Failed",
+                            candidateHead: {
+                              _tag: "Observed",
+                              commit: expect.any(String),
+                              observedAt: expect.any(Number)
+                            }
+                          })
+                        ])
+                      }
+                    }
+                  }
+                })
+                const mcp = yield* childClient(
+                  ["mcp", "--host", address, "--run", observation.selection.runId],
+                  mcpInput(observation.selection.runId, "snapshot")
+                )
+                expect(mcp.failed, mcp.stderr).toBe(false)
+                expect(mcpEnvelope(mcp.stdout).result).toMatchObject({
+                  _tag: "Success",
+                  value: {
+                    delivery: {
+                      diagnostics: { tasks: expect.arrayContaining([expect.objectContaining({ phase: "Failed" })]) }
+                    }
+                  }
+                })
+                const records = yield* fixture.readHistory(observation.selection.runId)
+                expect(
+                  records.some(
+                    ({ event }) =>
+                      event._tag === "IntegratorSessionFixed" ||
+                      event._tag === "TargetPromotionObservedSuccess" ||
+                      event._tag === "CompletionTaskAcknowledged"
+                  )
+                ).toBe(false)
+              })
+            ),
+          "Run",
+          "Listening"
+        )
+      })
+    ).pipe(Effect.provide(runningHostFixtureLayer)),
+  45_000
+)
+
+for (const disposition of ["Completed", "Cancelled"] as const)
+  it.live(
+    `preserves Run ${disposition} alongside failed provider finalization`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* makeRunningHostFixture(builtEntry, false, undefined, undefined, true, {
+            failClose: true
+          })
+          if (disposition === "Cancelled") {
+            yield* withDecodedProductionRepositoryHost(fixture.configuration, fixture.graph, (observation) =>
+              Effect.gen(function* () {
+                yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
+                yield* awaitExecuting(observation)
+                yield* Deferred.await(fixture.activationFinalizing).pipe(Effect.timeout("20 seconds"))
+                yield* fixture.releaseObservationCut
+                yield* Deferred.await(fixture.activationIdle).pipe(Effect.timeout("20 seconds"))
+                const result = yield* observation.applicationExitRequestBoundary.requestExit
+                expect(result._tag).toBe("Succeeded")
+                expect(yield* observation.runTermination.poll).toEqual(Option.none())
+              })
+            )
+          }
+          const retained = yield* Ref.make<unknown>(null)
+          const result = yield* withDecodedProductionRepositoryHost(
+            fixture.configuration,
+            fixture.graph,
+            (observation) =>
+              Effect.gen(function* () {
+                if (disposition === "Completed") {
+                  yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
+                  yield* awaitExecuting(observation)
+                  yield* Deferred.await(fixture.activationFinalizing).pipe(Effect.timeout("20 seconds"))
+                  yield* fixture.release
+                }
+                const termination = yield* observation.runTermination.await.pipe(Effect.timeout("20 seconds"))
+                expect(termination.disposition).toBe(disposition)
+                const cursor = yield* observation.acceptedHistory.get
+                const accepted = yield* observation.traceReader.readAt(cursor)
+                yield* Ref.set(retained, {
+                  termination,
+                  delivered: accepted.items.some(
+                    ({ occurrence }) =>
+                      occurrence._tag === "IntegrationFocusedCompletionOccurred" &&
+                      occurrence.event._tag === "CompletionTaskAcknowledged"
+                  )
+                })
+                yield* fixture.enableCloseFailure
+              }).pipe(Effect.ensuring(fixture.releaseObservationCut)),
+            disposition === "Cancelled" ? "Cancel" : "Run"
+          ).pipe(Effect.exit)
+          expect(result._tag).toBe("Failure")
+          if (Exit.isFailure(result)) {
+            const diagnostic = projectRuntimeCause(result.cause, [])
+            expect(diagnostic).toMatchObject({
+              boundary: "NodeMainExit",
+              outcome: "Failed",
+              reasons: expect.arrayContaining([
+                expect.objectContaining({
+                  error: expect.objectContaining({
+                    errorTag: "CodexAppServerFailure",
+                    operation: "close",
+                    category: "Ownership"
+                  })
+                })
+              ])
+            })
+            expect(JSON.stringify(diagnostic)).not.toContain("private provider payload")
+          }
+          expect(yield* Ref.get(retained)).toMatchObject({
+            termination: { disposition },
+            delivered: disposition === "Completed"
+          })
+        })
+      ).pipe(Effect.provide(runningHostFixtureLayer)),
+    45_000
+  )
+
+it.live(
+  "shows tracker throttling and recovery without restarting the owned turn",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeRunningHostFixture(builtEntry)
+        const address = yield* freeAddress
+        yield* withDecodedProductionRepositoryHost(
+          fixture.configuration,
+          fixture.graph,
+          (observation) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                yield* serveRunningHost(address, observation)
+                yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
+                yield* awaitExecuting(observation)
+                yield* Deferred.await(fixture.activationFinalizing).pipe(Effect.timeout("20 seconds"))
+                yield* fixture.releaseObservationCut
+                yield* Deferred.await(fixture.activationIdle).pipe(Effect.timeout("20 seconds"))
+                for (const tag of ["Throttled", "CircuitOpen", "None"] as const) {
+                  yield* fixture.setGraphReadFailure(
+                    tag === "Throttled"
+                      ? new GithubGraphqlReadThrottled({
+                          operation: "ReadIssue",
+                          detail: "private provider payload",
+                          retry: { _tag: "Unavailable" }
+                        })
+                      : tag === "CircuitOpen"
+                        ? new GithubGraphqlRequestError({
+                            operation: "ReadIssue",
+                            kind: "CircuitOpen",
+                            detail: "private provider payload"
+                          })
+                        : null
+                  )
+                  const signal = yield* attachCurrentSignal(observation.current)
+                  const refresh = yield* childClient([
+                    "attach",
+                    "refresh",
+                    "--host",
+                    address,
+                    "--run",
+                    observation.selection.runId,
+                    "--json",
+                    "--whole-graph"
+                  ])
+                  expect(refresh.failed, refresh.stderr).toBe(false)
+                  const matches = (state: typeof signal.current) =>
+                    state._tag === "Ready" && state.evaluation.diagnostics?.trackerWait._tag === tag
+                  const current = yield* observation.current.get
+                  const state = matches(current)
+                    ? current
+                    : Option.getOrThrow(
+                        yield* signal.changes.pipe(Stream.filter(matches), Stream.runHead, Effect.timeout("10 seconds"))
+                      )
+                  if (state._tag !== "Ready") return yield* Effect.die("ready tracker diagnosis missing")
+                  expect(state.evaluation.diagnostics?.trackerWait._tag).toBe(tag)
+                  expect(JSON.stringify(state.evaluation.diagnostics)).not.toContain("private provider payload")
+                }
+                expect(
+                  (yield* fixture.provider.snapshot()).operationCounts.find(({ tag }) => tag === "CodexStartTurn")
+                    ?.count
+                ).toBe(1)
+              })
+            ).pipe(Effect.ensuring(fixture.releaseObservationCut)),
+          "Run",
+          "Listening"
+        )
+      })
+    ).pipe(Effect.provide(runningHostFixtureLayer)),
+  45_000
 )

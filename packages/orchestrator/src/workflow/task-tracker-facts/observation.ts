@@ -1,5 +1,6 @@
+import { descriptorSubjectsMatch, observedDescriptorsFor, TaskDescriptorRows } from "./task-descriptors.js"
 import { Schema } from "effect"
-import { TaskId, TaskRevision } from "@dalph/contracts"
+import { TaskId, TaskRevision, type TaskWorkSpecification } from "@dalph/contracts"
 import { OperationId } from "../identity.js"
 import { TaskLifecycle, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import {
@@ -10,7 +11,6 @@ import {
 } from "../../authorities/task-tracker/target.js"
 import { workflowJournalEventVersion } from "../kernel/event.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { type TaskWorkSpecification } from "@dalph/contracts"
 import type { WorkflowOperation } from "../registry/operation.js"
 import { TaskClaimObservation } from "../../authorities/task-tracker/claim-mutation.js"
 import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"
@@ -47,8 +47,9 @@ export const TaskIdentitiesObserved = Schema.TaggedStruct("TaskIdentities", {
   ...completeFactEvidenceFields,
   coverage: CompleteTargetClosureCoverage,
   taskIds: Schema.Array(TaskId).check(Schema.isUnique()),
+  descriptors: Schema.optionalKey(TaskDescriptorRows),
   target: TrackerTarget
-})
+}).check(Schema.makeFilter(descriptorSubjectsMatch))
 
 /** The lifecycle returned for every named task subject. */
 export const TaskLifecyclesObserved = Schema.TaggedStruct("TaskLifecycles", {
@@ -375,7 +376,13 @@ export const makeCompleteTaskTrackerFactsObserved = (
   const coverage = completeTargetClosureCoverage(operation)
   return CompleteTaskTrackerFactsObserved.make({
     factFamilies: [
-      TaskIdentitiesObserved.make({ ...evidence, coverage, target: operation.target, taskIds }),
+      TaskIdentitiesObserved.make({
+        ...evidence,
+        coverage,
+        target: operation.target,
+        taskIds,
+        ...observedDescriptorsFor(tasks)
+      }),
       TaskLifecyclesObserved.make({
         ...evidence,
         coverage,

@@ -8,6 +8,7 @@ import {
   EvidenceReference,
   GitCommitSha,
   PlannedTaskAttempt,
+  PlannedAttemptExecutorFailureCode,
   RunId,
   samePlannedTaskAttempt,
   WorktreeLocator,
@@ -84,7 +85,10 @@ export type CodexServerLeaseIncarnation = typeof CodexServerLeaseIncarnation.Typ
 /** A sealed private terminal result; the generic executor deliberately has no Completed state here. */
 export const CodexSealedTerminal = Schema.TaggedUnion({
   Accepted: { commit: GitCommitSha, evidenceManifest: EvidenceReference },
-  Failed: {}
+  Failed: {
+    failureCode: Schema.optionalKey(PlannedAttemptExecutorFailureCode),
+    observedHead: Schema.optionalKey(GitCommitSha)
+  }
 })
 export type CodexSealedTerminal = typeof CodexSealedTerminal.Type
 

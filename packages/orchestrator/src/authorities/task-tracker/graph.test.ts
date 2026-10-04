@@ -207,3 +207,25 @@ it("derives only the selected task and its transitive grouping descendants", () 
   expect(graph.groupingSubtreeOf(TaskId.make("D"))).toEqual(["D", "E"])
   expect(graph.groupingSubtreeOf(TaskId.make("missing"))).toEqual([])
 })
+
+it("retains tracker task descriptors through graph serialization and reconstruction", () => {
+  const input = {
+    revision: "descriptor-v1",
+    tasks: [
+      {
+        id: "task-a",
+        lifecycle: open,
+        parentTaskId: null,
+        prerequisiteIds: [],
+        descriptor: { title: "Readable task", issueNumber: 430 }
+      }
+    ]
+  }
+  const projected = projectTrackerSnapshot(input)
+  expect(projected._tag).toBe("Valid")
+  if (projected._tag !== "Valid") return
+  expect(projected.snapshot.toWire().tasks[0]).toEqual(input.tasks[0])
+  const restored = projectTaskDagWire(projected.snapshot.toWire())
+  expect(restored._tag).toBe("Valid")
+  if (restored._tag === "Valid") expect(restored.snapshot.toWire()).toEqual(projected.snapshot.toWire())
+})

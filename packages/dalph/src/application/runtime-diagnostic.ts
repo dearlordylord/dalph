@@ -219,6 +219,9 @@ const sourceSafeMessage = (
   operation: string | undefined,
   source: typeof RuntimeDiagnosticSource.Type | undefined
 ) => {
+  if (source?._tag === "CodexAttemptStoreFailure" && operation === "configure") {
+    return "Codex private-state configuration failed. Verify the configured absolute directory, current-user ownership and owner-only permissions (0700) before retrying."
+  }
   if (source?.code !== undefined) return `${operation ?? tag} failed with ${String(source.code)}`
   return `${operation ?? tag} failed`
 }

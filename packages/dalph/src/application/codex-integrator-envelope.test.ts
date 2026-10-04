@@ -102,7 +102,8 @@ describe("Codex Integrator result envelope", () => {
       await decode(turn('{"outcome":"PreparedCandidate","version":1,"candidate":""}')),
       await decode(turn('{"outcome":"NotPrepared","version":1,"detail":""}')),
       await decode(turn('{"outcome":"Unknown","version":1,"detail":"provider stopped"}')),
-      await decode(turn('{"outcome":"NotPrepared","version":2,"detail":"provider stopped"}'))
+      await decode(turn('{"outcome":"NotPrepared","version":2,"detail":"provider stopped"}')),
+      await decode(turn('{"outcome":"PreparedCandidate","version":1,"candidate":"candidate","runId":"foreign"}'))
     ]
     for (const value of values) expect(value._tag).toBe("NotPrepared")
     expect(values[0]).toMatchObject({ detail: "Codex returned no unique result envelope" })

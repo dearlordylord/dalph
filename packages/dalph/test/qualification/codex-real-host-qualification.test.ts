@@ -71,16 +71,23 @@ const longLivedShellCommand = (
     name: "exec_command",
     arguments: JSON.stringify({
       cmd:
-        kind === "stuck"
-          ? "sh -c 'trap \"\" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 & printf '%s\\n' $! > .dalph-owned-child-pid"
-          : kind === "escaped"
-            ? "sh -c 'while :; do sleep 1; done' </dev/null >/dev/null 2>&1 & printf '%s\\n' $! > .dalph-owned-child-pid"
-            : "printf '%s\\n' $$ > .dalph-owned-child-pid; while :; do sleep 1; done",
+        kind === "foreground"
+          ? "printf '%s\\n' $$ > .dalph-owned-child-pid; while :; do sleep 1; done"
+          : detachedChildCommand(kind),
       workdir: worktree,
       yield_time_ms: 30_000
     })
   }
 })
+/** A new OS session proves escape from the app-server group instead of merely backgrounding a shell job. */
+const detachedChildCommand = (kind: "escaped" | "stuck"): string => {
+  const childProgram =
+    kind === "stuck"
+      ? 'process.on("SIGTERM", () => {}); process.on("SIGHUP", () => {}); setInterval(() => {}, 1000)'
+      : "setInterval(() => {}, 1000)"
+  const program = `const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(childProgram)}], { detached: true, stdio: "ignore", env: process.env }); require("node:fs").writeFileSync(".dalph-owned-child-pid", String(child.pid)); child.unref()`
+  return `node -e '${program.replaceAll("'", "'\\''")}'`
+}
 const assistantMessage = (text: string): Record<string, unknown> => ({
   type: "response.output_item.done",
   item: {
@@ -198,9 +205,12 @@ class ResponsesFixture {
       if (this.mode === "failed-race") {
         response.write(sse(failed(responseId)))
       } else {
-        const correlation = { runId: "real-codex-qualification-run", attemptId: "real-codex-qualification-attempt" }
         response.write(
-          sse(assistantMessage(JSON.stringify({ commit: await git(this.worktree, "rev-parse", "HEAD"), correlation })))
+          sse(
+            assistantMessage(
+              JSON.stringify({ version: 1, outcome: "Accepted", commit: await git(this.worktree, "rev-parse", "HEAD") })
+            )
+          )
         )
         response.write(sse(completed(responseId)))
       }
@@ -225,13 +235,12 @@ class ResponsesFixture {
         )
       )
     } else {
-      const correlation =
+      const commit = await git(this.worktree, "rev-parse", "HEAD")
+      const candidate =
         this.mode === "foreign"
-          ? { runId: "foreign-run", attemptId: "foreign-attempt" }
-          : { runId: "real-codex-qualification-run", attemptId: "real-codex-qualification-attempt" }
-      response.write(
-        sse(assistantMessage(JSON.stringify({ commit: await git(this.worktree, "rev-parse", "HEAD"), correlation })))
-      )
+          ? { commit, correlation: { runId: "foreign-run", attemptId: "foreign-attempt" } }
+          : { version: 1, outcome: "Accepted", commit }
+      response.write(sse(assistantMessage(JSON.stringify(candidate))))
     }
     response.write(sse(completed(responseId)))
     response.end()
@@ -337,7 +346,7 @@ class BuiltHost {
   }
 
   continue(): void {
-    this.child.stdin.write("continue\n")
+    this.child.stdin.end("continue\n")
   }
 
   async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
@@ -578,6 +587,8 @@ const makeFixture = async (mode: ModelMode): Promise<Fixture> => {
   await writeFile(
     nodePath.join(codexHome, "config.toml"),
     [
+      // Plugin marketplace cloning is outside this local provider/process qualification.
+      "features.plugins = false",
       'model_provider = "dalph-fixture"',
       'model = "dalph-fixture-model"',
       'approval_policy = "never"',
@@ -634,18 +645,22 @@ const spawnHost = async (fixture: Fixture, action: HostAction, options: HostOpti
   return host
 }
 
+/** Reconcile stopped writers before injecting a retained-provider fault or deleting its files. */
+const closeOwnedFixtureProvider = async (fixture: Fixture): Promise<void> => {
+  const launch = (await latestPrivateSnapshot(fixture)).serverLaunch
+  const closer = await spawnHost(fixture, "close")
+  requireEvent(await closer.waitFor("closed"), "closed")
+  const closeExit = await closer.waitForExit()
+  if (closeExit.code !== 0 || closeExit.signal !== null) {
+    throw new Error(`qualification cleanup host failed: ${JSON.stringify({ ...closeExit, events: closer.events })}`)
+  }
+  if (launch !== null) await waitForOwnedServerAbsence(launch)
+}
+
 const dispose = async (fixture: Fixture, hosts: ReadonlyArray<BuiltHost>): Promise<void> => {
   for (const host of hosts) await host.stop("SIGKILL")
-  let launch: CodexServerLaunchRecord | null = null
   try {
-    launch = (await latestPrivateSnapshot(fixture)).serverLaunch
-    const closer = await spawnHost(fixture, "close")
-    requireEvent(await closer.waitFor("closed"), "closed")
-    const closeExit = await closer.waitForExit()
-    if (closeExit.code !== 0 || closeExit.signal !== null) {
-      throw new Error(`qualification cleanup host failed: ${JSON.stringify(closeExit)}`)
-    }
-    if (launch !== null) await waitForOwnedServerAbsence(launch)
+    await closeOwnedFixtureProvider(fixture)
   } finally {
     await fixture.model.close()
   }
@@ -970,6 +985,9 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         hosts.push(started)
         expect(requireEvent(await started.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const ownedChildPid = await waitForOwnedChildPid(fixture)
+        requireEvent(await started.waitFor("suspension-ready"), "suspension-ready")
+        expect(started.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        started.continue()
         const report = requireEvent(await started.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
@@ -986,18 +1004,27 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
   qualificationTest(
     "safe suspension preserves the exact thread and a later built host resumes it",
     async () => {
-      const fixture = await makeFixture("holding")
+      const fixture = await makeFixture("child")
       const hosts: Array<BuiltHost> = []
       try {
-        const suspended = await spawnHost(fixture, "exercise-suspension")
+        const suspended = await spawnHost(fixture, "exercise-suspension", { waitForOwnedChild: true })
         hosts.push(suspended)
         expect(requireEvent(await suspended.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
+        await fixture.model.waitForCalls(1)
+        const ownedChildPid = await waitForOwnedChildPid(fixture)
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(true)
+        requireEvent(await suspended.waitFor("suspension-ready"), "suspension-ready")
+        expect(suspended.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        suspended.continue()
         const report = requireEvent(await suspended.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(false)
+        await waitForProcessAbsence(ownedChildPid)
         expect(fixture.model.calls).toHaveLength(1)
+        expect(await suspended.waitForExit()).toEqual({ code: 0, signal: null })
 
         const resumed = await spawnHost(fixture, "resume")
         hosts.push(resumed)
@@ -1127,6 +1154,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const started = await spawnHost(fixture, "settle")
         hosts.push(started)
         expect(terminalReport(await started.waitForReport(2)).result._tag).toBe("Accepted")
+        await started.waitForExit()
         const foreign = await spawnHost(fixture, "project", {
           runId: "foreign-run",
           attemptId: "foreign-attempt",
@@ -1155,7 +1183,14 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(requireEvent(await running.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const rollout = await onlyRolloutFile(fixture)
+        const launch = (await latestPrivateSnapshot(fixture)).serverLaunch
+        expect(launch).not.toBeNull()
         await running.stop("SIGKILL")
+        await closeOwnedFixtureProvider(fixture)
+        if (launch !== null)
+          expect(await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))).toEqual({
+            _tag: "Absent"
+          })
         await rm(rollout)
 
         const projected = await spawnHost(fixture, "project")
@@ -1186,6 +1221,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         await fixture.model.waitForCalls(1)
         rollout = await onlyRolloutFile(fixture)
         await running.stop("SIGKILL")
+        await closeOwnedFixtureProvider(fixture)
         await corrupt(rollout)
 
         const projected = await spawnHost(fixture, "project")
@@ -1260,6 +1296,9 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
         const priorAppServerPid = (await latestPrivateSnapshot(fixture)).serverLaunch?.pid
+        requireEvent(await interrupted.waitFor("suspension-ready"), "suspension-ready")
+        expect(interrupted.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        interrupted.continue()
         requireEvent(await interrupted.waitFor("suspension-requested"), "suspension-requested")
         await interrupted.stop("SIGKILL")
         expect(
@@ -1313,3 +1352,29 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
     45_000
   )
 })
+
+qualificationTest(
+  "retains the last lifecycle projection when the qualification observation bound expires",
+  async () => {
+    const fixture = await makeFixture("holding")
+    const hosts: Array<BuiltHost> = []
+    try {
+      const host = await spawnHost(fixture, "settle")
+      hosts.push(host)
+      expect(requireEvent(await host.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
+      const failed = await host.waitFor("failure")
+      expect(failed.event).toBe("failure")
+      if (failed.event !== "failure") throw new Error("expected the bounded observation failure")
+      expect(failed.detail).toContain("last projection=Exact/ExecutorWorkExecuting")
+      expect(failed.detail).toContain("retained state=Running")
+      expect(failed.detail).toContain("last census=")
+      expect(failed.detail).not.toContain(fixture.worktree)
+      expect(
+        host.events.some((event) => event.event === "report" && event.report._tag === "ExecutorWorkTerminal")
+      ).toBe(false)
+    } finally {
+      await dispose(fixture, hosts)
+    }
+  },
+  30_000
+)

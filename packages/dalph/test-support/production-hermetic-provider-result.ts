@@ -1,4 +1,4 @@
-import { GitCommitSha, PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import { GitCommitSha } from "@dalph/contracts"
 import { GitCommand } from "@dalph/orchestrator"
 import { Crypto, Effect, FileSystem, Schema } from "effect"
 import { CodexAppServerFailure } from "../src/application/codex-app-server.js"
@@ -61,15 +61,11 @@ export const makeHermeticProviderResult = Effect.fn("HermeticProvider.makeResult
   const produceTaskResult = Effect.fn("HermeticProvider.produceTaskResult")(function* (cwd: string, text: string) {
     if (!cwd.startsWith(`${configuration.plannedAttemptWorktreeRoot}/`) || promptFact(text, "worktree") !== cwd)
       return yield* providerFailure("turn/start", "foreign task worktree")
-    const correlation = yield* Schema.decodeUnknownEffect(PlannedAttemptExecutorCorrelation)({
-      runId: promptFact(text, "run_id"),
-      attemptId: promptFact(text, "attempt_id")
-    })
     const base = yield* Schema.decodeUnknownEffect(GitCommitSha)(promptFact(text, "base_sha"))
     if (base !== configuration.plannedAttemptBaseSha || (yield* runGit(cwd, ["rev-parse", "HEAD"])) !== base)
       return yield* providerFailure("turn/start", "task head differs from planned Base")
-    const attemptDigest = yield* crypto.digest("SHA-256", new TextEncoder().encode(correlation.attemptId))
-    const resultFile = `hermetic-result-${Array.from(attemptDigest, (byte) =>
+    const worktreeDigest = yield* crypto.digest("SHA-256", new TextEncoder().encode(cwd))
+    const resultFile = `hermetic-result-${Array.from(worktreeDigest, (byte) =>
       byte.toString(digestHexRadix).padStart(digestHexWidth, "0")
     ).join("")}.txt`
     yield* fileSystem.writeFileString(`${cwd}/${resultFile}`, "Controlled immutable accepted result.\n")
@@ -84,7 +80,7 @@ export const makeHermeticProviderResult = Effect.fn("HermeticProvider.makeResult
       "controlled accepted result"
     ])
     const commit = yield* Schema.decodeUnknownEffect(GitCommitSha)(yield* runGit(cwd, ["rev-parse", "HEAD"]))
-    return JSON.stringify({ commit, correlation })
+    return JSON.stringify({ version: 1, outcome: "Accepted", commit })
   })
   const produceResult = Effect.fn("HermeticProvider.produceResult")(function* (cwd: string, text: string) {
     return yield* text.startsWith("You are the Dalph integration provider.\n")

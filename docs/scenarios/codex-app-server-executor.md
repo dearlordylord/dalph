@@ -520,7 +520,10 @@ The #75 fixture uses the built Codex CLI/app-server protocol with an isolated
 Codex state directory, a real temporary Git repository and registered planned
 worktree, and a deterministic local fake model endpoint. It does not contact
 OpenAI or require production credentials. Linux and macOS run the same named
-matrix; host-specific process-group observations may differ, but the visible
+matrix. Controlled homes disable optional plugins, so background marketplace
+cloning and plugin/authentication refresh are outside this qualification. This
+fixture setting does not change production provider configuration. Host-specific
+process-group observations may differ, but the visible
 executor and application outcomes may not.
 
 Issue 58's historical review loop is not selected. Its old implementation is
@@ -546,3 +549,12 @@ review round belongs to the MVP.
   [issue #111](replace-purged-codex-work-unit.md).
 - Changing accepted-result integration, Integrator, promotion, or
   task completion semantics.
+
+## Application-bound semantic results
+
+[Application-bound provider results](application-bound-provider-results.md)
+refines the model-facing result protocol. Dalph asks for the candidate proposal
+without Run/Attempt identifiers and binds its internal report only after exact
+thread/turn ownership and ordinary Git/evidence checks. Supported legacy
+correlation remains exact. Sealed Failed is absorbing after restart; changing
+provider output cannot promote that seal to Accepted.
