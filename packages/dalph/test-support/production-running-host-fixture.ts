@@ -286,11 +286,14 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const productionGraph = productionRepositoryHostGraph({
     ...reactivationObserversFor(paused),
     ...(discovery?.onTimerStateChange === undefined ? {} : { onTimerStateChange: discovery.onTimerStateChange }),
-    ...(discovery?.onActivationIdle === undefined ? {} : { onActivationHandoffIdle: discovery.onActivationIdle }),
     githubRequestCircuitMaxRequests: 2000,
     onActivationFinalizationStart: () =>
       Deferred.succeed(activationFinalizing, undefined).pipe(Effect.andThen(Deferred.await(releaseObservationCut))),
-    onActivationHandoffIdle: () => Deferred.succeed(activationIdle, undefined).pipe(Effect.asVoid),
+    onActivationHandoffIdle: () =>
+      Deferred.succeed(activationIdle, undefined).pipe(
+        Effect.andThen(discovery?.onActivationIdle?.() ?? Effect.void),
+        Effect.asVoid
+      ),
     workflowGitCommandObserver: () => Ref.update(gitCalls, (count) => count + 1),
     applicationExitRequestObserver: () => Ref.update(exitCalls, (count) => count + 1),
     applicationExitTraceObserver: (event) => Ref.update(exitEvents, (events) => [...events, event]),
