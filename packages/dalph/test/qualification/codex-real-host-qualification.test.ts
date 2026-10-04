@@ -346,7 +346,7 @@ class BuiltHost {
   }
 
   continue(): void {
-    this.child.stdin.write("continue\n")
+    this.child.stdin.end("continue\n")
   }
 
   async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
@@ -983,6 +983,9 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         hosts.push(started)
         expect(requireEvent(await started.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const ownedChildPid = await waitForOwnedChildPid(fixture)
+        requireEvent(await started.waitFor("suspension-ready"), "suspension-ready")
+        expect(started.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        started.continue()
         const report = requireEvent(await started.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
@@ -1007,10 +1010,15 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(requireEvent(await suspended.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
+        await fixture.model.waitForCalls(1)
+        requireEvent(await suspended.waitFor("suspension-ready"), "suspension-ready")
+        expect(suspended.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        suspended.continue()
         const report = requireEvent(await suspended.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
         expect(fixture.model.calls).toHaveLength(1)
+        expect(await suspended.waitForExit()).toEqual({ code: 0, signal: null })
 
         const resumed = await spawnHost(fixture, "resume")
         hosts.push(resumed)
@@ -1282,6 +1290,9 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
         const priorAppServerPid = (await latestPrivateSnapshot(fixture)).serverLaunch?.pid
+        requireEvent(await interrupted.waitFor("suspension-ready"), "suspension-ready")
+        expect(interrupted.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        interrupted.continue()
         requireEvent(await interrupted.waitFor("suspension-requested"), "suspension-requested")
         await interrupted.stop("SIGKILL")
         expect(
