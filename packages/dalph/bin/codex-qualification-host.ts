@@ -37,7 +37,7 @@ import {
   JournalDatabaseLocator,
   InRunJournal
 } from "@dalph/orchestrator"
-import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Ref, Schema, Stream } from "effect"
 import {
   CodexAppServer,
   codexAppServerNodeLayer,
@@ -142,10 +142,12 @@ const settleAttempt = (
   Effect.scoped(
     Effect.gen(function* () {
       const attachment = yield* lifecycle.attach(correlation)
+      const latest = yield* Ref.make(attachment.current)
       const terminalProjection =
         attachment.current._tag === "Exact" && attachment.current.report._tag !== "ExecutorWorkExecuting"
           ? Option.some(attachment.current)
           : yield* attachment.changes.pipe(
+              Stream.tap((projection) => Ref.set(latest, projection)),
               Stream.filter(
                 (projection) => projection._tag === "Exact" && projection.report._tag !== "ExecutorWorkExecuting"
               ),
@@ -155,9 +157,11 @@ const settleAttempt = (
             )
       yield* attachment.close
       if (Option.isNone(terminalProjection)) {
+        const last = yield* Ref.get(latest)
+        const observation = last._tag === "Exact" ? `${last._tag}/${last.report._tag}` : last._tag
         return yield* Effect.fail(
           new QualificationConfigurationFailure({
-            detail: "real Codex turn did not settle within the qualification observation bound"
+            detail: `real Codex turn did not settle within the qualification observation bound; last projection=${observation}`
           })
         )
       }

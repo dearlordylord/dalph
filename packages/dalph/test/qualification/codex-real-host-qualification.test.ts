@@ -1322,3 +1322,26 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
     45_000
   )
 })
+
+qualificationTest(
+  "retains the last lifecycle projection when the qualification observation bound expires",
+  async () => {
+    const fixture = await makeFixture("holding")
+    const hosts: Array<BuiltHost> = []
+    try {
+      const host = await spawnHost(fixture, "settle")
+      hosts.push(host)
+      expect(requireEvent(await host.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
+      const failed = await host.waitFor("failure")
+      expect(failed.event).toBe("failure")
+      if (failed.event !== "failure") throw new Error("expected the bounded observation failure")
+      expect(failed.detail).toContain("last projection=Exact/ExecutorWorkExecuting")
+      expect(
+        host.events.some((event) => event.event === "report" && event.report._tag === "ExecutorWorkTerminal")
+      ).toBe(false)
+    } finally {
+      await dispose(fixture, hosts)
+    }
+  },
+  30_000
+)
