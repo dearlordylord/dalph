@@ -8,6 +8,21 @@ import {
   type IntegratorRunCorrelation
 } from "@dalph/orchestrator"
 
+/** Model-owned integration proposal; fixed session/run identities are bound by the provider adapter. */
+const PreparedIntegrationSemanticResult = Schema.Struct({
+  version: Schema.Literal(1),
+  outcome: Schema.Literal("PreparedCandidate"),
+  candidate: IntegratorCandidateText
+})
+
+const NotPreparedIntegrationSemanticResult = Schema.Struct({
+  version: Schema.Literal(1),
+  outcome: Schema.Literal("NotPrepared"),
+  detail: IntegratorNotPreparedDetail
+})
+
+const IntegratorSemanticResult = Schema.Union([PreparedIntegrationSemanticResult, NotPreparedIntegrationSemanticResult])
+
 const lastElementOffset = -1
 const escapeParity = 2
 
@@ -54,25 +69,12 @@ const terminalObjectStart = (text: string): number | undefined => {
   return undefined
 }
 
-const decodePreparedEnvelope = (value: Record<string, unknown>, run: IntegratorRunCorrelation): IntegratorResult => {
-  const candidate = Schema.decodeUnknownOption(IntegratorCandidateText)(value["candidate"])
-  return Option.isSome(candidate)
-    ? IntegratorResult.cases.PreparedCandidate.make({ correlation: run, candidateText: candidate.value })
-    : malformedEnvelope(run)
-}
-
-const decodeNotPreparedEnvelope = (value: Record<string, unknown>, run: IntegratorRunCorrelation): IntegratorResult => {
-  const detail = Schema.decodeUnknownOption(IntegratorNotPreparedDetail)(value["detail"])
-  return Option.isSome(detail)
-    ? IntegratorResult.cases.NotPrepared.make({ correlation: run, detail: detail.value })
-    : malformedEnvelope(run)
-}
-
 const decodeEnvelopeObject = (value: Record<string, unknown>, run: IntegratorRunCorrelation): IntegratorResult => {
-  if (!hasEnvelopeShape(value) || value["version"] !== 1) return malformedEnvelope(run)
-  if (value["outcome"] === "PreparedCandidate") return decodePreparedEnvelope(value, run)
-  if (value["outcome"] === "NotPrepared") return decodeNotPreparedEnvelope(value, run)
-  return malformedEnvelope(run)
+  const semantic = Schema.decodeUnknownOption(IntegratorSemanticResult)(value, { onExcessProperty: "error" })
+  if (Option.isNone(semantic)) return malformedEnvelope(run)
+  return semantic.value.outcome === "PreparedCandidate"
+    ? IntegratorResult.cases.PreparedCandidate.make({ correlation: run, candidateText: semantic.value.candidate })
+    : IntegratorResult.cases.NotPrepared.make({ correlation: run, detail: semantic.value.detail })
 }
 
 /**
@@ -92,6 +94,7 @@ export const parseTerminalEnvelope = (text: string): Record<string, unknown> | u
   }
 }
 
+/** Decode only after the caller has reconciled the exact owned provider thread and turn. */
 export const exactEnvelope = (
   turn: CodexTurnSnapshot,
   run: IntegratorRunCorrelation

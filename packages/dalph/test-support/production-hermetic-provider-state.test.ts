@@ -110,9 +110,7 @@ it.effect("produces distinct accepted commits for long exact A/B attempt identit
         const started = yield* provider.startTurnWithCompletion(
           thread.id,
           thread.cwd,
-          [`run_id: ${runId}`, `attempt_id: ${plan.attemptId}`, `base_sha: ${head}`, `worktree: ${plan.worktree}`].join(
-            "\n"
-          ),
+          [`base_sha: ${head}`, `worktree: ${plan.worktree}`].join("\n"),
           token
         )
         const turn = started.turn
@@ -126,8 +124,10 @@ it.effect("produces distinct accepted commits for long exact A/B attempt identit
           Schema.Struct({ type: Schema.Literal("agentMessage"), text: Schema.String })
         )(turn.items[0])
         const result = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(Schema.Struct({ commit: GitCommitSha, correlation: Schema.Unknown }))
-        )(item.text)
+          Schema.fromJsonString(
+            Schema.Struct({ version: Schema.Literal(1), outcome: Schema.Literal("Accepted"), commit: GitCommitSha })
+          )
+        )(item.text, { onExcessProperty: "error" })
         commits.push(result.commit)
         const files = (yield* runGit(plan.worktree, ["show", "--name-only", "--format=", result.commit]))
           .split("\n")
@@ -396,7 +396,7 @@ it.effect("creates real accepted and two-parent candidate commits through owned 
       const candidate = `${configuration.integratorCandidateWorktreeRoot}/candidate-one`
       yield* runGit(repository, ["worktree", "add", "-b", "task-one", worktree, head])
       const thread = yield* provider.codex.startThread(worktree, CodexThreadOwnershipToken.make("owned-task"))
-      const text = `# Hermetic task\nCreate the exact result.\n\nDalph immutable attempt facts:\nrun_id: run:hermetic\nattempt_id: attempt:hermetic\ntask_id: task:hermetic\ntask_revision: revision:hermetic\nbase_sha: ${head}\nbranch: refs/heads/task-one\nworktree: ${worktree}`
+      const text = `# Hermetic task\nCreate the exact result.\n\nDalph immutable attempt facts:\ntask_id: task:hermetic\ntask_revision: revision:hermetic\nbase_sha: ${head}\nbranch: refs/heads/task-one\nworktree: ${worktree}`
       const token = CodexOwnedTurnToken.make("owned-task-turn")
       const started = yield* provider.startTurnWithCompletion(thread.id, worktree, text, token)
       const turn = started.turn
@@ -407,13 +407,10 @@ it.effect("creates real accepted and two-parent candidate commits through owned 
       )(turn.items[0])
       const result = yield* Schema.decodeUnknownEffect(
         Schema.fromJsonString(
-          Schema.Struct({
-            commit: GitCommitSha,
-            correlation: Schema.Struct({ runId: Schema.String, attemptId: Schema.String })
-          })
+          Schema.Struct({ version: Schema.Literal(1), outcome: Schema.Literal("Accepted"), commit: GitCommitSha })
         )
-      )(envelope.text)
-      expect(result.correlation).toEqual({ runId: "run:hermetic", attemptId: "attempt:hermetic" })
+      )(envelope.text, { onExcessProperty: "error" })
+      expect(JSON.parse(envelope.text)).not.toHaveProperty("correlation")
       expect(yield* runGit(worktree, ["rev-parse", "HEAD"])).toBe(result.commit)
       expect(yield* runGit(worktree, ["show", "-s", "--format=%P", result.commit])).toBe(head)
       const completed = (yield* provider.codex.readThread(thread.id)).turns[0]

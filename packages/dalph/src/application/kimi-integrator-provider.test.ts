@@ -94,112 +94,121 @@ describe("Kimi Integrator provider adapter", () => {
     })
   )
 
-  it.effect("runs the shared Integrator core through Kimi without acquiring Codex", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem
-        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-kimi-integrator-" })
-        const repository = GitRepositoryLocator.make(`${root}/repository.git`)
-        const config = CodexIntegratorConfiguration.make({
-          candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make(root),
-          commonDirectory: GitCommonDirectoryLocator.make(`${root}/repository.git`),
-          privateStoreLocator: IntegratorPrivateStoreLocator.make(`${root}/integrator-private.json`),
-          repository
-        })
-        const resource = IntegratorCandidateResourceLocator.make("candidate:test")
-        const candidatePath = candidateWorktreePathFor(config, resource)
-        const targetHead = GitCommitSha.make("a".repeat(40))
-        const acceptedCommit = GitCommitSha.make("b".repeat(40))
-        const session = IntegratorSessionCorrelation.make({
-          acceptedResult: AcceptedResult.make({
-            commit: acceptedCommit,
-            evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
-          }),
-          candidateResource: resource,
-          expectedTargetHead: targetHead,
-          integrationTarget: IntegrationTarget.make({ repository, ref: IntegrationTargetRef.make("refs/heads/main") }),
-          plannedAttempt: PlannedTaskAttempt.make({
-            attemptId: AttemptId.make("attempt"),
-            baseSha: targetHead,
-            branch: TaskBranchRef.make("refs/heads/task"),
-            executor: TaskExecutorLocator.make("kimi:test"),
-            runId: RunId.make("run"),
-            taskId: TaskId.make("task"),
-            taskRevision: TaskRevision.make("revision"),
-            worktree: WorktreeLocator.make(`${root}/planned`)
-          }),
-          queuedAt: JournalPosition.make(1),
-          sessionId: IntegratorSessionId.make("session"),
-          startedAt: JournalPosition.make(2),
-          targetLineageObservedAt: JournalPosition.make(3)
-        })
-        const sessionId = KimiAcpSessionId.make("kimi-integrator-session")
-        const observation = {
-          sessionId,
-          cwd: candidatePath,
-          status: "terminal" as const,
-          updateCount: 1,
-          lastMessage: '{"version":1,"outcome":"PreparedCandidate","candidate":"M"}',
-          stopReason: "end_turn",
-          permissionDenied: false
-        }
-        const calls: Array<string> = []
-        const client: KimiAcpClientService = {
-          initialize: () => Effect.succeed({ loadSession: true, resumeSession: true, sessionClose: true }),
-          newSession: (cwd) => Effect.sync(() => calls.push(`newSession:${cwd}`)).pipe(Effect.as(sessionId)),
-          loadSession: (id) => Effect.succeed(id),
-          resumeSession: (id) => Effect.succeed(id),
-          prompt: (id, text) => Effect.sync(() => calls.push(`prompt:${id}:${text.includes("Accepted commit C")}`)),
-          observe: (id) => Effect.sync(() => calls.push(`observe:${id}`)).pipe(Effect.as(observation)),
-          cancel: () => Effect.void,
-          closeSession: () => Effect.void,
-          close: () => Effect.void
-        }
-        let registered = false
-        const git = GitCommand.of({
-          run: (_directory, args) => {
-            if (args[0] === "worktree" && args[1] === "list") {
-              return Effect.succeed({
-                exitCode: 0,
-                stderr: "",
-                stdout: registered ? `worktree ${candidatePath}\0HEAD ${targetHead}\0detached\0\0` : ""
-              })
-            }
-            if (args[0] === "worktree" && args[1] === "add") {
-              registered = true
-              return fileSystem.makeDirectory(candidatePath, { recursive: true }).pipe(
-                Effect.mapError(
-                  (failure) => new GitCommandInvocationFailure({ detail: `candidate setup failed: ${String(failure)}` })
-                ),
-                Effect.as({ exitCode: 0, stderr: "", stdout: "" })
+  for (const owner of ["Exact", "ForeignSession", "ForeignWorktree"] as const) {
+    it.effect(`binds only the exact Kimi Integrator session: ${owner}`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem
+          const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-kimi-integrator-" })
+          const repository = GitRepositoryLocator.make(`${root}/repository.git`)
+          const config = CodexIntegratorConfiguration.make({
+            candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make(root),
+            commonDirectory: GitCommonDirectoryLocator.make(`${root}/repository.git`),
+            privateStoreLocator: IntegratorPrivateStoreLocator.make(`${root}/integrator-private.json`),
+            repository
+          })
+          const resource = IntegratorCandidateResourceLocator.make("candidate:test")
+          const candidatePath = candidateWorktreePathFor(config, resource)
+          const targetHead = GitCommitSha.make("a".repeat(40))
+          const acceptedCommit = GitCommitSha.make("b".repeat(40))
+          const session = IntegratorSessionCorrelation.make({
+            acceptedResult: AcceptedResult.make({
+              commit: acceptedCommit,
+              evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
+            }),
+            candidateResource: resource,
+            expectedTargetHead: targetHead,
+            integrationTarget: IntegrationTarget.make({
+              repository,
+              ref: IntegrationTargetRef.make("refs/heads/main")
+            }),
+            plannedAttempt: PlannedTaskAttempt.make({
+              attemptId: AttemptId.make("attempt"),
+              baseSha: targetHead,
+              branch: TaskBranchRef.make("refs/heads/task"),
+              executor: TaskExecutorLocator.make("kimi:test"),
+              runId: RunId.make("run"),
+              taskId: TaskId.make("task"),
+              taskRevision: TaskRevision.make("revision"),
+              worktree: WorktreeLocator.make(`${root}/planned`)
+            }),
+            queuedAt: JournalPosition.make(1),
+            sessionId: IntegratorSessionId.make("session"),
+            startedAt: JournalPosition.make(2),
+            targetLineageObservedAt: JournalPosition.make(3)
+          })
+          const sessionId = KimiAcpSessionId.make("kimi-integrator-session")
+          const observation = {
+            sessionId: owner === "ForeignSession" ? KimiAcpSessionId.make("foreign-integrator-session") : sessionId,
+            cwd: owner === "ForeignWorktree" ? `${root}/foreign` : candidatePath,
+            status: "terminal" as const,
+            updateCount: 1,
+            lastMessage: '{"version":1,"outcome":"PreparedCandidate","candidate":"M"}',
+            stopReason: "end_turn",
+            permissionDenied: false
+          }
+          const calls: Array<string> = []
+          const client: KimiAcpClientService = {
+            initialize: () => Effect.succeed({ loadSession: true, resumeSession: true, sessionClose: true }),
+            newSession: (cwd) => Effect.sync(() => calls.push(`newSession:${cwd}`)).pipe(Effect.as(sessionId)),
+            loadSession: (id) => Effect.succeed(id),
+            resumeSession: (id) => Effect.succeed(id),
+            prompt: (id, text) => Effect.sync(() => calls.push(`prompt:${id}:${text.includes("Accepted commit C")}`)),
+            observe: (id) => Effect.sync(() => calls.push(`observe:${id}`)).pipe(Effect.as(observation)),
+            cancel: () => Effect.void,
+            closeSession: () => Effect.void,
+            close: () => Effect.void
+          }
+          let registered = false
+          const git = GitCommand.of({
+            run: (_directory, args) => {
+              if (args[0] === "worktree" && args[1] === "list") {
+                return Effect.succeed({
+                  exitCode: 0,
+                  stderr: "",
+                  stdout: registered ? `worktree ${candidatePath}\0HEAD ${targetHead}\0detached\0\0` : ""
+                })
+              }
+              if (args[0] === "worktree" && args[1] === "add") {
+                registered = true
+                return fileSystem.makeDirectory(candidatePath, { recursive: true }).pipe(
+                  Effect.mapError(
+                    (failure) =>
+                      new GitCommandInvocationFailure({ detail: `candidate setup failed: ${String(failure)}` })
+                  ),
+                  Effect.as({ exitCode: 0, stderr: "", stdout: "" })
+                )
+              }
+              return Effect.succeed({ exitCode: 0, stderr: "", stdout: "" })
+            },
+            runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+            runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
+          })
+          const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+          const layer = nodeKimiIntegratorLayer(config, controlledKimiAcpClientLayer(client)).pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                NodeFileSystem.layer,
+                Layer.succeed(GitCommand, git),
+                Layer.succeed(CoordinatorOwnership, ownership)
               )
-            }
-            return Effect.succeed({ exitCode: 0, stderr: "", stdout: "" })
-          },
-          runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
-          runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
-        })
-        const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-        const layer = nodeKimiIntegratorLayer(config, controlledKimiAcpClientLayer(client)).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              NodeFileSystem.layer,
-              Layer.succeed(GitCommand, git),
-              Layer.succeed(CoordinatorOwnership, ownership)
             )
           )
-        )
-        const context = yield* Layer.build(layer)
-        const integrator = Context.get(context, Integrator)
-        const result = yield* integrator.prepare(
-          IntegratorRequest.make({
-            correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
-          })
-        )
-        expect(result._tag).toBe("PreparedCandidate")
-        expect(calls.some((call) => call.startsWith("newSession:"))).toBe(true)
-        expect(calls.some((call) => call.startsWith("prompt:") && call.endsWith(":true"))).toBe(true)
-      })
-    ).pipe(Effect.provide(NodeFileSystem.layer))
-  )
+          const context = yield* Layer.build(layer)
+          const integrator = Context.get(context, Integrator)
+          const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+          const result = yield* integrator.prepare(IntegratorRequest.make({ correlation: run })).pipe(Effect.exit)
+          if (owner === "Exact") {
+            expect(result).toMatchObject({ _tag: "Success", value: { _tag: "PreparedCandidate", correlation: run } })
+          } else {
+            expect(result._tag).toBe("Failure")
+          }
+          expect(calls.some((call) => call.startsWith("prompt:"))).toBe(owner === "Exact")
+          expect(calls.some((call) => call.startsWith("prompt:"))).toBe(owner === "Exact")
+          expect(calls.some((call) => call.startsWith("newSession:"))).toBe(true)
+          expect(calls.some((call) => call.startsWith("prompt:") && call.endsWith(":true"))).toBe(owner === "Exact")
+        })
+      ).pipe(Effect.provide(NodeFileSystem.layer))
+    )
+  }
 })

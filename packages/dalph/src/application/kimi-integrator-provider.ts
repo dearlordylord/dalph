@@ -91,6 +91,19 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
     )
     const threadTokens = yield* Ref.make<ReadonlyMap<string, CodexThreadOwnershipToken>>(new Map())
     const turns = yield* Ref.make<ReadonlyMap<string, CodexTurnSnapshot>>(new Map())
+    const observeOwnedSession = Effect.fn("KimiIntegrator.observeOwnedSession")(function* (
+      sessionId: KimiAcpSessionId,
+      operation: CodexAppServerFailure["operation"],
+      cwd?: string
+    ) {
+      const observation = yield* client.observe(sessionId).pipe(mapFailure(operation))
+      if (observation.sessionId !== sessionId || (cwd !== undefined && observation.cwd !== cwd)) {
+        return yield* Effect.fail(
+          operationFailure(operation, "Kimi observation belongs to another session or worktree")
+        )
+      }
+      return observation
+    })
     const app: CodexAppServerService = {
       incarnation,
       terminalSealPolicy: "FreshLifecycleMaySeal",
@@ -105,7 +118,7 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
                 ? Effect.void
                 : Ref.update(threadTokens, (current) => new Map([...current, [sessionId, ownedThreadToken]] as const))
             return remember.pipe(
-              Effect.andThen(client.observe(sessionId)),
+              Effect.andThen(observeOwnedSession(sessionId, "thread/start", cwd)),
               mapFailure("thread/start"),
               Effect.map((observation) => threadFor(sessionId, cwd, observation, undefined, ownedThreadToken))
             )
@@ -115,8 +128,7 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
         Effect.gen(function* () {
           const sessions = yield* Ref.get(threadTokens)
           const listed = yield* Effect.forEach(sessions.keys(), (sessionId) =>
-            client.observe(clientSessionId(sessionId)).pipe(
-              mapFailure("thread/list"),
+            observeOwnedSession(clientSessionId(sessionId), "thread/list").pipe(
               Effect.map((observation) =>
                 CodexThreadListSummary.IdentityOnly({
                   id: threadIdFor(sessionId),
@@ -133,7 +145,7 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
         return Effect.gen(function* () {
           const tokenMap = yield* Ref.get(threadTokens)
           const turnMap = yield* Ref.get(turns)
-          const observation = yield* client.observe(clientSessionId(sessionId)).pipe(mapFailure("thread/read"))
+          const observation = yield* observeOwnedSession(clientSessionId(sessionId), "thread/read")
           return threadFor(sessionId, observation.cwd, observation, turnMap.get(sessionId), tokenMap.get(sessionId))
         })
       },
@@ -143,9 +155,11 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
           mapFailure("thread/resume"),
           Effect.flatMap((restored) =>
             Effect.gen(function* () {
+              if (restored !== sessionId)
+                return yield* Effect.fail(operationFailure("thread/resume", "Kimi restored another session"))
               const tokenMap = yield* Ref.get(threadTokens)
               const turnMap = yield* Ref.get(turns)
-              const observation = yield* client.observe(restored).pipe(mapFailure("thread/resume"))
+              const observation = yield* observeOwnedSession(restored, "thread/resume", cwd)
               return threadFor(restored, cwd, observation, turnMap.get(restored), tokenMap.get(restored))
             })
           )
@@ -176,7 +190,7 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
             }
           }
           yield* client.prompt(clientSessionId(sessionId), text).pipe(mapFailure("turn/start"))
-          const observation = yield* client.observe(clientSessionId(sessionId)).pipe(mapFailure("turn/start"))
+          const observation = yield* observeOwnedSession(clientSessionId(sessionId), "turn/start", _cwd)
           const turn = turnFor(threadId, token, observation)
           yield* Ref.update(turns, (current) => new Map([...current, [sessionId, turn]] as const))
           return turn

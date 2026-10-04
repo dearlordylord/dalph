@@ -546,3 +546,12 @@ review round belongs to the MVP.
   [issue #111](replace-purged-codex-work-unit.md).
 - Changing accepted-result integration, Integrator, promotion, or
   task completion semantics.
+
+## Application-bound semantic results
+
+[Application-bound provider results](application-bound-provider-results.md)
+refines the model-facing result protocol. Dalph asks for the candidate proposal
+without Run/Attempt identifiers and binds its internal report only after exact
+thread/turn ownership and ordinary Git/evidence checks. Supported legacy
+correlation remains exact. Sealed Failed is absorbing after restart; changing
+provider output cannot promote that seal to Accepted.

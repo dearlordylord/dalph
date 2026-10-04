@@ -109,3 +109,13 @@ without accepted evidence.
 The controlled tests are the maintained catalog entry for this boundary; they
 do not claim that a live Kimi account or model is available in CI; the live
 probe above is retained as dated acceptance evidence rather than a CI test.
+
+## Application-bound semantic results
+
+[Application-bound provider results](application-bound-provider-results.md)
+refines result decoding. Kimi proposes a semantic candidate without copying
+Run/Attempt identifiers. Dalph checks the observed session/cwd, candidate HEAD,
+Base ancestry and evidence. A changed HEAD without a valid proposal cannot
+become Accepted. An unchanged Base with no candidate retains legacy Completed;
+previously sealed outcomes are unchanged. A foreign returned load identity
+cannot authorize another prompt.

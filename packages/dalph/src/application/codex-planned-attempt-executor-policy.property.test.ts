@@ -13,7 +13,6 @@ import {
   acceptedManifestMatches,
   collectText,
   commandFailure,
-  commitCandidates,
   commitFromTurn,
   commitMatchesHead,
   decodeAcceptedManifest,
@@ -165,7 +164,7 @@ it("normalizes text, status, and command failures at their pure boundaries", () 
   ).toEqual(["Reject", "Reject", "Intent", "Persistable", "Persistable", "Reject", "Persistable", "Reject"])
 })
 
-it("requires one exact commit and the exact response correlation", () => {
+it("requires one exact legacy commit and exact legacy response correlation", () => {
   const commit = "a".repeat(40)
   const otherCommit = "b".repeat(40)
   const message = JSON.stringify({ commit, correlation })
@@ -179,13 +178,7 @@ it("requires one exact commit and the exact response correlation", () => {
       correlation
     )
   ).toEqual({ _tag: "Invalid" })
-  expect(parsedCommitFromMessage(JSON.stringify({ commit: 42, correlation }), correlation)).toEqual({
-    _tag: "Valid",
-    candidate: undefined
-  })
-  expect(commitCandidates(message, commit)).toEqual(new Set([commit]))
-  expect(commitCandidates(`${commit} ${otherCommit}`, undefined)).toEqual(new Set([commit, otherCommit]))
-  expect(commitCandidates("no commit", "invalid")).toEqual(new Set())
+  expect(parsedCommitFromMessage(JSON.stringify({ commit: 42, correlation }), correlation)).toEqual({ _tag: "Invalid" })
   expect(commitFromTurn(undefined, correlation)).toBeUndefined()
   expect(commitFromTurn(turn({ items: [] }), correlation)).toBeUndefined()
   expect(commitFromTurn(turn({ items: [{ type: "agentMessage", text: message }] }), correlation)).toBe(commit)
