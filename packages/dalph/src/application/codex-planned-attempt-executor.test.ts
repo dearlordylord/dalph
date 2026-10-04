@@ -6618,3 +6618,60 @@ it.effect("refuses replacement when no observed private turn can prove a purged 
     expect(observedTurnId).toBeDefined()
   })
 )
+
+it.live("rereads a sealed terminal after an exact completion hint resolves stale recovery", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const hints = yield* PubSub.unbounded<CodexTurnCompletedHint>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(hints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.complete("{invalid}")
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const attached = yield* lifecycle.attach(correlation)
+        if (attached.current._tag === "Exact" && attached.current.report._tag === "ExecutorWorkTerminal") {
+          expect(attached.current.report.result._tag).toBe("Failed")
+        } else {
+          yield* PubSub.publish(hints, exactCompletionHint())
+          expect(yield* Stream.runHead(attached.changes).pipe(Effect.timeout("2 seconds"))).toMatchObject({
+            _tag: "Some",
+            value: { report: { result: { _tag: "Failed" } } }
+          })
+        }
+        yield* attached.close
+      }).pipe(Effect.provide(layerFor(harness)))
+      const seal = harness.currentRecord()
+      const completed = harness.currentThread().turns[0]
+      expect(completed).toBeDefined()
+      if (completed === undefined) return yield* Effect.die("owned completed turn missing")
+      const stale = { ...completed, status: "inProgress" as const }
+      harness.setThread({ ...harness.currentThread(), status: "active", turns: [stale] })
+      harness.setProviderTurnLedger([stale])
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const attached = yield* lifecycle.attach(correlation)
+        expect(attached.current).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting" } })
+        harness.setThread({ ...harness.currentThread(), status: "idle", turns: [completed] })
+        harness.setProviderTurnLedger([completed])
+        yield* PubSub.publish(hints, exactCompletionHint())
+        const changed = yield* Stream.runHead(attached.changes).pipe(Effect.timeout("2 seconds"))
+        expect(changed).toMatchObject({
+          _tag: "Some",
+          value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Failed" } } }
+        })
+        yield* attached.close
+      }).pipe(Effect.provide(layerFor(harness)))
+      expect(harness.currentRecord()).toEqual(seal)
+      expect(harness.turnCount()).toBe(1)
+    })
+  )
+)

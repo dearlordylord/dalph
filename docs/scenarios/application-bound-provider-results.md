@@ -86,3 +86,25 @@ reread, not a model restart; after the terminal seal, duplicate observations do
 not replace that seal. This scope neither integrates a retained failed candidate
 nor changes publication, cleanup, claims or attempt Base. Explicit recovery is
 owned by #428.
+
+## Real-host qualification
+
+`codex-real-host-qualification.test.ts` supplies identity-free semantic results
+through the real pinned app-server and built Dalph host. Its foreign legacy
+correlation remains an independent negative control. Real crash/restart,
+interruption and application Exit cases retain their existing assertions.
+The escaped/stuck child fixture creates a separate OS session; backgrounding
+a shell in the app-server's own group does not establish the required survivor.
+This fixture correction changes no production process-ownership, shutdown or
+workflow decision. Local qualification exercises all 23 real-host scenarios;
+Linux/macOS hosted qualification remains a separate exact-head obligation.
+
+7. **Sealed result with a stale recovery census.** After a crash, the exact
+   attempt already has a sealed terminal result, but the provider initially
+   reports its owned turn as in progress. Dalph exposes Executing until an
+   exact thread/turn completion notification triggers a provider reread. Once
+   the provider proves completion, Dalph returns the original sealed result.
+   A foreign notification cannot authorize that reread; neither notification
+   starts another turn or replaces the seal. Acceptance test: `rereads a sealed
+   terminal after an exact completion hint resolves stale recovery` in
+   `codex-planned-attempt-executor.test.ts`.

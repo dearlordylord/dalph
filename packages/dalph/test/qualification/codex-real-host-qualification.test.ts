@@ -71,16 +71,23 @@ const longLivedShellCommand = (
     name: "exec_command",
     arguments: JSON.stringify({
       cmd:
-        kind === "stuck"
-          ? "sh -c 'trap \"\" TERM; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 & printf '%s\\n' $! > .dalph-owned-child-pid"
-          : kind === "escaped"
-            ? "sh -c 'while :; do sleep 1; done' </dev/null >/dev/null 2>&1 & printf '%s\\n' $! > .dalph-owned-child-pid"
-            : "printf '%s\\n' $$ > .dalph-owned-child-pid; while :; do sleep 1; done",
+        kind === "foreground"
+          ? "printf '%s\\n' $$ > .dalph-owned-child-pid; while :; do sleep 1; done"
+          : detachedChildCommand(kind),
       workdir: worktree,
       yield_time_ms: 30_000
     })
   }
 })
+/** A new OS session proves escape from the app-server group instead of merely backgrounding a shell job. */
+const detachedChildCommand = (kind: "escaped" | "stuck"): string => {
+  const childProgram =
+    kind === "stuck"
+      ? 'process.on("SIGTERM", () => {}); process.on("SIGHUP", () => {}); setInterval(() => {}, 1000)'
+      : "setInterval(() => {}, 1000)"
+  const program = `const child = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(childProgram)}], { detached: true, stdio: "ignore", env: process.env }); require("node:fs").writeFileSync(".dalph-owned-child-pid", String(child.pid)); child.unref()`
+  return `node -e '${program.replaceAll("'", "'\\''")}'`
+}
 const assistantMessage = (text: string): Record<string, unknown> => ({
   type: "response.output_item.done",
   item: {
@@ -198,9 +205,12 @@ class ResponsesFixture {
       if (this.mode === "failed-race") {
         response.write(sse(failed(responseId)))
       } else {
-        const correlation = { runId: "real-codex-qualification-run", attemptId: "real-codex-qualification-attempt" }
         response.write(
-          sse(assistantMessage(JSON.stringify({ commit: await git(this.worktree, "rev-parse", "HEAD"), correlation })))
+          sse(
+            assistantMessage(
+              JSON.stringify({ version: 1, outcome: "Accepted", commit: await git(this.worktree, "rev-parse", "HEAD") })
+            )
+          )
         )
         response.write(sse(completed(responseId)))
       }
@@ -225,13 +235,12 @@ class ResponsesFixture {
         )
       )
     } else {
-      const correlation =
+      const commit = await git(this.worktree, "rev-parse", "HEAD")
+      const candidate =
         this.mode === "foreign"
-          ? { runId: "foreign-run", attemptId: "foreign-attempt" }
-          : { runId: "real-codex-qualification-run", attemptId: "real-codex-qualification-attempt" }
-      response.write(
-        sse(assistantMessage(JSON.stringify({ commit: await git(this.worktree, "rev-parse", "HEAD"), correlation })))
-      )
+          ? { commit, correlation: { runId: "foreign-run", attemptId: "foreign-attempt" } }
+          : { version: 1, outcome: "Accepted", commit }
+      response.write(sse(assistantMessage(JSON.stringify(candidate))))
     }
     response.write(sse(completed(responseId)))
     response.end()
@@ -1313,3 +1322,27 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
     45_000
   )
 })
+
+qualificationTest(
+  "retains the last lifecycle projection when the qualification observation bound expires",
+  async () => {
+    const fixture = await makeFixture("holding")
+    const hosts: Array<BuiltHost> = []
+    try {
+      const host = await spawnHost(fixture, "settle")
+      hosts.push(host)
+      expect(requireEvent(await host.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
+      const failed = await host.waitFor("failure")
+      expect(failed.event).toBe("failure")
+      if (failed.event !== "failure") throw new Error("expected the bounded observation failure")
+      expect(failed.detail).toContain("last projection=Exact/ExecutorWorkExecuting")
+      expect(failed.detail).toContain("retained state=Running")
+      expect(
+        host.events.some((event) => event.event === "report" && event.report._tag === "ExecutorWorkTerminal")
+      ).toBe(false)
+    } finally {
+      await dispose(fixture, hosts)
+    }
+  },
+  30_000
+)
