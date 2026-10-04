@@ -8,6 +8,8 @@ import {
   HostInstanceId,
   LocalHostAddress,
   RequestId,
+  SubscriptionId,
+  WatchSequence,
   RunningHostDescriptor,
   runningHostLimits,
   runningHostSuccessEnvelope,
@@ -138,6 +140,9 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       capabilities: { tools: {}, resources: {} }
     })
     expect(replies[1].result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "dalph_refresh",
+      "dalph_watch_snapshots",
+      "dalph_close_watch",
       "dalph_read_snapshot",
       "dalph_read_run_control",
       "dalph_start_work",
@@ -146,7 +151,7 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
     expect(replies[1].result.tools[0].outputSchema.type).toBe("object")
     expect(replies[2].result.structuredContent).toEqual(JSON.parse(replies[2].result.content[0].text))
     expect(replies[2].result.structuredContent).toEqual(JSON.parse(replies[3].result.contents[0].text))
-    expect(replies[4].error.code).toBe(-32601)
+    expect(replies[4].error.code).toBe(-32002)
     expect(replies.find(({ id }) => id === 6).result.structuredContent.result.value).toEqual({ _tag: "WakeSubmitted" })
     expect(replies.find(({ id }) => id === 7).result.structuredContent.result.value).toMatchObject({
       _tag: "UnpauseApplied",
@@ -372,4 +377,70 @@ it.effect("MCP write deadline cancels the pending sink and returns typed failure
     })
     expect(yield* Ref.get(cancellations)).toBe(1)
   })
+)
+
+it.effect(
+  "Blocked MCP notification stdout ends the bridge at its deadline and releases every session source with stdin open",
+  () =>
+    Effect.gen(function* () {
+      const input = yield* Queue.unbounded<Uint8Array>()
+      const replies = yield* Queue.unbounded<string>()
+      const entered = yield* Deferred.make<void>()
+      const acquired = yield* Ref.make(0)
+      const released = yield* Ref.make(0)
+      const frame = {
+        protocolVersion: 1 as const,
+        requestId: RequestId.make("host-request"),
+        runId,
+        subscriptionId: SubscriptionId.make("host-subscription"),
+        sequence: WatchSequence.make(0),
+        frame: { _tag: "Snapshot" as const, value: { _tag: "NotReady" as const, runId } }
+      }
+      const bridge = yield* runRunningHostMcp(
+        address,
+        runId,
+        {
+          input: Stream.fromQueue(input),
+          write: (line) =>
+            line.includes('"notifications/resources/updated"')
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never))
+              : Queue.offer(replies, line).pipe(Effect.asVoid)
+        },
+        {
+          descriptor: () => Effect.succeed(descriptor),
+          call: () => Effect.die("watch cannot mutate"),
+          watch: () =>
+            Stream.unwrap(
+              Ref.update(acquired, (n) => n + 1).pipe(Effect.as(Stream.concat(Stream.make(frame), Stream.never)))
+            ).pipe(Stream.ensuring(Ref.update(released, (n) => n + 1)))
+        }
+      ).pipe(Effect.result, Effect.forkChild)
+      const send = (message: unknown) => Queue.offer(input, new TextEncoder().encode(JSON.stringify(message) + "\n"))
+      yield* send(init)
+      yield* Queue.take(replies)
+      yield* send({ jsonrpc: "2.0", method: "notifications/initialized" })
+      for (const id of [2, 3]) {
+        yield* send({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "dalph_watch_snapshots", arguments: { runId } }
+        })
+        yield* Queue.take(replies)
+      }
+      expect(yield* Ref.get(acquired)).toBe(2)
+      yield* send({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "resources/subscribe",
+        params: { uri: "dalph://runs/R/watches/mcp-watch-1" }
+      })
+      yield* Deferred.await(entered)
+      yield* TestClock.adjust(runningHostLimits.writeDeadlineMillis - 1)
+      expect(yield* Ref.get(released)).toBe(0)
+      yield* TestClock.adjust(1)
+      expect(yield* Fiber.join(bridge)).toMatchObject({ _tag: "Failure", failure: { _tag: "WriteTimedOut" } })
+      expect(yield* Ref.get(released)).toBe(2)
+      expect(yield* Queue.offer(input, new Uint8Array(0))).toBe(true)
+    })
 )

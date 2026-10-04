@@ -1,13 +1,21 @@
 import { NodeServices } from "@effect/platform-node"
-import { ControlDirectionApplicationOrdinal, JournalPosition, TraceCursor } from "@dalph/orchestrator"
+import {
+  currentSignalFromCurrentFirstStream,
+  type DeliveryRuntimeObservationState,
+  ControlDirectionApplicationOrdinal,
+  JournalPosition,
+  TraceCursor
+} from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
 import { TestClock } from "effect/testing"
 import { Command } from "effect/unstable/cli"
 import { expect } from "vitest"
 import { availableLocalHostAddress, makeRunningHostReadProbe } from "../../test-support/running-host-read-probe.js"
 import { DalphCommandExit } from "./command-exit.js"
 import { makeRunningHostCommands, RunningHostCliOutput } from "./running-host-cli.js"
+import { writeRunningHostWatchFrame } from "./running-host-http-watch.js"
+import type { RunningHostWatchFrame } from "./running-host-contract.js"
 import { serveRunningHost } from "./running-host-http.js"
 
 const noSignals = {
@@ -133,6 +141,92 @@ it.effect("a blocked CLI writer is interrupted at five seconds with transport ex
       const error = result._tag === "Failure" ? Cause.findErrorOption(result.cause) : Option.none()
       expect(Option.getOrThrow(error)).toMatchObject({ _tag: "DalphCommandExit", status: 3 })
       expect(yield* Ref.get(cancelled)).toBe(1)
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
+
+for (const exit of ["Cancel", "BrokenStdout"] as const)
+  it.live(`CLI watch ${exit} releases its source and causes no application Exit or task effect`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const probe = yield* makeRunningHostReadProbe()
+        const state = yield* SubscriptionRef.make<DeliveryRuntimeObservationState>({ _tag: "NotReady" })
+        const released = yield* Deferred.make<void>()
+        const writing = yield* Deferred.make<void>()
+        const source = currentSignalFromCurrentFirstStream(
+          SubscriptionRef.changes(state).pipe(Stream.ensuring(Deferred.succeed(released, undefined)))
+        )
+        const address = yield* availableLocalHostAddress
+        yield* serveRunningHost(address, { ...probe.observation, current: source })
+        const output = Layer.succeed(RunningHostCliOutput, {
+          writeLine: () =>
+            Deferred.succeed(writing, undefined).pipe(
+              Effect.andThen(exit === "Cancel" ? Effect.never : Effect.fail(new DalphCommandExit({ status: 3 })))
+            )
+        })
+        const client = yield* application(output)([
+          "attach",
+          "watch",
+          "--host",
+          address,
+          "--run",
+          probe.runId,
+          "--json"
+        ]).pipe(Effect.provide(NodeServices.layer), Effect.exit, Effect.forkChild)
+        yield* Deferred.await(writing)
+        if (exit === "Cancel") yield* Fiber.interrupt(client)
+        else {
+          const result = yield* Fiber.join(client)
+          expect(result._tag).toBe("Failure")
+          if (result._tag === "Failure") expect(Cause.squash(result.cause)).toMatchObject({ status: 3 })
+        }
+        yield* Deferred.await(released).pipe(Effect.timeout("2 seconds"))
+        expect(yield* Ref.get(probe.reads)).toBe(0)
+        yield* SubscriptionRef.set(state, { _tag: "Closed", final: null })
+        expect((yield* source.get)._tag).toBe("Closed")
+      })
+    )
+  )
+
+it.live("CLI emits a correlated Failure after initial current and abrupt host disconnect", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const address = yield* availableLocalHostAddress
+      const first = yield* Deferred.make<void>()
+      const frames = yield* Ref.make<ReadonlyArray<RunningHostWatchFrame>>([])
+      const disconnect = yield* Ref.make<() => void>(() => undefined)
+      yield* serveRunningHost(address, probe.observation, (response, frame) =>
+        Ref.set(disconnect, () => {
+          response.destroy()
+        }).pipe(Effect.andThen(writeRunningHostWatchFrame(response, frame)))
+      )
+      const output = Layer.succeed(RunningHostCliOutput, {
+        writeLine: (text) =>
+          Effect.sync(() => JSON.parse(text) as RunningHostWatchFrame).pipe(
+            Effect.flatMap((frame) => Ref.update(frames, (all) => [...all, frame])),
+            Effect.andThen(Deferred.succeed(first, undefined)),
+            Effect.asVoid
+          )
+      })
+      const client = yield* application(output)([
+        "attach",
+        "watch",
+        "--host",
+        address,
+        "--run",
+        probe.runId,
+        "--json"
+      ]).pipe(Effect.provide(NodeServices.layer), Effect.exit, Effect.forkChild)
+      yield* Deferred.await(first)
+      yield* Effect.sync(yield* Ref.get(disconnect))
+      yield* Fiber.join(client)
+      const values = yield* Ref.get(frames)
+      expect(values).toHaveLength(2)
+      expect(values[1]?.frame).toMatchObject({ _tag: "Failure", error: { _tag: "TransportFailed" } })
+      expect(values[1]?.requestId).toBe(values[0]?.requestId)
+      expect(values[1]?.subscriptionId).toBe(values[0]?.subscriptionId)
+      expect(values[1]?.sequence).toBe(1)
     })
   ).pipe(Effect.provide(NodeServices.layer))
 )

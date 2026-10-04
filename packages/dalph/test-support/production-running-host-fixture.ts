@@ -70,7 +70,14 @@ const providerBodyFor = (request: GithubGraphqlRequest) => {
 export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(function* (
   builtEntry: string,
   includeBlockedChildren = false,
-  paused?: PausedRunningHostFixture
+  paused?: PausedRunningHostFixture,
+  discovery?: {
+    readonly startupIncludesE?: boolean
+    readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+    readonly onRootGraphRead?: () => Effect.Effect<void>
+    readonly onActivationIdle?: () => Effect.Effect<void>
+  },
+  interruptStopsTurn = false
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const git = yield* GitCommand
@@ -115,16 +122,24 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         : Effect.void,
     fixture.manifest.invocationId
   )
-  const maskThread = (thread: CodexThreadSnapshot, visible: boolean): CodexThreadSnapshot =>
-    visible
-      ? thread
-      : {
-          ...thread,
-          status: "active" as const,
-          turns: thread.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
-        }
+  // The shutdown fixture acknowledges interrupt, then reconciliation observes an idle interrupted turn.
+  const interrupted = yield* Ref.make(false)
+  const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean): CodexThreadSnapshot =>
+    stopped
+      ? { ...thread, status: "idle", turns: thread.turns.map((turn) => ({ ...turn, status: "interrupted" as const })) }
+      : visible
+        ? thread
+        : {
+            ...thread,
+            status: "active" as const,
+            turns: thread.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
+          }
   const codex = CodexAppServer.of({
     ...provider.codex,
+    interruptTurn: (threadId, turnId) =>
+      provider.codex
+        .interruptTurn(threadId, turnId)
+        .pipe(Effect.andThen(interruptStopsTurn ? Ref.set(interrupted, true) : Effect.void)),
     unattendedPolicyAdmission: Effect.void,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
@@ -165,7 +180,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .readThread(id)
         .pipe(
           Effect.flatMap((thread) =>
-            Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
+            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted)]).pipe(
+              Effect.map(([visible, stopped]) => maskThread(thread, visible, stopped))
+            )
           )
         ),
     resumeThread: (id, cwd) =>
@@ -173,7 +190,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .resumeThread(id, cwd)
         .pipe(
           Effect.flatMap((thread) =>
-            Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
+            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted)]).pipe(
+              Effect.map(([visible, stopped]) => maskThread(thread, visible, stopped))
+            )
           )
         ),
     startTurn: (...args) =>
@@ -189,11 +208,14 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const rootNode = hermeticQualificationTrackerIdentity.issueNodeId
   const childB = GithubIssueNodeId.make("running-host-B")
   const childC = GithubIssueNodeId.make("running-host-C")
-  const nodeIds = [rootNode, childB, childC]
+  const childE = GithubIssueNodeId.make("running-host-E")
+  const includesE = yield* Ref.make(discovery?.startupIncludesE === true)
+  const nodeIds = [rootNode, childB, childC, childE]
   const taskIds = nodeIds.map((node) => githubTaskIdFor(hermeticQualificationTrackerIdentity.repositoryNodeId, node))
   const trackerCalls = yield* Ref.make(0)
   const gitCalls = yield* Ref.make(0)
   const exitCalls = yield* Ref.make(0)
+  const exitEvents = yield* Ref.make<ReadonlyArray<unknown>>([])
   const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
     Effect.gen(function* () {
       yield* Ref.update(trackerCalls, (count) => count + 1)
@@ -208,13 +230,25 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
           }
         }
       })
-      if (request._tag === "ReadSubIssues")
+      if (request._tag === "ReadSubIssues") {
+        if (request.issueNodeId === rootNode && discovery?.onRootGraphRead !== undefined)
+          yield* discovery.onRootGraphRead()
         return connection(
           "subIssues",
-          includeBlockedChildren && request.issueNodeId === rootNode ? [childB, childC] : []
+          includeBlockedChildren && request.issueNodeId === rootNode
+            ? [childB, childC, ...((yield* Ref.get(includesE)) ? [childE] : [])]
+            : []
         )
+      }
       if (includeBlockedChildren && request._tag === "ReadBlockedBy")
-        return connection("blockedBy", request.issueNodeId === childC ? [rootNode, childB] : [])
+        return connection(
+          "blockedBy",
+          request.issueNodeId === childC
+            ? [rootNode, childB, ...((yield* Ref.get(includesE)) ? [childE] : [])]
+            : request.issueNodeId === childE
+              ? [rootNode]
+              : []
+        )
       if (includeBlockedChildren && request._tag === "ReadIssue" && request.issueNodeId !== rootNode)
         return {
           body: {
@@ -245,16 +279,24 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   )
   const failures = yield* Ref.make<ReadonlyArray<unknown>>([])
   const activationFinalizing = yield* Deferred.make<void>()
+  const activationIdle = yield* Deferred.make<void>()
   const releaseObservationCut = yield* Deferred.make<void>()
   yield* Effect.addFinalizer(() => Deferred.succeed(releaseObservationCut, undefined).pipe(Effect.asVoid))
   const ownerReady = yield* Deferred.make<RunReactivationOwner["Service"]>()
   const productionGraph = productionRepositoryHostGraph({
     ...reactivationObserversFor(paused),
+    ...(discovery?.onTimerStateChange === undefined ? {} : { onTimerStateChange: discovery.onTimerStateChange }),
     githubRequestCircuitMaxRequests: 2000,
     onActivationFinalizationStart: () =>
       Deferred.succeed(activationFinalizing, undefined).pipe(Effect.andThen(Deferred.await(releaseObservationCut))),
+    onActivationHandoffIdle: () =>
+      Deferred.succeed(activationIdle, undefined).pipe(
+        Effect.andThen(discovery?.onActivationIdle?.() ?? Effect.void),
+        Effect.asVoid
+      ),
     workflowGitCommandObserver: () => Ref.update(gitCalls, (count) => count + 1),
     applicationExitRequestObserver: () => Ref.update(exitCalls, (count) => count + 1),
+    applicationExitTraceObserver: (event) => Ref.update(exitEvents, (events) => [...events, event]),
     onActivationFailure: (failure) => Ref.update(failures, (all) => [...all, failure]),
     codexAppServer: () =>
       Layer.effect(
@@ -269,7 +311,12 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const graph = {
     ...productionGraph,
     ...(paused === undefined
-      ? {}
+      ? {
+          foundation: (configuration: ProductionRepositoryHostConfiguration) =>
+            productionGraph
+              .foundation(configuration)
+              .pipe(Layer.tap((context) => Deferred.succeed(pausedStore, Context.get(context, JournalStore))))
+        }
       : {
           foundation: (configuration: ProductionRepositoryHostConfiguration) =>
             journalStoreCapabilities(
@@ -327,17 +374,21 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     configuration,
     graph,
     taskIds,
+    authorE: Ref.set(includesE, true),
     bootstrap: Deferred.await(bootstrapReady),
+    readHistory: (runId: RunId) => Deferred.await(pausedStore).pipe(Effect.flatMap((store) => store.read(runId))),
     readPausedHistory: Deferred.await(pausedStore).pipe(
       Effect.flatMap((store) => store.read(RunId.make("paused-client-run")))
     ),
     releaseObservationCut: Deferred.succeed(releaseObservationCut, undefined).pipe(Effect.asVoid),
     activationFinalizing,
+    activationIdle,
     provider,
     failures,
     trackerCalls,
     gitCalls,
     exitCalls,
+    exitEvents,
     turnEntered,
     completionEntered,
     release: Deferred.succeed(releaseObservationCut, undefined).pipe(

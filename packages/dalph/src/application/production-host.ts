@@ -175,6 +175,7 @@ export interface ProductionRunningHostObservation<E> extends ProductionHostObser
   readonly closing: Effect.Effect<boolean>
   readonly commandAdmission: ApplicationExitAdmissionService
   readonly awaitExitResult: Effect.Effect<void>
+  readonly registerObservationDrain: ProductionHostApplicationExitShellService["registerProcessLocalDrain"]
   readonly executeAttachedCommand: (
     request: RunningHostCommandRequest
   ) => Effect.Effect<RunningHostCommandValue, RunningHostError>
@@ -347,6 +348,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly onAcceptedRunControl?: (direction: AcceptedRunControlDirection) => Effect.Effect<void>
   /** Optional observation of each admitted activation finalization. */
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
+  /** Qualification-only observation of the existing owner idle handoff. */
+  readonly onActivationHandoffIdle?: () => Effect.Effect<void>
   /** Qualification synchronization immediately before the real expected-head Git mutation. */
   readonly targetPromotionCompareAndSetObserver?: (request: TargetPromotionGitRequest) => Effect.Effect<void>
   /** Qualification-only process view shared by app-server ownership and attempt activity observations. */
@@ -1045,6 +1048,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             ...(adapters.onActivationFinalizationStart === undefined
               ? {}
               : { onActivationFinalizationStart: adapters.onActivationFinalizationStart }),
+            ...(adapters.onActivationHandoffIdle === undefined
+              ? {}
+              : { onActivationHandoffIdle: adapters.onActivationHandoffIdle }),
             ...(adapters.onTimerStateChange === undefined ? {} : { onTimerStateChange: adapters.onTimerStateChange }),
             ...(adapters.onAcceptedRunControl === undefined
               ? {}
@@ -1167,17 +1173,22 @@ export const withDecodedProductionRepositoryHost = <
         closing: applicationExit.admission.snapshot.pipe(Effect.map((state) => state.cutoffClosed)),
         commandAdmission: applicationExit.admission,
         awaitExitResult: applicationExit.awaitExitResult.pipe(Effect.asVoid),
+        registerObservationDrain: applicationExit.registerProcessLocalDrain,
         executeAttachedCommand: Effect.fn("ProductionHost.executeAttachedCommand")(function* (request) {
           const owner = Context.getOption(run, RunReactivationOwner)
-          if (request.operation._tag === "StartWork") {
+          if (request.operation._tag === "StartWork" || request.operation._tag === "Refresh") {
             if (Option.isNone(owner))
               return yield* Effect.fail<RunningHostError>({
                 _tag: "CommandFailed",
-                operation: "StartWork",
+                operation: request.operation._tag,
                 stage: "BeforeApplication",
                 causeTag: "RunOwnerUnavailable",
                 detail: "The Run owner is unavailable."
               })
+            if (request.operation._tag === "Refresh") {
+              yield* owner.value.hint(RunReactivationHint.TrackerNotification())
+              return { _tag: "RefreshSubmitted" as const, interest: request.operation.interest }
+            }
             yield* owner.value.hint(RunReactivationHint.OperatorWake())
             return { _tag: "WakeSubmitted" as const }
           }

@@ -95,7 +95,7 @@ const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError>
     disposition: "Completed",
     terminatedAt: TraceCursor.make({ runId, position: JournalPosition.make(4) })
   },
-  ...(["StartWork", "Unpause"] as const).flatMap(
+  ...(["StartWork", "Unpause", "Refresh"] as const).flatMap(
     (operation): ReadonlyArray<RunningHostError> => [
       { _tag: "CommandFailed", operation, stage: "PreAdmission", causeTag: "NoControl", detail: "unavailable" },
       { _tag: "CommandFailed", operation, stage: "BeforeApplication", causeTag: "Rejected", detail: "not applied" },
@@ -124,18 +124,26 @@ const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError>
   }
 ]
 
-const operationsFor = (error: RunningHostError): ReadonlyArray<"snapshot" | "control" | "start" | "unpause"> =>
+const operationsFor = (
+  error: RunningHostError
+): ReadonlyArray<"snapshot" | "control" | "start" | "unpause" | "refresh"> =>
   error._tag === "CommandFailed" || error._tag === "CommandOutcomeUnknown"
-    ? [error.operation === "StartWork" ? ("start" as const) : ("unpause" as const)]
+    ? [
+        error.operation === "StartWork"
+          ? ("start" as const)
+          : error.operation === "Refresh"
+            ? ("refresh" as const)
+            : ("unpause" as const)
+      ]
     : error._tag === "UnpausePartiallyApplied"
       ? ["unpause" as const]
       : error._tag === "RunClosed"
-        ? (["start", "unpause"] as const)
+        ? (["start", "unpause", "refresh"] as const)
         : error._tag === "ReadFailed" || error._tag === "ProjectionFailed"
           ? (["snapshot", "control"] as const)
-          : (["snapshot", "control", "start", "unpause"] as const)
+          : (["snapshot", "control", "start", "unpause", "refresh"] as const)
 
-for (const selectedOperation of ["snapshot", "control", "start", "unpause"] as const) {
+for (const selectedOperation of ["snapshot", "control", "start", "unpause", "refresh"] as const) {
   for (const [errorIndex, error] of failuresFor(LocalHostAddress.make("http://127.0.0.1:43127")).entries()) {
     if (!operationsFor(error).includes(selectedOperation)) continue
     it.live(
@@ -201,19 +209,34 @@ for (const selectedOperation of ["snapshot", "control", "start", "unpause"] as c
               const operations = operationsFor(error)
 
               for (const operation of operations.filter((operation) => operation === selectedOperation)) {
-                const source = yield* callRunningHost(address, runId, {
-                  _tag:
-                    operation === "snapshot"
-                      ? "ReadSnapshot"
-                      : operation === "control"
-                        ? "ReadRunControl"
-                        : operation === "start"
-                          ? "StartWork"
-                          : "Unpause"
-                })
+                const source = yield* callRunningHost(
+                  address,
+                  runId,
+                  operation === "refresh"
+                    ? { _tag: "Refresh", interest: { _tag: "WholeGraph" } }
+                    : {
+                        _tag:
+                          operation === "snapshot"
+                            ? "ReadSnapshot"
+                            : operation === "control"
+                              ? "ReadRunControl"
+                              : operation === "start"
+                                ? "StartWork"
+                                : "Unpause"
+                      }
+                )
                 if (source.result._tag !== "Failure") return expect.fail("source client must return the shared failure")
                 expect(normalize(source.result.error)).toEqual(normalize(error))
-                const cli = yield* child(["attach", operation, "--host", address, "--run", runId, "--json"])
+                const cli = yield* child([
+                  "attach",
+                  operation,
+                  "--host",
+                  address,
+                  "--run",
+                  runId,
+                  "--json",
+                  ...(operation === "refresh" ? ["--whole-graph"] : [])
+                ])
                 const expectedStatus = [
                   "HostUnavailable",
                   "WriteTimedOut",
@@ -250,10 +273,12 @@ for (const selectedOperation of ["snapshot", "control", "start", "unpause"] as c
                           ? "dalph_read_snapshot"
                           : operation === "control"
                             ? "dalph_read_run_control"
-                            : operation === "start"
-                              ? "dalph_start_work"
-                              : "dalph_unpause",
-                      arguments: { runId }
+                            : operation === "refresh"
+                              ? "dalph_refresh"
+                              : operation === "start"
+                                ? "dalph_start_work"
+                                : "dalph_unpause",
+                      arguments: { runId, ...(operation === "refresh" ? { interest: { _tag: "WholeGraph" } } : {}) }
                     }
                   }
                 ]
@@ -652,14 +677,20 @@ it.live("submitted commands classify inconsistent response correlation and opera
       })
       for (const mode of ["Correlation", "Operation"] as const) {
         replies = mode
-        for (const operation of ["StartWork", "Unpause"] as const)
-          expect(yield* callRunningHost(address, runId, { _tag: operation })).toMatchObject({
+        for (const operation of ["StartWork", "Unpause", "Refresh"] as const)
+          expect(
+            yield* callRunningHost(
+              address,
+              runId,
+              operation === "Refresh" ? { _tag: "Refresh", interest: { _tag: "WholeGraph" } } : { _tag: operation }
+            )
+          ).toMatchObject({
             result: {
               error: { _tag: "CommandOutcomeUnknown", operation, phase: "AdmissionUnconfirmed", acceptedAt: null }
             }
           })
       }
-      expect(calls).toBe(4)
+      expect(calls).toBe(6)
     })
   )
 )
