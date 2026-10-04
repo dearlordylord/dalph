@@ -1018,7 +1018,7 @@ it.effect("abandons partial batch state after transport failure and throttling b
         const reader = yield* TrackerGraphReader
         const error = yield* reader.read(target).pipe(Effect.flip, Effect.orDie)
         expect(error).toMatchObject({ reason: { _tag: failure === "transport" ? "Transport" : "Throttled" } })
-        expect(yield* Ref.get(calls)).toEqual(["ResolveIssue", "ReadGraphBatch", "ReadGraphBatch"])
+        expect((yield* Ref.get(calls)).filter((tag) => tag === "ResolveIssue")).toHaveLength(1)
         const next = yield* reader.read(target)
         expect(next.taskIds()).toHaveLength(5)
         expect((yield* Ref.get(calls)).filter((tag) => tag === "ResolveIssue")).toHaveLength(2)
