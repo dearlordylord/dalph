@@ -66,6 +66,7 @@ import type * as Scope from "effect/Scope"
 import { TestClock, TestConsole } from "effect/testing"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
+import { isolatedPlannedAttemptExecutorLayer } from "./isolated-planned-attempt-executor.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
 import { beginPlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { plannedAttemptProtocolControllerLayer } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
@@ -1143,6 +1144,14 @@ definePlannedAttemptExecutorConformanceSuite(codexConformanceImplementation)
 plannedAttemptExecutorContract({
   layer: layerForImplementation(codexPlannedAttemptExecutorLayer)(makeHarness()),
   name: "Codex app-server"
+})
+
+plannedAttemptExecutorContract({
+  layer: isolatedPlannedAttemptExecutorLayer(
+    () => Layer.build(layerForImplementation(codexPlannedAttemptExecutorLayer)(makeHarness())),
+    () => "isolated contract acquisition failed"
+  ),
+  name: "isolated Codex app-server"
 })
 
 const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExactReport")(function* (

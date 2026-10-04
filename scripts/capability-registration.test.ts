@@ -370,16 +370,27 @@ describe("capability registration gate", () => {
     )
   })
 
-  it("rejects replacement of the registered Codex-owned activity census in the production host", () => {
-    const replacedProductionHost = sourceFiles.map((file) =>
-      file.path === "packages/dalph/src/application/production-host.ts"
+  it("rejects a contract that bypasses the registered isolated executor", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/codex-planned-attempt-executor.test.ts"
         ? {
             ...file,
             source: file.source.replace(
-              "codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(appLayer))",
-              "Layer.empty"
+              "layer: isolatedPlannedAttemptExecutorLayer(",
+              "layer: unregisteredExecutorLayer("
             )
           }
+        : file
+    )
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "isolated-planned-attempt-executor production contract implementation binding is stale: isolatedPlannedAttemptExecutorLayer"
+    )
+  })
+
+  it("rejects replacement of the registered Codex-owned activity census in the production host", () => {
+    const replacedProductionHost = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/production-host.ts"
+        ? { ...file, source: file.source.replaceAll("codexOwnedActivityCensusLayer", "unregisteredActivityCensus") }
         : file
     )
 
