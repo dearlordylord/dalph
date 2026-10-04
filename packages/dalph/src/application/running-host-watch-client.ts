@@ -2,7 +2,11 @@ import { NodeCrypto, NodeHttpClient } from "@effect/platform-node"
 import type { RunId } from "@dalph/contracts"
 import { Crypto, Effect, Schema, Stream } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
-import { decodeRunningHostResponseJson, readRunningHostDescriptor } from "./running-host-client.js"
+import {
+  decodeRunningHostResponseJson,
+  readRunningHostDescriptor,
+  validateRunningHostResponseCorrelation
+} from "./running-host-client.js"
 import {
   encodeRunningHostWatchFrame,
   type LocalHostAddress,
@@ -127,9 +131,10 @@ export const watchRunningHost = (
           return known._tag === "Some" ? known.value : failed("WatchRejectedResponseInvalid")
         })
       )
-      const envelope = yield* Schema.decodeUnknownEffect(RunningHostEnvelope)(input).pipe(
-        Effect.mapError(() => failed("WatchRejectedSchemaInvalid"))
-      )
+      const envelope = yield* Schema.decodeUnknownEffect(RunningHostEnvelope)(input, {
+        onExcessProperty: "error"
+      }).pipe(Effect.mapError(() => failed("WatchRejectedSchemaInvalid")))
+      yield* validateRunningHostResponseCorrelation(request, envelope)
       return yield* Effect.fail(
         envelope.result._tag === "Failure" ? envelope.result.error : failed("WatchStreamExpected")
       )

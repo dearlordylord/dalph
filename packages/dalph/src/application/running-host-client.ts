@@ -155,18 +155,22 @@ export const readRunningHostDescriptor = Effect.fn("RunningHostClient.descriptor
   (effect) => Effect.scoped(effect.pipe(Effect.provide([NodeHttpClient.layerUndici, NodeCrypto.layer])))
 )
 
+/** A unary reply belongs only to the exact request and selected Run that produced it. */
+export const validateRunningHostResponseCorrelation = (
+  request: RunningHostRequest,
+  envelope: RunningHostEnvelope
+): Effect.Effect<void, RunningHostError> =>
+  envelope.requestId === request.requestId && envelope.runId === request.runId
+    ? Effect.void
+    : Effect.fail({ _tag: "TransportFailed", phase: "Response", reason: "ResponseCorrelationMismatch" })
+
 const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (request: RunningHostRequest, input: unknown) {
   const envelope = yield* Schema.decodeUnknownEffect(RunningHostEnvelope)(input, { onExcessProperty: "error" }).pipe(
     Effect.mapError(
       (): RunningHostError => ({ _tag: "TransportFailed", phase: "Response", reason: "ResponseSchemaInvalid" })
     )
   )
-  if (envelope.requestId !== request.requestId || envelope.runId !== request.runId)
-    return yield* Effect.fail<RunningHostError>({
-      _tag: "TransportFailed",
-      phase: "Response",
-      reason: "ResponseCorrelationMismatch"
-    })
+  yield* validateRunningHostResponseCorrelation(request, envelope)
   const compatible =
     envelope.result._tag === "Success"
       ? successTags[request.operation._tag].includes(envelope.result.value._tag)
