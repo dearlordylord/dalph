@@ -35,6 +35,7 @@ import {
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator,
   nodeCodexIntegratorPrivateStoreLayer,
+  inspectCodexIntegratorRetainedThreads,
   recordRunIntent,
   removalIntentRecordFor,
   removedRecordFor,
@@ -166,6 +167,42 @@ describe("Codex Integrator private store", () => {
     expect(removalIntentRecordFor(record())).toBeUndefined()
     expect(removalIntentRecordFor(unsealed)).toBeUndefined()
     expect(removedRecordFor(unsealed)).toBeUndefined()
+  })
+
+  it("inspects legacy thread intent through the private store without process or credential effects", async () => {
+    const locator = IntegratorPrivateStoreLocator.make("/controlled/integrator.json")
+    for (const [tag, retained] of [
+      ["CandidateUnmaterialized", false],
+      ["CandidateReady", false],
+      ["ThreadStartIntentRecorded", true],
+      ["ThreadReady", true]
+    ] as const) {
+      const saved = Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({
+        ...record(),
+        _tag: tag,
+        ...(tag === "ThreadReady" ? { threadId: "legacy-thread" } : {})
+      })
+      const fs = FileSystem.makeNoop({
+        exists: () => Effect.succeed(true),
+        readFileString: () => Effect.succeed(JSON.stringify([saved]))
+      })
+      expect(
+        await Effect.runPromise(
+          inspectCodexIntegratorRetainedThreads(locator).pipe(Effect.provide(Layer.succeed(FileSystem.FileSystem, fs)))
+        )
+      ).toBe(retained)
+    }
+    const malformed = FileSystem.makeNoop({
+      exists: () => Effect.succeed(true),
+      readFileString: () => Effect.succeed("malformed")
+    })
+    const outcome = await Effect.runPromise(
+      inspectCodexIntegratorRetainedThreads(locator).pipe(
+        Effect.provide(Layer.succeed(FileSystem.FileSystem, malformed)),
+        Effect.result
+      )
+    )
+    expect(outcome._tag).toBe("Failure")
   })
 
   it("reads absence, writes a record, and finds it by exact candidate path", async () => {

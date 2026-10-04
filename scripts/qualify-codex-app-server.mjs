@@ -13,6 +13,7 @@ const pinnedCodexVersion = JSON.parse(await readFile(new URL("../package.json", 
   .devDependencies["@openai/codex"]
 const testFiles = [
   "packages/dalph/src/application/codex-app-server-real-qualification.test.ts",
+  "packages/dalph/src/application/codex-shared-home-real-qualification.test.ts",
   "packages/dalph/src/application/codex-integrator-real-qualification.test.ts",
   "packages/dalph/test/qualification/codex-real-host-qualification.test.ts",
   "packages/dalph/src/application/codex-planned-attempt-executor.test.ts"

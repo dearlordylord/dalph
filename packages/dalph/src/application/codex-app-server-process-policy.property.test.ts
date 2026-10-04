@@ -1,5 +1,5 @@
 import { ApplicationExitDiagnostic, ApplicationExitDrainFailure } from "@dalph/orchestrator"
-import { Cause, Effect, Exit, Option } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import * as fc from "fast-check"
 import { describe, expect, it } from "vitest"
 import {
@@ -28,6 +28,7 @@ import {
   normalizeInitializeResponse,
   numericProcessId,
   observeLeaseOwner,
+  observeRetainedCodexStartup,
   processErrorCode,
   processGroupLeaderFailure,
   processIdentityFromIncarnation,
@@ -50,6 +51,7 @@ import {
   nodeCodexProcessNativeService
 } from "./codex-process-native.js"
 import type { CodexProcessNativeService } from "./codex-process-native.js"
+import { CodexStartupAdmissionRecord } from "./codex-startup-admission.js"
 import {
   CodexAttemptStoreFailure,
   CodexProcessIdentity,
@@ -98,11 +100,112 @@ const withNative = <A>(service: CodexProcessNativeService, use: (native: CodexPr
 }
 
 describe("Codex process observation policy", () => {
+  it("classifies initialize protocol and host contradictions without process or filesystem effects", () => {
+    const forbidden = () => {
+      throw new Error("initialize classification must not access the host")
+    }
+    const host = native({
+      platform: "linux",
+      readFile: forbidden,
+      readdir: forbidden,
+      execFile: forbidden,
+      kill: forbidden
+    })
+    const valid = { userAgent: "fixture", codexHome: "/provider-home", platformFamily: "unix", platformOs: "linux" }
+    expect(normalizeInitializeResponse(valid, host)).toBe(true)
+    for (const malformed of ["malformed", null, {}, { ...valid, codexHome: "" }]) {
+      expect(normalizeInitializeResponse(malformed, host)).toMatchObject({ operation: "initialize", kind: "Malformed" })
+    }
+    for (const contradictory of [
+      { ...valid, platformFamily: "windows" },
+      { ...valid, platformFamily: "windows", platformOs: "windows" }
+    ]) {
+      expect(normalizeInitializeResponse(contradictory, host)).toMatchObject({
+        operation: "initialize",
+        kind: "CorrelationContradiction"
+      })
+    }
+  })
+
+  it("retains startup custody while its controller can still spawn and never signals that controller", async () => {
+    const record = Schema.decodeUnknownSync(CodexStartupAdmissionRecord)({
+      startup: {
+        _tag: "Pending",
+        startupId: "pending",
+        home: "/tmp/provider",
+        intendedAtMilliseconds: 0,
+        deadlineMilliseconds: 30_000
+      },
+      launch: { command: ["codex", "app-server"], incarnation: "pending", phase: "Launching", pid: null },
+      holder: { pid: 60, processIdentity: "linux:123", incarnation: "holder" },
+      disposition: "Pending"
+    })
+    const selected = native({
+      readFile: async () => linuxStatText(stat(60, 1, 60, "linux:123")),
+      readdir: async () => {
+        throw new Error("live holder must prevent census")
+      },
+      kill: () => {
+        throw new Error("foreign controller must never be signalled")
+      }
+    })
+    expect(await Effect.runPromise(observeRetainedCodexStartup(record, selected))).toEqual({ _tag: "Unresolved" })
+  })
+
   it("runs Node's native exec adapter on success and failure", async () => {
     await expect(nodeCodexProcessNativeService.execFile("/bin/sh", ["-c", "printf native-ok"])).resolves.toEqual({
       stdout: "native-ok"
     })
     await expect(nodeCodexProcessNativeService.execFile("/definitely-missing-dalph-command", [])).rejects.toBeDefined()
+  })
+
+  it("releases retained startup only after absent controller, server and escaped token writers are proved", async () => {
+    const record = Schema.decodeUnknownSync(CodexStartupAdmissionRecord)({
+      startup: {
+        _tag: "Pending",
+        startupId: "pending",
+        home: "/tmp/provider",
+        intendedAtMilliseconds: 0,
+        deadlineMilliseconds: 30_000
+      },
+      launch: { command: ["codex", "app-server"], incarnation: "pending", phase: "Launching", pid: null },
+      holder: { pid: 60, processIdentity: "linux:123", incarnation: "holder" },
+      disposition: "Pending"
+    })
+    for (const mode of ["absent", "server", "escaped-writer", "unreadable", "holder-returned"] as const) {
+      let holderReads = 0
+      const selected = native({
+        readdir: async () => {
+          if (mode === "unreadable") throw Object.assign(new Error("unreadable census"), { code: "EACCES" })
+          return mode === "server" || mode === "escaped-writer" ? ["69"] : []
+        },
+        readFile: async (filename) => {
+          if (filename === "/proc/60/stat") {
+            holderReads += 1
+            if (mode === "holder-returned" && holderReads > 1) return linuxStatText(stat(60, 1, 60, "linux:123"))
+            throw Object.assign(new Error("absent holder"), { code: "ENOENT" })
+          }
+          if (filename === "/proc/69/stat") return linuxStatText(stat(69, 1, 69, "linux:456"))
+          if (filename === "/proc/69/cmdline")
+            return mode === "server" ? "codex\u0000app-server\u0000" : "/bin/sh\u0000work\u0000"
+          if (filename === "/proc/69/environ") return "DALPH_CODEX_SERVER_INCARNATION=pending\u0000"
+          throw new Error("unexpected process observation: " + filename)
+        },
+        kill: () => {
+          throw new Error("retained startup observation must never signal")
+        }
+      })
+      const outcome = await Effect.runPromise(observeRetainedCodexStartup(record, selected).pipe(Effect.result))
+      if (mode === "unreadable") {
+        expect(outcome._tag, mode).toBe("Failure")
+        if (outcome._tag === "Failure") expect(outcome.failure.kind).toBe("Custody")
+      } else {
+        expect(outcome._tag, mode).toBe("Success")
+        if (outcome._tag === "Success")
+          expect(outcome.success).toEqual({ _tag: mode === "absent" ? "StoppedAbsent" : "Unresolved" })
+      }
+      if (mode === "absent" || mode === "holder-returned") expect(holderReads).toBe(2)
+    }
   })
 
   it("classifies native absence codes through direct and wrapped failures", () => {
@@ -398,6 +501,8 @@ describe("Codex process observation policy", () => {
       }
     })
     const store: CodexAttemptStoreService = {
+      readServerStartup: () => Effect.die("startup boundary is outside this controlled fixture"),
+      writeServerStartup: () => Effect.die("startup boundary is outside this controlled fixture"),
       readAttempt: () => Effect.succeed(Option.none()),
       writeAttempt: () => Effect.void,
       readReplacementLedger: () => Effect.succeed(Option.none()),

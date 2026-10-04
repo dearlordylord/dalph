@@ -1,8 +1,10 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only a local protocol fixture, never OpenAI. */
 import nodeProcess from "node:process"
+import { userInfo } from "node:os"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Ref, Schema } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Ref, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { expect, expectTypeOf } from "vitest"
 import {
   ApplicationExitDiagnostic,
@@ -35,6 +37,9 @@ import {
 } from "./codex-attempt-store.js"
 import { controlledCodexProcessNativeLayer, nodeCodexProcessNativeService } from "./codex-process-native.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
+import { CodexStartupAdmissionRecord, openCodexStartupAdmission } from "./codex-startup-admission.js"
+import { CodexServerStartupId } from "./codex-server-startup-record.js"
+import { resolveCodexProviderHome } from "./codex-provider-home.js"
 import { ExecutorModelAlias } from "./executor-profile.js"
 
 const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
@@ -76,7 +81,7 @@ const onMessage = (message) => {
   if (message.method === "initialize")
     return write(message.id, {
       userAgent: "fixture-codex/58",
-      codexHome: "/tmp/fixture-codex-home",
+      codexHome: process.env.DALPH_QUALIFICATION_INITIALIZE_HOME ?? process.env.CODEX_HOME ?? "/tmp/fixture-codex-home",
       platformFamily: "unix",
       platformOs: process.platform === "darwin" ? "macos" : "linux"
     })
@@ -152,38 +157,11 @@ process.stdin.on("data", (chunk) => {
 })
 `
 
-const contradictoryInitializationServer = String.raw`#!/usr/bin/env node
-let buffer = ""
-process.stdin.setEncoding("utf8")
-process.stdin.on("data", (chunk) => {
-  buffer += chunk
-  while (buffer.includes("\n")) {
-    const index = buffer.indexOf("\n")
-    const line = buffer.slice(0, index)
-    buffer = buffer.slice(index + 1)
-    if (line.trim() === "") continue
-    const message = JSON.parse(line)
-    if (message.method === "initialize") {
-      process.stdout.write(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            userAgent: "fixture-codex/58",
-            codexHome: "/tmp/fixture-codex-home",
-            platformFamily: "windows",
-            platformOs: "windows"
-          }
-        }) + "\n"
-      )
-    }
-  }
-})
-`
-
 const controlledStoreWithFailure = (
   failureMode: "lease-error" | "lease-observation" | "lease-exact" | "read-launch" | "release-lease"
 ): CodexAttemptStoreService => ({
+  readServerStartup: () => Effect.die("startup boundary is outside this controlled fixture"),
+  writeServerStartup: () => Effect.die("startup boundary is outside this controlled fixture"),
   readAttempt: () => Effect.succeed(Option.none()),
   writeAttempt: () => Effect.void,
   readReplacementLedger: () => Effect.succeed(Option.none()),
@@ -489,7 +467,11 @@ it.effect("starts codex app-server without provider credential or CODEX_HOME ove
           JSON.parse(yield* fileSystem.readFileString(capture))
         )
         expect(captured.arguments).toEqual([...codexAppServerLaunchArguments])
-        expect(captured.codexHome).toBe(nodeProcess.env["CODEX_HOME"])
+        expect(captured.codexHome).toBe(
+          yield* fileSystem.realPath(
+            nodeProcess.env["CODEX_HOME"] ?? path.join(nodeProcess.env["HOME"] ?? userInfo().homedir, ".codex")
+          )
+        )
         expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env["OPENAI_API_KEY"] !== undefined)
         expect(captured.hasProviderCredential).toBe(nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined)
         expect(captured.path).toBe(nodeProcess.env["PATH"])
@@ -538,7 +520,11 @@ it.effect("launches a selected Codex model without changing provider or credenti
           JSON.parse(yield* fileSystem.readFileString(capture))
         )
         expect(captured.arguments).toEqual(expectedArguments)
-        expect(captured.codexHome).toBe(nodeProcess.env["CODEX_HOME"])
+        expect(captured.codexHome).toBe(
+          yield* fileSystem.realPath(
+            nodeProcess.env["CODEX_HOME"] ?? path.join(nodeProcess.env["HOME"] ?? userInfo().homedir, ".codex")
+          )
+        )
         expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env["OPENAI_API_KEY"] !== undefined)
         expect(captured.hasProviderCredential).toBe(nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined)
         yield* app.close
@@ -722,24 +708,243 @@ it.effect("fails closed on duplicate, foreign, or unreadable pre-spawn token cen
   )
 )
 
-it.effect("fails closed when initialization decodes to an invalid protocol shape", () =>
+it.effect("a contradictory initialize home refuses thread work and preserves pending startup evidence", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem
+      const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-malformed-" })
-      const executable = path.join(root, "fixture-codex-malformed")
-      yield* fileSystem.writeFileString(executable, malformedInitializationServer)
-      yield* fileSystem.chmod(executable, 0o755)
-      const appLayer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
-        Layer.provide(memoryCodexAttemptStoreLayer())
-      )
-      const result = yield* Effect.gen(function* () {
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-startup-home-contradiction-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fs.writeFileString(executable, fakeServer)
+      yield* fs.chmod(executable, 0o755)
+      const storeLayer = memoryCodexAttemptStoreLayer()
+      const appLayer = codexAppServerNodeLayer(
+        {
+          executable,
+          environment: {
+            CODEX_HOME: path.join(root, "expected"),
+            DALPH_QUALIFICATION_INITIALIZE_HOME: path.join(root, "different")
+          }
+        },
+        isolatedCodexProcessNativeService
+      ).pipe(Layer.provide(storeLayer))
+      yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
-        return yield* app.startThread("/exact/worktree")
-      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
-      expect(Exit.isFailure(result)).toBe(true)
+        const outcome = yield* app.startThread(root).pipe(Effect.result)
+        expect(outcome._tag).toBe("Failure")
+        if (outcome._tag === "Failure") expect(outcome.failure.detail).toContain("different provider-home namespace")
+        const store = yield* CodexAttemptStore
+        const startup = yield* store.readServerStartup()
+        expect(Option.isSome(startup)).toBe(true)
+        if (Option.isSome(startup)) {
+          expect(startup.value._tag).toBe("Pending")
+          expect(startup.value.home).toBe(path.join(root, "expected"))
+        }
+        expect(yield* fs.exists(executable + ".thread")).toBe(false)
+      }).pipe(Effect.provide(Layer.merge(storeLayer, appLayer)))
     }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("failed spawn releases only proved-absent startup custody before another same-home unit is admitted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-startup-spawn-failure-" })
+      for (const unit of ["first", "second"]) {
+        const layer = codexAppServerNodeLayer(
+          {
+            executable: path.join(root, "missing-" + unit),
+            environment: { CODEX_HOME: path.join(root, "provider-home") }
+          },
+          isolatedCodexProcessNativeService
+        ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+        const outcome = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const app = yield* CodexAppServer
+            return yield* app.startThread(root).pipe(Effect.result)
+          }).pipe(Effect.provide(layer))
+        )
+        expect(outcome._tag, unit).toBe("Failure")
+        if (outcome._tag === "Failure") {
+          expect(outcome.failure.kind).toBe("Unavailable")
+          expect(outcome.failure.detail).not.toContain("deadline")
+        }
+      }
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("Exit already requested forbids a Node app-server spawn even when startup admission is available", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-startup-exit-before-spawn-" })
+      const executable = path.join(root, "fixture-codex")
+      const capture = path.join(root, "spawned")
+      yield* fs.writeFileString(
+        executable,
+        `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(capture)}, "spawned")\n`
+      )
+      yield* fs.chmod(executable, 0o755)
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        { requestEnd: () => Effect.void }
+      )
+      expect((yield* shell.requestBoundary.requestExit)._tag).toBe("Succeeded")
+      const appLayer = codexAppServerNodeLayer(
+        { executable, environment: { CODEX_HOME: path.join(root, "provider-home") } },
+        isolatedCodexProcessNativeService
+      ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()), Layer.provide(Layer.succeed(ApplicationExitShell, shell)))
+      const outcome = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        return yield* app.startThread(root)
+      }).pipe(Effect.provide(appLayer), Effect.exit)
+      expect(Exit.isFailure(outcome)).toBe(true)
+      expect(yield* fs.exists(capture)).toBe(false)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect.each(["Deadline", "Exit"] as const)(
+  "startup %s before initialize stops the exact acknowledged Node child without resetting its intent",
+  (boundary) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const store = yield* CodexAttemptStore
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-startup-before-initialize-expiry-" })
+        const executable = path.join(root, "fixture-codex")
+        const initialized = path.join(root, "initialize-requested")
+        yield* fs.writeFileString(
+          executable,
+          fakeServer.replace(
+            'if (message.method === "initialized") return',
+            `if (message.method === "initialize") fs.writeFileSync(${JSON.stringify(initialized)}, "requested"); if (message.method === "initialized") return`
+          )
+        )
+        yield* fs.chmod(executable, 0o755)
+        const acknowledged = yield* Deferred.make<CodexServerLaunchRecord>()
+        const stalledStore = {
+          ...store,
+          writeServerLaunch: (record: CodexServerLaunchRecord) =>
+            store
+              .writeServerLaunch(record)
+              .pipe(
+                Effect.andThen(
+                  record.phase === "Live"
+                    ? Deferred.succeed(acknowledged, record).pipe(Effect.andThen(Effect.never))
+                    : Effect.void
+                )
+              )
+        }
+        const shell = yield* makeApplicationExitShell(
+          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+          { requestEnd: () => Effect.void }
+        )
+        const layer = codexAppServerNodeLayer(
+          { executable, environment: { CODEX_HOME: path.join(root, "provider-home") } },
+          isolatedCodexProcessNativeService
+        ).pipe(
+          Layer.provide(Layer.succeed(CodexAttemptStore, stalledStore)),
+          Layer.provide(Layer.succeed(ApplicationExitShell, shell))
+        )
+        const waiting = yield* Effect.gen(function* () {
+          const app = yield* CodexAppServer
+          return yield* app.startThread(root).pipe(Effect.result)
+        }).pipe(Effect.provide(layer), Effect.forkChild)
+        const launch = yield* Deferred.await(acknowledged)
+        const startup = yield* store.readServerStartup()
+        expect(launch.pid).not.toBeNull()
+        expect(yield* fs.exists(initialized)).toBe(false)
+        if (boundary === "Deadline") yield* TestClock.adjust("30 seconds")
+        else expect((yield* shell.requestBoundary.requestExit)._tag).toBe("Succeeded")
+        const outcome = yield* Fiber.join(waiting)
+        expect(outcome._tag).toBe("Failure")
+        if (outcome._tag === "Failure")
+          expect(outcome.failure.detail).toContain(
+            boundary === "Deadline"
+              ? "original queue-plus-initialize startup deadline expired"
+              : "application Exit closed startup"
+          )
+        expect(yield* store.readServerLaunch()).toEqual(Option.none())
+        expect(yield* store.readServerStartup()).toEqual(startup)
+        expect(yield* fs.exists(initialized)).toBe(false)
+      }).pipe(Effect.provide(memoryCodexAttemptStoreLayer()), Effect.provide(NodeServices.layer))
+    )
+)
+
+it.effect("Exit cancels a queued Node startup without spawning or releasing its sibling's custody", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const store = yield* CodexAttemptStore
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-startup-queued-exit-" })
+      const home = yield* resolveCodexProviderHome(path.join(root, "provider-home"))
+      const temporaryDirectory = yield* resolveCodexProviderHome("/tmp")
+      const now = yield* Clock.currentTimeMillis
+      const candidate = yield* Schema.decodeUnknownEffect(CodexStartupAdmissionRecord)({
+        startup: {
+          _tag: "Pending",
+          startupId: root,
+          home,
+          intendedAtMilliseconds: now,
+          deadlineMilliseconds: now + 30_000
+        },
+        launch: { command: ["codex", "app-server"], incarnation: root, phase: "Launching", pid: null },
+        holder: { pid: 1, processIdentity: "linux:controlled-holder", incarnation: root },
+        disposition: "Pending"
+      })
+      const sibling = yield* openCodexStartupAdmission(
+        path.join(temporaryDirectory, `dalph-codex-startup-${userInfo().uid}`),
+        candidate
+      )
+      expect(yield* sibling.tryAcquire(() => Effect.succeed({ _tag: "Unresolved" }))).toBe(true)
+      const executable = path.join(root, "fixture-codex")
+      const capture = path.join(root, "spawned")
+      yield* fs.writeFileString(
+        executable,
+        `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(capture)}, "spawned")\n`
+      )
+      yield* fs.chmod(executable, 0o755)
+      const launching = yield* Deferred.make<void>()
+      const queuedStore = {
+        ...store,
+        writeServerLaunch: (record: CodexServerLaunchRecord) =>
+          store.writeServerLaunch(record).pipe(Effect.andThen(Deferred.succeed(launching, undefined)), Effect.asVoid)
+      }
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        { requestEnd: () => Effect.void }
+      )
+      const appLayer = codexAppServerNodeLayer(
+        { executable, environment: { CODEX_HOME: home } },
+        isolatedCodexProcessNativeService
+      ).pipe(
+        Layer.provide(Layer.succeed(CodexAttemptStore, queuedStore)),
+        Layer.provide(Layer.succeed(ApplicationExitShell, shell))
+      )
+      const waiting = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        return yield* app.startThread(root)
+      }).pipe(Effect.provide(appLayer), Effect.exit, Effect.forkChild)
+      yield* Deferred.await(launching)
+      const exit = yield* shell.requestBoundary.requestExit
+      expect(exit._tag).toBe("Succeeded")
+      expect(Exit.isFailure(yield* Fiber.join(waiting))).toBe(true)
+      expect(yield* fs.exists(capture)).toBe(false)
+      // The held descriptor must still reject a third owner after the queued unit exits.
+      const third = yield* openCodexStartupAdmission(
+        path.join(temporaryDirectory, `dalph-codex-startup-${userInfo().uid}`),
+        { ...candidate, startup: { ...candidate.startup, startupId: CodexServerStartupId.make(root + "-third") } }
+      )
+      expect(yield* third.tryAcquire(() => Effect.succeed({ _tag: "Unresolved" }))).toBe(false)
+      yield* sibling.release({ _tag: "StoppedAbsent" })
+    }).pipe(Effect.provide(memoryCodexAttemptStoreLayer()), Effect.provide(NodeServices.layer))
   )
 )
 
@@ -776,27 +981,6 @@ it.effect("keeps every request boundary typed after initialization becomes unava
         const results = yield* Effect.forEach(operations, Effect.exit)
         expect(results.map(Exit.isFailure)).toEqual(operations.map(() => true))
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
-    }).pipe(Effect.provide(NodeServices.layer))
-  )
-)
-
-it.effect("fails initialization closed when the server identity contradicts the host", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-app-server-conflict-" })
-      const executable = path.join(root, "fixture-codex-conflict")
-      yield* fileSystem.writeFileString(executable, contradictoryInitializationServer)
-      yield* fileSystem.chmod(executable, 0o755)
-      const appLayer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
-        Layer.provide(memoryCodexAttemptStoreLayer())
-      )
-      const result = yield* Effect.gen(function* () {
-        const app = yield* CodexAppServer
-        return yield* app.startThread("/exact/worktree")
-      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
-      expect(Exit.isFailure(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

@@ -274,6 +274,36 @@ const decodeStore = (
     catch: (error) => new CodexIntegratorStoreFailure({ detail: `private store is malformed: ${String(error)}` })
   }).pipe(Effect.flatMap(decodeRecords))
 
+/** One shared decoder/read boundary for runtime recovery and pre-start ownership inspection. */
+const readNativeRecords = Effect.fn("CodexIntegratorPrivateStore.readNativeRecords")(function* (
+  fileSystem: FileSystem.FileSystem,
+  locator: IntegratorPrivateStoreLocator
+) {
+  const exists = yield* fileSystem
+    .exists(locator)
+    .pipe(Effect.mapError((error) => new CodexIntegratorStoreFailure({ detail: String(error) })))
+  if (!exists) return []
+  const encoded = yield* fileSystem
+    .readFileString(locator)
+    .pipe(Effect.mapError((error) => new CodexIntegratorStoreFailure({ detail: String(error) })))
+  return yield* decodeStore(encoded)
+})
+
+/** Private session authority proves whether legacy thread intent requires a retained home binding. */
+export const inspectCodexIntegratorRetainedThreads = Effect.fn("CodexIntegratorPrivateStore.inspectRetainedThreads")(
+  function* (locator: IntegratorPrivateStoreLocator) {
+    const fileSystem = yield* FileSystem.FileSystem
+    const records = yield* readNativeRecords(fileSystem, locator)
+    return records.some(
+      (record) =>
+        record._tag === "ThreadStartIntentRecorded" ||
+        record._tag === "ThreadReady" ||
+        record._tag === "ThreadWithRuns" ||
+        record._tag === "RemovalIntentRecorded"
+    )
+  }
+)
+
 /** Node-backed store. Every read reopens the file so a later process can recover the same private session. */
 export const nodeCodexIntegratorPrivateStoreLayer = (
   config: Pick<CodexIntegratorConfiguration, "privateStoreLocator">
@@ -283,16 +313,7 @@ export const nodeCodexIntegratorPrivateStoreLayer = (
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
       const mutex = yield* Semaphore.make(1)
-      const readAll = Effect.fn("CodexIntegratorPrivateStore.Node.readAll")(function* () {
-        const exists = yield* fileSystem
-          .exists(config.privateStoreLocator)
-          .pipe(Effect.mapError((error) => new CodexIntegratorStoreFailure({ detail: String(error) })))
-        if (!exists) return []
-        const encoded = yield* fileSystem
-          .readFileString(config.privateStoreLocator)
-          .pipe(Effect.mapError((error) => new CodexIntegratorStoreFailure({ detail: String(error) })))
-        return yield* decodeStore(encoded)
-      })
+      const readAll = () => readNativeRecords(fileSystem, config.privateStoreLocator)
       const writeAll = (records: ReadonlyArray<CodexIntegratorPrivateRecord>) =>
         Effect.gen(function* () {
           const parent = nodePath.dirname(config.privateStoreLocator)

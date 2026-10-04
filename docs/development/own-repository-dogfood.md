@@ -47,6 +47,9 @@ selected model; a rejected model does not authorize a silent fallback.
 
 ## Pin source, target, and non-secret configuration
 
+For an explicit `codexHome`, the shared startup limit, and the managed-refresh
+limitation, use the [provider-home guidance](walkthrough.md#3-write-the-complete-non-secret-configuration).
+
 Use Bash and stop on a failed command. Replace the three input values below
 with an approved clean source checkout, its exact source SHA, and the fresh
 issue number. The temporary root must remain available throughout recovery;

@@ -257,6 +257,79 @@ const ownershipLayer = Layer.succeed(
   CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 )
 
+it.effect("production passes the explicit provider home to independent executor and integrator children", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const input = yield* makeTemporaryProductionInput
+      const codexHome = `${input.codexExecutorPrivateStateDirectory}-provider-home`
+      const executable = `${input.repository}/fixture-codex`
+      yield* fs.makeDirectory(codexHome)
+      yield* fs.writeFileString(`${codexHome}/fixture-sentinel`, "existing provider files")
+      yield* fs.writeFileString(executable, fakeProductionCodex)
+      yield* fs.chmod(executable, 0o755)
+      const configuration = yield* decodeProductionRepositoryHostConfiguration({
+        ...input,
+        codexExecutable: executable,
+        codexHome
+      })
+      const adapters = { codexProcessNative: isolatedCodexProcessNativeService }
+      const graph = productionRepositoryHostTestGraph(adapters)
+      const ambientHome = nodeProcess.env["CODEX_HOME"]
+      const shell = yield* graph.makeApplicationExit()
+      const integrator = yield* graph.acquireProvider(configuration, shell)
+      if (integrator._tag !== "CodexAppServer") return yield* Effect.die("expected integrator provider")
+      const readCapture = fs
+        .readFileString(`${executable}.capture.json`)
+        .pipe(
+          Effect.flatMap((contents) => Schema.decodeUnknownEffect(ProductionCodexLaunchCapture)(JSON.parse(contents)))
+        )
+      expect((yield* readCapture).codexHome).toBe(codexHome)
+      const executor = yield* acquireProductionCodexAttemptProvider(
+        configuration,
+        shell,
+        PlannedAttemptExecutorCorrelation.make({
+          runId: RunId.make("explicit-home-run"),
+          attemptId: AttemptId.make("explicit-home-attempt")
+        }),
+        adapters
+      )
+      expect((yield* readCapture).codexHome).toBe(codexHome)
+      expect(executor.app.incarnation).not.toBe(integrator.appServer.incarnation)
+      expect(nodeProcess.env["CODEX_HOME"]).toBe(ambientHome)
+      expect(yield* fs.readDirectory(codexHome)).toEqual(["fixture-sentinel"])
+      expect(yield* fs.readFileString(`${codexHome}/fixture-sentinel`)).toBe("existing provider files")
+      expect((yield* shell.requestBoundary.requestExit)._tag).toBe("Succeeded")
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("production refuses malformed integrator ownership before acquiring any app-server", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const input = yield* makeTemporaryProductionInput
+      yield* fs.writeFileString(input.integratorPrivateStore, "malformed legacy ownership")
+      const configuration = yield* decodeProductionRepositoryHostConfiguration(input)
+      let acquisitions = 0
+      const graph = productionRepositoryHostTestGraph({
+        codexAppServer: () => {
+          acquisitions += 1
+          return Layer.effect(CodexAppServer, Effect.die("unproven integrator ownership must prevent acquisition"))
+        }
+      })
+      const shell = yield* graph.makeApplicationExit()
+      const outcome = yield* graph.acquireProvider(configuration, shell).pipe(Effect.result)
+      expect(outcome).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "CodexAppServerFailure", kind: "Ownership", operation: "initialize" }
+      })
+      expect(acquisitions).toBe(0)
+      expect(yield* fs.readFileString(input.integratorPrivateStore)).toBe("malformed legacy ownership")
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("production provider refuses retained shared attempts before spawning and preserves their custody", () =>
   Effect.scoped(
     Effect.gen(function* () {

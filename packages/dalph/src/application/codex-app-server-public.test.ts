@@ -261,7 +261,7 @@ process.stdin.on("data", (chunk) => {
     const message = JSON.parse(line)
     if (message.id === undefined) continue
     if (message.method === "initialize") {
-      write(message.id, { userAgent: "fixture", codexHome: "/tmp/fixture", platformFamily: "unix", platformOs: "linux" })
+      write(message.id, { userAgent: "fixture", codexHome: process.env.CODEX_HOME ?? "/tmp/fixture", platformFamily: "unix", platformOs: "linux" })
     } else if (message.method === "thread/start") {
       write(message.id, { thread: { id: "discovery-thread", cwd: message.params.cwd, status: "idle", turns: [] } })
     } else {
@@ -1236,7 +1236,10 @@ it.effect("reconciles application lease owner identity before spawning", () => {
     withFakeLeaseProc(stats, killError, (native, switchToUnsupportedPlatform) =>
       Effect.scoped(
         Effect.gen(function* () {
+          const startupStore = yield* CodexAttemptStore.pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
           const store: CodexAttemptStoreService = {
+            readServerStartup: startupStore.readServerStartup,
+            writeServerStartup: startupStore.writeServerStartup,
             readAttempt: () => Effect.succeed(Option.none()),
             writeAttempt: () => Effect.void,
             readReplacementLedger: () => Effect.succeed(Option.none()),
@@ -1400,7 +1403,10 @@ it.effect("reconciles controlled detached process-group ownership before close",
           yield* fileSystem.writeFileString(executable, discoveryFixture)
           yield* fileSystem.chmod(executable, 0o755)
           let launch: CodexServerLaunchRecord | undefined
+          const startupStore = yield* CodexAttemptStore.pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
           const store: CodexAttemptStoreService = {
+            readServerStartup: startupStore.readServerStartup,
+            writeServerStartup: startupStore.writeServerStartup,
             readAttempt: () => Effect.succeed(Option.none()),
             writeAttempt: () => Effect.void,
             readReplacementLedger: () => Effect.succeed(Option.none()),

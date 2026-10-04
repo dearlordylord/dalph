@@ -463,6 +463,8 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
       Ref.update(records, (current) =>
         new Map(current).set(`${record.correlationRunId}\u0000${record.correlationAttemptId}`, record)
       ),
+    readServerStartup: unusedBoundary,
+    writeServerStartup: unusedBoundary,
     readServerLaunch: unusedBoundary,
     writeServerLaunch: unusedBoundary,
     clearServerLaunch: unusedBoundary,

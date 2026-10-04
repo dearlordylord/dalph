@@ -138,7 +138,11 @@ import { nodeKimiAttemptPrivateStoreLayer } from "./kimi-attempt-store.js"
 import { kimiPlannedAttemptExecutorLayer } from "./kimi-planned-attempt-executor.js"
 import { nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import { nodeKimiIntegratorLayer } from "./kimi-integrator-provider.js"
-import { CodexIntegratorConfiguration, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
+import {
+  CodexIntegratorConfiguration,
+  IntegratorPrivateStoreLocator,
+  inspectCodexIntegratorRetainedThreads
+} from "./codex-integrator-private-store.js"
 import {
   type ProductionRepositoryHostConfiguration,
   ProductionCodexExecutorPrivateStateDirectory,
@@ -527,6 +531,7 @@ const defaultCodexAppServerLayer = (
       ...(profile.adapter === "codex-app-server" ? { model: profile.model } : {}),
       clientName: configuration.codexClientName,
       clientVersion: configuration.codexClientVersion,
+      ...(configuration.codexHome === undefined ? {} : { environment: { CODEX_HOME: configuration.codexHome } }),
       requireUnattendedPolicy: true
     },
     native,
@@ -861,6 +866,21 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         )
       )
       const attemptStore = Context.get(storeContext, CodexAttemptStore)
+      const startup = yield* attemptStore.readServerStartup()
+      if (
+        Option.isNone(startup) &&
+        (yield* inspectCodexIntegratorRetainedThreads(configuration.integratorPrivateStore).pipe(
+          Effect.provide(NodeServices.layer),
+          Effect.mapError(
+            (error) => new CodexAppServerFailure({ detail: error.detail, kind: "Ownership", operation: "initialize" })
+          )
+        ))
+      )
+        return yield* new CodexAppServerFailure({
+          detail: "retained integrator threads have no proven provider-home namespace; no provider was started",
+          kind: "Ownership",
+          operation: "initialize"
+        })
       if (attemptStore.hasRetainedAttempts === undefined || (yield* attemptStore.hasRetainedAttempts())) {
         return yield* new CodexAppServerFailure({
           detail: "retained shared-provider attempts require explicit custody migration; no provider was started",

@@ -42,6 +42,87 @@ import {
   nodeCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
 import { CodexToolEffectLimitMilliseconds, CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
+import { CodexServerStartupRecord } from "./codex-server-startup-record.js"
+
+it.effect("only observed initialization permits a new startup intent in the original namespace", () =>
+  Effect.gen(function* () {
+    const store = yield* CodexAttemptStore
+    const pending = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+      _tag: "Pending",
+      startupId: "startup-one",
+      home: "/tmp/codex-original-home",
+      intendedAtMilliseconds: 1_000,
+      deadlineMilliseconds: 31_000
+    })
+    const next = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+      ...pending,
+      startupId: "startup-two",
+      intendedAtMilliseconds: 3_000,
+      deadlineMilliseconds: 33_000
+    })
+    yield* store.writeServerStartup(pending)
+    expect((yield* store.writeServerStartup(next).pipe(Effect.result))._tag).toBe("Failure")
+    const initialized = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+      ...pending,
+      _tag: "Initialized",
+      initializedAtMilliseconds: 2_000
+    })
+    yield* store.writeServerStartup(initialized)
+    expect((yield* store.writeServerStartup(pending).pipe(Effect.result))._tag).toBe("Failure")
+    yield* store.writeServerStartup(next)
+    expect((yield* store.writeServerStartup(initialized).pipe(Effect.result))._tag).toBe("Failure")
+    expect(yield* store.readServerStartup()).toEqual(Option.some(next))
+  }).pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
+)
+
+it.effect("private startup intent survives launch cleanup and restart without a replenished deadline", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-startup-deadline-" })
+      const pending = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+        _tag: "Pending",
+        startupId: "startup-original",
+        home: "/tmp/codex-original-home",
+        intendedAtMilliseconds: 1_000,
+        deadlineMilliseconds: 31_000
+      })
+      const layer = nodeCodexAttemptStoreLayer({ stateDirectory: root })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          yield* store.writeServerStartup(pending)
+          const incarnation = CodexServerIncarnation.make("startup-launch")
+          yield* store.writeServerLaunch({
+            command: ["codex", "app-server"],
+            incarnation,
+            phase: "Launching",
+            pid: null
+          })
+          yield* store.clearServerLaunch(incarnation)
+        }).pipe(Effect.provide(layer))
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          expect(yield* store.readServerStartup()).toEqual(Option.some(pending))
+          const changed = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+            ...pending,
+            intendedAtMilliseconds: 2_000,
+            deadlineMilliseconds: 32_000
+          })
+          expect((yield* store.writeServerStartup(changed).pipe(Effect.result))._tag).toBe("Failure")
+          const foreignHome = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+            ...pending,
+            home: "/tmp/codex-another-home"
+          })
+          expect((yield* store.writeServerStartup(foreignHome).pipe(Effect.result))._tag).toBe("Failure")
+          expect(yield* store.readServerStartup()).toEqual(Option.some(pending))
+        }).pipe(Effect.provide(Layer.fresh(layer)))
+      )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
 
 const specification = makeTaskWorkSpecification({
   body: "Private store test",

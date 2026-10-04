@@ -588,6 +588,8 @@ const makeHarness = (
   }
 
   const store: CodexAttemptStoreService = {
+    readServerStartup: () => Effect.die("startup boundary is outside this controlled fixture"),
+    writeServerStartup: () => Effect.die("startup boundary is outside this controlled fixture"),
     readAttempt: (runId, attemptId) => {
       attemptReadCount += 1
       return (options.beforeAttemptRead?.() ?? Effect.void).pipe(
