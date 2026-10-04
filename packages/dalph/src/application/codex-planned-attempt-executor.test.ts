@@ -3636,6 +3636,138 @@ it.effect("reconciles a lost turn response without sending a second turn", () =>
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("reconciles an exact abortion hint through unresolved custody without another turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = makeHarness({ terminalTurnStatus: "interrupted" })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const hints = yield* CodexCompletionHintTestControl
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const before = harness.currentRecord()
+        const thread = harness.currentThread()
+        const owned = thread.turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+        const write = harness.store.writeToolEffect
+        if (owned === undefined || write === undefined) return yield* Effect.die("missing original tool fixture")
+        yield* write(
+          CodexToolEffectRecord.cases.Completed.make({
+            runId: correlation.runId,
+            attemptId: correlation.attemptId,
+            threadId: thread.id,
+            turnId: owned.id,
+            itemId: CodexToolItemId.make("completed-before-hinted-abort"),
+            incarnation: harness.app.incarnation,
+            worktree,
+            startedAtMilliseconds: 0,
+            deadlineMilliseconds: 60_000,
+            completedAtMilliseconds: 1
+          })
+        )
+        harness.setActivityCensus({ _tag: "Unreadable", detail: "controlled missing writer observation" })
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting" } })
+        expect(yield* hints.publishMatching()).toBe(true)
+        const changed = yield* Stream.runHead(attachment.changes)
+        expect(changed).toMatchObject({
+          _tag: "Some",
+          value: { _tag: "Unreadable", detail: "Codex owned turn interrupted; writer custody remains unresolved" }
+        })
+        expect(harness.currentRecord()).toEqual(before)
+        harness.setActivityCensus({ _tag: "Absent" })
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        yield* TestClock.adjust(Duration.seconds(1))
+        expect(yield* Fiber.join(waiting)).toMatchObject({
+          _tag: "Some",
+          value: {
+            _tag: "Exact",
+            report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Failed", failureCode: "ProviderFailed" } }
+          }
+        })
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Completed" }])
+        expect(harness.turnCount()).toBe(1)
+        expect(harness.interruptCount()).toBe(0)
+        expect(harness.closeCount()).toBe(0)
+        yield* attachment.close
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("reports unresolved custody for an aborted owned turn after completed tools", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const original = makeHarness()
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+      }).pipe(Effect.provide(layerFor(original)))
+      const before = original.currentRecord()
+      const thread = original.currentThread()
+      const owned = thread.turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+      if (owned === undefined || before?._tag !== "Running") return yield* Effect.die("missing original owned turn")
+      const write = original.store.writeToolEffect
+      if (write === undefined) return yield* Effect.die("missing controlled tool store")
+      yield* write(
+        CodexToolEffectRecord.cases.Completed.make({
+          runId: correlation.runId,
+          attemptId: correlation.attemptId,
+          threadId: thread.id,
+          turnId: owned.id,
+          itemId: CodexToolItemId.make("completed-before-abort"),
+          incarnation: original.app.incarnation,
+          worktree,
+          startedAtMilliseconds: 0,
+          deadlineMilliseconds: 60_000,
+          completedAtMilliseconds: 1
+        })
+      )
+      const incarnation = CodexServerIncarnation.make("abort-reconciled-server")
+      const recovered = makeHarness({
+        disableExactCompletionHints: true,
+        incarnation,
+        serverLaunch: CodexServerLaunchRecord.make({
+          command: ["codex", "app-server"],
+          incarnation,
+          phase: "Live",
+          pid: 102
+        })
+      })
+      recovered.restoreProviderThread({
+        ...thread,
+        status: "idle",
+        turns: thread.turns.map((turn) => (turn.id === owned.id ? { ...turn, status: "interrupted" } : turn))
+      })
+      recovered.setActivityCensus({ _tag: "Unreadable", detail: "controlled missing writer observation" })
+      const observed = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        return yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+      }).pipe(Effect.provide(layerFor(recovered, defaultGitCommand, undefined, undefined, original.store)))
+      expect(observed).toMatchObject({
+        _tag: "Unreadable",
+        detail: "Codex owned turn interrupted; writer custody remains unresolved"
+      })
+      expect(original.currentRecord()).toEqual(before)
+      expect(original.toolEffectRecords()).toMatchObject([{ _tag: "Completed" }])
+      expect(recovered.turnCount()).toBe(1)
+      expect(recovered.threadStarts()).toBe(0)
+      expect(recovered.interruptCount()).toBe(0)
+      recovered.setActivityCensus({ _tag: "Absent" })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const failed = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+        expect(failed).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Failed", failureCode: "ProviderFailed" } }
+        })
+        expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(failed)
+      }).pipe(Effect.provide(layerFor(recovered, defaultGitCommand, undefined, undefined, original.store)))
+      expect(original.currentRecord()?._tag).toBe("Terminal")
+      expect(recovered.turnCount()).toBe(1)
+    })
+  )
+)
+
 it.effect("fails closed when a lost turn response leaves an interrupted turn idle", () => {
   const harness = makeHarness({
     loseFirstTurnResponse: true,

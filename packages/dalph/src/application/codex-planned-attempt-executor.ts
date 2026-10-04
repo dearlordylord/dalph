@@ -2217,6 +2217,14 @@ const makeCodexPlannedAttemptExecutorContext = (
           reconciliation,
           completionHintAuthorized
         )
+        if (reconciliation.turn.status === "interrupted" && outcome.report._tag === "ExecutorWorkExecuting") {
+          return projectionOutcome(
+            unreadable(correlation, "Codex owned turn interrupted; writer custody remains unresolved"),
+            outcome.continueLifecycleObservation,
+            reconciliation.thread.id,
+            reconciliation.turn.id
+          )
+        }
         // A Begin reconciliation settles the lost public command response
         // before ordinary passive delivery can expose the retained terminal.
         return projectionOutcome(
@@ -2299,7 +2307,23 @@ const makeCodexPlannedAttemptExecutorContext = (
         return projectionOutcome(exact(report), false, record.threadId, record.observedTurnId)
       }
       const reconciliation = yield* reconcile(attempt, correlation, record)
-      return yield* projectReconciliation(correlation, record, attempt, reconciliation, purpose, terminalReadAuthorized)
+      // An interruption observed outside Suspend is an aborted owned turn.
+      // Suspend itself still reconciles interruption as idle before proving its
+      // stopped disposition; changing that command boundary would lose Resume.
+      const lifecycleReconciliation =
+        (reconciliation._tag === "Idle" || reconciliation._tag === "Running") &&
+        reconciliation.turn?.status === "interrupted" &&
+        (record._tag === "Running" || (record._tag === "Terminal" && record.terminal._tag === "Failed"))
+          ? { ...reconciliation, _tag: "Terminal" as const, turn: reconciliation.turn }
+          : reconciliation
+      return yield* projectReconciliation(
+        correlation,
+        record,
+        attempt,
+        lifecycleReconciliation,
+        purpose,
+        terminalReadAuthorized
+      )
     })
 
     const projectFailure = (
@@ -3479,8 +3503,8 @@ const makeCodexPlannedAttemptExecutorContext = (
           )
           const shouldContinueLifecycleObservation = (outcome: LifecycleProjectionOutcome) =>
             outcome.continueLifecycleObservation &&
-            outcome.projection._tag === "Exact" &&
-            outcome.projection.report._tag === "ExecutorWorkExecuting"
+            (outcome.projection._tag === "Unreadable" ||
+              (outcome.projection._tag === "Exact" && outcome.projection.report._tag === "ExecutorWorkExecuting"))
           const heldTerminalActivity = yield* Deferred.make<void>()
           const readLifecycle = (
             initial: boolean,

@@ -54,6 +54,46 @@ or after proof but before its record. On restart reconcile that exact process
 and writer census before retrying. Preserve B's separate custody and original
 deadlines. Never allocate duplicate turns/providers or signal a foreign PID.
 
+## S3/S4 addition: an owned turn aborts after every tool completed
+
+Starting facts: the tracker claim, exact planned Base, Git worktree and private
+Running record belong to the original attempt. At least one retained tool item
+is Completed; none is Started, StopIntended or LimitReached. Codex stops that
+exact turn with status interrupted. Its initiating cause is unknown.
+
+A matching completion notification triggers an exact thread/turn reread in the
+same provider incarnation. When notification delivery is absent, restart first
+reconciles the previous exact server and its writers, then rereads the retained
+thread using the original store. Both paths must distinguish an aborted turn
+from writers that are still live or whose census is unreadable. An unreadable
+census exposes unresolved responsibility, rather than current Executing. An
+exact live census retains custody; neither abort nor a completed tool ledger
+proves writer absence. Only a fresh absent census permits recording ProviderFailed.
+
+Preserve the original candidate, claim, planned attempt and history. Do not
+start another turn, replace the provider, publish the candidate or infer a tool
+deadline. A crash before failure persistence repeats exact reconciliation;
+after a failure seal, retry preserves that seal. Continuation and replacement
+require the separate accepted recovery protocol in #428. Tracker mutation is
+inapplicable: this observation does not change tracker facts.
+
+Acceptance mapping:
+`reports unresolved custody for an aborted owned turn after completed tools`
+exercises restart without notification, unreadable census, subsequent fresh
+absence, immutable failure reread and no duplicate turn.
+`reconciles an exact abortion hint through unresolved custody without another turn`
+exercises same-incarnation notification, unresolved custody and paced reread to
+fresh absence without interruption or replacement. Both seed a Completed tool
+record and preserve the original private association until absence is proved.
+
+Outstanding acceptance evidence: an exact live writer after abortion, custody
+becoming unreadable at the final failure-seal census, and same-incarnation
+observation without a completion hint. That last case requires an observed
+boundary that authorizes failure reconciliation; elapsed silence alone is not
+authority. Ordinary successful completion without an exact hint retains its
+existing completion-authority requirements. These remaining cases still block
+completion of #434.
+
 ## S5: Host-wide Exit
 
 Starting facts: several executor owners and the integrator remain live. Exit
