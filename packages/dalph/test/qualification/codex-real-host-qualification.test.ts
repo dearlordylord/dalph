@@ -1136,6 +1136,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const started = await spawnHost(fixture, "settle")
         hosts.push(started)
         expect(terminalReport(await started.waitForReport(2)).result._tag).toBe("Accepted")
+        await started.waitForExit()
         const foreign = await spawnHost(fixture, "project", {
           runId: "foreign-run",
           attemptId: "foreign-attempt",

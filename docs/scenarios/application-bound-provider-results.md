@@ -108,3 +108,18 @@ Linux/macOS hosted qualification remains a separate exact-head obligation.
    starts another turn or replaces the seal. Acceptance test: `rereads a sealed
    terminal after an exact completion hint resolves stale recovery` in
    `codex-planned-attempt-executor.test.ts`.
+
+8. **Terminal recovery without a replayed notification.** The exact attempt
+   already has a terminal seal, but a restarted provider temporarily reports
+   that owned turn as Running and does not replay its completion notification.
+   The attached observer performs paced reads of that exact association until
+   the provider and owned-activity census permit the original terminal result.
+   It stops with the attachment, and never starts a provider turn, rewrites the
+   seal or accepts foreign ownership. Test: `reconciles a sealed result when
+   recovery does not replay its completion notification`.
+9. **Completion notification ahead of provider census.** An exact matching
+   completion notification arrives while the associated turn is still reported
+   Running. Dalph retains that notification as read authorization and continues
+   paced reconciliation until the provider exposes its terminal census. An
+   unrelated notification authorizes no cadence. Test: `continues reconciliation
+   when an exact completion hint precedes the terminal provider census`.
