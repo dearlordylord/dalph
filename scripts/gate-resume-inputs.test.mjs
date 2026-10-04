@@ -21,6 +21,7 @@ import { afterEach, test } from "node:test"
 import { startInputGuard } from "./gate-resume-inputs.mjs"
 import { startInputObserver } from "./gate-input-observer.mjs"
 import { stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
+import { qualityRootConfigurationSuffixes } from "./quality-file-discovery.mjs"
 
 const roots = []
 afterEach(() => {
@@ -35,7 +36,8 @@ const fixture = () => {
   git("init", "-q")
   git("config", "user.name", "Input Fixture")
   git("config", "user.email", "input@example.test")
-  writeFileSync(join(root, "source.ts"), "initial\n")
+  mkdirSync(join(root, "src"))
+  writeFileSync(join(root, "src/source.ts"), "initial\n")
   writeFileSync(join(root, ".gitignore"), ".scratch/\nnode_modules/\n.env\n")
   git("add", ".")
   git("commit", "-qm", "base")
@@ -98,19 +100,19 @@ for (const [name, mutate] of [
   [
     "source editrestore",
     (f) => {
-      writeFileSync(join(f.root, "source.ts"), "edit\n")
-      writeFileSync(join(f.root, "source.ts"), "initial\n")
+      writeFileSync(join(f.root, "src/source.ts"), "edit\n")
+      writeFileSync(join(f.root, "src/source.ts"), "initial\n")
     }
   ],
   ["ignored configuration", (f) => writeFileSync(join(f.root, ".env"), "VITE_MODE=other\n")],
-  ["untracked membership", (f) => writeFileSync(join(f.root, "new.ts"), "new\n")],
+  ["untracked membership", (f) => writeFileSync(join(f.root, "src/new.ts"), "new\n")],
   ["dependency bytes", (f) => writeFileSync(join(f.root, "node_modules", "dep.js"), "edited\n")],
-  ["index staging", (f) => f.git("update-index", "--chmod=+x", "source.ts")],
+  ["index staging", (f) => f.git("update-index", "--chmod=+x", "src/source.ts")],
   [
     "atomic source replacement",
     (f) => {
       writeFileSync(join(f.root, "replacement"), "initial\n")
-      renameSync(join(f.root, "replacement"), join(f.root, "source.ts"))
+      renameSync(join(f.root, "replacement"), join(f.root, "src/source.ts"))
     }
   ],
   [
@@ -396,7 +398,7 @@ void test("resolved external workspace target and symlink replacement are observ
 void test("input inode detects writes through a hardlink outside the watched tree", async () => {
   const f = fixture()
   const alias = join(f.outer, "alias")
-  linkSync(join(f.root, "source.ts"), alias)
+  linkSync(join(f.root, "src/source.ts"), alias)
   const guard = await f.guard()
   try {
     writeFileSync(alias, "edit\n")
@@ -514,10 +516,10 @@ void test("unresolved semantic index stages and unsupported module configuration
   f.environment.NODE_OPTIONS = "--require=/outside/module.js"
   await assert.rejects(f.guard(), /[Uu]nsupported/u)
   delete f.environment.NODE_OPTIONS
-  const sha = f.git("rev-parse", "HEAD:source.ts")
+  const sha = f.git("rev-parse", "HEAD:src/source.ts")
   execFileSync("git", ["update-index", "--index-info"], {
     cwd: f.root,
-    input: `0 ${"0".repeat(40)}\tsource.ts\n100644 ${sha} 1\tsource.ts\n100644 ${sha} 2\tsource.ts\n`
+    input: `0 ${"0".repeat(40)}\tsrc/source.ts\n100644 ${sha} 1\tsrc/source.ts\n100644 ${sha} 2\tsrc/source.ts\n`
   })
   await assert.rejects(f.guard(), /conflicts/u)
 })
@@ -525,7 +527,7 @@ void test("unresolved semantic index stages and unsupported module configuration
 void test("semantic candidate identity tolerates a normal status stat refresh", async () => {
   const f = semanticCandidateFixture()
   f.environment.GIT_OPTIONAL_LOCKS = "1"
-  const source = join(f.root, "source.ts")
+  const source = join(f.root, "src/source.ts")
   writeFileSync(source, "initial\n")
   const refreshedStat = new Date("2000-01-01T00:00:00.000Z")
   utimesSync(source, refreshedStat, refreshedStat)
@@ -548,15 +550,15 @@ void test("semantic candidate identity tolerates a normal status stat refresh", 
 
 void test("semantic candidate identity rejects a persistent staged entry change at the boundary", async () => {
   const f = semanticCandidateFixture()
-  const source = join(f.root, "source.ts")
+  const source = join(f.root, "src/source.ts")
   const sourceBytes = readFileSync(source)
   const head = f.git("rev-parse", "HEAD")
   const guard = await f.guard()
   try {
-    f.git("update-index", "--chmod=+x", "source.ts")
+    f.git("update-index", "--chmod=+x", "src/source.ts")
     assert.deepEqual(readFileSync(source), sourceBytes)
     assert.equal(f.git("rev-parse", "HEAD"), head)
-    assert.match(f.git("ls-files", "--stage", "-v", "source.ts"), /^H 100755 /u)
+    assert.match(f.git("ls-files", "--stage", "-v", "src/source.ts"), /^H 100755 /u)
     await assert.rejects(guard.assertUnchanged(), /Candidate staged Git index entries changed during execution/u)
   } finally {
     await guard.close()
@@ -565,14 +567,14 @@ void test("semantic candidate identity rejects a persistent staged entry change 
 
 void test("semantic candidate identity rejects a persistent staged entry change at finish without a boundary check", async () => {
   const f = semanticCandidateFixture()
-  const sourceBytes = readFileSync(join(f.root, "source.ts"))
+  const sourceBytes = readFileSync(join(f.root, "src/source.ts"))
   const head = f.git("rev-parse", "HEAD")
   const guard = await f.guard()
   try {
-    f.git("update-index", "--chmod=+x", "source.ts")
-    assert.deepEqual(readFileSync(join(f.root, "source.ts")), sourceBytes)
+    f.git("update-index", "--chmod=+x", "src/source.ts")
+    assert.deepEqual(readFileSync(join(f.root, "src/source.ts")), sourceBytes)
     assert.equal(f.git("rev-parse", "HEAD"), head)
-    assert.match(f.git("ls-files", "--stage", "-v", "source.ts"), /^H 100755 /u)
+    assert.match(f.git("ls-files", "--stage", "-v", "src/source.ts"), /^H 100755 /u)
     await assert.rejects(guard.finish(), /Candidate staged Git index entries changed during execution/u)
   } finally {
     await guard.close()
@@ -587,9 +589,9 @@ void test("semantic candidate identity rejects persistent skip-worktree and assu
     const f = semanticCandidateFixture()
     const guard = await f.guard()
     try {
-      const before = f.git("ls-files", "--stage", "-v", "source.ts")
-      f.git("update-index", flag, "source.ts")
-      const after = f.git("ls-files", "--stage", "-v", "source.ts")
+      const before = f.git("ls-files", "--stage", "-v", "src/source.ts")
+      f.git("update-index", flag, "src/source.ts")
+      const after = f.git("ls-files", "--stage", "-v", "src/source.ts")
       assert.notEqual(after, before)
       assert.match(after, tag)
       await assert.rejects(guard.assertUnchanged(), /Candidate staged Git index entries changed during execution/u)
@@ -1014,14 +1016,14 @@ void test("installed dprint check with disabled incremental cache preserves real
   assert.ok(metadataEntry, `missing cached dprint metadata for ${expectedPluginSource}`)
   const metadata = metadataEntry.metadata
   assert.equal(metadata.source, expectedPluginSource)
-  writeFileSync(join(f.root, "source.ts"), "const value = 1;\n")
+  writeFileSync(join(f.root, "src/source.ts"), "const value = 1;\n")
   writeFileSync(join(f.root, "dprint.json"), JSON.stringify({ plugins: [metadata.source.slice(7)] }))
   f.invocation.toolExecutables.push(installed)
   f.environment.HTTPS_PROXY = "http://127.0.0.1:1"
   f.environment.HTTP_PROXY = "http://127.0.0.1:1"
   const guard = await f.guard()
   try {
-    execFileSync(installed, ["check", "--incremental=false", "source.ts"], {
+    execFileSync(installed, ["check", "--incremental=false", "src/source.ts"], {
       cwd: f.root,
       env: f.environment,
       timeout: 10000
@@ -1376,7 +1378,7 @@ void test("read-only status under guarded optional-lock policy leaves stale inde
   const observedGit = (...args) =>
     execFileSync("git", args, { cwd: f.root, env: f.environment, encoding: "utf8" }).trim()
   // Same authored bytes, new stat metadata: ordinary status would optionally refresh the index.
-  writeFileSync(join(f.root, "source.ts"), "initial\n")
+  writeFileSync(join(f.root, "src/source.ts"), "initial\n")
   const index = join(f.root, ".git", "index")
   const before = readFileSync(index)
   const guard = await f.guard()
@@ -1384,11 +1386,113 @@ void test("read-only status under guarded optional-lock policy leaves stale inde
     assert.equal(observedGit("status", "--porcelain=v1", "--untracked-files=all"), "")
     assert.deepEqual(readFileSync(index), before)
     assert.equal((await guard.finish()).unchanged, true)
-    observedGit("update-index", "--chmod=+x", "source.ts")
+    observedGit("update-index", "--chmod=+x", "src/source.ts")
     assert.notDeepEqual(readFileSync(index), before)
-    assert.match(observedGit("ls-files", "--stage", "source.ts"), /^100755 /u)
+    assert.match(observedGit("ls-files", "--stage", "src/source.ts"), /^100755 /u)
     await assert.rejects(guard.assertUnchanged(), /dirty|changed|watch/u)
   } finally {
     await guard.close()
   }
 })
+
+void test("research and root reports do not invalidate the guard, while source and maintained docs do", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "REPORT.md"), "report before\n")
+  f.git("add", "REPORT.md")
+  f.git("commit", "-qm", "report")
+  const guard = await f.guard()
+  try {
+    mkdirSync(join(f.root, "research"))
+    writeFileSync(join(f.root, "research", "survey.md"), "independent research\n")
+    mkdirSync(join(f.root, "quint-specs"))
+    writeFileSync(join(f.root, "quint-specs", "quint.lock"), "independent survey\n")
+    writeFileSync(join(f.root, "REPORT.md"), "report after\n")
+    await guard.checkpoint()
+    await guard.finish()
+  } finally {
+    await guard.close()
+  }
+  for (const path of ["src/new.ts", "docs/new.md", "package.json"]) {
+    const current = await f.guard()
+    try {
+      mkdirSync(join(f.root, path.split("/").slice(0, -1).join("/")), { recursive: true })
+      writeFileSync(join(f.root, path), "new verification input\n")
+      await assert.rejects(current.checkpoint(), /input|observer|changed/iu)
+    } finally {
+      await current.close()
+    }
+  }
+})
+
+void test("guarded root configuration suffixes agree with the formatter's current input globs", () => {
+  const formatter = JSON.parse(readFileSync(new URL("../dprint.json", import.meta.url), "utf8"))
+  const rootConfigurations = formatter.includes.filter((glob) => !glob.includes("/"))
+  assert.deepEqual(
+    rootConfigurations.toSorted(),
+    qualityRootConfigurationSuffixes.map((suffix) => `*${suffix}`).toSorted()
+  )
+})
+
+for (const extension of ["js", "mjs", "ts", "tsx"]) {
+  void test(`a newly created root .config.${extension} removed before validation still invalidates qualification`, async () => {
+    const f = fixture()
+    const path = join(f.root, `another-tool.config.${extension}`)
+    const guard = await f.guard()
+    try {
+      writeFileSync(path, "temporary formatter input\n")
+      rmSync(path)
+      await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+    } finally {
+      await guard.close()
+    }
+  })
+}
+
+void test("an existing root TSX configuration edit restored before validation still invalidates qualification", async () => {
+  const f = fixture()
+  const path = join(f.root, "another-tool.config.tsx")
+  writeFileSync(path, "initial formatter input\n")
+  const guard = await f.guard()
+  try {
+    writeFileSync(path, "changed formatter input\n")
+    writeFileSync(path, "initial formatter input\n")
+    await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+void test("moving a root configuration away and restoring it invalidates qualification", async () => {
+  const f = fixture()
+  const path = join(f.root, "another-tool.config.tsx")
+  const moved = join(f.root, "unrelated-report.txt")
+  writeFileSync(path, "initial formatter input\n")
+  const guard = await f.guard()
+  try {
+    renameSync(path, moved)
+    renameSync(moved, path)
+    await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+for (const { kind, makeLink } of [
+  { kind: "symbolic", makeLink: symlinkSync },
+  { kind: "hard", makeLink: linkSync }
+]) {
+  void test(`a root configuration ${kind} link observes target edits restored before validation`, async () => {
+    const f = fixture()
+    const target = join(f.outer, "formatter-target.tsx")
+    writeFileSync(target, "initial formatter input\n")
+    makeLink(target, join(f.root, "another-tool.config.tsx"))
+    const guard = await f.guard()
+    try {
+      writeFileSync(target, "changed formatter input\n")
+      writeFileSync(target, "initial formatter input\n")
+      await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+    } finally {
+      await guard.close()
+    }
+  })
+}

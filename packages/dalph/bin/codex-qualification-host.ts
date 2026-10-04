@@ -55,6 +55,7 @@ import {
   readQualificationRetainedAttemptState
 } from "../src/qualification/codex-census-diagnostic.js"
 import { qualificationWorkflowJournalLayer } from "../src/application/qualification-journal.js"
+import { qualificationCutStore } from "./codex-qualification-startup-cut.js"
 import { CodexQualificationAction, CodexQualificationHostEvent } from "./codex-qualification-host-contract.js"
 
 const QualificationConfiguration = Schema.Struct({
@@ -82,7 +83,7 @@ class QualificationConfigurationFailure extends Schema.TaggedError<Qualification
 ) {}
 
 const usage =
-  "dalph-codex-qualification-host <allocate|associate|association-cut|workflow-association-cut|workflow-begin|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
+  "dalph-codex-qualification-host <startup-cut|initialize-response-cut|initialize-observed-cut|allocate|associate|association-cut|workflow-association-cut|workflow-begin|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
 
 const envValue = (name: string): string | undefined => nodeProcess.env[name]
 
@@ -254,28 +255,11 @@ const configurationProgram = Effect.gen(function* () {
       )
       const exitLayer = Layer.succeed(ApplicationExitShell, applicationExit)
       const durableStoreLayer = nodeCodexAttemptStoreLayer({ stateDirectory: configuration.stateDirectory })
-      const storeLayer =
-        configuration.action === "association-cut" || configuration.action === "workflow-association-cut"
-          ? Layer.effect(
-              CodexAttemptStore,
-              Effect.map(CodexAttemptStore, (durable) => ({
-                ...durable,
-                writeAttempt: (record: CodexAttemptRecord) =>
-                  record._tag === "AssociatedPreTurn"
-                    ? (configuration.action === "workflow-association-cut"
-                        ? durable
-                            .writeAttempt(record)
-                            .pipe(
-                              Effect.andThen(
-                                writeEvent({ event: "associated", threadMaterialized: true, worktree: record.worktree })
-                              )
-                            )
-                        : writeEvent({ event: "association-write-started" })
-                      ).pipe(Effect.andThen(Effect.never))
-                    : durable.writeAttempt(record)
-              }))
-            ).pipe(Layer.provide(durableStoreLayer))
-          : durableStoreLayer
+      const storeLayer = Layer.effect(
+        CodexAttemptStore,
+        Effect.map(CodexAttemptStore, (durable) => qualificationCutStore(durable, configuration.action, writeEvent))
+      ).pipe(Layer.provide(durableStoreLayer))
+
       const appLayer = codexAppServerNodeLayer({
         executable: configuration.codexExecutable,
         environment: environmentFor(configuration)

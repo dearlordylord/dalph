@@ -23,6 +23,7 @@ export const copyQualityRuntimeFixture = (worktree) => {
   mkdirSync(directory, { recursive: true })
   for (const name of [
     "application-exit-model-registry.mjs",
+    "canonical-path-order.mjs",
     "effect-tsgo-platform-binary.mjs",
     "formal-evidence-contract.mjs",
     "formal-success-evidence.mjs",
@@ -43,6 +44,7 @@ export const copyQualityRuntimeFixture = (worktree) => {
     "quality-gate-qualification-scheduler.mjs",
     "quality-gate-stage-policy.mjs",
     "quality-check-selection.mjs",
+    "quality-file-discovery.mjs",
     "quality-output-budget.mjs",
     "formal-progress-events.mjs",
     "quint-effective-profile.mjs",

@@ -3,6 +3,10 @@ export declare const startInputObserver: (options: {
   readonly roots: ReadonlyArray<string>
   readonly excludedRoots?: ReadonlyArray<string>
   readonly protectedRoots?: ReadonlyArray<string>
+  readonly rootFileSuffixes?: ReadonlyArray<{
+    readonly root: string
+    readonly suffixes: ReadonlyArray<string>
+  }>
   readonly pythonExecutable?: string
   readonly pythonArguments?: ReadonlyArray<string>
   readonly environment?: NodeJS.ProcessEnv

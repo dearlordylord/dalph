@@ -9,6 +9,9 @@ export const CodexQualificationAction = Schema.Literals([
   "workflow-association-cut",
   "workflow-begin",
   "association-cut",
+  "startup-cut",
+  "initialize-response-cut",
+  "initialize-observed-cut",
   "pre-thread-cut",
   "create",
   "resume",
@@ -41,6 +44,11 @@ export const CodexQualificationHostEvent = Schema.Union([
   Schema.Struct({ event: Schema.Literal("allocated"), worktree: Schema.String, threadMaterialized: Schema.Boolean }),
   Schema.Struct({ event: Schema.Literal("associated"), worktree: Schema.String, threadMaterialized: Schema.Boolean }),
   Schema.Struct({ event: Schema.Literal("association-write-started") }),
+  Schema.Struct({ event: Schema.Literal("startup-cut"), serverPid: Schema.Int }),
+  Schema.Struct({
+    event: Schema.Literal("initialize-cut"),
+    observation: Schema.Literals(["ResponseOnly", "DurableInitialized"])
+  }),
   Schema.Struct({
     event: Schema.Literal("begin-journal"),
     beginIntents: BeginIntentCount,

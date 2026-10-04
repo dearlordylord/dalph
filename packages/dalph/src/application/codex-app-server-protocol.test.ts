@@ -64,13 +64,13 @@ const responseFor = (method, params = {}) => {
   if (mode === "non-openai-provider-credential" && method === "initialize") {
     const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
     return process.env.DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL === "fixture-provider-key" && argumentsAreExact
-      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs }
+      ? { userAgent: "fixture-codex/protocol", codexHome: process.env.CODEX_HOME, platformFamily: "unix", platformOs }
       : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs }
   }
   if (mode === "unattended-policy" && method === "initialize") {
     const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
     return argumentsAreExact
-      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs }
+      ? { userAgent: "fixture-codex/protocol", codexHome: process.env.CODEX_HOME, platformFamily: "unix", platformOs }
       : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs }
   }
   if (method === "config/read") {
@@ -142,7 +142,7 @@ const responseFor = (method, params = {}) => {
   }
   if (mode === "initialize-rpc-error" && method === "initialize") return { error: true }
   if (mode === "initialize-family-contradiction" && method === "initialize") {
-    return { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "windows", platformOs: "linux" }
+    return { userAgent: "fixture-codex/protocol", codexHome: process.env.CODEX_HOME, platformFamily: "windows", platformOs: "linux" }
   }
   if (mode === "rpc-error" && method === "thread/start") return { error: true }
   if (mode === "response-not-object" && method === "thread/start") return "not-an-object"
@@ -463,7 +463,7 @@ const responseFor = (method, params = {}) => {
     return { turn: { ...validTurn, status: "inProgress", items: [] } }
   }
   return method === "initialize"
-    ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs }
+    ? { userAgent: "fixture-codex/protocol", codexHome: process.env.CODEX_HOME, platformFamily: "unix", platformOs }
     : method === "thread/start" || method === "thread/read" || method === "thread/resume"
       ? { thread: validThread }
       : method === "turn/start"
@@ -774,7 +774,11 @@ const withFixture = <A>(
       yield* fileSystem.chmod(executable, 0o755)
       const { requestBoundary, ...serverConfig } = config
       const layer = codexAppServerNodeLayer(
-        { ...serverConfig, executable },
+        {
+          ...serverConfig,
+          executable,
+          environment: { CODEX_HOME: path.join(root, "provider-home"), ...serverConfig.environment }
+        },
         isolatedCodexProcessNativeService,
         requestBoundary
       ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
@@ -809,7 +813,13 @@ const unansweredFixture = (
       yield* fileSystem.writeFileString(executable, protocolFixture)
       yield* fileSystem.chmod(executable, 0o755)
       const layer = codexAppServerNodeLayer(
-        { executable, environment: { DALPH_SECRET_SENTINEL: "credential-must-not-escape" } },
+        {
+          executable,
+          environment: {
+            CODEX_HOME: path.join(root, "provider-home"),
+            DALPH_SECRET_SENTINEL: "credential-must-not-escape"
+          }
+        },
         isolatedCodexProcessNativeService
       ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
       const result = yield* Effect.gen(function* () {
@@ -818,7 +828,7 @@ const unansweredFixture = (
       }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.forkChild)
 
       yield* awaitFile(fileSystem, `${executable}.received`)
-      yield* TestClock.adjust("59 seconds")
+      yield* TestClock.adjust(mode === "initialize-unanswered" ? "29 seconds" : "59 seconds")
       expect(result.pollUnsafe()).toBeUndefined()
       yield* TestClock.adjust("1 second")
       const exit = yield* Fiber.join(result)
@@ -839,9 +849,10 @@ const passiveUnansweredFixture = (
       const executable = path.join(root, mode)
       yield* fileSystem.writeFileString(executable, protocolFixture)
       yield* fileSystem.chmod(executable, 0o755)
-      const layer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
-        Layer.provide(memoryCodexAttemptStoreLayer())
-      )
+      const layer = codexAppServerNodeLayer(
+        { executable, environment: { CODEX_HOME: path.join(root, "provider-home") } },
+        isolatedCodexProcessNativeService
+      ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
       return yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         const result = yield* Effect.exit(action(app)).pipe(Effect.forkChild)
@@ -1444,21 +1455,23 @@ it.effect("replays a sticky app-server protocol failure to a later lifecycle sub
   )
 )
 
-it.effect("bounds an unanswered initialize request and closes its exact owned child once", () =>
-  Effect.gen(function* () {
-    const exit = yield* unansweredFixture("initialize-unanswered", (app) => app.startThread("/fixture/worktree"))
-    expectAppFailure(exit, "initialize")
-    if (Exit.isFailure(exit)) {
-      const failure = Cause.findErrorOption(exit.cause)
-      if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
-        expect(failure.value).toMatchObject({
-          kind: "Unavailable",
-          rpcSnapshot: { requestId: 1, method: "initialize", sentCount: 1, responseCount: 0, pendingCount: 0 }
-        })
-        expect(JSON.stringify(failure.value)).not.toMatch(/credential-must-not-escape|DALPH_SECRET_SENTINEL/)
+it.effect(
+  "bounds unanswered initialize by the original thirty-second startup deadline and closes its exact owned child once",
+  () =>
+    Effect.gen(function* () {
+      const exit = yield* unansweredFixture("initialize-unanswered", (app) => app.startThread("/fixture/worktree"))
+      expectAppFailure(exit, "initialize")
+      if (Exit.isFailure(exit)) {
+        const failure = Cause.findErrorOption(exit.cause)
+        if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+          expect(failure.value).toMatchObject({
+            kind: "Unavailable",
+            detail: "original queue-plus-initialize startup deadline expired"
+          })
+          expect(JSON.stringify(failure.value)).not.toMatch(/credential-must-not-escape|DALPH_SECRET_SENTINEL/)
+        }
       }
-    }
-  })
+    })
 )
 
 it.effect("bounds an unanswered thread start without fabricating a task turn and closes once", () =>

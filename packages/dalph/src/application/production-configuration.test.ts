@@ -158,6 +158,30 @@ describe("production repository host configuration", () => {
     expect("codexHome" in decoded).toBe(false)
   })
 
+  it("preserves an optional explicit Codex provider home without treating it as executor state", async () => {
+    const decoded = await Effect.runPromise(
+      decodeProductionRepositoryHostConfiguration({ ...validRawConfiguration(), codexHome: "/srv/codex/provider" })
+    )
+    expect(decoded).toMatchObject({
+      codexHome: "/srv/codex/provider",
+      codexExecutorPrivateStateDirectory: "/var/lib/dalph/executor-private"
+    })
+  })
+
+  it.each(["", "relative/provider", "/srv/codex/../provider"])(
+    "rejects an invalid explicit provider home before live effects: %s",
+    async (codexHome) => {
+      const effects = await Effect.runPromise(Ref.make(0))
+      const result = await Effect.runPromise(
+        withProductionRepositoryHostConfiguration({ ...validRawConfiguration(), codexHome }, () =>
+          Ref.update(effects, (count) => count + 1)
+        ).pipe(Effect.result)
+      )
+      expect(result._tag).toBe("Failure")
+      expect(await Effect.runPromise(Ref.get(effects))).toBe(0)
+    }
+  )
+
   it("derives a disjoint Kimi executor state directory when none is configured", async () => {
     const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
     expect(productionKimiExecutorPrivateStateDirectory(decoded)).toBe("/var/lib/dalph/executor-private-kimi")

@@ -3,7 +3,7 @@ import nodeProcess from "node:process"
 import { spawn } from "node:child_process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Path, Stream } from "effect"
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Path, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   CodexAppServer,
@@ -38,6 +38,9 @@ import {
 } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService } from "./codex-process-native.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
+
+import { resolveCodexProviderHome } from "./codex-provider-home.js"
+import { CodexServerStartupRecord } from "./codex-server-startup-record.js"
 
 const standaloneNodeCodexOwnedActivityCensusLayer = Layer.succeed(
   CodexOwnedActivityCensus,
@@ -261,7 +264,7 @@ process.stdin.on("data", (chunk) => {
     const message = JSON.parse(line)
     if (message.id === undefined) continue
     if (message.method === "initialize") {
-      write(message.id, { userAgent: "fixture", codexHome: "/tmp/fixture", platformFamily: "unix", platformOs: "linux" })
+      write(message.id, { userAgent: "fixture", codexHome: process.env.CODEX_HOME ?? "/tmp/fixture", platformFamily: "unix", platformOs: "linux" })
     } else if (message.method === "thread/start") {
       write(message.id, { thread: { id: "discovery-thread", cwd: message.params.cwd, status: "idle", turns: [] } })
     } else {
@@ -1115,8 +1118,22 @@ it.effect("reconciles an exact launch-token process before starting a replacemen
         phase: "Launching",
         pid: null
       })
-      const layer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
-        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
+      const home = yield* resolveCodexProviderHome(path.join(root, "provider-home"))
+      const serverStartup = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+        _tag: "Initialized",
+        startupId: "public-discovery-prior-startup",
+        home,
+        intendedAtMilliseconds: 0,
+        deadlineMilliseconds: 30_000,
+        initializedAtMilliseconds: 0
+      })
+      const layer = codexAppServerNodeLayer(
+        { executable, environment: { CODEX_HOME: home } },
+        isolatedCodexProcessNativeService
+      ).pipe(
+        Layer.provide(
+          memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, serverStartup, replacements: [] })
+        )
       )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
@@ -1236,7 +1253,11 @@ it.effect("reconciles application lease owner identity before spawning", () => {
     withFakeLeaseProc(stats, killError, (native, switchToUnsupportedPlatform) =>
       Effect.scoped(
         Effect.gen(function* () {
+          const startupStore = yield* CodexAttemptStore.pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
           const store: CodexAttemptStoreService = {
+            readServerStartup: startupStore.readServerStartup,
+            writeServerStartup: startupStore.writeServerStartup,
+            hasRetainedAttempts: () => Effect.succeed(false),
             readAttempt: () => Effect.succeed(Option.none()),
             writeAttempt: () => Effect.void,
             readReplacementLedger: () => Effect.succeed(Option.none()),
@@ -1400,7 +1421,11 @@ it.effect("reconciles controlled detached process-group ownership before close",
           yield* fileSystem.writeFileString(executable, discoveryFixture)
           yield* fileSystem.chmod(executable, 0o755)
           let launch: CodexServerLaunchRecord | undefined
+          const startupStore = yield* CodexAttemptStore.pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
           const store: CodexAttemptStoreService = {
+            readServerStartup: startupStore.readServerStartup,
+            writeServerStartup: startupStore.writeServerStartup,
+            hasRetainedAttempts: () => Effect.succeed(false),
             readAttempt: () => Effect.succeed(Option.none()),
             writeAttempt: () => Effect.void,
             readReplacementLedger: () => Effect.succeed(Option.none()),

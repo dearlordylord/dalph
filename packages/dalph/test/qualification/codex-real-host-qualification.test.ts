@@ -20,6 +20,7 @@ import {
   type CodexAttemptRecord as CodexAttemptRecordType
 } from "../../src/application/codex-attempt-store.js"
 import { makeNodeCodexProcessGroupCensusService } from "../../src/application/codex-app-server.js"
+import { CodexServerStartupRecord } from "../../src/application/codex-server-startup-record.js"
 import { AcceptedResultEvidenceManifest } from "@dalph/contracts"
 import {
   CodexQualificationHostEvent,
@@ -248,6 +249,10 @@ class ResponsesFixture {
 }
 
 type HostAction =
+  | "startup-cut"
+  | "initialize-response-cut"
+  | "initialize-observed-cut"
+  | "wait"
   | "workflow-association-cut"
   | "workflow-begin"
   | "allocate"
@@ -423,7 +428,8 @@ const privateSnapshotLineSchema = Schema.Struct({
 })
 const privateSnapshotSchema = Schema.Struct({
   attempts: Schema.Array(CodexAttemptRecord),
-  serverLaunch: Schema.NullOr(CodexServerLaunchRecord)
+  serverLaunch: Schema.NullOr(CodexServerLaunchRecord),
+  serverStartup: Schema.optionalKey(CodexServerStartupRecord)
 })
 type PrivateSnapshot = typeof privateSnapshotSchema.Type
 
@@ -684,6 +690,71 @@ const terminalReport = (event: HostEvent) => {
 }
 
 describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
+  qualificationTest.each(["initialize-response-cut", "initialize-observed-cut"] as const)(
+    "%s recovers exact admission custody without repeating an unobserved startup budget",
+    async (action) => {
+      const fixture = await makeFixture("accepted")
+      const hosts: Array<BuiltHost> = []
+      try {
+        const cut = spawnRawHost(fixture, action)
+        hosts.push(cut)
+        const observation = requireEvent(await cut.waitFor("initialize-cut"), "initialize-cut")
+        const before = await latestPrivateSnapshot(fixture)
+        if (before.serverStartup === undefined || before.serverLaunch === null || before.serverLaunch.pid === null)
+          throw new Error("startup and exact acknowledged launch are required")
+        expect(before.serverStartup._tag).toBe(action === "initialize-response-cut" ? "Pending" : "Initialized")
+        expect(observation.observation).toBe(
+          action === "initialize-response-cut" ? "ResponseOnly" : "DurableInitialized"
+        )
+        expect(processIsLive(before.serverLaunch.pid)).toBe(true)
+        await cut.stop("SIGKILL")
+        const recovered = await spawnHost(fixture, "wait")
+        hosts.push(recovered)
+        const after = await latestPrivateSnapshot(fixture)
+        expect(after.serverStartup?._tag).toBe("Initialized")
+        if (action === "initialize-response-cut") {
+          expect(after.serverStartup).toMatchObject({ ...before.serverStartup, _tag: "Initialized" })
+        } else {
+          expect(after.serverStartup?.home).toBe(before.serverStartup.home)
+          expect(after.serverStartup?.startupId).not.toBe(before.serverStartup.startupId)
+        }
+        expect(after.serverLaunch?.pid).not.toBe(before.serverLaunch.pid)
+        await waitForOwnedServerAbsence(before.serverLaunch)
+        expect(fixture.model.calls).toHaveLength(0)
+      } finally {
+        await dispose(fixture, hosts)
+      }
+    },
+    30_000
+  )
+  qualificationTest(
+    "crash before initialize reconciles the exact server and retains the original startup deadline",
+    async () => {
+      const fixture = await makeFixture("accepted")
+      const hosts: Array<BuiltHost> = []
+      try {
+        const cut = spawnRawHost(fixture, "startup-cut")
+        hosts.push(cut)
+        const acknowledged = requireEvent(await cut.waitFor("startup-cut"), "startup-cut")
+        const before = await latestPrivateSnapshot(fixture)
+        if (before.serverStartup?._tag !== "Pending") throw new Error("pending startup intent is required")
+        expect(before.serverLaunch?.pid).toBe(acknowledged.serverPid)
+        expect(processIsLive(acknowledged.serverPid)).toBe(true)
+        await cut.stop("SIGKILL")
+        const recovered = await spawnHost(fixture, "wait")
+        hosts.push(recovered)
+        const after = await latestPrivateSnapshot(fixture)
+        expect(after.serverStartup).toMatchObject({ ...before.serverStartup, _tag: "Initialized" })
+        expect(after.serverLaunch?.pid).not.toBe(acknowledged.serverPid)
+        if (before.serverLaunch === null) throw new Error("exact prior launch is required")
+        await waitForOwnedServerAbsence(before.serverLaunch)
+        expect(fixture.model.calls).toHaveLength(0)
+      } finally {
+        await dispose(fixture, hosts)
+      }
+    },
+    30_000
+  )
   qualificationTest(
     "built create reports ExecutorWorkExecuting, process restart projects the same thread as terminal Accepted, and rereads evidence",
     async () => {

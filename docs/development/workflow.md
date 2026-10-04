@@ -9,10 +9,32 @@
   predicted internal call order is a hypothesis. Record the first obstruction
   and unexecuted suffix. Reuse applicable evidence; workflow adoption does not
   restart completed characterization.
-- After two attempts fail to advance the same outcome, name competing causes
-  and run a distinguishing experiment. More reviewers, time, or gate reruns alone
-  are not new evidence. Continue independent authorized work; ask only about
-  unresolved choices that materially change accepted outcomes.
+- For a failed test, complete these steps before another broad check:
+  1. Locate the failed boundary in retained evidence. Record competing causes,
+     the observation that distinguishes them, and the stopping result.
+  2. Put pure validation and decisions in controlled unit tests. For each native
+     fixture, name its unique OS acceptance fact and set an isolated provider
+     home. Use dedicated, explicit custody for ambient-home inheritance and
+     same-home contention. Remove redundant process fixtures once their accepted
+     behavior is covered; preserve native spawn, lock, writer-absence, and cleanup
+     proofs. Use minimal typed events for projection and serialization checks.
+     Keep one composed replay for each distinct ordering or authority requirement;
+     put additional readback assertions into that replay instead of starting the
+     same graph again.
+     When a verification helper gains an import, update its shared copied-runtime
+     fixture and run the composed consumer tests; an isolated helper test cannot
+     prove that dependency closure. After JavaScript fixture changes, run the
+     full type-aware lint census once: selecting only those files can omit types
+     discovered in the complete program.
+  3. Run one bounded diagnostic that supplies the recorded observation. A passing
+     isolated test leaves an order-dependent cause unresolved. Choose a different
+     observation when the diagnostic cannot discriminate; an unchanged rerun,
+     added reviewer, or longer timeout supplies no evidence.
+  4. Repair the identified cause and observe the focused acceptance check pass.
+     Then select the affected checks once using [choosing checks](checks.md#choosing-checks).
+  These steps govern test development and change no Dalph runtime behavior.
+  Continue independent work while a boundary is unresolved; ask only about
+  choices that change accepted outcomes.
 - Before a focused authored-cassette diagnostic, trace each requested fact to
   the adapter actually selected by that story (including conditional interpreter
   routes). Name the observation point and prove it executes *before* the first

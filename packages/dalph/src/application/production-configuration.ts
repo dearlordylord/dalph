@@ -54,6 +54,12 @@ export const ProductionCodexExecutorPrivateStateDirectory = Schema.NonEmptyStrin
 ).pipe(Schema.brand("ProductionCodexExecutorPrivateStateDirectory"))
 export type ProductionCodexExecutorPrivateStateDirectory = typeof ProductionCodexExecutorPrivateStateDirectory.Type
 
+/** Explicit provider-home option; native startup resolves aliases before binding its namespace. */
+export const ProductionCodexProviderHome = Schema.NonEmptyString.check(
+  canonicalAbsolutePath("Codex provider home")
+).pipe(Schema.brand("ProductionCodexProviderHome"))
+export type ProductionCodexProviderHome = typeof ProductionCodexProviderHome.Type
+
 /** Canonical private directory for Kimi's provider-session associations. */
 export const ProductionKimiExecutorPrivateStateDirectory = Schema.NonEmptyString.check(
   canonicalAbsolutePath("Kimi executor private-state directory")
@@ -157,6 +163,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   evidenceStoreRoot: CanonicalEvidenceStoreLocator,
   plannedAttemptWorktreeRoot: ProductionPlannedAttemptWorktreeRoot,
   codexExecutorPrivateStateDirectory: ProductionCodexExecutorPrivateStateDirectory,
+  codexHome: Schema.optionalKey(ProductionCodexProviderHome),
   codexToolEffectPolicy: Schema.optionalKey(CodexToolEffectPolicy),
   kimiExecutorPrivateStateDirectory: Schema.optionalKey(ProductionKimiExecutorPrivateStateDirectory),
   integratorCandidateWorktreeRoot: IntegratorCandidateWorktreeRoot,

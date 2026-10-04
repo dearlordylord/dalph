@@ -15,6 +15,7 @@ import {
   evidenceReferenceEquals
 } from "@dalph/contracts"
 import { Config, Context, Effect, Layer, Option, Path, Ref, Result, Schema, Semaphore, type Crypto } from "effect"
+import { CodexServerStartupRecord, startupTransitionProblem } from "./codex-server-startup-record.js"
 import {
   CodexAttemptStoreNative,
   nodeCodexAttemptStoreNativeLayer,
@@ -712,7 +713,8 @@ const CodexAttemptStoreSnapshot = Schema.Struct({
   attempts: Schema.Array(CodexAttemptRecord),
   serverLaunch: Schema.NullOr(CodexServerLaunchRecord),
   replacements: Schema.Array(CodexPurgedWorkUnitReplacementLedger),
-  toolEffects: Schema.optionalKey(Schema.Array(CodexToolEffectRecord))
+  toolEffects: Schema.optionalKey(Schema.Array(CodexToolEffectRecord)),
+  serverStartup: Schema.optionalKey(CodexServerStartupRecord)
 }).check(
   Schema.makeFilter((snapshot) => {
     const keys = new Set(snapshot.attempts.map((record) => keyOf(record.correlationRunId, record.correlationAttemptId)))
@@ -744,6 +746,8 @@ const CodexAttemptStoreOperation = Schema.Literals([
   "readServerLaunch",
   "writeServerLaunch",
   "clearServerLaunch",
+  "readServerStartup",
+  "writeServerStartup",
   "readReplacementLedger",
   "appendReplacementLedger",
   "readToolEffect",
@@ -782,6 +786,9 @@ export interface CodexAttemptStoreService {
   readonly readServerLaunch: () => Effect.Effect<Option.Option<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
   readonly writeServerLaunch: (record: CodexServerLaunchRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   readonly clearServerLaunch: (incarnation: CodexServerIncarnation) => Effect.Effect<void, CodexAttemptStoreFailure>
+  /** Original namespace/startup deadline survives independent launch cleanup. */
+  readonly readServerStartup: () => Effect.Effect<Option.Option<CodexServerStartupRecord>, CodexAttemptStoreFailure>
+  readonly writeServerStartup: (record: CodexServerStartupRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   /** Reads one private replacement operation by its stable operator request identity. */
   readonly readReplacementLedger: (
     requestId: CodexReplacementRequestId
@@ -813,6 +820,22 @@ export class CodexAttemptStore extends Context.Service<CodexAttemptStore, CodexA
   "@dalph/CodexAttemptStore"
 ) {}
 
+const validateStartupTransition = (
+  previous: Option.Option<CodexServerStartupRecord>,
+  record: CodexServerStartupRecord
+): Effect.Effect<void, CodexAttemptStoreFailure> =>
+  Effect.gen(function* () {
+    yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)(record).pipe(
+      Effect.mapError(
+        (error) => new CodexAttemptStoreFailure({ detail: String(error), operation: "writeServerStartup" })
+      )
+    )
+    const problem = startupTransitionProblem(Option.getOrUndefined(previous), record)
+    if (problem !== undefined) {
+      return yield* new CodexAttemptStoreFailure({ detail: problem, operation: "writeServerStartup" })
+    }
+  })
+
 const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: null, replacements: [], toolEffects: [] }
 
 export const errorCode = (error: unknown): string =>
@@ -827,6 +850,7 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
       const launch = yield* Ref.make<Option.Option<CodexServerLaunchRecord>>(
         initial.serverLaunch === null ? Option.none() : Option.some(initial.serverLaunch)
       )
+      const startup = yield* Ref.make(Option.fromUndefinedOr(initial.serverStartup))
       const replacements = yield* Ref.make<ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>>(
         new Map(initial.replacements.map((ledger) => [ledger.requestId, ledger]))
       )
@@ -883,6 +907,18 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
       ) {
         yield* Ref.update(launch, (current) =>
           Option.isSome(current) && current.value.incarnation === incarnation ? Option.none() : current
+        )
+      })
+      const readServerStartup = () => Ref.get(startup)
+      const writeServerStartup = Effect.fn("CodexAttemptStore.Memory.writeServerStartup")(function* (
+        record: CodexServerStartupRecord
+      ) {
+        yield* snapshotGate.withPermit(
+          Effect.gen(function* () {
+            const previous = yield* Ref.get(startup)
+            yield* validateStartupTransition(previous, record)
+            yield* Ref.set(startup, Option.some(record))
+          })
         )
       })
       const readReplacementLedger: NonNullable<CodexAttemptStoreService["readReplacementLedger"]> = (requestId) =>
@@ -1007,6 +1043,8 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         readServerLaunch,
         writeServerLaunch,
         clearServerLaunch,
+        readServerStartup,
+        writeServerStartup,
         readReplacementLedger,
         appendReplacementLedger,
         readToolEffect,
@@ -1176,7 +1214,13 @@ const ensurePrivateDirectoryComponent = async (
     stat = await native.lstat(current)
   } catch (error) {
     if (nativeErrorCode(error) !== "ENOENT") return { current, observation: { _tag: "Failure", detail: String(error) } }
-    await native.mkdir(current, { mode: privateDirectoryMode })
+    try {
+      await native.mkdir(current, { mode: privateDirectoryMode })
+    } catch (creationError) {
+      // A concurrent creator grants no trust: re-observe and validate the exact path below.
+      if (nativeErrorCode(creationError) !== "EEXIST")
+        return { current, observation: { _tag: "Failure", detail: String(creationError) } }
+    }
     stat = await native.lstat(current)
   }
   const failure = privateDirectoryStatFailure(stat, current, isFinal, uid)
@@ -1460,13 +1504,15 @@ const encodeSnapshot = (
   attempts: ReadonlyMap<string, CodexAttemptRecord>,
   serverLaunch: Option.Option<CodexServerLaunchRecord>,
   replacements: ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>,
-  toolEffects: ReadonlyMap<string, CodexToolEffectRecord>
+  toolEffects: ReadonlyMap<string, CodexToolEffectRecord>,
+  startup: Option.Option<CodexServerStartupRecord>
 ): string =>
   JSON.stringify({
     attempts: [...attempts.values()],
     serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null,
     replacements: [...replacements.values()],
-    toolEffects: [...toolEffects.values()]
+    toolEffects: [...toolEffects.values()],
+    ...(Option.isSome(startup) ? { serverStartup: startup.value } : {})
   })
 
 /** Validates the complete next snapshot before one store operation crosses persistence. */
@@ -1558,6 +1604,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
       const launch = yield* Ref.make<Option.Option<CodexServerLaunchRecord>>(
         initial.snapshot.serverLaunch === null ? Option.none() : Option.some(initial.snapshot.serverLaunch)
       )
+      const startup = yield* Ref.make(Option.fromUndefinedOr(initial.snapshot.serverStartup))
+      const startupGate = yield* Semaphore.make(1)
       const replacements = yield* Ref.make<ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>>(
         new Map(initial.snapshot.replacements.map((ledger) => [ledger.requestId, ledger]))
       )
@@ -1587,7 +1635,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
                 yield* Ref.get(attempts),
                 yield* Ref.get(launch),
                 yield* Ref.get(replacements),
-                yield* Ref.get(toolEffects)
+                yield* Ref.get(toolEffects),
+                yield* Ref.get(startup)
               )
               // The private state file is an append-only checksummed boundary.
               // It never re-resolves a validated temporary path for rename;
@@ -1658,6 +1707,24 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
           Effect.andThen(persist("clearServerLaunch")),
           Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "clearServerLaunch"))
         )
+      const readServerStartup = () => guard("readServerStartup", Ref.get(startup))
+      const writeServerStartup = Effect.fn("CodexAttemptStore.Node.writeServerStartup")(function* (
+        record: CodexServerStartupRecord
+      ) {
+        yield* startupGate.withPermit(
+          guard(
+            "writeServerStartup",
+            Effect.gen(function* () {
+              const previous = yield* Ref.get(startup)
+              yield* validateStartupTransition(previous, record)
+              yield* Ref.set(startup, Option.some(record))
+              yield* persist("writeServerStartup").pipe(
+                Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "writeServerStartup"))
+              )
+            })
+          )
+        )
+      })
       const readReplacementLedger: NonNullable<CodexAttemptStoreService["readReplacementLedger"]> = (requestId) =>
         guard(
           "readReplacementLedger",
@@ -1913,6 +1980,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         readServerLaunch,
         writeServerLaunch,
         clearServerLaunch,
+        readServerStartup,
+        writeServerStartup,
         readReplacementLedger,
         appendReplacementLedger,
         readToolEffect,

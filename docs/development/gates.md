@@ -234,3 +234,43 @@ Ordinary `check:all` runs every selected stage once for its exact candidate.
 Interrupted runs retain custody until reconciliation and restart without prefix
 credit. Standalone formal reuse is governed separately by
 [formal verification](formal.md#formal-reuse-and-handoff).
+
+
+### Verification input scope
+
+The quality input guard observes the build/test owners declared in
+[`gate-resume-inputs.mjs`](../../scripts/gate-resume-inputs.mjs), using the same
+roots for filesystem observation and content snapshots. Root configuration
+suffixes share the formatter's file-selection policy; both existing inputs and
+new matching files remain observed, including creation followed by deletion
+before validation. Source and workspace
+packages, scripts, maintained documentation, specifications, the maintained
+Reducer Lab, test fixtures, dependencies and build/test configuration remain
+inputs. Dirty files, new files under these roots, deletion and edit/restore
+remain observable. The forbidden default Apalache output root `_apalache-out`
+also remains observed: a server must write its managed output under gate
+custody instead of changing the candidate. Update the declared roots when commands acquire a new input
+owner. During application qualification, independent `research/` content,
+root reports such as `REPORT.md`, editor
+state and unrelated `quint-specs/quint.lock` files do not invalidate quality
+qualification. Git candidate/index authority, external tools and effective
+configuration keep their existing independent guards; committing or staging
+while qualifying a frozen candidate can still invalidate it.
+
+This is the selected application quality command's scope. The separate
+`check:docs` command and hosted documentation job still check their maintained
+Markdown and local link targets, including research and root Markdown.
+Optional duplication analysis keeps its own wider source selection; the
+ordinary quality plan excludes that advisory stage. Their inputs do not become
+inputs of an application qualification command that does not execute them.
+
+| Qualification scenario | Acceptance test |
+| --- | --- |
+| A new root formatter configuration is created and deleted before validation; filesystem observation rejects the run despite unchanged final membership | `scripts/gate-resume-inputs.test.mjs`: `a newly created root .config.js removed before validation still invalidates qualification` and its MJS, TS, and TSX cases |
+| An existing TSX configuration is edited and restored, moved away and restored, or changed through a symbolic or hard link; the observer rejects qualification | `scripts/gate-resume-inputs.test.mjs`: `an existing root TSX configuration edit restored before validation still invalidates qualification`; `moving a root configuration away and restoring it invalidates qualification`; `a root configuration symbolic link observes target edits restored before validation`; `a root configuration hard link observes target edits restored before validation` |
+| Independent research, a root report, and an unrelated Quint lock change while source, maintained docs, and package inputs retain their guards | `scripts/gate-resume-inputs.test.mjs`: `research and root reports do not invalidate the guard, while source and maintained docs do` |
+| Dropping the owned formal server output argument writes its default output into the candidate; the native observer refuses qualification despite successful server cleanup | `scripts/quint-owned-server.test.mjs`: `dropping only the owned server output argument makes native candidate observation refuse fresh qualification` |
+
+This selection changes verification tooling only; Dalph runtime behavior and
+its accepted operational scenarios are unchanged. Formal input policy owns its
+separate model/toolchain scope.

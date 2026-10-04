@@ -1,13 +1,17 @@
 /* eslint-disable import/no-nodejs-modules -- the process adapter is the one explicit execution-substrate boundary. */
 /* eslint-disable max-lines -- The protocol transport and ownership gate form one audited application boundary. */
 import nodePath from "node:path"
+import { userInfo } from "node:os"
 import { NodeCrypto } from "@effect/platform-node"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
 import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { Scope } from "effect"
 import {
+  Cause,
   Channel,
+  Clock,
+  ConfigProvider,
   Context,
   Crypto,
   Data,
@@ -52,6 +56,18 @@ import {
 } from "./codex-process-native.js"
 import { logCodexCompletionTrace } from "./codex-completion-trace.js"
 import type { ExecutorModelAlias } from "./executor-profile.js"
+import { resolveChildCodexProviderHome, resolveCodexProviderHome } from "./codex-provider-home.js"
+import {
+  openCodexStartupAdmission,
+  type CodexStartupAdmissionObservation,
+  type CodexStartupAdmissionRecord
+} from "./codex-startup-admission.js"
+import {
+  CodexServerStartupFailure,
+  boundCodexServerStartup,
+  reconcileCodexServerStartup
+} from "./codex-server-startup.js"
+import { CodexServerStartupRecord, type CodexProviderHomeNamespace } from "./codex-server-startup-record.js"
 
 /** The process-owned status projection returned by one Codex thread read. */
 const CodexThreadStatus = Schema.Literals(["active", "idle", "notLoaded", "systemError"])
@@ -594,6 +610,8 @@ const operationFailure = (
 
 const initializeOwnershipFailure = (error: unknown): CodexAppServerFailure =>
   operationFailure("initialize", "Ownership", error)
+const initializeStartupFailure = (error: CodexServerStartupFailure): CodexAppServerFailure =>
+  operationFailure("initialize", error.kind === "Deadline" ? "Unavailable" : "Ownership", error.detail)
 const initializeProtocolFailure = (error: unknown): CodexAppServerFailure =>
   operationFailure("initialize", "Protocol", error)
 const initializeUnavailableFailure = (error: unknown): CodexAppServerFailure =>
@@ -760,6 +778,41 @@ export const observeLeaseOwner = async (
     /* v8 ignore stop -- @preserve */
   }
 }
+
+/** Read-only proof shared by retained-owner recovery and an admitted startup's scope cleanup. */
+export const observeCodexStartupProcessAbsence = Effect.fn("CodexAppServer.observeStartupProcessAbsence")(function* (
+  launch: CodexServerLaunchRecord,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+) {
+  const observe = <A>(read: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: read,
+      catch: () =>
+        new CodexServerStartupFailure({ kind: "Custody", detail: "startup process absence could not be observed" })
+    })
+  const servers = yield* observe(() => discoverAppServerProcesses(launch.incarnation, native))
+  if (servers._tag !== "Absent") return false
+  const writers = yield* observe(() => observeOwnedActivityProcesses([], native, launch.incarnation))
+  return writers._tag === "Absent"
+})
+
+/** Another controller's custody is releasable only after its spawn authority and every token writer are absent. */
+export const observeRetainedCodexStartup = Effect.fn("CodexAppServer.observeRetainedStartup")(function* (
+  record: CodexStartupAdmissionRecord,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Effect.fn.Return<CodexStartupAdmissionObservation, CodexServerStartupFailure> {
+  const observe = <A>(read: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: read,
+      catch: () =>
+        new CodexServerStartupFailure({ kind: "Custody", detail: "retained startup process observation failed" })
+    })
+  const holder = yield* observe(() => observeLeaseOwner(record.holder, native))
+  if (holder._tag !== "Absent") return { _tag: "Unresolved" }
+  if (!(yield* observeCodexStartupProcessAbsence(record.launch, native))) return { _tag: "Unresolved" }
+  const holderAfterCensus = yield* observe(() => observeLeaseOwner(record.holder, native))
+  return holderAfterCensus._tag === "Absent" ? { _tag: "StoppedAbsent" } : { _tag: "Unresolved" }
+})
 
 export interface LinuxProcessStat {
   readonly pid: number
@@ -3129,11 +3182,9 @@ const reconcilePriorServerLaunch = (
     yield* reconcileExistingPriorServer(ownership, prior, native)
   })
 
-const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
+const acquireApplicationServerLease = Effect.fn("CodexAppServer.acquireApplicationServerLease")(function* (
   store: CodexAttemptStoreService,
   ownership: CodexProcessOwnershipService,
-  incarnation: CodexServerIncarnation,
-  command: ReadonlyArray<string>,
   crypto: Crypto.Crypto,
   native: CodexProcessNativeService = nodeCodexProcessNativeService
 ) {
@@ -3154,9 +3205,6 @@ const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
   // Register immediately after acquisition so every later startup failure
   // releases only this exact owner, including failures while reading launch state.
   yield* Effect.addFinalizer(() => store.releaseServerLease(leaseOwner).pipe(Effect.orDie))
-  const prior = yield* store.readServerLaunch()
-  if (Option.isSome(prior)) yield* reconcilePriorServerLaunch(store, ownership, prior.value, native)
-  yield* store.writeServerLaunch({ command, incarnation, phase: "Launching", pid: null })
   return leaseOwner
 })
 
@@ -3593,7 +3641,8 @@ export const closeHandleFailure = (error: unknown): CodexAppServerFailure =>
  */
 export const codexAppServerLayer = (
   config: CodexAppServerLayerConfig = {},
-  requestBoundary: CodexAppServerRequestBoundary = unrestrictedCodexAppServerRequestBoundary
+  requestBoundary: CodexAppServerRequestBoundary = unrestrictedCodexAppServerRequestBoundary,
+  startupBoundary?: { readonly home: CodexProviderHomeNamespace; readonly directory: string }
 ): Layer.Layer<
   CodexAppServer,
   CodexAppServerFailure | CodexAttemptStoreFailure,
@@ -3617,112 +3666,258 @@ export const codexAppServerLayer = (
       const launchArguments = codexAppServerArgumentsForModel(selected.model)
       const command = [selected.executable, ...launchArguments] as const
       const incarnation = yield* newIncarnation(crypto)
-      const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command, crypto, native)
-      const handle = yield* spawner
-        .spawn(
-          ChildProcess.make(selected.executable, [...launchArguments], {
-            stdin: { stream: "pipe", endOnDone: false },
-            stdout: "pipe",
-            stderr: "pipe",
-            detached: true,
-            env: { ...selected.environment, [codexServerIncarnationEnvironment]: durableIncarnationToken(incarnation) },
-            extendEnv: selected.extendEnvironment ?? true
-          })
-        )
-        .pipe(Effect.mapError(initializeUnavailableFailure))
-      const childPid = Number(handle.pid)
-      const liveIncarnation = yield* Effect.tryPromise({
-        try: () => incarnationWithProcessIdentity(incarnation, childPid, native),
-        catch: initializeOwnershipFailure
-      }).pipe(
-        Effect.flatMap((observed) =>
-          /* v8 ignore next -- @preserve Production launch proceeds only after the platform helper has returned an exact process-start identity. */
-          observed === undefined
-            ? Effect.fail(operationFailure("initialize", "Ownership", "process-start identity is missing"))
-            : Effect.succeed(observed)
-        ),
-        Effect.catch(
-          failAfterInitializationCleanup.bind(
-            undefined,
-            handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }),
-            "process identity"
+      const leaseOwner = yield* acquireApplicationServerLease(store, ownership, crypto, native)
+      const reconcilePriorLaunch = Effect.gen(function* () {
+        const prior = yield* store.readServerLaunch()
+        if (Option.isSome(prior)) yield* reconcilePriorServerLaunch(store, ownership, prior.value, native)
+      })
+      const startup =
+        startupBoundary === undefined
+          ? yield* reconcilePriorLaunch.pipe(Effect.as(undefined))
+          : yield* reconcileCodexServerStartup(store, startupBoundary.home, reconcilePriorLaunch).pipe(
+              Effect.mapError(initializeOwnershipFailure)
+            )
+      const { childPid, close, liveIncarnation, liveLaunch, rpc, stopRetainedLaunch } = yield* boundCodexServerStartup(
+        startup,
+        Effect.gen(function* () {
+          const launchIntent: CodexServerLaunchRecord = { command, incarnation, phase: "Launching", pid: null }
+          yield* store.writeServerLaunch(launchIntent)
+          const startupAdmission =
+            startupBoundary === undefined || startup === undefined
+              ? undefined
+              : yield* openCodexStartupAdmission(startupBoundary.directory, {
+                  startup,
+                  launch: launchIntent,
+                  holder: leaseOwner,
+                  disposition: "Pending"
+                }).pipe(Effect.mapError(initializeOwnershipFailure))
+          const startupAdmissionReleased = yield* Ref.make(false)
+          const releaseStartupAdmission = (
+            observation: Exclude<CodexStartupAdmissionObservation, { readonly _tag: "Unresolved" }>
+          ) =>
+            startupAdmission === undefined
+              ? Effect.void
+              : startupAdmission
+                  .release(observation)
+                  .pipe(
+                    Effect.andThen(Ref.set(startupAdmissionReleased, true)),
+                    Effect.mapError(initializeOwnershipFailure),
+                    Effect.uninterruptible
+                  )
+          if (startupAdmission !== undefined) {
+            yield* Effect.uninterruptibleMask((restore) =>
+              restore(
+                startupAdmission.awaitAdmission(
+                  (record) => observeRetainedCodexStartup(record, native),
+                  Option.isSome(applicationExit) ? applicationExit.value.awaitExitRequested : undefined
+                )
+              ).pipe(
+                Effect.andThen(
+                  Effect.addFinalizer(() =>
+                    Effect.gen(function* () {
+                      if (yield* Ref.get(startupAdmissionReleased)) return
+                      if (!(yield* observeCodexStartupProcessAbsence(launchIntent, native)))
+                        return yield* new CodexServerStartupFailure({
+                          kind: "Custody",
+                          detail: "startup scope ended with unproven token writers; custody retained"
+                        })
+                      yield* releaseStartupAdmission({ _tag: "StoppedAbsent" })
+                    }).pipe(Effect.orDie)
+                  )
+                )
+              )
+            ).pipe(Effect.mapError(initializeOwnershipFailure))
+          }
+          if (Option.isSome(applicationExit) && (yield* applicationExit.value.admission.snapshot).cutoffClosed) {
+            if (startupAdmission !== undefined) {
+              yield* releaseStartupAdmission({ _tag: "StoppedAbsent" })
+            }
+            return yield* operationFailure("initialize", "Unavailable", "application Exit closed startup before spawn")
+          }
+          if (startup !== undefined && (yield* Clock.currentTimeMillis) >= startup.deadlineMilliseconds) {
+            if (startupAdmission !== undefined) {
+              yield* releaseStartupAdmission({ _tag: "StoppedAbsent" })
+            }
+            return yield* operationFailure(
+              "initialize",
+              "Unavailable",
+              "original startup deadline expired before spawn"
+            )
+          }
+          const handle = yield* spawner
+            .spawn(
+              ChildProcess.make(selected.executable, [...launchArguments], {
+                stdin: { stream: "pipe", endOnDone: false },
+                stdout: "pipe",
+                stderr: "pipe",
+                detached: true,
+                env: {
+                  ...selected.environment,
+                  [codexServerIncarnationEnvironment]: durableIncarnationToken(incarnation)
+                },
+                extendEnv: selected.extendEnvironment ?? true
+              })
+            )
+            .pipe(Effect.mapError(initializeUnavailableFailure))
+          const childPid = Number(handle.pid)
+          const liveIncarnation = yield* Effect.tryPromise({
+            try: () => incarnationWithProcessIdentity(incarnation, childPid, native),
+            catch: initializeOwnershipFailure
+          }).pipe(
+            Effect.flatMap((observed) =>
+              /* v8 ignore next -- @preserve Production launch proceeds only after the platform helper has returned an exact process-start identity. */
+              observed === undefined
+                ? Effect.fail(operationFailure("initialize", "Ownership", "process-start identity is missing"))
+                : Effect.succeed(observed)
+            ),
+            Effect.catch(
+              failAfterInitializationCleanup.bind(
+                undefined,
+                handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }),
+                "process identity"
+              )
+            )
           )
+          // The detached handoff is not durable until the child has an exact
+          // process-start identity. A restart can therefore never treat a
+          // pid-only acknowledgement as an owned Codex process.
+          const spawnedLaunch: CodexServerLaunchRecord = {
+            command,
+            incarnation: liveIncarnation,
+            phase: "Spawned",
+            pid: childPid
+          }
+          yield* store
+            .writeServerLaunch(spawnedLaunch)
+            .pipe(
+              Effect.catch(
+                failAfterInitializationCleanup.bind(
+                  undefined,
+                  handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }),
+                  "spawned process"
+                )
+              )
+            )
+          const liveLaunch: CodexServerLaunchRecord = {
+            command,
+            incarnation: liveIncarnation,
+            phase: "Live",
+            pid: childPid
+          }
+          const closeHandle = yield* Effect.cached(
+            Effect.gen(function* () {
+              // Re-read the exact process identity before disposing the detached
+              // group. The census is optional only for controlled transport tests;
+              // the Node production layer supplies it and proves descendants gone.
+              yield* ownership.stop(liveLaunch)
+              if (Option.isSome(processGroupCensus)) {
+                yield* awaitOwnedGroupAbsent(processGroupCensus.value, liveLaunch, ownershipStopPollAttempts, native)
+                yield* reconcilePriorTokenOwnedActivities(liveLaunch, native)
+              }
+              yield* awaitOwnedProcessAbsent(ownership, liveLaunch, ownershipStopPollAttempts, "close", native)
+              if (startupAdmission !== undefined && !(yield* Ref.get(startupAdmissionReleased))) {
+                yield* releaseStartupAdmission({ _tag: "StoppedAbsent" })
+              }
+              yield* store.clearServerLaunch(liveIncarnation)
+            }).pipe(Effect.mapError(closeHandleFailure))
+          )
+          yield* Effect.addFinalizer(() => closeHandle.pipe(Effect.orDie))
+          yield* store.writeServerLaunch(liveLaunch).pipe(Effect.catch(failAfterClose.bind(undefined, closeHandle)))
+          const rpc = yield* makeJsonRpcClient(handle, liveIncarnation, requestBoundary)
+          const releaseLease = store
+            .releaseServerLease(leaseOwner)
+            .pipe(Effect.mapError((error) => operationFailure("close", "Ownership", error.detail)))
+          const close = yield* Effect.cached(closeHandle.pipe(Effect.andThen(rpc.close), Effect.andThen(releaseLease)))
+          const stopRetainedLaunch = (prior: CodexServerLaunchRecord) =>
+            Effect.gen(function* () {
+              if (prior.incarnation === liveIncarnation) {
+                return yield* Effect.fail(
+                  operationFailure("close", "Ownership", "retained launch is the current app-server")
+                )
+              }
+              if (Option.isNone(processGroupCensus)) {
+                return yield* Effect.fail(
+                  operationFailure("close", "Ownership", "retained launch has no process-group census")
+                )
+              }
+              yield* ownership.stop(prior)
+              yield* awaitOwnedGroupAbsent(processGroupCensus.value, prior, ownershipStopPollAttempts, native)
+              yield* reconcilePriorTokenOwnedActivities(prior, native)
+              yield* awaitOwnedProcessAbsent(ownership, prior, ownershipStopPollAttempts, "close", native)
+            })
+          yield* rpc.installDeadlineClose(close)
+          // The application shell owns the only graceful Exit close. The scope
+          // finalizer is a process-death fallback and cannot synthesize executor
+          // safety or terminal evidence.
+          yield* Effect.addFinalizer(() => close.pipe(Effect.orDie))
+          if (Option.isSome(applicationExit) && startup === undefined)
+            yield* registerApplicationServerDrain(applicationExit.value, close)
+          const initializeRequest = rpc.requestBounded("initialize", "initialize", {
+            clientInfo: { name: selected.clientName, version: selected.clientVersion },
+            capabilities: { experimentalApi: true }
+          })
+          const remainingStartup =
+            startup === undefined ? undefined : startup.deadlineMilliseconds - (yield* Clock.currentTimeMillis)
+          const initializeResponse = yield* remainingStartup === undefined
+            ? initializeRequest
+            : initializeRequest.pipe(
+                Effect.timeoutOrElse({
+                  duration: Duration.millis(Math.max(0, remainingStartup)),
+                  orElse: () =>
+                    Effect.fail(
+                      operationFailure(
+                        "initialize",
+                        "Unavailable",
+                        "original queue-plus-initialize startup deadline expired"
+                      )
+                    )
+                })
+              )
+          const normalizedInitialize = normalizeInitializeResponse(initializeResponse, native)
+          if (normalizedInitialize !== true) return yield* Effect.fail(normalizedInitialize)
+          if (startupBoundary !== undefined) {
+            const response = yield* Schema.decodeUnknownEffect(CodexInitializeResponse)(initializeResponse).pipe(
+              Effect.mapError(initializeOwnershipFailure)
+            )
+            const observedHome = yield* resolveCodexProviderHome(response.codexHome).pipe(
+              Effect.mapError(initializeOwnershipFailure)
+            )
+            if (observedHome !== startupBoundary.home)
+              return yield* operationFailure(
+                "initialize",
+                "Ownership",
+                "app-server initialized in a different provider-home namespace"
+              )
+          }
+          if (startup !== undefined && startupAdmission !== undefined) {
+            const initialized = yield* Schema.decodeUnknownEffect(CodexServerStartupRecord)({
+              ...startup,
+              _tag: "Initialized",
+              initializedAtMilliseconds: yield* Clock.currentTimeMillis
+            }).pipe(Effect.mapError(initializeOwnershipFailure))
+            yield* store.writeServerStartup(initialized)
+            yield* releaseStartupAdmission({ _tag: "Initialized", startup: initialized })
+          }
+          yield* rpc.notify("initialized")
+          return { rpc, liveIncarnation, childPid, liveLaunch, stopRetainedLaunch, close }
+        }),
+        Option.isSome(applicationExit)
+          ? {
+              requested: applicationExit.value.awaitExitRequested,
+              registerDrain: (closeStartup) =>
+                registerApplicationServerDrain(
+                  applicationExit.value,
+                  closeStartup.pipe(
+                    Effect.catchCause((cause) => Effect.fail(closeOwnershipFailure(Cause.pretty(cause))))
+                  )
+                )
+            }
+          : undefined
+      ).pipe(
+        Effect.mapError((error) =>
+          error instanceof CodexServerStartupFailure ? initializeStartupFailure(error) : error
         )
       )
-      // The detached handoff is not durable until the child has an exact
-      // process-start identity. A restart can therefore never treat a
-      // pid-only acknowledgement as an owned Codex process.
-      const spawnedLaunch: CodexServerLaunchRecord = {
-        command,
-        incarnation: liveIncarnation,
-        phase: "Spawned",
-        pid: childPid
-      }
-      yield* store
-        .writeServerLaunch(spawnedLaunch)
-        .pipe(
-          Effect.catch(
-            failAfterInitializationCleanup.bind(
-              undefined,
-              handle.kill({ killSignal: "SIGTERM", forceKillAfter: Duration.seconds(1) }),
-              "spawned process"
-            )
-          )
-        )
-      const liveLaunch: CodexServerLaunchRecord = {
-        command,
-        incarnation: liveIncarnation,
-        phase: "Live",
-        pid: childPid
-      }
-      const closeHandle = Effect.gen(function* () {
-        // Re-read the exact process identity before disposing the detached
-        // group. The census is optional only for controlled transport tests;
-        // the Node production layer supplies it and proves descendants gone.
-        yield* ownership.stop(liveLaunch)
-        if (Option.isSome(processGroupCensus)) {
-          yield* awaitOwnedGroupAbsent(processGroupCensus.value, liveLaunch, ownershipStopPollAttempts, native)
-          yield* reconcilePriorTokenOwnedActivities(liveLaunch, native)
-        }
-        yield* awaitOwnedProcessAbsent(ownership, liveLaunch, ownershipStopPollAttempts, "close", native)
-        yield* store.clearServerLaunch(liveIncarnation)
-      }).pipe(Effect.mapError(closeHandleFailure))
-      yield* store.writeServerLaunch(liveLaunch).pipe(Effect.catch(failAfterClose.bind(undefined, closeHandle)))
-      const rpc = yield* makeJsonRpcClient(handle, liveIncarnation, requestBoundary)
-      const releaseLease = store
-        .releaseServerLease(leaseOwner)
-        .pipe(Effect.mapError((error) => operationFailure("close", "Ownership", error.detail)))
-      const close = yield* Effect.cached(closeHandle.pipe(Effect.andThen(rpc.close), Effect.andThen(releaseLease)))
-      const stopRetainedLaunch = (prior: CodexServerLaunchRecord) =>
-        Effect.gen(function* () {
-          if (prior.incarnation === liveIncarnation) {
-            return yield* Effect.fail(
-              operationFailure("close", "Ownership", "retained launch is the current app-server")
-            )
-          }
-          if (Option.isNone(processGroupCensus)) {
-            return yield* Effect.fail(
-              operationFailure("close", "Ownership", "retained launch has no process-group census")
-            )
-          }
-          yield* ownership.stop(prior)
-          yield* awaitOwnedGroupAbsent(processGroupCensus.value, prior, ownershipStopPollAttempts, native)
-          yield* reconcilePriorTokenOwnedActivities(prior, native)
-          yield* awaitOwnedProcessAbsent(ownership, prior, ownershipStopPollAttempts, "close", native)
-        })
-      yield* rpc.installDeadlineClose(close)
-      // The application shell owns the only graceful Exit close. The scope
-      // finalizer is a process-death fallback and cannot synthesize executor
-      // safety or terminal evidence.
-      yield* Effect.addFinalizer(() => close.pipe(Effect.orDie))
-      if (Option.isSome(applicationExit)) yield* registerApplicationServerDrain(applicationExit.value, close)
-      const initializeResponse = yield* rpc.requestBounded("initialize", "initialize", {
-        clientInfo: { name: selected.clientName, version: selected.clientVersion },
-        capabilities: { experimentalApi: true }
-      })
-      const normalizedInitialize = normalizeInitializeResponse(initializeResponse, native)
-      if (normalizedInitialize !== true) return yield* Effect.fail(normalizedInitialize)
-      yield* rpc.notify("initialized")
       if (selected.requireUnattendedPolicy === true) {
         const configReadResponse = yield* rpc.requestBounded("config/read", "config/read", { includeLayers: false })
         const normalizedPolicy = normalizeUnattendedPolicyResponse(configReadResponse)
@@ -4071,7 +4266,26 @@ export const codexAppServerNodeLayer = (
   CodexAppServerFailure | CodexAttemptStoreFailure,
   CodexAttemptStore | ChildProcessSpawner.ChildProcessSpawner
 > =>
-  codexAppServerLayer(config, requestBoundary).pipe(
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const operatingSystemUser = yield* Effect.try({ try: () => userInfo(), catch: initializeUnavailableFailure })
+      const home = yield* resolveChildCodexProviderHome(
+        config.environment ?? {},
+        config.extendEnvironment ?? true,
+        ConfigProvider.fromEnv(),
+        operatingSystemUser.homedir
+      ).pipe(Effect.mapError(initializeUnavailableFailure))
+      // Supported Linux/macOS controllers share this host locator even when their TMPDIR values differ.
+      const temporaryDirectory = yield* resolveCodexProviderHome("/tmp").pipe(
+        Effect.mapError(initializeUnavailableFailure)
+      )
+      return codexAppServerLayer(
+        { ...config, environment: { ...config.environment, CODEX_HOME: home } },
+        requestBoundary,
+        { home, directory: nodePath.join(temporaryDirectory, `dalph-codex-startup-${operatingSystemUser.uid}`) }
+      )
+    })
+  ).pipe(
     Layer.provide(
       native === nodeCodexProcessNativeService ? nodeCodexProcessNativeLayer : Layer.succeed(CodexProcessNative, native)
     ),

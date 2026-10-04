@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs"
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { inputObserverScript, startInputObserver } from "./gate-input-observer.mjs"
+import { qualityRootConfigurationSuffixes } from "./quality-file-discovery.mjs"
 
 const hash = (value) => createHash("sha256").update(value).digest("hex")
 const below = (path, root) => path === root || path.startsWith(`${root}${sep}`)
@@ -309,6 +310,55 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   return { inputs: [...new Set(paths)], transientCoordinationRoots: [...new Set(transientCoordinationRoots)] }
 }
 
+/** Application qualification owners; separate documentation and optional analysis commands have their own inputs.
+ * Update this scope when a command starts consuming another input owner.
+ */
+const verificationSourceRoots = (root) =>
+  [
+    "src",
+    "packages",
+    "scripts",
+    "specs",
+    // A formal server writing its unmanaged default output into the candidate
+    // must still invalidate handoff; managed output lives under gate custody.
+    "_apalache-out",
+    "test",
+    "patches",
+    "prototypes/reducer-lab",
+    "docs",
+    "node_modules",
+    ".github",
+    ".husky",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "mise.toml",
+    "tsconfig.json",
+    "tsconfig.base.json",
+    "tsconfig.lint.json",
+    "tsconfig.artifacts.json",
+    ...["vite", "vitest"].flatMap((tool) =>
+      ["ts", "mts", "cts", "js", "mjs", "cjs"].map((extension) => `${tool}.config.${extension}`)
+    ),
+    "dprint.json",
+    "knip.jsonc",
+    "lychee.toml",
+    "oxlint-complexity-suppressions.json",
+    "oxlint.complexity.json",
+    ".oxlintrc.json",
+    ".jscpd.json",
+    ".gitleaks.toml",
+    ".editorconfig",
+    ".eslintrc",
+    ".gitignore",
+    ".npmrc",
+    ".env",
+    ".env.local",
+    ".env.test",
+    "README.md",
+    "AGENTS.md"
+  ].map((path) => join(root, path))
+
 const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvocation, worktree }) => {
   const root = realpathSync(worktree)
   if (!Array.isArray(logicalInvocation.toolExecutables))
@@ -363,6 +413,8 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
   return {
     commonConfig,
     root,
+    sourceRoots: verificationSourceRoots(root),
+    rootFileSuffixes: [{ root, suffixes: qualityRootConfigurationSuffixes }],
     tools,
     gitInputs,
     configurations,
@@ -385,7 +437,12 @@ const stagedIndexEntries = (root, environment) => {
 const snapshot = ({ effectiveEnvironment, layout, logicalInvocation }) => {
   const index = stagedIndexEntries(layout.root, effectiveEnvironment)
   const head = git(layout.root, ["rev-parse", "HEAD"], effectiveEnvironment).trim()
-  const source = manifest([layout.root], layout.sourceExclusions)
+  const rootConfigurations = layout.rootFileSuffixes.flatMap(({ root, suffixes }) =>
+    readdirSync(root)
+      .filter((name) => suffixes.some((suffix) => name.length > suffix.length && name.endsWith(suffix)))
+      .map((name) => join(root, name))
+  )
+  const source = manifest([...layout.sourceRoots, ...rootConfigurations], layout.sourceExclusions)
   const gitConfiguration = candidateGitConfiguration(layout.root, effectiveEnvironment)
   const projectGitConfiguration = (entries) =>
     entries.map((entry) =>
@@ -423,9 +480,10 @@ export const startInputGuard = async ({
 }) => {
   const layout = inputLayout({ worktree, logicalInvocation, effectiveEnvironment, generatedOutputRoots })
   const observer = await startInputObserver({
-    roots: [layout.root, ...layout.gitInputs, ...layout.tools, ...layout.configurations],
+    roots: [...layout.sourceRoots, ...layout.gitInputs, ...layout.tools, ...layout.configurations],
     excludedRoots: layout.sourceExclusions,
     protectedRoots: layout.gitInputs,
+    rootFileSuffixes: layout.rootFileSuffixes,
     replaceableRoots: [],
     transientCoordinationRoots: layout.transientCoordinationRoots,
     pythonExecutable: layout.python

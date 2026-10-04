@@ -220,6 +220,28 @@ The CLI injects the GitHub target parsed from the command and the redacted
 rejected as an excess property. Codex authentication remains in the invoking
 CLI environment and is not copied into this document.
 
+To select an existing Codex home explicitly, add `codexHome` to the JSON with
+its normalized absolute directory, for example `"codexHome": "/home/alice/.codex"`.
+Otherwise Dalph resolves the inherited `CODEX_HOME`, or the ordinary `.codex`
+directory under the invoking user's home. Each child receives that canonical
+path; Dalph preserves the controller environment and uses the existing login.
+The provider home is separate from `codexExecutorPrivateStateDirectory`, which
+stores execution custody rather than credentials.
+
+Executor attempts and the integrator run independent app-server processes.
+When they use the same canonical home, startup waits in one local cooperative
+queue until the preceding `initialize` is confirmed. The original thirty-second
+limit covers both waiting and initialization; recovery keeps its original
+deadline. Initialized processes continue concurrently. Exit retains its existing
+five-second drain, and an expired or exiting waiter cannot start another child.
+
+This startup queue does not coordinate managed authentication refresh. With
+shared credentials, simultaneous refresh can still fail one active turn even
+after both processes initialized successfully. Startup success therefore does
+not establish safe concurrent refresh. Keep retained execution evidence when
+this occurs; specifying cross-process authentication coordination is separate
+work. See [shared-home startup scenarios and qualification limits](../scenarios/shared-codex-provider-home.md).
+
 #### 4. Run and read the public output
 
 Run exactly this public command from any directory:
