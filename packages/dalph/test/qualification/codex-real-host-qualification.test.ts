@@ -643,18 +643,22 @@ const spawnHost = async (fixture: Fixture, action: HostAction, options: HostOpti
   return host
 }
 
+/** Reconcile stopped writers before injecting a retained-provider fault or deleting its files. */
+const closeOwnedFixtureProvider = async (fixture: Fixture): Promise<void> => {
+  const launch = (await latestPrivateSnapshot(fixture)).serverLaunch
+  const closer = await spawnHost(fixture, "close")
+  requireEvent(await closer.waitFor("closed"), "closed")
+  const closeExit = await closer.waitForExit()
+  if (closeExit.code !== 0 || closeExit.signal !== null) {
+    throw new Error(`qualification cleanup host failed: ${JSON.stringify({ ...closeExit, events: closer.events })}`)
+  }
+  if (launch !== null) await waitForOwnedServerAbsence(launch)
+}
+
 const dispose = async (fixture: Fixture, hosts: ReadonlyArray<BuiltHost>): Promise<void> => {
   for (const host of hosts) await host.stop("SIGKILL")
-  let launch: CodexServerLaunchRecord | null = null
   try {
-    launch = (await latestPrivateSnapshot(fixture)).serverLaunch
-    const closer = await spawnHost(fixture, "close")
-    requireEvent(await closer.waitFor("closed"), "closed")
-    const closeExit = await closer.waitForExit()
-    if (closeExit.code !== 0 || closeExit.signal !== null) {
-      throw new Error(`qualification cleanup host failed: ${JSON.stringify(closeExit)}`)
-    }
-    if (launch !== null) await waitForOwnedServerAbsence(launch)
+    await closeOwnedFixtureProvider(fixture)
   } finally {
     await fixture.model.close()
   }
@@ -1165,7 +1169,14 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(requireEvent(await running.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const rollout = await onlyRolloutFile(fixture)
+        const launch = (await latestPrivateSnapshot(fixture)).serverLaunch
+        expect(launch).not.toBeNull()
         await running.stop("SIGKILL")
+        await closeOwnedFixtureProvider(fixture)
+        if (launch !== null)
+          expect(await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))).toEqual({
+            _tag: "Absent"
+          })
         await rm(rollout)
 
         const projected = await spawnHost(fixture, "project")
@@ -1196,6 +1207,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         await fixture.model.waitForCalls(1)
         rollout = await onlyRolloutFile(fixture)
         await running.stop("SIGKILL")
+        await closeOwnedFixtureProvider(fixture)
         await corrupt(rollout)
 
         const projected = await spawnHost(fixture, "project")
