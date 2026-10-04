@@ -6772,3 +6772,132 @@ it.live("continues reconciliation when an exact completion hint precedes the ter
     })
   )
 )
+
+it.live.each(["Initial", "Final"] as const)(
+  "reconciles a sealed terminal after a transient unreadable activity census (%s)",
+  (boundary) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* PubSub.unbounded<CodexTurnCompletedHint>()
+        const harness = makeHarness({
+          lifecycleHints: PubSub.subscribe(hints).pipe(
+            Effect.map((subscription) =>
+              Stream.unfold(undefined, () =>
+                PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+              )
+            )
+          )
+        })
+        yield* Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+          harness.complete(finalResponse(head))
+          const first = yield* lifecycle.attach(correlation)
+          if (first.current._tag !== "Exact" || first.current.report._tag !== "ExecutorWorkTerminal") {
+            yield* PubSub.publish(hints, exactCompletionHint())
+            expect(yield* Stream.runHead(first.changes).pipe(Effect.timeout("2 seconds"))).toMatchObject({
+              _tag: "Some",
+              value: { report: { result: { _tag: "Accepted" } } }
+            })
+          }
+          yield* first.close
+          const seal = harness.currentRecord()
+          expect(seal).toMatchObject({ _tag: "Terminal", terminal: { _tag: "Accepted" } })
+          const unreadable = { _tag: "Unreadable" as const, detail: "transient process census" }
+          if (boundary === "Initial") harness.setActivityCensus(unreadable)
+          else harness.setActivityCensusSequence([{ _tag: "Absent" }, ...Array.from({ length: 10 }, () => unreadable)])
+          const attached = yield* lifecycle.attach(correlation)
+          expect(attached.current).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting" } })
+          const changed = yield* Stream.runHead(attached.changes).pipe(Effect.timeout("4 seconds"), Effect.forkScoped)
+          const reads = harness.resumeCwds.length + harness.threadReads()
+          yield* Effect.sleep("1100 millis")
+          expect(harness.resumeCwds.length + harness.threadReads()).toBeGreaterThan(reads)
+          expect(harness.currentRecord()).toEqual(seal)
+          harness.setActivityCensus({ _tag: "Absent" })
+          expect(yield* Fiber.join(changed)).toMatchObject({
+            _tag: "Some",
+            value: { report: { result: { _tag: "Accepted" } } }
+          })
+          yield* attached.close
+          expect(harness.currentRecord()).toEqual(seal)
+        }).pipe(Effect.provide(layerFor(harness)))
+        expect(harness.turnCount()).toBe(1)
+      })
+    )
+)
+
+it.live("reconciles an exact completion after a transient unreadable activity census", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const hints = yield* PubSub.unbounded<CodexTurnCompletedHint>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(hints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attached = yield* lifecycle.attach(correlation)
+        const changed = yield* Stream.runHead(attached.changes).pipe(Effect.timeout("4 seconds"), Effect.forkScoped)
+        harness.complete("{invalid}")
+        harness.setActivityCensus({ _tag: "Unreadable", detail: "transient process census" })
+        yield* PubSub.publish(hints, exactCompletionHint())
+        yield* Effect.sleep("50 millis")
+        const reads = harness.resumeCwds.length + harness.threadReads()
+        yield* Effect.sleep("1100 millis")
+        expect(harness.resumeCwds.length + harness.threadReads()).toBeGreaterThan(reads)
+        expect(harness.currentRecord()?._tag).toBe("Running")
+        harness.setActivityCensus({ _tag: "Absent" })
+        expect(yield* Fiber.join(changed)).toMatchObject({
+          _tag: "Some",
+          value: { report: { result: { _tag: "Failed" } } }
+        })
+        yield* attached.close
+      }).pipe(Effect.provide(layerFor(harness)))
+      expect(harness.turnCount()).toBe(1)
+    })
+  )
+)
+
+it.live("does not schedule reconciliation after an exact hint meets a contradictory activity census", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const hints = yield* PubSub.unbounded<CodexTurnCompletedHint>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(hints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const attached = yield* lifecycle.attach(correlation)
+        const changes = yield* Stream.runCollect(attached.changes).pipe(Effect.forkScoped)
+        harness.complete("{invalid}")
+        harness.setActivityCensus({ _tag: "Contradictory", detail: "contradictory process identity" })
+        yield* PubSub.publish(hints, exactCompletionHint())
+        yield* Effect.sleep("50 millis")
+        const reads = harness.resumeCwds.length + harness.threadReads()
+        expect(reads).toBeGreaterThan(0)
+        yield* Effect.sleep("1100 millis")
+        expect(harness.resumeCwds.length + harness.threadReads()).toBe(reads)
+        expect(harness.currentRecord()?._tag).toBe("Running")
+        yield* attached.close
+        yield* Fiber.interrupt(changes)
+      }).pipe(Effect.provide(layerFor(harness)))
+      expect(harness.turnCount()).toBe(1)
+    })
+  )
+)

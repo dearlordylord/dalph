@@ -123,3 +123,16 @@ Linux/macOS hosted qualification remains a separate exact-head obligation.
    paced reconciliation until the provider exposes its terminal census. An
    unrelated notification authorizes no cadence. Test: `continues reconciliation
    when an exact completion hint precedes the terminal provider census`.
+
+10. **Unreadable activity after exact terminal authorization.** The retained
+    terminal seal, or an exact completion notification for the owned turn,
+    authorizes reconciliation, but the execution substrate temporarily returns
+    Unreadable. Dalph continues paced observation while retaining Executing;
+    it exposes no terminal result until activity is freshly proved absent.
+    A contradictory census and an ordinary unhinted Running attempt authorize
+    no new cadence. Closing the attachment stops reads. Tests: `reconciles a
+    sealed terminal after a transient unreadable activity census` and
+    `reconciles an exact completion after a transient unreadable activity census`;
+    the Initial/Final variants cover both census boundaries. Negative control:
+    `does not schedule reconciliation after an exact hint meets a contradictory
+    activity census`.
