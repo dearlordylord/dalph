@@ -17,7 +17,10 @@
      home. Use dedicated, explicit custody for ambient-home inheritance and
      same-home contention. Remove redundant process fixtures once their accepted
      behavior is covered; preserve native spawn, lock, writer-absence, and cleanup
-     proofs.
+     proofs. Use minimal typed events for projection and serialization checks.
+     Keep one composed replay for each distinct ordering or authority requirement;
+     put additional readback assertions into that replay instead of starting the
+     same graph again.
   3. Run one bounded diagnostic that supplies the recorded observation. A passing
      isolated test leaves an order-dependent cause unresolved. Choose a different
      observation when the diagnostic cannot discriminate; an unchanged rerun,

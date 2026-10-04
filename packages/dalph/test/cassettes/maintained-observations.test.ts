@@ -4,8 +4,8 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
-// Two- and five-task examples exercise the same observation contract without replaying the ten-task story.
-for (const key of ["dependentTasksCompleteInOneRun", "productionShapedFiveTaskDiamond"] as const) {
+// The two-task example proves the observation contract; the dedicated diamond test owns five-task ordering.
+for (const key of ["dependentTasksCompleteInOneRun"] as const) {
   it.effect(
     `preserves maintained authored moments after fresh-claim integration progress in ${key}`,
     () =>
@@ -47,16 +47,6 @@ for (const key of ["dependentTasksCompleteInOneRun", "productionShapedFiveTaskDi
         })
         expect(acquired.position).toBeGreaterThan(intended.position)
         expect(lineage.position).toBeGreaterThan(acquired.position)
-        if (key === "productionShapedFiveTaskDiamond") {
-          const beganE = run.records.find(
-            ({ event }) =>
-              event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === "E"
-          )
-          const settledB = run.records.find(
-            ({ event }) => event._tag === "IntegrationFinalitySettled" && event.claim.plannedAttempt.taskId === "B"
-          )
-          expect(beganE?.position).toBeLessThan(settledB?.position ?? 0)
-        }
       }).pipe(Effect.provide(NodeCrypto.layer)),
     60_000
   )

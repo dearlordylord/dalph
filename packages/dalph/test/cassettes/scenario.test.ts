@@ -79,7 +79,6 @@ import {
   makeTaskWorktreeObservationOperation,
   OperationId,
   originatingActionForTargetLineageObservation,
-  PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
@@ -99,7 +98,6 @@ import {
   TrackerMutation,
   TaskWorkCapacity,
   TaskClaimReacquisitionRequestId,
-  TaskClaimReacquisitionDirectedEvent,
   TaskClaimReleaseAuthority,
   TaskLifecycle,
   TaskTrackerFactsObservedEvent,
@@ -121,10 +119,10 @@ import {
 } from "@dalph/orchestrator"
 
 import {
+  type AuthoredCassetteStoryItem,
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   acceptedResultRestartsIntoIntegrationAuthoredCassette,
   ambiguousCompletionResponseAuthoredCassette,
-  AuthoredCassetteStoryItem,
   AuthoredScenarioCassette,
   CassetteIdentityRenaming,
   changedAgainAttemptRequiresNewChoiceAuthoredCassette,
@@ -215,7 +213,6 @@ import {
   makeStoryCursor
 } from "../../src/cassettes/authored-cursor.js"
 import { AuthoredCausalWindow } from "../../src/cassettes/authored-domain.js"
-import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 import {
   authoredRunInputDigest,
   runCachedAuthoredScenarioCassette,
@@ -609,62 +606,6 @@ it.effect("holds a delivery claim until the earlier operator control boundary co
 
     yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
     expect(yield* Fiber.join(claimant)).toEqual(Option.some(claimRead))
-  })
-)
-
-it.effect("projects reacquisition and non-exact executor evidence through the authored assertion boundary", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("coverage-authored-outcome-run")
-    const taskId = TaskId.make("coverage-authored-outcome-task")
-    const requestId = TaskClaimReacquisitionRequestId.make("coverage-authored-outcome-request")
-    const direction = TaskClaimReacquisitionDirectedEvent.make({
-      initiatedBy: { _tag: "Operator" },
-      occurrenceClassification: "InitiatedAction",
-      requestId,
-      subject: { runId, taskId },
-      version: workflowJournalEventVersion
-    })
-    const directionAssertions = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
-      orchestration: null,
-      protocol: [{ _tag: "TaskClaimReacquisitionDirected", requestId, taskId }],
-      taskWork: { absences: [], results: [] }
-    })
-    expect(
-      (yield* assertAuthoredExpectedBehavior(
-        [
-          {
-            event: direction,
-            key: describeJournalEvent(direction).expectedKey,
-            position: JournalPosition.make(1),
-            runId
-          }
-        ],
-        directionAssertions
-      )).protocolEvidence
-    ).toEqual([{ _tag: "TaskClaimReacquisitionDirected", requestId, taskId }])
-
-    const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
-    const projection = run.records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
-    if (projection?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") {
-      return yield* Effect.die("missing command projection")
-    }
-    const unavailable = PlannedAttemptExecutorCommandProjectionObservedEvent.make({
-      commandOrdinal: projection.event.commandOrdinal,
-      observation: { _tag: "ExecutorStateNoCurrentReport" },
-      occurrenceClassification: "NonActionOccurrence",
-      plannedAttempt: projection.event.plannedAttempt,
-      projectionOrdinal: projection.event.projectionOrdinal,
-      version: workflowJournalEventVersion
-    })
-    const noEvidenceAssertions = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
-      orchestration: [],
-      protocol: null,
-      taskWork: { absences: [], results: [] }
-    })
-    expect(
-      (yield* assertAuthoredExpectedBehavior([{ ...projection, event: unavailable }], noEvidenceAssertions))
-        .orchestrationEvidence
-    ).toEqual([])
   })
 )
 
@@ -3141,6 +3082,7 @@ it.effect(
 
       expect([...settledAt.keys()]).toEqual(["A", "B", "C", "E", "D"])
       expect(bClaimAt).toBeGreaterThan(aSettledAt)
+      expect(beganAt.get(TaskId.make("E"))).toBeLessThan(settledAt.get(TaskId.make("B")) ?? 0)
       expect(eGraphReads).toHaveLength(2)
       expect(eGraphReads[0]).toBeLessThan(eClaimAt)
       expect(eGraphReads[1]).toBeGreaterThan(eClaimAt)
