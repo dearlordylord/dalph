@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "636eb7d7cd016a3cff938d75dc95f6b932a7b15f8da5f4ac0b51b680c2b22053",
+  "digest": "7ae4e32843be8fab24b988b3739df3de4c772725ae4e94ba96922cabba5e3f6f",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -60,6 +60,8 @@
     "packages/orchestrator/src/authorities/task-tracker/github/completion-task.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/focused-completion-reader.ts",
+    "packages/orchestrator/src/authorities/task-tracker/github/graph-batch-query.ts",
+    "packages/orchestrator/src/authorities/task-tracker/github/graph-batch.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/graph-schema.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/graphql-client.ts",
