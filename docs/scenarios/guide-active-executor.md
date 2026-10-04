@@ -1,5 +1,11 @@
 # Alice sends information to one active executor
 
+> **DRAFT — NOT TO BE TRUSTED.** This document was produced before the
+> requested sequential design discussion was completed. It is not an accepted
+> specification or implementation authority. Its decisions, contracts, test
+> mappings and review conclusions require fresh discussion and validation.
+> Individual user choices do not approve the surrounding design.
+
 Alice submits a short clarification through Dalph's running CLI or MCP host.
 Dalph sends it through the executor's own provider session to the exact active
 turn Alice selected. [Issue #433](https://github.com/dearlordylord/dalph/issues/433)

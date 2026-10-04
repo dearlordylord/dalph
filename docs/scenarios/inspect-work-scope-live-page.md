@@ -1,5 +1,11 @@
 # Alice inspects declared work outside the selected Run
 
+> **DRAFT — NOT TO BE TRUSTED.** This document was produced before the
+> requested sequential design discussion was completed. It is not an accepted
+> specification or implementation authority. Its decisions, contracts, test
+> mappings and review conclusions require fresh discussion and validation.
+> Individual user choices do not approve the surrounding design.
+
 Alice selects an explicit tracker work scope and opens Dalph's native page at
 the running host's Docker IPv4 origin. The host displays complete inspection
 facts alongside the selected Run's observations without scheduling the inspected

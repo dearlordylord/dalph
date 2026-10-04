@@ -1043,17 +1043,6 @@ task-revision fingerprint pair. It coalesces exact request redelivery and
 cannot identify another Run, task, attempt, fingerprint pair, or choice.
 _Avoid_: Operator identity, attempt identity, operation identity, idempotency key
 
-**Protocol-failure recovery request**:
-An Operator's explicit request for new task work after one exact attempt has a
-proven terminal result-protocol failure. It identifies that sealed failure
-without reopening it or treating the retained candidate as accepted.
-_Avoid_: Restart, Resume, retrying the failed result, accepting old work
-
-**Retained failed candidate**:
-A Git commit preserved from a failed task attempt for inspection and reference.
-Its existence proves neither task acceptance nor permission to publish it.
-_Avoid_: Accepted result, recovered result, delivered task
-
 **Accepted result**:
 The exact Git commit and content-addressed executor evidence manifest returned
 after the executor's whole bounded workflow accepts one planned attempt. It

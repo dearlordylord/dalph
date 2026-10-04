@@ -1,5 +1,11 @@
 # Alice isolates the Dalph host's Codex provider state
 
+> **DRAFT — NOT TO BE TRUSTED.** This document was produced before the
+> requested sequential design discussion was completed. It is not an accepted
+> specification or implementation authority. Its decisions, contracts, test
+> mappings and review conclusions require fresh discussion and validation.
+> Individual user choices do not approve the surrounding design.
+
 Alice supplies a dedicated provider home when starting a Dalph host. Each exact
 planned attempt and integration session uses its own owned app-server under
 [issue #434](https://github.com/dearlordylord/dalph/issues/434), while those

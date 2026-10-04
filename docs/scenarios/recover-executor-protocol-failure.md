@@ -1,5 +1,11 @@
 # Alice requests new work after an executor result protocol failure
 
+> **DRAFT — NOT TO BE TRUSTED.** This document was produced before the
+> requested sequential design discussion was completed. It is not an accepted
+> specification or implementation authority. Its decisions, contracts, test
+> mappings and review conclusions require fresh discussion and validation.
+> Individual user choices do not approve the surrounding design.
+
 Alice asks the running Dalph host to recover one exact failed task attempt.
 Dalph preserves that attempt's sealed result and checks the executor, tracker,
 and Git before it may plan a successor. [Issue #428](https://github.com/dearlordylord/dalph/issues/428)
