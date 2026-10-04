@@ -1,7 +1,26 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AttemptId, PlannedAttemptExecutorCorrelation, RunId, WorktreeLocator } from "@dalph/contracts"
+import {
+  AttemptId,
+  PlannedAttemptExecutorCorrelation,
+  RunId,
+  WorktreeLocator,
+  AcceptedResult,
+  EvidenceDigest,
+  EvidenceReference,
+  GitCommitSha,
+  IntegrationTarget,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  PlannedAttemptExecutorRequest,
+  PlannedTaskAttempt,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  makeTaskWorkSpecification,
+  passiveLifecycleObservationPurpose
+} from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
@@ -19,6 +38,14 @@ import {
   GithubRepositoryNodeId,
   InitialControlPolicy,
   Integrator,
+  GitCommand,
+  memoryEvidenceStoreLayer,
+  IntegratorRequest,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorSessionCorrelation,
+  IntegratorSessionId,
+  IntegratorCandidateResourceLocator,
   IntegratorCandidateProviderAuthority,
   unavailableIntegratorCandidateProviderAuthority,
   JournalDatabaseLocator,
@@ -70,6 +97,7 @@ import {
   Layer,
   Option,
   Path,
+  PubSub,
   Ref,
   Schema,
   Stream
@@ -83,6 +111,7 @@ import {
   ProductionCancellationRunNotFound,
   productionRepositoryHostGraph,
   acquireProductionCodexAttemptProvider,
+  productionCodexExecutionLayers,
   withDecodedProductionRepositoryHost,
   withProductionRepositoryHost
 } from "./production-host.js"
@@ -108,6 +137,10 @@ import {
   CodexTurnId,
   nodeCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
+import {
+  makeControlledCodexContainment,
+  type ControlledCodexContainment
+} from "../../test-support/controlled-codex-containment.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import {
   remoteBaselineGitLayerForTest,
@@ -356,6 +389,229 @@ it.effect("production isolates executor A, executor B and integrator processes a
           }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: directory })))
         )
       }
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("production executor expiry preserves B and the original gated integration session", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const input = yield* makeTemporaryProductionInput
+      const configuration = yield* decodeProductionRepositoryHostConfiguration({
+        ...input,
+        plannedAttemptExecutor: "executor:codex/production",
+        codexToolEffectPolicy: { defaultLimitMilliseconds: 1_000, longCommands: [] },
+        executorProfiles: [
+          {
+            adapter: "codex-app-server",
+            executable: "controlled-codex",
+            id: "codex/production",
+            model: "controlled",
+            permissionPolicy: "unattended",
+            provider: "codex"
+          }
+        ]
+      })
+      const profile = configuration.executorProfiles?.[0]
+      if (profile === undefined) return yield* Effect.die("controlled profile is required")
+      const owners = yield* Ref.make<ReadonlyArray<ControlledCodexContainment>>([])
+      const adapters = {
+        codexProcessNative: isolatedCodexProcessNativeService,
+        codexAppServer: (scoped: ProductionRepositoryHostConfiguration) =>
+          Layer.effect(
+            CodexAppServer,
+            Effect.gen(function* () {
+              const existing = yield* Ref.get(owners)
+              const owner = yield* makeControlledCodexContainment(
+                String(existing.length),
+                scoped.codexExecutorPrivateStateDirectory
+              )
+              yield* Ref.set(owners, [...existing, owner])
+              return owner.app
+            })
+          )
+      }
+      const graph = productionRepositoryHostTestGraph(adapters)
+      const shell = yield* graph.makeApplicationExit()
+      const admitted = yield* graph.acquireProvider(configuration, shell)
+      if (admitted._tag !== "CodexAppServer") return yield* Effect.die("controlled Codex admission is required")
+      const base = GitCommitSha.make("a".repeat(40))
+      const commit = GitCommitSha.make("b".repeat(40))
+      const makeAttempt = (name: string) => {
+        const specification = makeTaskWorkSpecification({
+          taskId: TaskId.make(name),
+          title: name,
+          body: "controlled concurrent containment"
+        })
+        const plannedAttempt = PlannedTaskAttempt.make({
+          attemptId: AttemptId.make(name),
+          runId: RunId.make("concurrent-run"),
+          taskId: specification.taskId,
+          taskRevision: specification.fingerprint,
+          baseSha: base,
+          branch: TaskBranchRef.make(`refs/heads/${name}`),
+          executor: TaskExecutorLocator.make(configuration.plannedAttemptExecutor),
+          worktree: WorktreeLocator.make(`${input.plannedAttemptWorktreeRoot}/${name}`)
+        })
+        return PlannedAttemptExecutorRequest.make({ plannedAttempt, specification })
+      }
+      const aRequest = makeAttempt("a")
+      const bRequest = makeAttempt("b")
+      const cRequest = makeAttempt("previously-accepted-c")
+      const aCorrelation = PlannedAttemptExecutorCorrelation.make({
+        runId: aRequest.plannedAttempt.runId,
+        attemptId: aRequest.plannedAttempt.attemptId
+      })
+      const bCorrelation = PlannedAttemptExecutorCorrelation.make({
+        runId: bRequest.plannedAttempt.runId,
+        attemptId: bRequest.plannedAttempt.attemptId
+      })
+      const registration = yield* Ref.make<string | undefined>(undefined)
+      const git = Layer.succeed(GitCommand, {
+        run: (_directory, args) =>
+          Effect.gen(function* () {
+            if (args[0] === "worktree" && args[1] === "add") {
+              const directory = args.at(-2)
+              if (directory === undefined) return yield* Effect.die("candidate path missing")
+              yield* fs.makeDirectory(directory, { recursive: true }).pipe(Effect.orDie)
+              yield* Ref.set(registration, directory)
+            }
+            const directory = yield* Ref.get(registration)
+            const stdout =
+              args[0] === "worktree" && args[1] === "list" && directory !== undefined
+                ? `worktree ${directory}\0HEAD ${base}\0detached\0\0`
+                : ""
+            return { exitCode: 0, stderr: "", stdout }
+          }),
+        runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${commit}\n` }),
+        runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
+      })
+      const layers = productionCodexExecutionLayers({
+        configuration,
+        profile,
+        applicationExit: shell,
+        adapters,
+        app: Layer.succeed(CodexAppServer, admitted.appServer),
+        git,
+        evidence: memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+        ownership: CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+      })
+      const context = yield* Layer.build(Layer.merge(layers.executor, layers.integrator))
+      const executor = Context.get(context, PlannedAttemptExecutor)
+      const lifecycle = Context.get(context, PlannedAttemptExecutorLifecycleObservation)
+      const integrator = Context.get(context, Integrator)
+      yield* executor.begin(aRequest, { _tag: "InitialDelivery" })
+      yield* executor.begin(bRequest, { _tag: "InitialDelivery" })
+      const aAttachment = yield* lifecycle.attach(aCorrelation)
+      const bAttachment = yield* lifecycle.attach(bCorrelation)
+      const [integrationOwner, a, b] = yield* Ref.get(owners)
+      if (integrationOwner === undefined || a === undefined || b === undefined)
+        return yield* Effect.die("three exact providers are required")
+      const integrationRequest = IntegratorRequest.make({
+        correlation: IntegratorRunCorrelation.make({
+          ordinal: IntegratorRunOrdinal.make(1),
+          session: IntegratorSessionCorrelation.make({
+            acceptedResult: AcceptedResult.make({
+              commit,
+              evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
+            }),
+            candidateResource: IntegratorCandidateResourceLocator.make("candidate-c"),
+            expectedTargetHead: base,
+            integrationTarget: IntegrationTarget.make({
+              repository: configuration.repository,
+              ref: configuration.integrationRef
+            }),
+            plannedAttempt: cRequest.plannedAttempt,
+            queuedAt: JournalPosition.make(1),
+            startedAt: JournalPosition.make(2),
+            targetLineageObservedAt: JournalPosition.make(3),
+            sessionId: IntegratorSessionId.make("original-session-c")
+          })
+        })
+      })
+      const integrating = yield* integrator.prepare(integrationRequest).pipe(Effect.forkChild)
+      yield* Deferred.await(integrationOwner.bound)
+      expect(integrating.pollUnsafe()).toBeUndefined()
+      const originalB = yield* b.read
+      const originalIntegration = yield* integrationOwner.read
+      const aOutcome = yield* aAttachment.changes.pipe(Stream.runHead, Effect.forkChild)
+      const bOutcome = yield* bAttachment.changes.pipe(Stream.runHead, Effect.forkChild)
+      const stateFile = `${a.stateDirectory}/executor-private-state.json`
+      const readStarted = Effect.gen(function* () {
+        if (!(yield* fs.exists(stateFile))) return false
+        const text = yield* fs.readFileString(stateFile)
+        const lines = text
+          .split("\n")
+          .slice(0, -1)
+          .filter((line) => line.trim().length > 0)
+        const phases = yield* Effect.forEach(lines, (line) =>
+          Effect.gen(function* () {
+            const frame = yield* Schema.decodeUnknownEffect(Schema.Struct({ payload: Schema.String }))(JSON.parse(line))
+            const snapshot = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ toolEffects: Schema.optionalKey(Schema.Array(Schema.Struct({ _tag: Schema.String }))) })
+            )(JSON.parse(frame.payload))
+            return snapshot.toolEffects?.some((record) => record._tag === "Started") ?? false
+          })
+        )
+        return phases.some(Boolean)
+      })
+      const started = yield* Stream.merge(
+        Stream.fromEffect(readStarted),
+        fs.watch(a.stateDirectory).pipe(Stream.mapEffect(() => readStarted))
+      ).pipe(Stream.filter(Boolean), Stream.runHead, Effect.forkChild)
+      const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      const aThread = yield* a.read
+      const aTurn = aThread.turns[0]
+      if (aTurn === undefined) return yield* Effect.die("A needs its exact admitted turn")
+      yield* PubSub.publish(a.tools, {
+        phase: "Started",
+        threadId: aThread.id,
+        turnId: aTurn.id,
+        itemId: "expired-item",
+        kind: "dynamicToolCall",
+        observedAtMilliseconds: now
+      })
+      yield* Fiber.join(started)
+      yield* TestClock.adjust("1 second")
+      expect(yield* Fiber.join(aOutcome)).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Unreadable", detail: "Codex tool item limit reached" }
+      })
+      expect(yield* Ref.get(a.closed)).toBe(true)
+      expect(yield* Ref.get(a.interrupts)).toBe(1)
+      expect(yield* Ref.get(b.closed)).toBe(false)
+      expect(yield* Ref.get(integrationOwner.closed)).toBe(false)
+      expect(yield* b.read).toEqual(originalB)
+      expect(yield* integrationOwner.read).toEqual(originalIntegration)
+      expect(integrating.pollUnsafe()).toBeUndefined()
+      expect(yield* executor.observe(bCorrelation, passiveLifecycleObservationPurpose)).toMatchObject({
+        _tag: "Exact",
+        report: { _tag: "ExecutorWorkExecuting", correlation: bCorrelation }
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          if (store.listToolEffects === undefined) return yield* Effect.die("tool custody inventory is required")
+          expect(yield* store.listToolEffects(aCorrelation.runId, aCorrelation.attemptId)).toMatchObject([
+            { _tag: "LimitReached", reason: "Elapsed" }
+          ])
+        }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: a.stateDirectory })))
+      )
+      yield* b.complete(JSON.stringify({ commit, correlation: bCorrelation }))
+      expect(yield* Fiber.join(bOutcome)).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Accepted" } } }
+      })
+      yield* integrationOwner.complete('{"version":1,"outcome":"NotPrepared","detail":"controlled integration result"}')
+      expect(yield* Fiber.join(integrating)).toMatchObject({
+        _tag: "NotPrepared",
+        correlation: integrationRequest.correlation
+      })
+      expect(yield* Ref.get(owners)).toHaveLength(3)
+      for (const owner of [a, b, integrationOwner]) expect(yield* Ref.get(owner.turnStarts)).toBe(1)
+      yield* aAttachment.close
+      yield* bAttachment.close
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

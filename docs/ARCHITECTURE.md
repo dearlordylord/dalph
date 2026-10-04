@@ -416,8 +416,8 @@ future production executor design.
 For a Codex profile that opts into Dalph worktree preparation, the production
 executor records an attempt-local intent, runs the bounded repository helper
 in the exact worktree, and requires its terminal receipt before forwarding
-Begin. An unresolved preparation retains that attempt's fence. The shared
-Codex app-server and independent executor work keep their own lifecycles.
+Begin. An unresolved preparation retains that attempt's fence. Each
+Codex app-server and its independent executor work keep their own lifecycle.
 The production host gives each exact Codex executor attempt its own app-server
 process and launch/lease store. The integrator uses a separate provider.
 Observations, commands, lifecycle subscriptions and work-unit replacement route

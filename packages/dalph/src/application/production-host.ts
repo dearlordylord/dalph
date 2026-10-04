@@ -611,6 +611,70 @@ export const acquireProductionCodexAttemptProvider = <ECodex, EGithub, ETrace>(
     return { app, store, configuration: scopedConfiguration }
   }).pipe(Effect.provide(NodeCrypto.layer))
 
+/** The production Codex executor and integrator use independent provider custody. */
+export const productionCodexExecutionLayers = <ECodex, EGit, EEvidence>(options: {
+  readonly configuration: ProductionRepositoryHostConfiguration
+  readonly profile: ExecutorProfile
+  readonly applicationExit: ProductionHostApplicationExitShellService
+  readonly adapters: Pick<ProductionRepositoryHostAdapters<ECodex>, "codexAppServer" | "codexProcessNative">
+  readonly app: Layer.Layer<CodexAppServer, CodexAppServerFailure>
+  readonly git: Layer.Layer<GitCommand, EGit>
+  readonly evidence: Layer.Layer<EvidenceStore, EEvidence>
+  readonly ownership: CoordinatorOwnership["Service"]
+}) => {
+  const native = options.adapters.codexProcessNative ?? nodeCodexProcessNativeService
+  const executor = isolatedPlannedAttemptExecutorLayer(
+    (correlation) =>
+      Effect.gen(function* () {
+        const { app, store } = yield* acquireProductionCodexAttemptProvider(
+          options.configuration,
+          options.applicationExit,
+          correlation,
+          options.adapters
+        )
+        const isolatedApp = Layer.succeed(CodexAppServer, app)
+        return yield* Layer.build(
+          nodeCodexPlannedAttemptExecutorLayerWithOptions({
+            ...(options.configuration.codexToolEffectPolicy === undefined
+              ? {}
+              : { toolEffectPolicy: options.configuration.codexToolEffectPolicy }),
+            ...(options.profile.worktreePreparation === undefined
+              ? {}
+              : {
+                  taskInstructions: [
+                    "Dalph already prepared this exact worktree with its repository Node and frozen dependencies. Run every later Node and pnpm check through `mise exec --` so a login shell cannot select the host Node.",
+                    ...defaultCodexTaskInstructions
+                  ]
+                })
+          }).pipe(
+            Layer.provide(isolatedApp),
+            Layer.provide(codexOwnedActivityCensusLayer(native).pipe(Layer.provide(isolatedApp))),
+            Layer.provide(store),
+            Layer.provide(options.evidence),
+            Layer.provide(options.git),
+            Layer.provide(NodeCrypto.layer),
+            Layer.provide(NodeServices.layer)
+          )
+        )
+      }).pipe(Effect.provide(NodeCrypto.layer)),
+    () => "isolated Codex containment could not be acquired; retained custody must be reconciled"
+  )
+  const integratorConfiguration = CodexIntegratorConfiguration.make({
+    candidateWorktreeRoot: options.configuration.integratorCandidateWorktreeRoot,
+    commonDirectory: options.configuration.commonDirectory,
+    privateStoreLocator: options.configuration.integratorPrivateStore,
+    repository: options.configuration.repository
+  })
+  const integrator = nodeCodexIntegratorLayer(integratorConfiguration).pipe(
+    Layer.provide(options.app),
+    Layer.provide(codexOwnedActivityCensusLayer(native).pipe(Layer.provide(options.app))),
+    Layer.provide(options.git),
+    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.succeed(CoordinatorOwnership, options.ownership))
+  )
+  return { executor, integrator, integratorConfiguration }
+}
+
 const observedLayerBuild = <A, E, R>(
   layer: Layer.Layer<A, E, R>,
   boundary: ProductionRepositoryHostBoundary,
@@ -886,7 +950,6 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver
         )
-        const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
         if (selectedProfile.adapter === "codex-app-server" && provider._tag !== "CodexAppServer") {
           return yield* Effect.fail(
             new CodexAppServerFailure({
@@ -940,43 +1003,16 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                   })
                 )
               ).pipe(Layer.provide(realPromotion))
-        const activityCensusLayer = codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(appLayer))
-        const codexExecutorLayer = isolatedPlannedAttemptExecutorLayer(
-          (correlation) =>
-            Effect.gen(function* () {
-              const { app, store } = yield* acquireProductionCodexAttemptProvider(
-                configuration,
-                applicationExit,
-                correlation,
-                adapters
-              )
-              const isolatedApp = Layer.succeed(CodexAppServer, app)
-              return yield* Layer.build(
-                nodeCodexPlannedAttemptExecutorLayerWithOptions({
-                  ...(configuration.codexToolEffectPolicy === undefined
-                    ? {}
-                    : { toolEffectPolicy: configuration.codexToolEffectPolicy }),
-                  ...(selectedProfile.worktreePreparation === undefined
-                    ? {}
-                    : {
-                        taskInstructions: [
-                          "Dalph already prepared this exact worktree with its repository Node and frozen dependencies. Run every later Node and pnpm check through `mise exec --` so a login shell cannot select the host Node.",
-                          ...defaultCodexTaskInstructions
-                        ]
-                      })
-                }).pipe(
-                  Layer.provide(isolatedApp),
-                  Layer.provide(codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(isolatedApp))),
-                  Layer.provide(store),
-                  Layer.provide(evidenceLayer),
-                  Layer.provide(gitCommandLayer),
-                  Layer.provide(NodeCrypto.layer),
-                  Layer.provide(NodeServices.layer)
-                )
-              )
-            }).pipe(Effect.provide(NodeCrypto.layer)),
-          () => "isolated Codex containment could not be acquired; retained custody must be reconciled"
-        )
+        const codexLayers = productionCodexExecutionLayers({
+          configuration,
+          profile: selectedProfile,
+          applicationExit,
+          adapters,
+          app: appLayer,
+          git: gitCommandLayer,
+          evidence: evidenceLayer,
+          ownership
+        })
         const executorLayer =
           selectedProfile.adapter === "kimi-acp"
             ? observedPlannedAttemptExecutorLayer(
@@ -1000,7 +1036,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                 adapters.boundaryObserver
               )
             : observedPlannedAttemptExecutorLayer(
-                codexExecutorLayer,
+                codexLayers.executor,
                 adapters.boundaryObserver,
                 selectedProfile.worktreePreparation === undefined
                   ? undefined
@@ -1009,22 +1045,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                       args: ["scripts/prepare-attempt-worktree.mjs"]
                     })
               )
-        const integratorConfiguration = CodexIntegratorConfiguration.make({
-          candidateWorktreeRoot: configuration.integratorCandidateWorktreeRoot,
-          commonDirectory: configuration.commonDirectory,
-          privateStoreLocator: configuration.integratorPrivateStore,
-          repository: configuration.repository
-        })
-        const integratorLayer = observedIntegratorLayer(
-          nodeCodexIntegratorLayer(integratorConfiguration).pipe(
-            Layer.provide(appLayer),
-            Layer.provide(activityCensusLayer),
-            Layer.provide(gitCommandLayer),
-            Layer.provide(NodeServices.layer),
-            Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
-          ),
-          adapters.boundaryObserver
-        )
+        const integratorConfiguration = codexLayers.integratorConfiguration
+        const integratorLayer = observedIntegratorLayer(codexLayers.integrator, adapters.boundaryObserver)
         const selectedIntegratorLayer =
           selectedProfile.adapter === "kimi-acp"
             ? nodeKimiIntegratorLayer(
