@@ -42,7 +42,11 @@ import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contr
 const sessionId = KimiAcpSessionId.make("kimi-session-1")
 const cwd = "/worktrees/kimi"
 
+const expectedSemanticPrompt =
+  'Implement Kimi boundary\n\nAccepted results must be the final JSON object {"version":1,"outcome":"Accepted","commit":"<40-hex>"}. Dalph binds its own identities; do not include correlation identifiers.'
+
 const makeService = () => {
+  let observedCwd = cwd
   let status: KimiAcpSessionObservation["status"] = "idle"
   let lastMessage: string | undefined
   const calls: Array<string> = []
@@ -54,6 +58,7 @@ const makeService = () => {
       }),
     newSession: (worktree) =>
       Effect.sync(() => {
+        observedCwd = worktree
         calls.push(`session/new:${worktree}`)
         status = "idle"
         lastMessage = undefined
@@ -61,6 +66,7 @@ const makeService = () => {
       }),
     loadSession: (restored, worktree) =>
       Effect.sync(() => {
+        observedCwd = worktree
         calls.push(`session/load:${restored}:${worktree}`)
         status = "idle"
         lastMessage = undefined
@@ -68,6 +74,7 @@ const makeService = () => {
       }),
     resumeSession: (restored, worktree) =>
       Effect.sync(() => {
+        observedCwd = worktree
         calls.push(`session/resume:${restored}:${worktree}`)
         status = "idle"
         lastMessage = undefined
@@ -82,7 +89,7 @@ const makeService = () => {
       Effect.succeed(
         KimiAcpSessionObservation.make({
           sessionId: id,
-          cwd,
+          cwd: observedCwd,
           status,
           updateCount: calls.filter((call) => call.startsWith("prompt:")).length,
           permissionDenied: false,
@@ -264,7 +271,7 @@ it.effect("initializes in the exact worktree, creates one session, and sends the
     expect(controlled.calls).toEqual([
       `initialize:${cwd}`,
       `session/new:${cwd}`,
-      `prompt:${sessionId}:Implement Kimi boundary`
+      `prompt:${sessionId}:${expectedSemanticPrompt}`
     ])
     expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
       PlannedAttemptExecutorProjection.cases.Exact.make({
@@ -298,10 +305,10 @@ it.effect("cancels and resumes the same ACP session through the generic command 
     expect(controlled.calls).toEqual([
       `initialize:${cwd}`,
       `session/new:${cwd}`,
-      `prompt:${sessionId}:Implement Kimi boundary`,
+      `prompt:${sessionId}:${expectedSemanticPrompt}`,
       `session/cancel:${sessionId}`,
       `session/resume:${sessionId}:${cwd}`,
-      `prompt:${sessionId}:Implement Kimi boundary`
+      `prompt:${sessionId}:${expectedSemanticPrompt}`
     ])
   }).pipe(Effect.provide(testLayer(controlled.service)))
 })
@@ -366,7 +373,7 @@ it.effect("replays a retained session-created record before crossing the prompt 
     )
     expect(controlled.calls).toEqual([
       `session/load:${sessionId}:${cwd}`,
-      `prompt:${sessionId}:Implement Kimi boundary`
+      `prompt:${sessionId}:${expectedSemanticPrompt}`
     ])
   }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
 })
@@ -689,7 +696,10 @@ it.effect("reports Accepted only after the terminal commit matches HEAD and rere
         }
       }
     }
-    expect(boundaries.gitCalls).toEqual([["rev-parse", "HEAD"]])
+    expect(boundaries.gitCalls).toEqual([
+      ["rev-parse", "HEAD"],
+      ["merge-base", "--is-ancestor", request.plannedAttempt.baseSha, head]
+    ])
     expect(boundaries.evidencePutCalls()).toBe(1)
     expect(boundaries.evidenceReadCalls()).toBe(1)
     expect(boundaries.digestCalls()).toBe(1)
@@ -697,7 +707,7 @@ it.effect("reports Accepted only after the terminal commit matches HEAD and rere
     expect(controlled.calls).toEqual([
       `initialize:${cwd}`,
       `session/new:${cwd}`,
-      `prompt:${sessionId}:Implement Kimi boundary`,
+      `prompt:${sessionId}:${expectedSemanticPrompt}`,
       `session/close:${sessionId}`
     ])
   }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
@@ -735,7 +745,148 @@ it.effect("recovers a sealed terminal result without loading the closed Kimi ses
   })
 })
 
-it.effect("seals Accepted from a changed exact worktree when Kimi omits a commit marker", () => {
+it.effect("binds an owned Kimi semantic candidate without copied identities", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("opaque-".repeat(160))
+  const head = GitCommitSha.make("a".repeat(40))
+  const boundaries = makeAcceptanceBoundaries(head, acceptedDigest)
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    controlled.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
+    const accepted = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+    expect(accepted).toMatchObject({
+      _tag: "Exact",
+      report: { correlation, result: { _tag: "Accepted", acceptedResult: { commit: head } } }
+    })
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(accepted)
+    expect(controlled.calls.find((call) => call.startsWith("prompt:"))).not.toContain(correlation.runId)
+    expect(controlled.calls.find((call) => call.startsWith("prompt:"))).not.toContain(correlation.attemptId)
+    expect(controlled.calls.filter((call) => call.startsWith("prompt:"))).toHaveLength(1)
+    expect(boundaries.evidencePutCalls()).toBe(1)
+  }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
+})
+
+it.effect("refuses a retained Kimi session when load returns another identity", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("foreign-load")
+  const retained = makePrivateRecord(request.plannedAttempt, "SessionCreated")
+  const service: KimiAcpClientServiceType = {
+    ...controlled.service,
+    loadSession: (id, cwd) => controlled.service.loadSession(id, cwd).pipe(Effect.as(KimiAcpSessionId.make("foreign")))
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.begin(request, { _tag: "InitialDelivery" }).pipe(Effect.exit)).toMatchObject({
+      _tag: "Failure"
+    })
+    expect(controlled.calls.some((call) => call.startsWith("prompt:"))).toBe(false)
+    expect(controlled.calls.some((call) => call.startsWith("session/new:"))).toBe(false)
+    expect(correlation.runId).toBe(request.plannedAttempt.runId)
+  }).pipe(Effect.provide(testLayerWithPrivateStore(service, [retained])))
+})
+
+it.effect("rejects semantic results from another Kimi session or worktree", () =>
+  Effect.forEach(
+    ["Session", "Worktree"] as const,
+    (foreign) => {
+      const controlled = makeService()
+      const { correlation, request } = makeRequest()
+      const boundaries = makeAcceptanceBoundaries(GitCommitSha.make("a".repeat(40)), acceptedDigest)
+      const service: KimiAcpClientServiceType = {
+        ...controlled.service,
+        observe: (id) =>
+          controlled.service
+            .observe(id)
+            .pipe(
+              Effect.map((observation) => ({
+                ...observation,
+                ...(foreign === "Session"
+                  ? { sessionId: KimiAcpSessionId.make("foreign-session") }
+                  : { cwd: "/foreign" })
+              }))
+            )
+      }
+      return Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        controlled.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: "a".repeat(40) }))
+        expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+          _tag: "Unreadable"
+        })
+        expect(boundaries.evidencePutCalls()).toBe(0)
+        expect(boundaries.gitCalls).toEqual([])
+        expect(controlled.calls.some((call) => call.startsWith("session/close:"))).toBe(false)
+      }).pipe(Effect.provide(acceptanceTestLayer(service, boundaries)))
+    },
+    { discard: true }
+  )
+)
+
+it.effect("rejects a Kimi semantic candidate when Git cannot prove Base ancestry", () =>
+  Effect.forEach(
+    [1, 128],
+    (exitCode) => {
+      const controlled = makeService()
+      const { correlation, request } = makeRequest()
+      const head = GitCommitSha.make("a".repeat(40))
+      const boundaries = makeAcceptanceBoundaries(head, acceptedDigest)
+      const git: GitCommandService = {
+        ...boundaries.git,
+        runInWorktree: (cwd, args) =>
+          args[0] === "merge-base"
+            ? Effect.succeed({ exitCode, stderr: "lineage unavailable", stdout: "" })
+            : boundaries.git.runInWorktree(cwd, args)
+      }
+      return Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        controlled.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
+        expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+          _tag: "Exact",
+          report: { correlation, result: { _tag: "Failed" } }
+        })
+        expect(boundaries.evidencePutCalls()).toBe(0)
+      }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, { ...boundaries, git })))
+    },
+    { discard: true }
+  )
+)
+
+it.effect("rejects invalid semantic results without a HEAD fallback", () =>
+  Effect.forEach(
+    [
+      { version: 1, outcome: "Accepted", commit: "not-a-commit" },
+      { version: 1, outcome: "Accepted" },
+      { version: 2, outcome: "Accepted", commit: "a".repeat(40) },
+      {
+        version: 1,
+        outcome: "Accepted",
+        commit: "a".repeat(40),
+        correlation: { runId: "foreign", attemptId: "foreign" }
+      },
+      { commit: "a".repeat(40), correlation: { runId: "foreign", attemptId: "foreign" } }
+    ],
+    (payload) => {
+      const controlled = makeService()
+      const { correlation, request } = makeRequest()
+      const boundaries = makeAcceptanceBoundaries(GitCommitSha.make("a".repeat(40)), acceptedDigest)
+      return Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        controlled.complete(JSON.stringify(payload))
+        expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Failed" } }
+        })
+        expect(boundaries.evidencePutCalls()).toBe(0)
+      }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
+    },
+    { discard: true }
+  )
+)
+
+it.effect("refuses implicit HEAD acceptance when Kimi omits a semantic candidate", () => {
   const controlled = makeService()
   const { correlation, request } = makeRequest()
   const head = GitCommitSha.make("c".repeat(40))
@@ -748,10 +899,10 @@ it.effect("seals Accepted from a changed exact worktree when Kimi omits a commit
     const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected).toMatchObject({
       _tag: "Exact",
-      report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Accepted" } }
+      report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Failed" } }
     })
     expect(boundaries.gitCalls).toEqual([["rev-parse", "HEAD"]])
-    expect(boundaries.evidencePutCalls()).toBe(1)
+    expect(boundaries.evidencePutCalls()).toBe(0)
     expect(controlled.calls).toContain(`session/close:${sessionId}`)
   }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
 })
@@ -795,7 +946,10 @@ it.effect("does not report Accepted when reread evidence has a mismatched digest
 
     const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Unreadable")
-    expect(boundaries.gitCalls).toEqual([["rev-parse", "HEAD"]])
+    expect(boundaries.gitCalls).toEqual([
+      ["rev-parse", "HEAD"],
+      ["merge-base", "--is-ancestor", request.plannedAttempt.baseSha, head]
+    ])
     expect(boundaries.evidencePutCalls()).toBe(1)
     expect(boundaries.evidenceReadCalls()).toBe(1)
     expect(boundaries.digestCalls()).toBe(1)

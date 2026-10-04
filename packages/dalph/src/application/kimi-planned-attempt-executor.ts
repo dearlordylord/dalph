@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Kimi lifecycle, reconciliation, and private-state transitions stay co-located. */
 
+import { decodeOwnedSemanticCandidate, semanticCandidateInstructions } from "./provider-semantic-result.js"
 import {
   AcceptedResultEvidenceManifest,
   EvidenceDigest,
@@ -35,14 +36,10 @@ type AttemptState = {
   readonly sessionClosed: boolean
 }
 
-type JsonRecord = Record<string, unknown>
-
 const hexRadix = 16
 const hexByteWidth = 2
 const maximumSuspensionObservations = 4
 const suspensionObservationInterval = "100 millis"
-
-const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null
 
 const correlationOf = plannedAttemptExecutorCorrelation
 const correlationForContext = (attempt: AttemptContext): PlannedAttemptExecutorCorrelation =>
@@ -71,6 +68,8 @@ const commandFailure = (
     detail: error instanceof KimiAcpFailure ? error.detail : error instanceof Error ? error.message : String(error)
   })
 
+const semanticTaskText = (body: string): string => `${body}\n\n${semanticCandidateInstructions}`
+
 const textFrom = (observation: KimiAcpSessionObservation): string | undefined => observation.lastMessage
 
 const commitFromMessage = (
@@ -78,20 +77,8 @@ const commitFromMessage = (
   correlation: PlannedAttemptExecutorCorrelation
 ): GitCommitSha | undefined => {
   if (message === undefined) return undefined
-  try {
-    const value: unknown = JSON.parse(message)
-    if (!isJsonRecord(value)) return undefined
-    const record = value
-    const nested = record["correlation"]
-    if (!isJsonRecord(nested)) return undefined
-    const nestedRecord = nested
-    if (nestedRecord["runId"] !== correlation.runId || nestedRecord["attemptId"] !== correlation.attemptId)
-      return undefined
-    const commit = record["commit"]
-    return typeof commit === "string" && /^[0-9a-f]{40}$/u.test(commit) ? GitCommitSha.make(commit) : undefined
-  } catch {
-    return undefined
-  }
+  const candidate = decodeOwnedSemanticCandidate(message, correlation)
+  return Option.isSome(candidate) ? candidate.value.commit : undefined
 }
 
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -160,12 +147,19 @@ const resultForTerminal = Effect.fn("KimiPlannedAttemptExecutor.resultForTermina
     commit === undefined
       ? head.value === state.attempt.baseSha
         ? undefined
-        : head.value
+        : null
       : head.value === commit
         ? commit
         : null
   if (acceptedCommit === undefined) return PlannedAttemptExecutorResult.cases.Completed.make({})
   if (acceptedCommit === null) return PlannedAttemptExecutorResult.cases.Failed.make({})
+  const lineage = yield* git.value.runInWorktree(state.attempt.worktree, [
+    "merge-base",
+    "--is-ancestor",
+    state.attempt.baseSha,
+    acceptedCommit
+  ])
+  if (lineage.exitCode !== 0) return PlannedAttemptExecutorResult.cases.Failed.make({})
   const reference = yield* publishEvidence(crypto.value, evidence.value, acceptedCommit, correlation)
   return PlannedAttemptExecutorResult.cases.Accepted.make({
     acceptedResult: { commit: acceptedCommit, evidenceManifest: reference }
@@ -270,7 +264,16 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       // An unavailable record is a typed stop from a prior process. Do not
       // manufacture a new ACP session while merely observing it.
       if (record.phase !== "Unavailable" && !(record.phase === "Terminal" && record.sessionClosed === true)) {
-        yield* client.loadSession(record.sessionId, record.worktree).pipe(Effect.mapError((error) => error))
+        const loaded = yield* client.loadSession(record.sessionId, record.worktree)
+        if (loaded !== record.sessionId) {
+          return yield* Effect.fail(
+            new KimiAcpFailure({
+              detail: "Kimi loaded another session identity",
+              kind: "Protocol",
+              operation: "session/load"
+            })
+          )
+        }
       }
       const state: AttemptState = {
         attempt: context,
@@ -300,7 +303,19 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       return Option.isNone(record) ? Option.none<AttemptState>() : Option.some(yield* recoveredState(record.value))
     })
 
-    const observeClient = (state: AttemptState) => client.observe(state.sessionId)
+    const observeClient = Effect.fn("KimiPlannedAttemptExecutor.observeOwnedSession")(function* (state: AttemptState) {
+      const observation = yield* client.observe(state.sessionId)
+      if (observation.sessionId !== state.sessionId || observation.cwd !== state.attempt.worktree) {
+        return yield* Effect.fail(
+          new KimiAcpFailure({
+            detail: "Kimi observation belongs to another session or worktree",
+            kind: "Protocol",
+            operation: "session/prompt"
+          })
+        )
+      }
+      return observation
+    })
     const confirmIdleAfterCancel = Effect.fn("KimiPlannedAttemptExecutor.confirmIdleAfterCancel")(function* (
       sessionId: KimiAcpSessionId
     ) {
@@ -375,7 +390,7 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
           const intent = { ...existing, phase: "PromptIntentRecorded" as const, status: "executing" as const }
           yield* putAndPersist(intent)
           yield* client
-            .prompt(existing.sessionId, request.specification.body)
+            .prompt(existing.sessionId, semanticTaskText(request.specification.body))
             .pipe(Effect.mapError((error) => commandFailure("Begin", correlation, error)))
           yield* putAndPersist({ ...intent, phase: "Executing" as const })
           return executing(correlation)
@@ -406,7 +421,7 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       const intent = { ...fresh, phase: "PromptIntentRecorded" as const }
       yield* putAndPersist(intent)
       yield* client
-        .prompt(sessionId, request.specification.body)
+        .prompt(sessionId, semanticTaskText(request.specification.body))
         .pipe(Effect.mapError((error) => commandFailure("Begin", correlation, error)))
       yield* putAndPersist({ ...intent, phase: "Executing" as const })
       return executing(correlation)
@@ -483,7 +498,7 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       const promptIntent = { ...resumeIntent, phase: "PromptIntentRecorded" as const }
       yield* putAndPersist(promptIntent)
       yield* client
-        .prompt(existing.sessionId, request.specification.body)
+        .prompt(existing.sessionId, semanticTaskText(request.specification.body))
         .pipe(Effect.mapError((error) => commandFailure("Resume", correlation, error)))
       yield* putAndPersist({ ...promptIntent, phase: "Executing" as const, status: "executing" as const })
       return executing(correlation)

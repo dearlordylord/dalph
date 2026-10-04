@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- The bounded executor chronology stays co-located for auditability. */
+import { decodeOwnedSemanticCandidate, semanticCandidateInstructions } from "./provider-semantic-result.js"
 import {
   AcceptedResultEvidenceManifest,
   EvidenceDigest,
@@ -91,7 +92,6 @@ import {
 import { bindCodexToolEffectPolicy, CodexToolEffectPolicy, codexToolEffectLimit } from "./codex-tool-effect-policy.js"
 
 /** A terminal Codex message must contain one unambiguous 40-character commit. */
-const commitPattern = /(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/g
 const lastElementOffset = -1
 const hexRadix = 16
 const hexByteWidth = 2
@@ -478,34 +478,15 @@ export const collectText = (value: unknown): string => {
   return typeof text === "string" ? text : ""
 }
 
-type ParsedCommitMessage =
-  | { readonly _tag: "Valid"; readonly candidate: string | undefined }
-  | { readonly _tag: "Invalid" }
+type ParsedCommitMessage = { readonly _tag: "Valid"; readonly candidate: GitCommitSha } | { readonly _tag: "Invalid" }
 
 export const parsedCommitFromMessage = (
   finalMessage: string,
   expectedCorrelation: PlannedAttemptExecutorCorrelation
 ): ParsedCommitMessage => {
-  try {
-    const parsed: unknown = JSON.parse(finalMessage)
-    if (!isJsonRecord(parsed)) return { _tag: "Invalid" }
-    const responseCorrelation = parsed["correlation"]
-    if (responseCorrelation === undefined) return { _tag: "Invalid" }
-    const decoded = Schema.decodeUnknownSync(PlannedAttemptExecutorCorrelation)(responseCorrelation)
-    if (!sameCorrelation(decoded, expectedCorrelation)) return { _tag: "Invalid" }
-    return { _tag: "Valid", candidate: typeof parsed["commit"] === "string" ? parsed["commit"] : undefined }
-  } catch {
-    return { _tag: "Invalid" }
-  }
+  const candidate = decodeOwnedSemanticCandidate(finalMessage, expectedCorrelation)
+  return Option.isSome(candidate) ? { _tag: "Valid", candidate: candidate.value.commit } : { _tag: "Invalid" }
 }
-
-export const commitCandidates = (finalMessage: string, parsedCandidate: string | undefined): ReadonlySet<string> =>
-  new Set<string>([
-    ...(parsedCandidate !== undefined && /^[0-9a-f]{40}$/.test(parsedCandidate) ? [parsedCandidate] : []),
-    ...Array.from(finalMessage.matchAll(commitPattern), (match) => match[1]).filter(
-      (candidate): candidate is string => candidate !== undefined
-    )
-  ])
 
 export const decodeAcceptedManifest = (bytes: Uint8Array): typeof AcceptedResultEvidenceManifest.Type | undefined => {
   try {
@@ -539,9 +520,7 @@ export const commitFromTurn = (
   if (finalMessage === undefined) return undefined
   const parsedMessage = parsedCommitFromMessage(finalMessage, expectedCorrelation)
   if (parsedMessage._tag === "Invalid") return undefined
-  const candidates = commitCandidates(finalMessage, parsedMessage.candidate)
-  if (candidates.size !== 1) return undefined
-  return GitCommitSha.make(String([...candidates][0]))
+  return parsedMessage.candidate
 }
 
 export const defaultCodexTaskInstructions: ReadonlyArray<string> = [
@@ -561,14 +540,12 @@ const taskTurnText = (
     ...taskInstructions.map((instruction, index) => `${index + 1}. ${instruction}`),
     "",
     "Dalph immutable attempt facts:",
-    `run_id: ${attempt.runId}`,
-    `attempt_id: ${attempt.attemptId}`,
     `task_id: ${attempt.taskId}`,
     `task_revision: ${attempt.taskRevision}`,
     `base_sha: ${attempt.baseSha}`,
     `branch: ${attempt.branch}`,
     `worktree: ${attempt.worktree}`,
-    'Accepted results must be the final JSON object {"commit":"<40-hex>","correlation":{"runId":"...","attemptId":"..."}}.'
+    semanticCandidateInstructions
   ].join("\n")
 
 /** The stable operator request for replacing one provider work unit inside the retained thread. */
@@ -1490,10 +1467,14 @@ const makeCodexPlannedAttemptExecutorContext = (
       reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
     ) {
       const turn = reconciliation.turn
-      if (turn.status === "completed") {
-        if (observedRecord._tag === "Terminal" && isAcceptedTerminalRecord(observedRecord)) {
+      if (observedRecord._tag === "Terminal") {
+        if (isAcceptedTerminalRecord(observedRecord)) {
+          if (turn.status !== "completed") return yield* Effect.fail(new CodexEvidenceInvalid({}))
           return yield* rereadAccepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
         }
+        return { continueLifecycleObservation: false, report: terminal(correlation, { _tag: "Failed" }) }
+      }
+      if (turn.status === "completed") {
         return yield* accepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
       }
       return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread)

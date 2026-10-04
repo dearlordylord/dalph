@@ -284,6 +284,7 @@ const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${a
 
 const makeHarness = (
   options: {
+    readonly plannedAttempt?: PlannedTaskAttempt
     readonly loseFirstTurnResponse?: boolean
     readonly loseTurnResponseAt?: number
     readonly missingEmptyThread?: boolean
@@ -325,6 +326,7 @@ const makeHarness = (
     readonly afterActivityCensus?: () => Effect.Effect<void>
   } = {}
 ): Harness => {
+  const subject = options.plannedAttempt ?? attempt
   let threadId = CodexThreadId.make("codex-thread-issue-58")
   const turns: Array<CodexTurnSnapshot> = []
   const publishedCompletionHints: Array<CodexTurnCompletedHint> = []
@@ -703,7 +705,7 @@ const makeHarness = (
     turnCount: () => turnNumber,
     associationAtTurn: () => associationAtTurn,
     currentThread: () => currentThread,
-    currentRecord: () => records.get(keyOf(attempt.runId, attempt.attemptId)),
+    currentRecord: () => records.get(keyOf(subject.runId, subject.attemptId)),
     replacementLedger: () => [...replacementLedgers.values()].at(-1),
     toolEffectRecords: () => [...toolEffectRecords.values()],
     setThread: (thread) => {
@@ -734,7 +736,7 @@ const makeHarness = (
         ...currentTurn,
         status: "completed",
         items: [
-          { type: "agentMessage", text: `Working from base ${attempt.baseSha}` },
+          { type: "agentMessage", text: `Working from base ${subject.baseSha}` },
           { type: "agentMessage", text: message }
         ]
       }
@@ -753,7 +755,7 @@ const makeHarness = (
     publishCompletionHintIfTerminal: () =>
       Effect.sync(() => {
         if (options.disableExactCompletionHints === true) return false
-        const record = records.get(keyOf(attempt.runId, attempt.attemptId))
+        const record = records.get(keyOf(subject.runId, subject.attemptId))
         if (
           (record?._tag !== "Running" && record?._tag !== "SafelySuspended") ||
           currentTurn === undefined ||
@@ -768,7 +770,7 @@ const makeHarness = (
     publishMatchingCompletionHint: () =>
       Effect.sync(() => {
         if (options.disableExactCompletionHints === true) return false
-        const record = records.get(keyOf(attempt.runId, attempt.attemptId))
+        const record = records.get(keyOf(subject.runId, subject.attemptId))
         if (record?._tag !== "Running" && record?._tag !== "SafelySuspended") return false
         publishedCompletionHints.push({ threadId: record.threadId, turnId: record.observedTurnId })
         return true
@@ -953,7 +955,7 @@ it.effect("supplies the bounded fresh-review instruction in the default task pro
     expect(harness.turnTexts[0]).toContain("Run at most four review rounds")
     expect(harness.turnTexts[0]).toContain("report failure and do not return an accepted result")
     expect(harness.turnTexts[0]?.trimEnd()).toMatch(
-      /Accepted results must be the final JSON object \{"commit":"<40-hex>","correlation":\{"runId":"\.\.\.","attemptId":"\.\.\."\}\}\.$/u
+      /Accepted results must be the final JSON object \{"version":1,"outcome":"Accepted","commit":"<40-hex>"\}\. Dalph binds its own identities; do not include correlation identifiers\.$/u
     )
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -1142,11 +1144,12 @@ plannedAttemptExecutorContract({
 
 const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExactReport")(function* (
   _executor: PlannedAttemptExecutorService,
-  allowPending = false
+  allowPending = false,
+  observedCorrelation = correlation
 ) {
   const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
   const completionHints = yield* CodexCompletionHintTestControl
-  const attachment = yield* lifecycle.attach(correlation)
+  const attachment = yield* lifecycle.attach(observedCorrelation)
   if (attachment.current._tag === "Exact" && attachment.current.report._tag === "ExecutorWorkTerminal") {
     yield* attachment.close
     return attachment.current.report
@@ -3188,6 +3191,10 @@ it.effect("rejects malformed, foreign, ambiguous, and non-JSON terminal messages
           text: JSON.stringify({ correlation: { runId: "foreign-run", attemptId: "foreign-attempt" }, commit: head })
         }
       ],
+      [{ type: "agentMessage", text: JSON.stringify({ version: 1, outcome: "Accepted", commit: "not-a-commit" }) }],
+      [{ type: "agentMessage", text: JSON.stringify({ version: 1, outcome: "Accepted" }) }],
+      [{ type: "agentMessage", text: JSON.stringify({ version: 2, outcome: "Accepted", commit: head }) }],
+      [{ type: "agentMessage", text: JSON.stringify({ version: 1, outcome: "Accepted", commit: head, correlation }) }],
       [{ type: "agentMessage", text: JSON.stringify({ correlation, commit: "not-a-commit" }) }],
       [{ type: "agentMessage", text: JSON.stringify({ correlation, commit: head }) + ` ${"b".repeat(40)}` }],
       [{ type: "agentMessage", text: JSON.stringify({ correlation }) }],
@@ -3321,7 +3328,87 @@ it.effect("admits only one same-attempt Begin behind the executor gate", () => {
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("does not accept a commit without the exact final response correlation", () => {
+it.effect("binds an owned semantic result without model-copied identities", () => {
+  const ownedAttempt = PlannedTaskAttempt.make({
+    ...attempt,
+    runId: RunId.make(`r1.opaque/${"Ab9_-".repeat(160)}`),
+    attemptId: AttemptId.make(`attempt:opaque:${"zY8_-".repeat(160)}`)
+  })
+  const ownedCorrelation = plannedAttemptExecutorCorrelation(ownedAttempt)
+  const harness = makeHarness({ plannedAttempt: ownedAttempt })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin({ plannedAttempt: ownedAttempt, specification }, { _tag: "InitialDelivery" })
+    harness.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
+    const result = yield* observeExactReport(executor, false, ownedCorrelation)
+    expect(result).toMatchObject({
+      _tag: "ExecutorWorkTerminal",
+      correlation: ownedCorrelation,
+      result: { _tag: "Accepted", acceptedResult: { commit: head } }
+    })
+    expect(yield* observeExactReport(executor, false, ownedCorrelation)).toEqual(result)
+    expect(harness.turnTexts[0]).not.toContain(ownedAttempt.runId)
+    expect(harness.turnTexts[0]).not.toContain(ownedAttempt.attemptId)
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("accepts exact legacy identities containing unrelated commit-shaped bytes", () => {
+  const legacyAttempt = PlannedTaskAttempt.make({
+    ...attempt,
+    runId: RunId.make(`r1.${otherHead}`),
+    attemptId: AttemptId.make(`attempt:${otherHead}`)
+  })
+  const legacyCorrelation = plannedAttemptExecutorCorrelation(legacyAttempt)
+  const harness = makeHarness({ plannedAttempt: legacyAttempt })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin({ plannedAttempt: legacyAttempt, specification }, { _tag: "InitialDelivery" })
+    harness.complete(JSON.stringify({ commit: head, correlation: legacyCorrelation }))
+    expect(yield* observeExactReport(executor, false, legacyCorrelation)).toMatchObject({
+      correlation: legacyCorrelation,
+      result: { _tag: "Accepted", acceptedResult: { commit: head } }
+    })
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("recovers an unsealed semantic result without another provider turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+    }).pipe(Effect.provide(layerFor(harness)))
+    harness.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      const accepted = yield* observeExactReport(executor)
+      expect(accepted).toMatchObject({ correlation, result: { _tag: "Accepted", acceptedResult: { commit: head } } })
+      expect(yield* observeExactReport(executor)).toEqual(accepted)
+    }).pipe(Effect.provide(layerFor(harness)))
+    expect(harness.turnCount()).toBe(1)
+  })
+})
+
+it.effect("preserves a sealed failure after semantic output changes", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      harness.complete(JSON.stringify({ commit: head, correlation: { ...correlation, runId: "foreign" } }))
+      expect(yield* observeExactReport(executor)).toMatchObject({ result: { _tag: "Failed" } })
+    }).pipe(Effect.provide(layerFor(harness)))
+    harness.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      expect(yield* observeExactReport(executor)).toMatchObject({ correlation, result: { _tag: "Failed" } })
+    }).pipe(Effect.provide(layerFor(harness)))
+    expect(harness.turnCount()).toBe(1)
+  })
+})
+
+it.effect("rejects an unversioned candidate without exact legacy correlation", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
@@ -4965,6 +5052,7 @@ it.effect("maps duplicate owned tokens to an unreadable projection without choos
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
     harness.duplicateOwnedTurn()
     const projected = yield* observeAfterMatchingCompletionHint(executor)
     expect(projected._tag).toBe("Unreadable")
@@ -4979,6 +5067,7 @@ it.effect("maps an owned token to a contradictory turn id without choosing a tur
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
     harness.contradictOwnedTurnId()
     const projected = yield* observeAfterMatchingCompletionHint(executor)
     expect(projected._tag).toBe("Unreadable")
@@ -4993,6 +5082,7 @@ it.effect("maps a foreign correlation on the owned token to a contradiction", ()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
     harness.makeForeignTurnCorrelation()
     const projected = yield* observeAfterMatchingCompletionHint(executor)
     expect(projected._tag).toBe("CorrelationContradiction")

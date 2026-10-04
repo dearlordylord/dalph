@@ -52,6 +52,7 @@ Git history.
 - [Ask Codex to review a candidate before accepting it](codex-bounded-review-instruction.md)
 - [Replace one purged Codex work unit in the retained planned attempt](replace-purged-codex-work-unit.md)
 - [First concrete executor: persistent Codex app-server threads](codex-app-server-executor.md)
+- [Bind provider results to exact owned work without model-copied identities](application-bound-provider-results.md)
 - [Select Kimi ACP for one planned attempt](kimi-acp-planned-attempt-executor.md)
 - [Autonomous planned-attempt executor work](autonomous-executor-work.md)
 - [Observe one autonomous executor attempt through a same-host restart](passive-executor-observation-through-restart.md)
