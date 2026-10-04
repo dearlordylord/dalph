@@ -2870,46 +2870,40 @@ it.effect("records completion finality after Git-qualified promotion history", (
 
 it.effect("settles a promoted authored task through the real completion-claim boundary", () =>
   Effect.gen(function* () {
-    const finalityStory = completeSingletonDeliveryCassette.story
     const run = yield* runAuthoredScenarioCassette(completeSingletonDeliveryCassette)
-    const withFirstMismatchedTask = (tag: string) => {
-      let changed = false
-      return finalityStory.map((item) => {
-        if (!changed && item._tag === tag) {
-          changed = true
-          return { ...item, taskId: "B" }
-        }
-        return item
-      })
-    }
-    for (const [tag, expected] of [
-      ["CompletionTaskFocusedReadReturned", "authored focused completion read returned B for A"],
-      ["CompletionTaskRequestReturned", "authored completion response returned B for A"]
-    ] as const) {
-      const hostile = yield* Effect.exit(
-        runAuthoredScenarioCassette({ ...completeSingletonDeliveryCassette, story: withFirstMismatchedTask(tag) })
-      )
-      expect(Exit.isFailure(hostile)).toBe(true)
-      if (Exit.isFailure(hostile)) expect(Cause.pretty(hostile.cause)).toContain(expected)
-    }
     const completionIntent = run.records.find(({ event }) => event._tag === "CompletionTaskIntended")?.event
     if (completionIntent?._tag !== "CompletionTaskIntended") {
       return yield* Effect.die("authored finality run did not record the completion request")
     }
     const request = completionIntent.request
     const tracker = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+    const focusedReadRequest = FocusedTaskCompletionReadRequest.make({
+      expectedClaim: request.claim,
+      operationId: OperationId.make("hostile-authored-focused-read"),
+      target: FixtureTarget.make("cassette-target"),
+      taskId: request.taskId
+    })
+    // Wrong-task responses are boundary decisions; one positive replay above
+    // owns the composed finality chronology without replaying it for each mismatch.
     const hostileBoundaryCases = [
       {
+        expected: "authored focused completion read returned B for A",
+        invoke: (boundary: CompletionTaskBoundary["Service"]) => boundary.readFocusedTaskCompletion(focusedReadRequest),
+        item: {
+          _tag: "CompletionTaskFocusedReadReturned",
+          lifecycle: "Open",
+          taskId: TaskId.make("B"),
+          unfinishedPrerequisiteTaskIds: []
+        } as const
+      },
+      {
+        expected: "authored completion response returned B for A",
+        invoke: (boundary: CompletionTaskBoundary["Service"]) => boundary.completeTask(request),
+        item: { _tag: "CompletionTaskRequestReturned", outcome: "Acknowledged", taskId: TaskId.make("B") } as const
+      },
+      {
         expected: "authored focused completion read found UnclaimedTask for A",
-        invoke: (boundary: CompletionTaskBoundary["Service"]) =>
-          boundary.readFocusedTaskCompletion(
-            FocusedTaskCompletionReadRequest.make({
-              expectedClaim: request.claim,
-              operationId: OperationId.make("hostile-authored-focused-read"),
-              target: FixtureTarget.make("cassette-target"),
-              taskId: request.taskId
-            })
-          ),
+        invoke: (boundary: CompletionTaskBoundary["Service"]) => boundary.readFocusedTaskCompletion(focusedReadRequest),
         item: {
           _tag: "CompletionTaskFocusedReadReturned",
           lifecycle: "Open",
