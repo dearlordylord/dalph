@@ -231,7 +231,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
           "blockedBy",
           request.issueNodeId === childC
             ? [rootNode, childB, ...((yield* Ref.get(includesE)) ? [childE] : [])]
-            : request.issueNodeId === childE ? [rootNode] : []
+            : request.issueNodeId === childE
+              ? [rootNode]
+              : []
         )
       if (includeBlockedChildren && request._tag === "ReadIssue" && request.issueNodeId !== rootNode)
         return {
@@ -247,7 +249,6 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
               }
             }
           }
-
         }
       if (includeBlockedChildren && request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNode) {
         return yield* Effect.die("blocked child must not reach a work-specification read")
