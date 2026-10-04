@@ -3512,10 +3512,15 @@ const makeCodexPlannedAttemptExecutorContext = (
                             )
                           }
                           const record = Option.isSome(privateRecord.success) ? privateRecord.success.value : undefined
+                          // A sealed result may still project Executing while a recovered
+                          // provider census is stale. The exact hint authorizes a reread,
+                          // never a replacement of the retained terminal seal.
                           const exactAssociation =
                             record !== undefined &&
                             recordMatchesCorrelation(record, correlation) &&
-                            (record._tag === "Running" || record._tag === "SafelySuspended") &&
+                            (record._tag === "Running" ||
+                              record._tag === "SafelySuspended" ||
+                              record._tag === "Terminal") &&
                             record.threadId === hint.threadId &&
                             record.observedTurnId === hint.turnId
                           if (!exactAssociation) {

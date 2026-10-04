@@ -98,3 +98,13 @@ a shell in the app-server's own group does not establish the required survivor.
 This fixture correction changes no production process-ownership, shutdown or
 workflow decision. Local qualification exercises all 23 real-host scenarios;
 Linux/macOS hosted qualification remains a separate exact-head obligation.
+
+7. **Sealed result with a stale recovery census.** After a crash, the exact
+   attempt already has a sealed terminal result, but the provider initially
+   reports its owned turn as in progress. Dalph exposes Executing until an
+   exact thread/turn completion notification triggers a provider reread. Once
+   the provider proves completion, Dalph returns the original sealed result.
+   A foreign notification cannot authorize that reread; neither notification
+   starts another turn or replaces the seal. Acceptance test: `rereads a sealed
+   terminal after an exact completion hint resolves stale recovery` in
+   `codex-planned-attempt-executor.test.ts`.
