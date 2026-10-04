@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "7ae4e32843be8fab24b988b3739df3de4c772725ae4e94ba96922cabba5e3f6f",
+  "digest": "42215083fd2c5f5336c4def46c9422f859eff2abb90cc808b0c8abf1f606acc2",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -103,6 +103,7 @@
     "packages/orchestrator/src/coordination/delivery/delivery-action-proposal.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-child-handoff.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-cleanup-boundary.ts",
+    "packages/orchestrator/src/coordination/delivery/delivery-diagnostics.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-evidence.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-proposal-identity.ts",
@@ -432,6 +433,7 @@
     "packages/orchestrator/src/workflow/task-tracker-facts/observation.ts",
     "packages/orchestrator/src/workflow/task-tracker-facts/read-observation.ts",
     "packages/orchestrator/src/workflow/task-tracker-facts/reconfirmation.ts",
+    "packages/orchestrator/src/workflow/task-tracker-facts/task-descriptors.ts",
     "packages/orchestrator/test/journaled-graph-observation.ts",
     "packages/orchestrator/test/support/accepted-integration-history.ts",
     "packages/orchestrator/test/support/automatic-successor-generation.ts",

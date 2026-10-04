@@ -7,6 +7,7 @@ import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpa
 import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { Scope } from "effect"
 import {
+  Channel,
   Context,
   Crypto,
   Data,
@@ -77,6 +78,16 @@ export interface CodexTurnCompletedHint {
   readonly threadId: CodexThreadId
   readonly turnId: CodexTurnId
 }
+
+/** A provider reports an exact thread idle; this wakes failure diagnosis, never completion acceptance. */
+export interface CodexThreadIdleHint {
+  readonly threadId: CodexThreadId
+}
+
+const CodexThreadIdleNotificationBoundary = Schema.Struct({
+  threadId: CodexThreadId,
+  status: Schema.Struct({ type: Schema.Literal("idle") })
+})
 
 /** Private app-server lifecycle of one tool item; payload text stays with Codex. */
 export interface CodexToolEffectNotification {
@@ -507,6 +518,10 @@ export interface CodexAppServerService {
   readonly stopRetainedLaunch?: (launch: CodexServerLaunchRecord) => Effect.Effect<void, CodexAppServerFailure>
   /** Process-level protocol failures wake existing observers without inventing a completion identity. */
   readonly attachProtocolFailures?: Effect.Effect<Stream.Stream<CodexAppServerFailure>, never, Scope.Scope>
+  /** Subscribe before turn/start so an idle transition can diagnose an abortion even when completion delivery is lost. */
+  readonly attachThreadIdleHints?: (
+    threadId: CodexThreadId
+  ) => Effect.Effect<Stream.Stream<CodexThreadIdleHint>, never, Scope.Scope>
   /** Broadcast owned-activity hints; consumers must reread the exact process/activity census. */
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   /** Present only when this service can prove Dalph's required effective task policy. */
@@ -1824,6 +1839,9 @@ interface JsonRpcClient {
   ) => Effect.Effect<CodexTurnCompletedSubscription, never, Scope.Scope>
   readonly attachProtocolFailures: Effect.Effect<Stream.Stream<CodexAppServerFailure>, never, Scope.Scope>
   readonly attachToolEffects: Effect.Effect<Stream.Stream<CodexToolEffectNotification>, never, Scope.Scope>
+  readonly attachThreadIdleHints: (
+    threadId: CodexThreadId
+  ) => Effect.Effect<Stream.Stream<CodexThreadIdleHint>, never, Scope.Scope>
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly request: (
     operation: CodexAppServerRequestOperation,
@@ -2034,6 +2052,9 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const turnCompletedSubscribers = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<TurnCompletionSubscriber>>>(
     new Map()
   )
+  const threadIdleSubscribers = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<PubSub.PubSub<CodexThreadIdleHint>>>>(
+    new Map()
+  )
   const protocolFailures = yield* PubSub.unbounded<CodexAppServerFailure>()
   const protocolFailureState = yield* Ref.make<Option.Option<CodexAppServerFailure>>(Option.none())
   const ownedActivityHints = yield* PubSub.sliding<void>(1)
@@ -2170,6 +2191,20 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
                   )
                 }
               }
+            }
+            if (envelope.method === "thread/status/changed") {
+              const decoded = Schema.decodeUnknownResult(CodexThreadIdleNotificationBoundary)(message["params"])
+              if (Result.isFailure(decoded)) return Effect.void
+              const hint: CodexThreadIdleHint = { threadId: decoded.success.threadId }
+              return Ref.get(threadIdleSubscribers).pipe(
+                Effect.flatMap((subscribers) =>
+                  Effect.forEach(
+                    subscribers.get(hint.threadId) ?? [],
+                    (subscriber) => PubSub.publish(subscriber, hint),
+                    { discard: true }
+                  )
+                )
+              )
             }
             if (envelope.method === "turn/completed") {
               const notification = Schema.decodeUnknownResult(CodexTurnCompletedNotificationBoundary)(message["params"])
@@ -2368,8 +2403,32 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
       new Map()
     ])
     yield* Effect.forEach(subscribers, (subscriber) => subscriber.shutdown, { discard: true })
+    const idleSubscribers = yield* Ref.modify(threadIdleSubscribers, (current) => [
+      [...current.values()].flat(),
+      new Map()
+    ])
+    yield* Effect.forEach(idleSubscribers, PubSub.shutdown, { discard: true })
   })
   return {
+    attachThreadIdleHints: (threadId) =>
+      Effect.gen(function* () {
+        const hints = yield* PubSub.sliding<CodexThreadIdleHint>(1)
+        const subscription = yield* PubSub.subscribe(hints)
+        yield* Ref.update(threadIdleSubscribers, (current) =>
+          new Map(current).set(threadId, [...(current.get(threadId) ?? []), hints])
+        )
+        yield* Effect.addFinalizer(() =>
+          Ref.update(threadIdleSubscribers, (current) => {
+            const retained = (current.get(threadId) ?? []).filter((subscriber) => subscriber !== hints)
+            return new Map(
+              [...current]
+                .filter(([key]) => key !== threadId)
+                .concat(retained.length === 0 ? [] : [[threadId, retained]])
+            )
+          }).pipe(Effect.andThen(PubSub.shutdown(hints)))
+        )
+        return Stream.fromChannel(Channel.fromSubscriptionArray(subscription))
+      }),
     attachOwnedActivityHints: PubSub.subscribe(ownedActivityHints).pipe(
       Effect.map((subscription) =>
         Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
@@ -2391,9 +2450,9 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           pending: []
         })
         const stream = yield* PubSub.subscribe(hints).pipe(
-          Effect.map((queue) =>
-            Stream.unfold(undefined, () => PubSub.take(queue).pipe(Effect.map((hint) => [hint, undefined] as const)))
-          )
+          // Closing a provider subscription ends this hint source; it must not
+          // interrupt a sibling stream that is persisting stopped-writer proof.
+          Effect.map((subscription) => Stream.fromChannel(Channel.fromSubscriptionArray(subscription)))
         )
         const subscriber: TurnCompletionSubscriber = {
           publish: (hint) =>
@@ -3935,6 +3994,7 @@ export const codexAppServerLayer = (
         attachToolEffects: rpc.attachToolEffects,
         attachProtocolFailures: rpc.attachProtocolFailures,
         attachOwnedActivityHints: rpc.attachOwnedActivityHints,
+        attachThreadIdleHints: rpc.attachThreadIdleHints,
         incarnation: liveIncarnation,
         serverPid: childPid,
         serverLaunch: liveLaunch,

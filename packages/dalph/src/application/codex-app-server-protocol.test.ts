@@ -567,6 +567,16 @@ const onMessage = (message) => {
   if (mode === "no-id-response" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "fixture/notice" }) + "\n")
   }
+  if (mode === "thread-idle-hint" && message.method === "thread/start") {
+    for (const params of [
+      { threadId: "foreign-thread", status: { type: "idle" } },
+      { threadId: "protocol-thread", status: { type: "idle" } },
+      { threadId: "protocol-thread", status: { type: "active", activeFlags: [] } },
+      { threadId: "protocol-thread", status: {} }
+    ]) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "thread/status/changed", params }) + "\n")
+    write(message.id, responseFor(message.method, message.params))
+    return
+  }
   if (mode === "turn-completed-hint" && message.method === "thread/start") {
     process.stdout.write(JSON.stringify({
       jsonrpc: "2.0",
@@ -1742,6 +1752,40 @@ it.effect("keeps diagnostic stderr, blank lines, and notifications outside proto
   )
 )
 
+it.effect("routes early exact idle thread notifications without completion authority", () =>
+  withFixture("thread-idle-hint", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if (app.attachThreadIdleHints === undefined) return yield* Effect.die("native idle observation missing")
+        const hints = yield* app.attachThreadIdleHints(CodexThreadId.make("protocol-thread"))
+        yield* app.startThread("/fixture/worktree")
+        expect(yield* Stream.runHead(hints)).toEqual(Option.some({ threadId: "protocol-thread" }))
+      })
+    )
+  )
+)
+
+it.effect("provider closure ends the exact idle source without interrupting its consumer", () =>
+  withFixture("thread-idle-hint", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if (app.attachThreadIdleHints === undefined) return yield* Effect.die("native idle observation missing")
+        const hints = yield* app.attachThreadIdleHints(CodexThreadId.make("protocol-thread"))
+        const observed = yield* Deferred.make<void>()
+        const consuming = yield* hints.pipe(
+          Stream.tap(() => Deferred.succeed(observed, undefined).pipe(Effect.asVoid)),
+          Stream.runCollect,
+          Effect.forkChild
+        )
+        yield* app.startThread("/fixture/worktree")
+        yield* Deferred.await(observed)
+        yield* app.close
+        expect(Array.from(yield* Fiber.join(consuming))).toEqual([{ threadId: "protocol-thread" }])
+      })
+    )
+  )
+)
+
 it.effect("traces real turn/completed ingress and hint publication without retaining notification payload", () => {
   return withFixture("turn-completed-hint", (app) =>
     Effect.scoped(
@@ -1945,6 +1989,21 @@ it.effect("fails closed when the pre-response identity buffer is full before the
         // lifecycle read after the expected turn ID becomes known.
         expect(received.pollUnsafe()).toBeUndefined()
         yield* Fiber.interrupt(received)
+      })
+    )
+  )
+)
+
+it.effect("provider notification closure does not interrupt a sibling publishing stopped-writer proof", () =>
+  withFixture("happy", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const attachment = yield* attachExactCompletionHints(app)
+        const proof = Stream.fromEffect(app.close.pipe(Effect.as("stopped-writers-proved")))
+        const outcome = yield* Stream.runCollect(
+          Stream.merge(attachment.hints.pipe(Stream.map(() => "completion-hint")), proof)
+        )
+        expect(Array.from(outcome)).toEqual(["stopped-writers-proved"])
       })
     )
   )

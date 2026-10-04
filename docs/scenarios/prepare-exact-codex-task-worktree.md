@@ -15,7 +15,7 @@ Alice starts a production Run using a Codex executor profile. Git has created
 the planned task attempt A1 at its exact Base and exact worktree W. The
 worktree has no `node_modules`; the host shell selects Node 25, while W's
 manifest and `mise.toml` select Node 24.20.0. Another independent task may
-already be using the shared Codex app-server.
+already be using its separate Codex app-server.
 
 1. Before asking Codex to start A1's implementation turn, Dalph identifies W
    from the planned attempt and records an A1-scoped preparation intent. It
@@ -23,7 +23,7 @@ already be using the shared Codex app-server.
    directory. The command selects the repository Node, performs a frozen pnpm
    install, and checks the resulting worktree-local dependency store. The
    command's process and descendants belong to A1's preparation custody, not
-   to the shared app-server lifecycle.
+   to the app-server lifecycle.
 2. The command reports its selected Node, worktree, exit, and failure stage.
    Dalph validates that the successful report names W and records its observed
    completion. Only then may it submit A1's implementation turn to Codex.
@@ -32,7 +32,7 @@ already be using the shared Codex app-server.
 3. If selection or install fails, times out, or reports the wrong worktree,
    Dalph reports a typed A1 preparation failure. No A1 implementation turn
    starts. It leaves W available for diagnosis. Another task and the
-   Integrator may continue using the same app-server.
+   Integrator may continue using their separate app-servers.
 4. If Dalph loses the preparation response or crashes after starting the
    command, it reads the exact A1 preparation intent and terminal receipt.
    The helper writes that receipt only after its bounded child groups have
@@ -52,8 +52,7 @@ already be using the shared Codex app-server.
 Alice sees either A1 enter implementation with the correct Node and installed
 dependencies, or a preparation failure attributed to A1 and its stage. Dalph
 must not turn a preparation failure into a source-code failure, run two
-ambiguous installs in W, use another worktree's artifacts, stop or restart the
-shared app-server to settle A1, or block independent tasks because A1 is
+ambiguous installs in W, use another worktree's artifacts, stop or restart another attempt’s app-server to settle A1, or block independent tasks because A1 is
 unprepared.
 
 ## Acceptance-test mapping

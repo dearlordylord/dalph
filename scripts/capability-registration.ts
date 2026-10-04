@@ -16,6 +16,7 @@ type CapabilityFamily =
   | "git-target-promotion"
   | "codex-owned-activity-census"
   | "planned-attempt-executor"
+  | "isolated-planned-attempt-executor"
   | "outer-integrator"
   | "immutable-evidence"
   | "planned-worktree-cleanup"
@@ -234,6 +235,7 @@ const requiredCapabilityFamilies = [
   "git-target-promotion",
   "codex-owned-activity-census",
   "planned-attempt-executor",
+  "isolated-planned-attempt-executor",
   "outer-integrator",
   "immutable-evidence",
   "planned-worktree-cleanup",
@@ -614,7 +616,8 @@ const executorContract = contract("PlannedAttemptExecutor", [
   {
     invocation: {
       marker: "plannedAttemptExecutorContract(",
-      source: "packages/dalph/src/application/codex-planned-attempt-executor.test.ts"
+      source: "packages/dalph/src/application/codex-planned-attempt-executor.test.ts",
+      selector: { _tag: "ObjectProperty", property: "name", value: "Codex app-server" }
     },
     marker: "plannedAttemptExecutorContract",
     role: "production",
@@ -1006,6 +1009,39 @@ export const capabilityRegistrationInventory = {
           "packages/dalph/src/application/codex-planned-attempt-executor.ts",
           "codexPlannedAttemptExecutorLayerWithOptions"
         )
+      )
+    },
+    {
+      boundary: "planned-attempt executor routed through exact scoped provider ownership",
+      controlled: {
+        _tag: "NotApplicable",
+        reason: "provider-private-boundary",
+        detail: "Provider isolation routes the registered executor; dry-run owns no provider process."
+      },
+      contract: contract("PlannedAttemptExecutor", [
+        {
+          invocation: {
+            marker: "plannedAttemptExecutorContract(",
+            selector: { _tag: "ObjectProperty", property: "name", value: "isolated Codex app-server" },
+            source: "packages/dalph/src/application/codex-planned-attempt-executor.test.ts"
+          },
+          marker: "plannedAttemptExecutorContract",
+          role: "production",
+          source: "packages/orchestrator/test/contracts/planned-attempt-executor-contract.ts",
+          implementation: implementationBinding(
+            "isolatedPlannedAttemptExecutorLayer",
+            "packages/dalph/src/application/isolated-planned-attempt-executor.ts",
+            "isolatedPlannedAttemptExecutorLayer",
+            { _tag: "ObjectProperty", property: "layer" }
+          )
+        }
+      ]),
+      family: "isolated-planned-attempt-executor",
+      production: implementation(
+        "isolatedPlannedAttemptExecutorLayer",
+        "packages/dalph/src/application/isolated-planned-attempt-executor.ts",
+        "isolatedPlannedAttemptExecutorLayer",
+        composed("packages/dalph/src/application/production-host.ts", "isolatedPlannedAttemptExecutorLayer")
       )
     },
     {

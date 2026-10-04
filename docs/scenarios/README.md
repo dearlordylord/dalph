@@ -50,6 +50,7 @@ Git history.
 
 - [Prepare the exact Codex task worktree before implementation checks](prepare-exact-codex-task-worktree.md)
 - [Bound one Codex tool effect without losing its planned attempt](contain-non-converging-codex-tool-effects.md)
+- [Stop one Codex attempt without stopping its neighbours](isolated-codex-containment.md)
 - [Ask Codex to review a candidate before accepting it](codex-bounded-review-instruction.md)
 - [Replace one purged Codex work unit in the retained planned attempt](replace-purged-codex-work-unit.md)
 - [First concrete executor: persistent Codex app-server threads](codex-app-server-executor.md)
