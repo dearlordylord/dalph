@@ -1494,6 +1494,7 @@ it.effect(
                 Layer.mock(CodexAppServer, {
                   incarnation: CodexServerIncarnation.make(`process-${ordinal}`),
                   attachToolEffects: Effect.succeed(Stream.empty),
+                  attachThreadIdleHints: () => Effect.succeed(Stream.empty),
                   readThread: (threadId) =>
                     retainedThread?.id === threadId
                       ? Effect.succeed(retainedThread)
@@ -1645,18 +1646,12 @@ it.effect(
         expect((yield* fixture.activate().pipe(Effect.exit))._tag).toBe("Failure")
         expect(allocations).toBe(1)
         expect(turns).toBe(0)
-        const recovered = yield* fixture.activate().pipe(Effect.exit)
-        expect(recovered._tag).toBe("Success")
-        if (recovered._tag === "Success") {
-          expect(recovered.value).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
-        }
+        const recovered = yield* fixture.activate()
+        expect(recovered).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
         expect(allocations).toBe(2)
         expect(turns).toBe(1)
-        const resumed = yield* fixture.activate().pipe(Effect.exit)
-        expect(resumed._tag).toBe("Success")
-        if (resumed._tag === "Success") {
-          expect(resumed.value).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
-        }
+        const resumed = yield* fixture.activate()
+        expect(resumed).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
         expect(fixture.applicationBuilds()).toBe(3)
         expect(allocations).toBe(2)
         expect(turns).toBe(1)
