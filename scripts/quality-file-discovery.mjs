@@ -5,7 +5,13 @@ import { compareCanonicalPaths } from "./canonical-path-order.mjs"
 const authoredRoots = ["src", "packages", "scripts", "test"]
 const authoredExtensions = new Set([".js", ".mjs", ".ts", ".tsx"])
 const ignoredDirectoryNames = new Set([".git", ".worktrees", "coverage", "dist", "node_modules", "prototypes"])
-const rootConfigurationPattern = /^[^/]+\.config\.(?:js|mjs|ts|tsx)$/u
+/** Root configuration suffixes consumed by the formatter and the candidate input guard. */
+export const qualityRootConfigurationSuffixes = Object.freeze([
+  ".config.js",
+  ".config.mjs",
+  ".config.ts",
+  ".config.tsx"
+])
 const fixturePathPattern = /(?:^|\/)test\/fixtures(?:\/|$)/u
 
 const normalizedRelativePath = (path) => path.split(sep).join("/")
@@ -14,7 +20,10 @@ const isAuthoredQualityFile = (path) => {
   const normalized = normalizedRelativePath(path)
   if (normalized.split("/").some((segment) => ignoredDirectoryNames.has(segment))) return false
   if (fixturePathPattern.test(normalized)) return false
-  if (normalized.split("/").length === 1) return rootConfigurationPattern.test(normalized)
+  if (normalized.split("/").length === 1)
+    return qualityRootConfigurationSuffixes.some(
+      (suffix) => normalized.length > suffix.length && normalized.endsWith(suffix)
+    )
   return authoredExtensions.has(extname(normalized))
 }
 

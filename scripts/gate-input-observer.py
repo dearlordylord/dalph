@@ -22,6 +22,7 @@ watches = {}
 watched_paths = set()
 visited = set()
 roots = []
+root_file_suffixes = []
 excluded = []
 protected = []
 replaceable = set()
@@ -51,18 +52,31 @@ def skip(path):
 
 
 def relevant(path):
-    return not skip(path) and any(below(path, root) or below(root, path) for root in roots + protected)
+    return not skip(path) and (any(below(path, root) or below(root, path) for root in roots + protected)
+                               or matching_root_file(path)
+                               or any(below(root, path) for root, suffixes in root_file_suffixes))
+
+
+def matching_root_file(path):
+    for root, suffixes in root_file_suffixes:
+        if path != root and below(path, root):
+            name = os.path.relpath(path, root).split(os.sep)[0]
+            if any(len(name) > len(suffix) and name.endswith(suffix) for suffix in suffixes):
+                return True
+    return False
 
 
 def declared_input(path):
     if any(below(path, root) for root in protected):
         return True
-    return any(below(path, root) for root in roots) and not any(below(path, root) for root in excluded)
+    return (any(below(path, root) for root in roots) or matching_root_file(path)) and not any(
+        below(path, root) for root in excluded)
 
 
 def only_strict_ancestor(path):
     inputs = roots + protected
-    return any(path != root and below(root, path) for root in inputs) and not declared_input(path)
+    return (any(path != root and below(root, path) for root in inputs)
+            or any(below(root, path) for root, suffixes in root_file_suffixes)) and not declared_input(path)
 
 
 def invalidates(path, mask):
@@ -256,6 +270,8 @@ try:
     roots = list(dict.fromkeys([os.path.abspath(path) for path in config["roots"]] + [os.path.realpath(path) for path in config["roots"]]))
     excluded = [os.path.abspath(path) for path in config["excludedRoots"]]
     protected = [os.path.abspath(path) for path in config.get("protectedRoots", [])]
+    root_file_suffixes = [(os.path.abspath(entry["root"]), tuple(entry["suffixes"]))
+                          for entry in config.get("rootFileSuffixes", [])]
     replaceable = set(os.path.abspath(path) for path in config.get("replaceableRoots", []))
     transient_coordination = set(
         os.path.abspath(path) for path in config.get("transientCoordinationRoots", []))
@@ -266,6 +282,15 @@ try:
     for root in list(roots):
         watch_ancestors(root)
         walk(root)
+    for root, suffixes in root_file_suffixes:
+        watch_ancestors(root)
+        watch(root)
+        # Membership observation starts before enumeration, including files that
+        # are created and removed before the caller's next snapshot.
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if matching_root_file(entry.path):
+                    walk(entry.path)
     drain(validate=True)
     send("ready", version=1)
     while True:

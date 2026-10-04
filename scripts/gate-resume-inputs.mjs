@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs"
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { inputObserverScript, startInputObserver } from "./gate-input-observer.mjs"
+import { qualityRootConfigurationSuffixes } from "./quality-file-discovery.mjs"
 
 const hash = (value) => createHash("sha256").update(value).digest("hex")
 const below = (path, root) => path === root || path.startsWith(`${root}${sep}`)
@@ -309,7 +310,7 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   return { inputs: [...new Set(paths)], transientCoordinationRoots: [...new Set(transientCoordinationRoots)] }
 }
 
-/** Build/test owners; research reports and editor state are outside candidate inputs.
+/** Application qualification owners; separate documentation and optional analysis commands have their own inputs.
  * Update this scope when a command starts consuming another input owner.
  */
 const verificationSourceRoots = (root) =>
@@ -410,6 +411,7 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
     commonConfig,
     root,
     sourceRoots: verificationSourceRoots(root),
+    rootFileSuffixes: [{ root, suffixes: qualityRootConfigurationSuffixes }],
     tools,
     gitInputs,
     configurations,
@@ -432,7 +434,12 @@ const stagedIndexEntries = (root, environment) => {
 const snapshot = ({ effectiveEnvironment, layout, logicalInvocation }) => {
   const index = stagedIndexEntries(layout.root, effectiveEnvironment)
   const head = git(layout.root, ["rev-parse", "HEAD"], effectiveEnvironment).trim()
-  const source = manifest(layout.sourceRoots, layout.sourceExclusions)
+  const rootConfigurations = layout.rootFileSuffixes.flatMap(({ root, suffixes }) =>
+    readdirSync(root)
+      .filter((name) => suffixes.some((suffix) => name.length > suffix.length && name.endsWith(suffix)))
+      .map((name) => join(root, name))
+  )
+  const source = manifest([...layout.sourceRoots, ...rootConfigurations], layout.sourceExclusions)
   const gitConfiguration = candidateGitConfiguration(layout.root, effectiveEnvironment)
   const projectGitConfiguration = (entries) =>
     entries.map((entry) =>
@@ -473,6 +480,7 @@ export const startInputGuard = async ({
     roots: [...layout.sourceRoots, ...layout.gitInputs, ...layout.tools, ...layout.configurations],
     excludedRoots: layout.sourceExclusions,
     protectedRoots: layout.gitInputs,
+    rootFileSuffixes: layout.rootFileSuffixes,
     replaceableRoots: [],
     transientCoordinationRoots: layout.transientCoordinationRoots,
     pythonExecutable: layout.python

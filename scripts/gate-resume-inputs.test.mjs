@@ -21,6 +21,7 @@ import { afterEach, test } from "node:test"
 import { startInputGuard } from "./gate-resume-inputs.mjs"
 import { startInputObserver } from "./gate-input-observer.mjs"
 import { stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
+import { qualityRootConfigurationSuffixes } from "./quality-file-discovery.mjs"
 
 const roots = []
 afterEach(() => {
@@ -1422,3 +1423,76 @@ void test("research and root reports do not invalidate the guard, while source a
     }
   }
 })
+
+void test("guarded root configuration suffixes agree with the formatter's current input globs", () => {
+  const formatter = JSON.parse(readFileSync(new URL("../dprint.json", import.meta.url), "utf8"))
+  const rootConfigurations = formatter.includes.filter((glob) => !glob.includes("/"))
+  assert.deepEqual(
+    rootConfigurations.toSorted(),
+    qualityRootConfigurationSuffixes.map((suffix) => `*${suffix}`).toSorted()
+  )
+})
+
+for (const extension of ["js", "mjs", "ts", "tsx"]) {
+  void test(`a newly created root .config.${extension} removed before validation still invalidates qualification`, async () => {
+    const f = fixture()
+    const path = join(f.root, `another-tool.config.${extension}`)
+    const guard = await f.guard()
+    try {
+      writeFileSync(path, "temporary formatter input\n")
+      rmSync(path)
+      await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+    } finally {
+      await guard.close()
+    }
+  })
+}
+
+void test("an existing root TSX configuration edit restored before validation still invalidates qualification", async () => {
+  const f = fixture()
+  const path = join(f.root, "another-tool.config.tsx")
+  writeFileSync(path, "initial formatter input\n")
+  const guard = await f.guard()
+  try {
+    writeFileSync(path, "changed formatter input\n")
+    writeFileSync(path, "initial formatter input\n")
+    await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+void test("moving a root configuration away and restoring it invalidates qualification", async () => {
+  const f = fixture()
+  const path = join(f.root, "another-tool.config.tsx")
+  const moved = join(f.root, "unrelated-report.txt")
+  writeFileSync(path, "initial formatter input\n")
+  const guard = await f.guard()
+  try {
+    renameSync(path, moved)
+    renameSync(moved, path)
+    await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+for (const [kind, makeLink] of [
+  ["symbolic", symlinkSync],
+  ["hard", linkSync]
+]) {
+  void test(`a root configuration ${kind} link observes target edits restored before validation`, async () => {
+    const f = fixture()
+    const target = join(f.outer, "formatter-target.tsx")
+    writeFileSync(target, "initial formatter input\n")
+    makeLink(target, join(f.root, "another-tool.config.tsx"))
+    const guard = await f.guard()
+    try {
+      writeFileSync(target, "changed formatter input\n")
+      writeFileSync(target, "initial formatter input\n")
+      await assert.rejects(guard.assertUnchanged(), /dirty|watch/u)
+    } finally {
+      await guard.close()
+    }
+  })
+}
