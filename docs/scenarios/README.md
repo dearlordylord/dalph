@@ -47,9 +47,6 @@ Git history.
 
 ## Executor work and recovery
 
-- [Untrusted draft: request new work after a proven executor protocol failure](recover-executor-protocol-failure.md)
-- [Untrusted draft: isolate the host's Codex provider state](isolated-codex-provider-home.md)
-- [Untrusted draft: send information to one active executor](guide-active-executor.md)
 - [Prepare the exact Codex task worktree before implementation checks](prepare-exact-codex-task-worktree.md)
 - [Bound one Codex tool effect without losing its planned attempt](contain-non-converging-codex-tool-effects.md)
 - [Ask Codex to review a candidate before accepting it](codex-bounded-review-instruction.md)
@@ -91,7 +88,6 @@ Git history.
 
 ## Cassettes, presentation, and composed delivery
 
-- [Untrusted draft: inspect declared work outside the selected Run in a native page](inspect-work-scope-live-page.md)
 - [Preserve the selected cassette and playback moment in the URL](reducer-lab-url-selection.md)
 - [Authored-cassette abstraction levels](authored-cassette-abstraction-levels.md)
 - [Qualify the recovery-prefix harness against both journal stores](qualify-recovery-prefix-harness.md)
