@@ -2,7 +2,7 @@
 import nodeProcess from "node:process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Path, Ref, Schema, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import { runtimeDiagnosticByteLimit } from "./runtime-diagnostic.js"
@@ -21,6 +21,10 @@ const observeFailureChannels = (application: string, unavailable = false) =>
         import { Effect } from "effect";
         import { OperationId, TaskTrackerMutationThrottled } from "@dalph/orchestrator";
         import { runDalphNodeMain } from "./dist/src/application/node-main.js";
+        import { CodexAttemptStore, CodexAttemptStoreFailure, nodeCodexAttemptStoreLayer } from "./dist/src/application/codex-attempt-store.js";
+        import { NodeServices } from "@effect/platform-node";
+        import { CodexAppServerFailure } from "./dist/src/application/codex-app-server.js";
+        import { DalphCommandExit } from "./dist/src/application/command-exit.js";
         const privateSentinel = "private-provider-payload-must-not-be-printed";
         ${unavailable ? 'nodeProcess.stderr.on("error", () => {}); closeSync(2);' : ""}
         runDalphNodeMain(${application});
@@ -59,12 +63,100 @@ const assertFailureChannels = (application: string, expectedStderr: string, unav
   )
 
 it.live(
-  "a known typed command failure adds no terminal cause dump or private payload",
+  "a typed boundary failure emits a safe diagnostic without its private payload",
   () =>
-    assertFailureChannels(
-      'Effect.fail(new TaskTrackerMutationThrottled({ detail: privateSentinel, operation: "AcquireTaskClaim", operationId: OperationId.make("node-main-private-throttle"), retry: null }))',
-      ""
+    observeFailureChannels(
+      'Effect.fail(new TaskTrackerMutationThrottled({ detail: privateSentinel, operation: "AcquireTaskClaim", operationId: OperationId.make("node-main-private-throttle"), retry: null }))'
+    ).pipe(
+      Effect.tap(({ exitCode, stderr, stdout }) =>
+        Effect.sync(() => {
+          expect(stdout).toBe("")
+          expect(exitCode).toBe(1)
+          expect(JSON.parse(stderr)).toMatchObject({
+            boundary: "NodeMainExit",
+            reasons: [
+              { _tag: "Failure", error: { errorTag: "TaskTrackerMutationThrottled", operation: "AcquireTaskClaim" } }
+            ]
+          })
+          expect(stderr).not.toContain("private-provider-payload-must-not-be-printed")
+        })
+      )
     ),
+  30_000
+)
+
+it.live(
+  "reports a private-store configuration failure before Run allocation",
+  () =>
+    observeFailureChannels(
+      'Effect.fail(new CodexAttemptStoreFailure({ operation: "configure", detail: privateSentinel }))'
+    ).pipe(
+      Effect.tap(({ exitCode, stderr, stdout }) =>
+        Effect.sync(() => {
+          expect(stdout).toBe("")
+          expect(exitCode).toBe(1)
+          expect(JSON.parse(stderr)).toMatchObject({
+            boundary: "NodeMainExit",
+            reasons: [
+              {
+                _tag: "Failure",
+                error: {
+                  errorTag: "CodexAttemptStoreFailure",
+                  operation: "configure",
+                  safeMessage: expect.stringContaining("owner-only")
+                }
+              }
+            ]
+          })
+          expect(stderr).not.toContain("private-provider-payload-must-not-be-printed")
+          expect(stderr).not.toContain("controlled-github-token")
+          expect(stderr).not.toContain("runId")
+        })
+      )
+    ),
+  30_000
+)
+
+it.live(
+  "an already reported command exit adds no duplicate failure diagnostic",
+  () =>
+    observeFailureChannels("Effect.fail(new DalphCommandExit({ status: 2 }))").pipe(
+      Effect.tap(({ exitCode, stderr, stdout }) =>
+        Effect.sync(() => {
+          expect(stdout).toBe("")
+          expect(stderr).toBe("")
+          expect(exitCode).toBe(2)
+        })
+      )
+    ),
+  30_000
+)
+
+it.live(
+  "unsafe private-directory startup reports its boundary without repairing permissions",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-startup-diagnostic-" })
+        const directory = path.join(root, "private")
+        yield* fileSystem.makeDirectory(directory)
+        yield* fileSystem.chmod(directory, 0o755)
+        const observed = yield* observeFailureChannels(`Effect.gen(function* () {
+      yield* CodexAttemptStore;
+      nodeProcess.stdout.write("configuration-crossed");
+    }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: ${JSON.stringify(directory)} })), Effect.provide(NodeServices.layer))`)
+        expect(observed.stdout).toBe("")
+        expect(observed.exitCode).toBe(1)
+        expect(JSON.parse(observed.stderr)).toMatchObject({
+          reasons: [{ _tag: "Failure", error: { errorTag: "CodexAttemptStoreFailure", operation: "configure" } }]
+        })
+        expect(observed.stderr).not.toContain(directory)
+        expect((yield* fileSystem.stat(directory)).mode & 0o777).toBe(0o755)
+        expect(yield* fileSystem.readDirectory(directory)).toEqual([])
+      })
+    ).pipe(Effect.provide(NodeServices.layer)),
   30_000
 )
 
@@ -241,3 +333,21 @@ it.live(
     ).pipe(Effect.provide(NodeServices.layer)),
   30_000
 )
+
+for (const disposition of ["Completed", "Cancelled"] as const)
+  it.live(`keeps JSON Run ${disposition} visible when provider close makes process exit nonzero`, () =>
+    Effect.gen(function* () {
+      const observed = yield* observeFailureChannels(`Effect.scoped(Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => Effect.die(new CodexAppServerFailure({ operation: "close", kind: "Ownership", detail: privateSentinel })));
+        yield* Effect.sync(() => nodeProcess.stdout.write(JSON.stringify({ _tag: "RunDisposition", runId: "retained-run", disposition: "${disposition}", version: 1 }) + "\\n"));
+      }))`)
+      expect(observed.exitCode).toBe(1)
+      expect(JSON.parse(observed.stdout)).toMatchObject({ _tag: "RunDisposition", disposition })
+      expect(JSON.parse(observed.stderr)).toMatchObject({
+        boundary: "NodeMainExit",
+        outcome: "Failed",
+        reasons: [{ error: { errorTag: "CodexAppServerFailure", operation: "close", category: "Ownership" } }]
+      })
+      expect(observed.stderr).not.toContain("private-provider-payload")
+    }).pipe(Effect.provide(NodeServices.layer))
+  )

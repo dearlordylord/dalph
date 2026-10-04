@@ -31,6 +31,7 @@ import {
 } from "./delivery-evidence.js"
 import { deliveryProposalsOf, freshContinuationDecisionsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { deriveFreshTaskCandidateEvaluation } from "./fresh-task-candidate.js"
+import { projectDeliveryDiagnostics } from "./delivery-diagnostics.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
@@ -373,6 +374,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         proposalContributions,
         reflectionProposals: [],
         runtimeFacts: {
+          diagnostics: projectDeliveryDiagnostics(runId, records, journal.graph, target),
           acceptedAt: journal.position,
           acceptedFactPublication,
           ...(failedGraphReadAt === undefined ? {} : { failedWorkflowEstablishmentGraphReadAt: failedGraphReadAt }),

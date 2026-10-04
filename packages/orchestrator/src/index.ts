@@ -96,7 +96,9 @@ export {
   TaskLifecycle,
   TrackerRevision,
   TrackerSnapshot,
-  TrackerTask
+  TrackerTask,
+  TrackerIssueNumber,
+  TrackerTaskDescriptor
 } from "./authorities/task-tracker/task.js"
 export {
   TaskClaimReacquisitionDirectedEvent,
@@ -1109,3 +1111,5 @@ export {
   GitSenderToken,
   gitSenderTokenEnvironment
 } from "./authorities/git/sender-custody.js"
+
+export { DeliveryDiagnostics, projectDeliveryDiagnostics } from "./coordination/delivery/delivery-diagnostics.js"

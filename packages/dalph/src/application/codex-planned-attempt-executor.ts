@@ -13,6 +13,7 @@ import {
   type PlannedAttemptExecutorObservationPurpose,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorResult,
+  type PlannedAttemptExecutorFailureCode,
   PlannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
@@ -1308,14 +1309,32 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (commit === undefined) {
         return {
           _tag: "Report" as const,
-          outcome: yield* failed(attempt, correlation, record, turn.id, thread, terminalReadAuthorized)
+          outcome: yield* failed(
+            attempt,
+            correlation,
+            record,
+            turn.id,
+            thread,
+            "ResultEnvelopeInvalid",
+            head,
+            terminalReadAuthorized
+          )
         }
       }
       if (head === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
       if (commit !== head) {
         return {
           _tag: "Report" as const,
-          outcome: yield* failed(attempt, correlation, record, turn.id, thread, terminalReadAuthorized)
+          outcome: yield* failed(
+            attempt,
+            correlation,
+            record,
+            turn.id,
+            thread,
+            "CandidateHeadMismatch",
+            head,
+            terminalReadAuthorized
+          )
         }
       }
       return { _tag: "Commit" as const, commit }
@@ -1432,6 +1451,8 @@ const makeCodexPlannedAttemptExecutorContext = (
       record: OwnedTurnRecord,
       observedTurnId: CodexTurnId,
       thread: CodexThreadSnapshot,
+      failureCode: PlannedAttemptExecutorFailureCode,
+      observedHead?: GitCommitSha,
       terminalReadAuthorized = false
     ) {
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
@@ -1441,8 +1462,11 @@ const makeCodexPlannedAttemptExecutorContext = (
           report: running(correlation)
         }
       }
-      yield* save(terminalRecordFor(attempt, record, observedTurnId, CodexSealedTerminal.cases.Failed.make({}), null))
-      return { continueLifecycleObservation: false, report: terminal(correlation, { _tag: "Failed" }) }
+      const result = { _tag: "Failed" as const, failureCode, ...(observedHead === undefined ? {} : { observedHead }) }
+      yield* save(
+        terminalRecordFor(attempt, record, observedTurnId, CodexSealedTerminal.cases.Failed.make(result), null)
+      )
+      return { continueLifecycleObservation: false, report: terminal(correlation, result) }
     })
 
     const observedRecordForTerminal = Effect.fn("CodexPlannedAttemptExecutor.observedRecordForTerminal")(function* (
@@ -1492,11 +1516,12 @@ const makeCodexPlannedAttemptExecutorContext = (
     ) {
       const turn = reconciliation.turn
       if (observedRecord._tag === "Terminal") {
-        if (isAcceptedTerminalRecord(observedRecord)) {
-          if (turn.status !== "completed") return yield* Effect.fail(new CodexEvidenceInvalid({}))
-          return yield* rereadAccepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
+        if (observedRecord.terminal._tag === "Failed") {
+          return { continueLifecycleObservation: false, report: terminal(correlation, observedRecord.terminal) }
         }
-        return { continueLifecycleObservation: false, report: terminal(correlation, { _tag: "Failed" }) }
+        if (!isAcceptedTerminalRecord(observedRecord) || turn.status !== "completed")
+          return yield* Effect.fail(new CodexEvidenceInvalid({}))
+        return yield* rereadAccepted(attempt, correlation, observedRecord, turn, reconciliation.thread)
       }
       if (turn.status === "completed") {
         return yield* accepted(
@@ -1508,7 +1533,16 @@ const makeCodexPlannedAttemptExecutorContext = (
           terminalReadAuthorized
         )
       }
-      return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread, terminalReadAuthorized)
+      return yield* failed(
+        attempt,
+        correlation,
+        observedRecord,
+        turn.id,
+        reconciliation.thread,
+        "ProviderFailed",
+        undefined,
+        terminalReadAuthorized
+      )
     })
 
     const terminalOrRunningOutcome = Effect.fn("CodexPlannedAttemptExecutor.terminalOrRunningOutcome")(function* (

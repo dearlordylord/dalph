@@ -1,6 +1,13 @@
+import {
+  projectControlledThread,
+  failControlledGraphRead,
+  failControlledProviderClose
+} from "./production-running-host-provider-controls.js"
 import { githubGraphqlBatchTestClient } from "../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import { GitCommitSha, RemotePublicationTarget, RemotePublicationEndpoint, RunId } from "@dalph/contracts"
 import {
+  type GithubGraphqlReadThrottled,
+  type GithubGraphqlRequestError,
   RunReactivationOwner,
   GithubIssueNodeId,
   githubTaskIdFor,
@@ -77,7 +84,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     readonly onRootGraphRead?: () => Effect.Effect<void>
     readonly onActivationIdle?: () => Effect.Effect<void>
   },
-  interruptStopsTurn = false
+  interruptStopsTurn = false,
+  diagnostics?: { readonly rejectResult?: boolean; readonly failClose?: boolean }
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const git = yield* GitCommand
@@ -114,6 +122,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
       Effect.asVoid
     )
   )
+  const closeFailureEnabled = yield* Ref.make(false)
   const provider = yield* makeHermeticProviderState(
     configuration,
     (boundary) =>
@@ -124,16 +133,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   )
   // The shutdown fixture acknowledges interrupt, then reconciliation observes an idle interrupted turn.
   const interrupted = yield* Ref.make(false)
-  const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean): CodexThreadSnapshot =>
-    stopped
-      ? { ...thread, status: "idle", turns: thread.turns.map((turn) => ({ ...turn, status: "interrupted" as const })) }
-      : visible
-        ? thread
-        : {
-            ...thread,
-            status: "active" as const,
-            turns: thread.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
-          }
+  const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean) =>
+    projectControlledThread(thread, visible, stopped, diagnostics?.rejectResult === true)
   const codex = CodexAppServer.of({
     ...provider.codex,
     interruptTurn: (threadId, turnId) =>
@@ -216,9 +217,11 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const gitCalls = yield* Ref.make(0)
   const exitCalls = yield* Ref.make(0)
   const exitEvents = yield* Ref.make<ReadonlyArray<unknown>>([])
+  const graphReadFailure = yield* Ref.make<GithubGraphqlReadThrottled | GithubGraphqlRequestError | null>(null)
   const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
     Effect.gen(function* () {
       yield* Ref.update(trackerCalls, (count) => count + 1)
+      yield* failControlledGraphRead(request, graphReadFailure)
       const connection = (field: "subIssues" | "blockedBy", ids: ReadonlyArray<GithubIssueNodeId>) => ({
         body: {
           data: {
@@ -310,6 +313,14 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const afterInsert = paused?.afterInsert
   const graph = {
     ...productionGraph,
+    ...(diagnostics?.failClose !== true
+      ? {}
+      : {
+          acquireProvider: (...args: Parameters<typeof productionGraph.acquireProvider>) =>
+            productionGraph
+              .acquireProvider(...args)
+              .pipe(Effect.tap(() => Effect.addFinalizer(() => failControlledProviderClose(closeFailureEnabled))))
+        }),
     ...(paused === undefined
       ? {
           foundation: (configuration: ProductionRepositoryHostConfiguration) =>
@@ -373,6 +384,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   return {
     configuration,
     graph,
+    enableCloseFailure: Ref.set(closeFailureEnabled, true),
+    setGraphReadFailure: (failure: GithubGraphqlReadThrottled | GithubGraphqlRequestError | null) =>
+      Ref.set(graphReadFailure, failure),
     taskIds,
     authorE: Ref.set(includesE, true),
     bootstrap: Deferred.await(bootstrapReady),

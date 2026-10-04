@@ -154,26 +154,35 @@ const resultForTerminal = Effect.fn("KimiPlannedAttemptExecutor.resultForTermina
 ): Effect.fn.Return<PlannedAttemptExecutorResult, unknown, never> {
   const correlation = correlationForContext(state.attempt)
   const candidate = commitFromMessage(textFrom(observation), correlation)
-  if (candidate._tag === "InvalidCandidate") return PlannedAttemptExecutorResult.cases.Failed.make({})
+  if (candidate._tag === "InvalidCandidate")
+    return PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "ResultEnvelopeInvalid" })
   if (Option.isNone(git) || Option.isNone(evidence) || Option.isNone(crypto)) {
     return PlannedAttemptExecutorResult.cases.Completed.make({})
   }
   const head = yield* readHead(git.value, state.attempt)
-  if (Option.isNone(head)) return PlannedAttemptExecutorResult.cases.Failed.make({})
+  if (Option.isNone(head)) return PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "GitUnavailable" })
   if (candidate._tag === "NoCandidate") {
     return head.value === state.attempt.baseSha
       ? PlannedAttemptExecutorResult.cases.Completed.make({})
-      : PlannedAttemptExecutorResult.cases.Failed.make({})
+      : PlannedAttemptExecutorResult.cases.Failed.make({
+          failureCode: "ResultEnvelopeInvalid",
+          observedHead: head.value
+        })
   }
   const acceptedCommit = candidate.commit
-  if (head.value !== acceptedCommit) return PlannedAttemptExecutorResult.cases.Failed.make({})
+  if (head.value !== acceptedCommit)
+    return PlannedAttemptExecutorResult.cases.Failed.make({
+      failureCode: "CandidateHeadMismatch",
+      observedHead: head.value
+    })
   const lineage = yield* git.value.runInWorktree(state.attempt.worktree, [
     "merge-base",
     "--is-ancestor",
     state.attempt.baseSha,
     acceptedCommit
   ])
-  if (lineage.exitCode !== 0) return PlannedAttemptExecutorResult.cases.Failed.make({})
+  if (lineage.exitCode !== 0)
+    return PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "LineageUnproven", observedHead: head.value })
   const reference = yield* publishEvidence(crypto.value, evidence.value, acceptedCommit, correlation)
   return PlannedAttemptExecutorResult.cases.Accepted.make({
     acceptedResult: { commit: acceptedCommit, evidenceManifest: reference }

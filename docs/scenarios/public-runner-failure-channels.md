@@ -77,3 +77,19 @@ needed for the controlled runner tests.
   readers retain and decode the same bounded diagnostic when a child exits one;
   focused interference tests use its boundary and cause facts to identify the
   shared failure without changing public stdout or authorizing a retry.
+
+## Typed startup failures and finalization
+
+Under [#430](actionable-failure-diagnostics.md), the Node runner also emits the
+sanitized stderr diagnosis for a typed failure that reaches its boundary.
+An intentional `DalphCommandExit` alone remains silent; its command has already
+selected the public disposition. A separate scoped close failure is still
+reported. A private-store configuration failure before Run allocation names the
+configuration boundary and advises an absolute, current-owner directory with
+0700 permissions, without exposing its path or changing permissions.
+
+`node-main.integration.test.ts` exercises actual child-process status and
+stdout/stderr, including Completed and Cancelled Run records followed by
+provider-close failure. `production-running-host.test.ts` separately proves
+those Run dispositions through real Git/SQLite host composition. A failed
+process finalizer does not retroactively invalidate delivery or Run termination.

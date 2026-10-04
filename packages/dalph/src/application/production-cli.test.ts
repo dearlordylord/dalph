@@ -8,6 +8,8 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedTaskAttempt,
+  PlannedAttemptExecutorReport,
+  plannedAttemptExecutorCorrelation,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -2112,7 +2114,8 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
     relinquishment: TaskId.make("09-relinquishment"),
     settlement: TaskId.make("10-settlement"),
     tracker: TaskId.make("11-tracker"),
-    unavailable: TaskId.make("12-unavailable")
+    unavailable: TaskId.make("12-unavailable"),
+    failed: TaskId.make("13-failed")
   } as const
   const attemptOf = (taskId: TaskId, suffix: string) =>
     PlannedTaskAttempt.make({
@@ -2133,6 +2136,7 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
       | typeof ResponsibilityDisposition.UnreadableFactWait
       | typeof ResponsibilityDisposition.CancelledAttemptSettled
       | typeof ResponsibilityDisposition.Relinquished
+      | typeof ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal
     >
   ): TicketDeliveryEvidence => ({
     _tag: "ResponsibilityFacts",
@@ -2171,6 +2175,16 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
     queuedAt: JournalPosition.make(3)
   })
   const evidence: ReadonlyArray<TicketDeliveryEvidence> = [
+    executorFacts(
+      taskIds.failed,
+      "failed",
+      ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation: plannedAttemptExecutorCorrelation(attemptOf(taskIds.failed, "failed")),
+          result: { _tag: "Failed" }
+        })
+      })
+    ),
     trackerEvidence,
     conflictEvidence,
     conflictEvidence,
@@ -2279,7 +2293,7 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
   return { _tag: "Ready", evaluation, liveOwners }
 }
 
-it.effect("projects and encodes all eleven status variants through the production current-first attachment", () =>
+it.effect("projects and encodes all twelve status variants through the production current-first attachment", () =>
   Effect.gen(function* () {
     const observationState = projectedStatusFixture()
     const source = deliveryStatusOf({ _tag: "Run", runId }, observationState)
@@ -2290,6 +2304,7 @@ it.effect("projects and encodes all eleven status variants through the productio
     }
     expect(new Set(source.entries.map(({ _tag }) => _tag))).toEqual(
       new Set([
+        "ExecutorFailure",
         "DependencyWait",
         "TrackerFactWait",
         "TaskWorkCapacityWait",

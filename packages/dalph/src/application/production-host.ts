@@ -9,6 +9,8 @@ import {
 } from "@dalph/contracts"
 import {
   AcceptedJournalReader,
+  currentSignalFromCurrentFirstStream,
+  projectDeliveryDiagnostics,
   type AcceptedRunControlDirection,
   acceptedJournalRecordsForKind,
   journalRecordAt,
@@ -80,7 +82,7 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Logger, Option, Ref, Schema, Semaphore, type Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Logger, Option, Ref, Schema, Semaphore, Stream, type Scope } from "effect"
 // eslint-disable-next-line import/no-nodejs-modules -- The production host selects its own Node executable for task preparation.
 import nodeProcess from "node:process"
 import {
@@ -1160,9 +1162,33 @@ export const withDecodedProductionRepositoryHost = <
               : null
         } satisfies ProductionPassiveRunControl
       })
+      // An activation may finish immediately after retaining a failed read.
+      // Diagnostics follow accepted history even while execution is idle.
+      const readDiagnosticCurrent = Effect.gen(function* () {
+        const state = yield* source.current.get
+        if (state._tag !== "Ready" || Option.isNone(acceptedReader)) return state
+        const prefix = yield* acceptedReader.value.readAccepted(selection.runId).pipe(Effect.result)
+        if (prefix._tag === "Failure") return state
+        return {
+          ...state,
+          evaluation: {
+            ...state.evaluation,
+            diagnostics: projectDeliveryDiagnostics(selection.runId, prefix.success, undefined, configuration.target)
+          }
+        }
+      })
+      const diagnosticCurrent = currentSignalFromCurrentFirstStream(
+        Stream.merge(
+          source.current.changes.pipe(Stream.map(() => undefined)),
+          source.acceptedHistory.changes.pipe(Stream.map(() => undefined))
+        ).pipe(
+          Stream.mapEffect(() => readDiagnosticCurrent),
+          Stream.takeUntil((state) => state._tag === "Closed")
+        )
+      )
       const observation = {
         acceptedHistory: source.acceptedHistory,
-        current: source.current,
+        current: diagnosticCurrent,
         runTermination: source.runTermination,
         selection,
         traceReader,

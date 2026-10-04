@@ -31,11 +31,26 @@ export type AcceptedResultEvidenceManifest = typeof AcceptedResultEvidenceManife
 export const AcceptedResult = Schema.Struct({ commit: GitCommitSha, evidenceManifest: EvidenceReference })
 export type AcceptedResult = typeof AcceptedResult.Type
 
+/** Safe executor-observed causes; these codes carry no provider payload or retry authority. */
+export const PlannedAttemptExecutorFailureCode = Schema.Literals([
+  "ProviderFailed",
+  "ResultEnvelopeInvalid",
+  "CandidateHeadMismatch",
+  "GitUnavailable",
+  "LineageUnproven"
+])
+export type PlannedAttemptExecutorFailureCode = typeof PlannedAttemptExecutorFailureCode.Type
+
 /** The normalized terminal result of all executor work for one planned attempt. */
 export const PlannedAttemptExecutorResult = Schema.TaggedUnion({
   Accepted: { acceptedResult: AcceptedResult },
   Completed: {},
-  Failed: {}
+  /** Missing code is a retained legacy failure whose reason was never recorded. */
+  Failed: {
+    failureCode: Schema.optionalKey(PlannedAttemptExecutorFailureCode),
+    /** HEAD actually read from the exact worktree; neither semantic acceptance nor current Git authority. */
+    observedHead: Schema.optionalKey(GitCommitSha)
+  }
 })
 export type PlannedAttemptExecutorResult = typeof PlannedAttemptExecutorResult.Type
 
@@ -56,6 +71,9 @@ const samePlannedAttemptExecutorResult = (
   right: PlannedAttemptExecutorResult
 ): boolean => {
   if (left._tag !== right._tag) return false
+  if (left._tag === "Failed" && right._tag === "Failed") {
+    return left.failureCode === right.failureCode && left.observedHead === right.observedHead
+  }
   if (left._tag !== "Accepted" || right._tag !== "Accepted") return true
   return (
     left.acceptedResult.commit === right.acceptedResult.commit &&

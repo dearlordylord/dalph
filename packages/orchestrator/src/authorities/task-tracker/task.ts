@@ -12,7 +12,22 @@ export const isTaskOpen = (lifecycle: TaskLifecycle): boolean => lifecycle._tag 
 
 export const isDependencySatisfied = (lifecycle: TaskLifecycle): boolean => lifecycle._tag === "CompletedSuccessfully"
 
+/** A provider issue ordinal for display; the stable task identity remains TaskId. */
+export const TrackerIssueNumber = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
+  Schema.brand("TrackerIssueNumber")
+)
+export type TrackerIssueNumber = typeof TrackerIssueNumber.Type
+
+/** Intrinsic tracker metadata, excluding authored bodies and workflow/UI state. */
+export const TrackerTaskDescriptor = Schema.Struct({
+  title: Schema.NonEmptyString,
+  issueNumber: Schema.optionalKey(TrackerIssueNumber)
+})
+export type TrackerTaskDescriptor = typeof TrackerTaskDescriptor.Type
+
 export const TrackerTask = Schema.Struct({
+  /** Absent in older accepted observations and trackers without readable metadata. */
+  descriptor: Schema.optionalKey(TrackerTaskDescriptor),
   id: TaskId,
   lifecycle: TaskLifecycle,
   parentTaskId: Schema.NullOr(TaskId),

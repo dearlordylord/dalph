@@ -1,3 +1,5 @@
+import { projectTaskDagWire, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
+import { projectCompleteTaskGraph } from "./graph-projection.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 // @effect-diagnostics multipleEffectProvide:off
 import { Cause, Effect, Layer, Option, Ref, Result, Schema } from "effect"
@@ -18,8 +20,9 @@ import { reduceWorkflowJournalHistory } from "../../coordination/reconstruction/
 import { liveJournalTestLayer } from "../../coordination/delivery/live-journal-test-layer.js"
 import { Journal } from "../../coordination/delivery/journal.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
-import type { TaskTrackerFactsReadUnavailable } from "./observation.js"
 import {
+  CompleteTaskTrackerFactsObserved,
+  type TaskTrackerFactsReadUnavailable,
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   TaskTrackerFactsReadFailed,
@@ -33,7 +36,6 @@ import {
   reconstructedTaskGraphFor,
   reconstructedTaskWorkSpecificationFor
 } from "../../coordination/reconstruction/graph-knowledge.js"
-import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import {
   TestTrackerGraphReader,
   TrackerAdapterReadContext,
@@ -1557,4 +1559,48 @@ it("records exact normalized title and body only through the focused attempt rea
     reconstructedTaskWorkSpecificationFor({ taskTrackerFacts: [graphObservation, focusedObservation] }, taskId)
   ).toEqual(Option.some(specification))
   expect(reconstructedTaskWorkSpecificationFor({ taskTrackerFacts: [graphObservation] }, taskId)).toEqual(Option.none())
+})
+
+it("retains tracker descriptors across accepted observation serialization and graph reconstruction", () => {
+  const original = integrationFinalityFixture.graphSnapshot.toWire()
+  const projected = projectTaskDagWire({
+    ...original,
+    tasks: original.tasks.map((task) => ({ ...task, descriptor: { title: "Readable issue", issueNumber: 430 } }))
+  })
+  expect(projected._tag).toBe("Valid")
+  if (projected._tag !== "Valid") return
+  const observation = makeCompleteTaskTrackerFactsObserved(
+    integrationFinalityFixture.graphOperation,
+    projected.snapshot
+  )
+  const decoded = Schema.decodeUnknownSync(CompleteTaskTrackerFactsObserved)(JSON.parse(JSON.stringify(observation)))
+  expect(Option.getOrThrow(projectCompleteTaskGraph(decoded)).toWire().tasks[0]?.descriptor).toEqual({
+    title: "Readable issue",
+    issueNumber: 430
+  })
+})
+
+it("rejects foreign or duplicate tracker descriptor identities", () => {
+  const observation = makeCompleteTaskTrackerFactsObserved(
+    integrationFinalityFixture.graphOperation,
+    integrationFinalityFixture.graphSnapshot
+  )
+  const taskId = observation.factFamilies[0].taskIds[0]
+  expect(taskId).toBeDefined()
+  const descriptor = { title: "Readable issue", issueNumber: 430 }
+  for (const descriptors of [
+    [{ taskId: "foreign-task", descriptor }],
+    [
+      { taskId, descriptor },
+      { taskId, descriptor }
+    ]
+  ])
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(CompleteTaskTrackerFactsObserved)({
+          ...observation,
+          factFamilies: [{ ...observation.factFamilies[0], descriptors }, ...observation.factFamilies.slice(1)]
+        })
+      )
+    ).toBe(true)
 })

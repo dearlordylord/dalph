@@ -3,11 +3,13 @@ import {
   IntegrationTarget,
   PlannedAttemptExecutorCorrelation,
   PlannedTaskAttempt,
+  PlannedAttemptExecutorFailureCode,
   RunId,
   TaskId
 } from "@dalph/contracts"
 import type { CurrentDeliveryStatus } from "@dalph/orchestrator"
 import {
+  DeliveryDiagnostics,
   BoundedTicketRank,
   DeliveryProposalOrdinal,
   DeliveryProposalId,
@@ -81,6 +83,15 @@ const entryBase = {
 }
 
 const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
+  ExecutorFailure: {
+    ...entryBase,
+    classification: Schema.Literal("Blocked"),
+    plannedAttempt: PlannedTaskAttempt,
+    obligationReference: ObligationReference,
+    boundary: Schema.Literal("PlannedAttemptExecutor"),
+    reason: Schema.TaggedUnion({ Unavailable: {}, Known: { code: PlannedAttemptExecutorFailureCode } }),
+    recovery: Schema.TaggedStruct("Unavailable", { reason: Schema.Literal("ExecutorFailureRecoveryNotImplemented") })
+  },
   DependencyWait: {
     ...entryBase,
     classification: Schema.Literal("Waiting"),
@@ -219,6 +230,9 @@ const trackerFactRelationshipIsValid = (entry: PublicTrackerFactWait): boolean =
 
 const entryRelationshipCheck = Match.type<typeof PublicDeliveryStatusEntryShape.Type>().pipe(
   Match.tagsExhaustive({
+    ExecutorFailure: (entry) =>
+      entry.plannedAttempt.runId === entry.subject.runId &&
+      taskMatchesSubject(entry.plannedAttempt.taskId, entry.subject),
     LiveDeliveryAction: (entry) => {
       const materialized =
         entry.lifecycle === "MaterializedDeliveryAction" || entry.lifecycle === "SettledMaterializedDeliveryAction"
@@ -256,6 +270,7 @@ export type PublicDeliveryStatusEntry = typeof PublicDeliveryStatusEntry.Type
 
 const SnapshotShape = Schema.TaggedUnion({
   DeliveryStatusAvailable: {
+    diagnostics: Schema.optionalKey(DeliveryDiagnostics),
     acceptedAt: Schema.NullOr(JournalPosition),
     entries: Schema.Array(PublicDeliveryStatusEntry),
     subject: DeliveryStatusSubject
@@ -279,7 +294,15 @@ const Snapshot = SnapshotShape.pipe(
   Schema.refine(
     (status): status is typeof status =>
       status._tag !== "DeliveryStatusAvailable" ||
-      status.entries.every((entry) => belongs(entry.subject, status.subject)),
+      (status.entries.every((entry) => belongs(entry.subject, status.subject)) &&
+        (status.diagnostics === undefined ||
+          (status.diagnostics.runId === status.subject.runId &&
+            status.diagnostics.tasks.every(
+              (task) =>
+                task.retainedAttempt.runId === status.subject.runId &&
+                task.retainedAttempt.taskId === task.taskId &&
+                (status.subject._tag === "Run" || task.taskId === status.subject.taskId)
+            )))),
     { message: "every entry must belong to its status subject" }
   )
 )

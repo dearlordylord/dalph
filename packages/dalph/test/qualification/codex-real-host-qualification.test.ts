@@ -346,7 +346,7 @@ class BuiltHost {
   }
 
   continue(): void {
-    this.child.stdin.write("continue\n")
+    this.child.stdin.end("continue\n")
   }
 
   async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
@@ -587,6 +587,8 @@ const makeFixture = async (mode: ModelMode): Promise<Fixture> => {
   await writeFile(
     nodePath.join(codexHome, "config.toml"),
     [
+      // Plugin marketplace cloning is outside this local provider/process qualification.
+      "features.plugins = false",
       'model_provider = "dalph-fixture"',
       'model = "dalph-fixture-model"',
       'approval_policy = "never"',
@@ -643,18 +645,22 @@ const spawnHost = async (fixture: Fixture, action: HostAction, options: HostOpti
   return host
 }
 
+/** Reconcile stopped writers before injecting a retained-provider fault or deleting its files. */
+const closeOwnedFixtureProvider = async (fixture: Fixture): Promise<void> => {
+  const launch = (await latestPrivateSnapshot(fixture)).serverLaunch
+  const closer = await spawnHost(fixture, "close")
+  requireEvent(await closer.waitFor("closed"), "closed")
+  const closeExit = await closer.waitForExit()
+  if (closeExit.code !== 0 || closeExit.signal !== null) {
+    throw new Error(`qualification cleanup host failed: ${JSON.stringify({ ...closeExit, events: closer.events })}`)
+  }
+  if (launch !== null) await waitForOwnedServerAbsence(launch)
+}
+
 const dispose = async (fixture: Fixture, hosts: ReadonlyArray<BuiltHost>): Promise<void> => {
   for (const host of hosts) await host.stop("SIGKILL")
-  let launch: CodexServerLaunchRecord | null = null
   try {
-    launch = (await latestPrivateSnapshot(fixture)).serverLaunch
-    const closer = await spawnHost(fixture, "close")
-    requireEvent(await closer.waitFor("closed"), "closed")
-    const closeExit = await closer.waitForExit()
-    if (closeExit.code !== 0 || closeExit.signal !== null) {
-      throw new Error(`qualification cleanup host failed: ${JSON.stringify(closeExit)}`)
-    }
-    if (launch !== null) await waitForOwnedServerAbsence(launch)
+    await closeOwnedFixtureProvider(fixture)
   } finally {
     await fixture.model.close()
   }
@@ -979,6 +985,9 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         hosts.push(started)
         expect(requireEvent(await started.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const ownedChildPid = await waitForOwnedChildPid(fixture)
+        requireEvent(await started.waitFor("suspension-ready"), "suspension-ready")
+        expect(started.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        started.continue()
         const report = requireEvent(await started.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
@@ -995,18 +1004,27 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
   qualificationTest(
     "safe suspension preserves the exact thread and a later built host resumes it",
     async () => {
-      const fixture = await makeFixture("holding")
+      const fixture = await makeFixture("child")
       const hosts: Array<BuiltHost> = []
       try {
-        const suspended = await spawnHost(fixture, "exercise-suspension")
+        const suspended = await spawnHost(fixture, "exercise-suspension", { waitForOwnedChild: true })
         hosts.push(suspended)
         expect(requireEvent(await suspended.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
+        await fixture.model.waitForCalls(1)
+        const ownedChildPid = await waitForOwnedChildPid(fixture)
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(true)
+        requireEvent(await suspended.waitFor("suspension-ready"), "suspension-ready")
+        expect(suspended.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        suspended.continue()
         const report = requireEvent(await suspended.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(false)
+        await waitForProcessAbsence(ownedChildPid)
         expect(fixture.model.calls).toHaveLength(1)
+        expect(await suspended.waitForExit()).toEqual({ code: 0, signal: null })
 
         const resumed = await spawnHost(fixture, "resume")
         hosts.push(resumed)
@@ -1165,7 +1183,14 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(requireEvent(await running.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const rollout = await onlyRolloutFile(fixture)
+        const launch = (await latestPrivateSnapshot(fixture)).serverLaunch
+        expect(launch).not.toBeNull()
         await running.stop("SIGKILL")
+        await closeOwnedFixtureProvider(fixture)
+        if (launch !== null)
+          expect(await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))).toEqual({
+            _tag: "Absent"
+          })
         await rm(rollout)
 
         const projected = await spawnHost(fixture, "project")
@@ -1196,6 +1221,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         await fixture.model.waitForCalls(1)
         rollout = await onlyRolloutFile(fixture)
         await running.stop("SIGKILL")
+        await closeOwnedFixtureProvider(fixture)
         await corrupt(rollout)
 
         const projected = await spawnHost(fixture, "project")
@@ -1270,6 +1296,9 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
         const priorAppServerPid = (await latestPrivateSnapshot(fixture)).serverLaunch?.pid
+        requireEvent(await interrupted.waitFor("suspension-ready"), "suspension-ready")
+        expect(interrupted.events.some((event) => event.event === "suspension-requested")).toBe(false)
+        interrupted.continue()
         requireEvent(await interrupted.waitFor("suspension-requested"), "suspension-requested")
         await interrupted.stop("SIGKILL")
         expect(

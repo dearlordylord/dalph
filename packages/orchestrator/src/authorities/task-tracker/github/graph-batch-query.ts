@@ -10,7 +10,7 @@ export const graphBatchRequestBody = (
     .map((read, index) => {
       const fields =
         read._tag === "ReadIssue"
-          ? "state stateReason(enableDuplicate: true) repository { id } parent { id }"
+          ? "title number state stateReason(enableDuplicate: true) repository { id } parent { id }"
           : `${read._tag === "ReadBlockedBy" ? "blockedBy" : "subIssues"}(first: $pageSize, after: $cursor${index}) { nodes { id } pageInfo { hasNextPage endCursor } }`
       return `field${index}: node(id: $id${index}) { ... on Issue { __typename id ${fields} } }`
     })

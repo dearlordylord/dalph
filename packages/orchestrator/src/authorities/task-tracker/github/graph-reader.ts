@@ -6,9 +6,11 @@ import {
   type GithubTrackerReadOperation,
   type TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
+  TrackerReadRetrySeconds,
+  TrackerReadResetEpochSeconds,
   TrackerGraphReader
 } from "../graph-reader.js"
-import type { TaskLifecycle, TrackerTask } from "../task.js"
+import type { TaskLifecycle, TrackerTask, TrackerTaskDescriptor } from "../task.js"
 import { type TrackerTarget } from "../target.js"
 import { GithubGraphqlClient, githubGraphqlClientNodeLayer, GithubGraphqlRequest } from "./graphql-client.js"
 import type {
@@ -41,6 +43,7 @@ import { makeReadTaskWorkSpecification } from "./task-work-specification-reader.
 import { type GithubIssueState, type GithubIssueStateReason, githubTaskLifecycleFrom } from "./task-lifecycle.js"
 
 interface IssueProjection {
+  readonly descriptor?: TrackerTaskDescriptor
   readonly id: GithubIssueNodeId
   readonly lifecycle: TaskLifecycle
   readonly parentNodeId: GithubIssueNodeId | null
@@ -145,7 +148,14 @@ const readIssueProjection = Effect.fn("GithubTrackerGraphReader.readIssueProject
     (detail) => Effect.fail(incomplete(operation, detail))
   )
   const lifecycle = yield* lifecycleFrom(identity.state, identity.stateReason)
-  return { id: identity.id, lifecycle, parentNodeId: identity.parentNodeId } satisfies IssueProjection
+  return {
+    id: identity.id,
+    lifecycle,
+    parentNodeId: identity.parentNodeId,
+    ...(node?.title === undefined
+      ? {}
+      : { descriptor: { title: node.title, ...(node.number === undefined ? {} : { issueNumber: node.number }) } })
+  } satisfies IssueProjection
 })
 
 const normalizedTasks = (
@@ -164,7 +174,13 @@ const normalizedTasks = (
     const prerequisiteIds = prerequisiteNodeIds.map((prerequisiteNodeId) =>
       Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(prerequisiteNodeId)))
     )
-    return { id, lifecycle: issue.lifecycle, parentTaskId, prerequisiteIds }
+    return {
+      id,
+      lifecycle: issue.lifecycle,
+      parentTaskId,
+      prerequisiteIds,
+      ...(issue.descriptor === undefined ? {} : { descriptor: issue.descriptor })
+    }
   })
 }
 
@@ -181,7 +197,17 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
             adapterError(
               operation,
               error._tag === "GithubGraphqlClient.ReadThrottled"
-                ? TrackerAdapterReadFailureReason.cases.Throttled.make({})
+                ? TrackerAdapterReadFailureReason.cases.Throttled.make({
+                    retry:
+                      error.retry._tag === "RetryAfterSeconds"
+                        ? { _tag: "RetryAfterSeconds", seconds: TrackerReadRetrySeconds.make(error.retry.seconds) }
+                        : error.retry._tag === "RateLimitResetEpochSeconds"
+                          ? {
+                              _tag: "RateLimitResetEpochSeconds",
+                              epochSeconds: TrackerReadResetEpochSeconds.make(error.retry.epochSeconds)
+                            }
+                          : { _tag: "Unavailable" }
+                  })
                 : String(error.kind) === "CircuitOpen"
                   ? TrackerAdapterReadFailureReason.cases.CircuitOpen.make({})
                   : TrackerAdapterReadFailureReason.cases.Transport.make({}),

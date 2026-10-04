@@ -3144,7 +3144,10 @@ it.effect("keeps an immediate provider failure pending until its exact completio
       })
     )
     expect(yield* observeExactReport(failedExecutor)).toEqual(
-      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Failed", failureCode: "ProviderFailed" }
+      })
     )
   }).pipe(
     Effect.provide(layerFor(failedHarness)),
@@ -3172,7 +3175,10 @@ it.effect("seals a recovered failed owned turn even when Codex marks its thread 
     })
     const failed = yield* observeExactReport(executor)
     expect(failed).toEqual(
-      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Failed", failureCode: "ProviderFailed" }
+      })
     )
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -3212,7 +3218,10 @@ it.effect("rejects malformed, foreign, ambiguous, and non-JSON terminal messages
         harness.completeWithItems(items)
         const failed = yield* observeExactReport(executor)
         expect(failed).toEqual(
-          PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
+          PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+            correlation,
+            result: { _tag: "Failed", failureCode: "ResultEnvelopeInvalid", observedHead: head }
+          })
         )
       }).pipe(Effect.provide(layerFor(harness)))
     }
@@ -3397,12 +3406,17 @@ it.effect("preserves a sealed failure after semantic output changes", () => {
       const executor = yield* PlannedAttemptExecutor
       yield* executor.begin(request, { _tag: "InitialDelivery" })
       harness.complete(JSON.stringify({ commit: head, correlation: { ...correlation, runId: "foreign" } }))
-      expect(yield* observeExactReport(executor)).toMatchObject({ result: { _tag: "Failed" } })
+      expect(yield* observeExactReport(executor)).toMatchObject({
+        result: { _tag: "Failed", failureCode: "ResultEnvelopeInvalid", observedHead: head }
+      })
     }).pipe(Effect.provide(layerFor(harness)))
     harness.complete(JSON.stringify({ version: 1, outcome: "Accepted", commit: head }))
     yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      expect(yield* observeExactReport(executor)).toMatchObject({ correlation, result: { _tag: "Failed" } })
+      expect(yield* observeExactReport(executor)).toMatchObject({
+        correlation,
+        result: { _tag: "Failed", failureCode: "ResultEnvelopeInvalid", observedHead: head }
+      })
     }).pipe(Effect.provide(layerFor(harness)))
     expect(harness.turnCount()).toBe(1)
   })
@@ -3416,7 +3430,10 @@ it.effect("rejects an unversioned candidate without exact legacy correlation", (
     harness.complete(JSON.stringify({ commit: head }))
     const result = yield* observeExactReport(executor)
     expect(result).toEqual(
-      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Failed", failureCode: "ResultEnvelopeInvalid", observedHead: head }
+      })
     )
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -3450,7 +3467,10 @@ it.effect("reconciles a lost provider response and keeps lost public Begin recon
       })
     )
     expect(yield* observeExactReport(executor)).toEqual(
-      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Failed", failureCode: "ResultEnvelopeInvalid", observedHead: head }
+      })
     )
     expect(harness.turnCount()).toBe(1)
     expect(harness.currentRecord()?._tag).toBe("Terminal")
@@ -3653,11 +3673,21 @@ it.effect("seals Failed on commit mismatch and never reports Completed", () => {
       const changed = yield* Fiber.join(waiting)
       expect(changed).toMatchObject({
         _tag: "Some",
-        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Failed" } } }
+        value: {
+          _tag: "Exact",
+          report: {
+            _tag: "ExecutorWorkTerminal",
+            correlation,
+            result: { _tag: "Failed", failureCode: "CandidateHeadMismatch", observedHead: head }
+          }
+        }
       })
       const failed = changed._tag === "Some" && changed.value._tag === "Exact" ? changed.value.report : undefined
       expect(failed).toEqual(
-        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation,
+          result: { _tag: "Failed", failureCode: "CandidateHeadMismatch", observedHead: head }
+        })
       )
       expect(JSON.stringify(failed)).not.toContain("Completed")
       harness.setActivityCensus({ _tag: "ExactLive", activities: [] })
@@ -5257,7 +5287,10 @@ it.effect("keeps a terminal failed turn-start response pending until its complet
       })
     )
     expect(yield* observeExactReport(executor)).toEqual(
-      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Failed", failureCode: "ProviderFailed" }
+      })
     )
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))

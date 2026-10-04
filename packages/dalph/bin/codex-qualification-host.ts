@@ -196,6 +196,15 @@ const waitForOwnedChildPublication = (
     )
   )
 
+/** The test releases a boundary only after observing its required provider facts. */
+const waitForFixtureContinuation = Effect.promise(
+  () =>
+    new Promise<void>((resolve) => {
+      nodeProcess.stdin.once("data", () => resolve())
+      nodeProcess.stdin.resume()
+    })
+)
+
 const specificationFor = (configuration: QualificationConfiguration) =>
   makeTaskWorkSpecification({ body: taskBody, taskId: configuration.taskId, title: "Real Codex qualification" })
 
@@ -353,20 +362,15 @@ const configurationProgram = Effect.gen(function* () {
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
-          yield* Effect.sleep("100 millis")
+          yield* writeEvent({ event: "suspension-ready" })
+          yield* waitForFixtureContinuation
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
         } else if (configuration.action === "exercise-terminal-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           yield* writeEvent({ event: "suspension-ready" })
-          yield* Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                nodeProcess.stdin.once("data", () => resolve())
-                nodeProcess.stdin.resume()
-              })
-          )
+          yield* waitForFixtureContinuation
           yield* settleAttempt(lifecycle, correlation, store, lastCensus)
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
