@@ -1002,21 +1002,25 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
   qualificationTest(
     "safe suspension preserves the exact thread and a later built host resumes it",
     async () => {
-      const fixture = await makeFixture("holding")
+      const fixture = await makeFixture("child")
       const hosts: Array<BuiltHost> = []
       try {
-        const suspended = await spawnHost(fixture, "exercise-suspension")
+        const suspended = await spawnHost(fixture, "exercise-suspension", { waitForOwnedChild: true })
         hosts.push(suspended)
         expect(requireEvent(await suspended.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
         await fixture.model.waitForCalls(1)
+        const ownedChildPid = await waitForOwnedChildPid(fixture)
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(true)
         requireEvent(await suspended.waitFor("suspension-ready"), "suspension-ready")
         expect(suspended.events.some((event) => event.event === "suspension-requested")).toBe(false)
         suspended.continue()
         const report = requireEvent(await suspended.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(false)
+        await waitForProcessAbsence(ownedChildPid)
         expect(fixture.model.calls).toHaveLength(1)
         expect(await suspended.waitForExit()).toEqual({ code: 0, signal: null })
 
