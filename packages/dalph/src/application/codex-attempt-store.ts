@@ -504,6 +504,20 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     threadId: CodexThreadId,
     worktree: WorktreeLocator
   },
+  /** One exact Suspend interrupt may have crossed; reconcile it before retry or passive failure sealing. */
+  SuspensionInterruptIntended: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
   /** Suspend is durably authorized to close exact containment, but safe suspension is not yet proved. */
   SuspensionStopIntended: {
     attemptId: AttemptId,

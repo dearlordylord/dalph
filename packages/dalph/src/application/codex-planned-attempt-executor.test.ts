@@ -88,6 +88,7 @@ import {
   CodexProcessStartIdentity,
   CodexThreadWorkingDirectory,
   type CodexTurnCompletedHint,
+  type CodexThreadIdleHint,
   type CodexToolEffectNotification,
   type CodexTerminalSealPolicy,
   type CodexAppServerService,
@@ -319,6 +320,8 @@ const makeHarness = (
     readonly lifecycleHints?:
       | ((threadId: CodexThreadId) => Effect.Effect<Stream.Stream<CodexTurnCompletedHint>, never, Scope.Scope>)
       | Effect.Effect<Stream.Stream<CodexTurnCompletedHint>, never, Scope.Scope>
+    readonly threadIdleHints?: CodexAppServerService["attachThreadIdleHints"]
+    readonly afterThreadResume?: Effect.Effect<void, CodexAppServerFailure>
     readonly activityHints?: CodexAppServerService["attachOwnedActivityHints"]
     readonly toolEffects?: CodexAppServerService["attachToolEffects"]
     readonly failContainmentClose?: boolean
@@ -427,6 +430,7 @@ const makeHarness = (
             )
         }),
     attachOwnedActivityHints: options.activityHints ?? Effect.succeed(Stream.empty),
+    ...(options.threadIdleHints === undefined ? {} : { attachThreadIdleHints: options.threadIdleHints }),
     attachToolEffects: options.toolEffects ?? Effect.succeed(Stream.empty),
     startThread: (cwd) =>
       Effect.sync(() => {
@@ -470,7 +474,7 @@ const makeHarness = (
           currentThread = { ...currentThread, turns: [...currentThread.turns].reverse() }
         }
         return currentThread
-      })
+      }).pipe(Effect.tap(() => options.afterThreadResume ?? Effect.void))
     },
     listThreadTurns: () =>
       Effect.sync(() => {
@@ -761,7 +765,9 @@ const makeHarness = (
         if (options.disableExactCompletionHints === true) return false
         const record = records.get(keyOf(subject.runId, subject.attemptId))
         if (
-          (record?._tag !== "Running" && record?._tag !== "SafelySuspended") ||
+          (record?._tag !== "Running" &&
+            record?._tag !== "SuspensionInterruptIntended" &&
+            record?._tag !== "SafelySuspended") ||
           currentTurn === undefined ||
           currentTurn.status === "inProgress"
         )
@@ -775,7 +781,12 @@ const makeHarness = (
       Effect.sync(() => {
         if (options.disableExactCompletionHints === true) return false
         const record = records.get(keyOf(subject.runId, subject.attemptId))
-        if (record?._tag !== "Running" && record?._tag !== "SafelySuspended") return false
+        if (
+          record?._tag !== "Running" &&
+          record?._tag !== "SuspensionInterruptIntended" &&
+          record?._tag !== "SafelySuspended"
+        )
+          return false
         publishedCompletionHints.push({ threadId: record.threadId, turnId: record.observedTurnId })
         return true
       }),
@@ -3636,6 +3647,156 @@ it.effect("reconciles a lost turn response without sending a second turn", () =>
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("diagnoses an owned abortion from an idle thread hint without completion authority", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const idle = yield* PubSub.unbounded<CodexThreadIdleHint>()
+      const harness = makeHarness({
+        terminalTurnStatus: "interrupted",
+        disableExactCompletionHints: true,
+        threadIdleHints: () =>
+          PubSub.subscribe(idle).pipe(
+            Effect.map((subscription) => Stream.fromChannel(Channel.fromSubscriptionArray(subscription)))
+          )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const before = harness.currentRecord()
+        const thread = harness.currentThread()
+        const owned = thread.turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+        const write = harness.store.writeToolEffect
+        if (owned === undefined || write === undefined) return yield* Effect.die("missing idle abortion fixture")
+        yield* write(
+          CodexToolEffectRecord.cases.Completed.make({
+            runId: correlation.runId,
+            attemptId: correlation.attemptId,
+            threadId: thread.id,
+            turnId: owned.id,
+            itemId: CodexToolItemId.make("completed-before-idle-abort"),
+            incarnation: harness.app.incarnation,
+            worktree,
+            startedAtMilliseconds: 0,
+            deadlineMilliseconds: 60_000,
+            completedAtMilliseconds: 1
+          })
+        )
+        harness.setThread({ ...thread, status: "idle" })
+        harness.setActivityCensus({ _tag: "Unreadable", detail: "controlled missing writers" })
+        expect(yield* PubSub.publish(idle, { threadId: thread.id })).toBe(true)
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting" } })
+        const unresolvedObserved = yield* Deferred.make<void>()
+        const waiting = yield* attachment.changes.pipe(
+          Stream.tap((projection) =>
+            projection._tag === "Unreadable"
+              ? Deferred.succeed(unresolvedObserved, undefined).pipe(Effect.asVoid)
+              : Effect.void
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild
+        )
+        yield* Deferred.await(unresolvedObserved)
+        expect(harness.currentRecord()).toEqual(before)
+        harness.setActivityCensus({ _tag: "Absent" })
+        yield* TestClock.adjust(Duration.seconds(1))
+        expect(yield* Fiber.join(waiting)).toMatchObject([
+          { _tag: "Unreadable" },
+          {
+            _tag: "Exact",
+            report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Failed", failureCode: "ProviderFailed" } }
+          }
+        ])
+        expect(harness.turnCount()).toBe(1)
+        expect(harness.interruptCount()).toBe(0)
+        expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Completed" }])
+        yield* attachment.close
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("an idle thread hint cannot accept a completed turn or route a foreign thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const idle = yield* PubSub.unbounded<CodexThreadIdleHint>()
+      const read = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        disableExactCompletionHints: true,
+        afterThreadResume: Deferred.succeed(read, undefined).pipe(Effect.asVoid),
+        threadIdleHints: () =>
+          PubSub.subscribe(idle).pipe(
+            Effect.map((subscription) => Stream.fromChannel(Channel.fromSubscriptionArray(subscription)))
+          )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.complete(finalResponse(head))
+        const before = harness.currentRecord()
+        const attachment = yield* lifecycle.attach(correlation)
+        const watching = yield* Stream.runDrain(attachment.changes).pipe(Effect.forkChild)
+        yield* PubSub.publish(idle, { threadId: CodexThreadId.make("foreign-thread") })
+        yield* PubSub.publish(idle, { threadId: harness.currentThread().id })
+        yield* Deferred.await(read)
+        yield* TestClock.adjust(Duration.seconds(2))
+        expect(harness.resumeCwds).toHaveLength(1)
+        expect(harness.currentRecord()).toEqual(before)
+        expect(harness.currentRecord()?._tag).toBe("Running")
+        expect(harness.turnCount()).toBe(1)
+        yield* attachment.close
+        yield* Fiber.interrupt(watching)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("a late idle hint preserves an immutable terminal seal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const idle = yield* PubSub.unbounded<CodexThreadIdleHint>()
+      const observingLate = yield* Ref.make(false)
+      const reread = yield* Deferred.make<void>()
+      const unexpected = yield* Ref.make(0)
+      const harness = makeHarness({
+        afterThreadResume: Ref.get(observingLate).pipe(
+          Effect.flatMap((enabled) => (enabled ? Deferred.succeed(reread, undefined).pipe(Effect.asVoid) : Effect.void))
+        ),
+        threadIdleHints: () =>
+          PubSub.subscribe(idle).pipe(
+            Effect.map((subscription) => Stream.fromChannel(Channel.fromSubscriptionArray(subscription)))
+          )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.complete(finalResponse(head))
+        const accepted = yield* observeExactReport(executor)
+        expect(accepted).toMatchObject({ _tag: "ExecutorWorkTerminal", result: { _tag: "Accepted" } })
+        const seal = harness.currentRecord()
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toEqual(PlannedAttemptExecutorProjection.cases.Exact.make({ report: accepted }))
+        const watching = yield* Stream.runForEach(attachment.changes, () => Ref.update(unexpected, (n) => n + 1)).pipe(
+          Effect.forkChild
+        )
+        yield* Ref.set(observingLate, true)
+        yield* PubSub.publish(idle, { threadId: harness.currentThread().id })
+        yield* Deferred.await(reread)
+        yield* TestClock.adjust(Duration.seconds(1))
+        expect(yield* Ref.get(unexpected)).toBe(0)
+        expect(harness.currentRecord()).toEqual(seal)
+        expect(harness.turnCount()).toBe(1)
+        yield* attachment.close
+        yield* Fiber.interrupt(watching)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
 it.effect("reconciles an exact abortion hint through unresolved custody without another turn", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -3752,6 +3913,40 @@ it.effect("reports unresolved custody for an aborted owned turn after completed 
       expect(recovered.turnCount()).toBe(1)
       expect(recovered.threadStarts()).toBe(0)
       expect(recovered.interruptCount()).toBe(0)
+      for (const census of [
+        [
+          {
+            _tag: "ExactLive" as const,
+            activities: [
+              {
+                _tag: "BackgroundTerminal" as const,
+                terminal: {
+                  processId: "aborted-writer",
+                  itemId: "retained-writer",
+                  command: "pnpm test",
+                  cwd: worktree,
+                  osPid: null
+                }
+              }
+            ]
+          }
+        ],
+        [{ _tag: "Absent" as const }, { _tag: "Unreadable" as const, detail: "final writer census unavailable" }]
+      ]) {
+        recovered.setActivityCensusSequence(census)
+        const unresolved = yield* Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          return yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+        }).pipe(Effect.provide(layerFor(recovered, defaultGitCommand, undefined, undefined, original.store)))
+        expect(unresolved).toMatchObject({
+          _tag: "Unreadable",
+          detail: "Codex owned turn interrupted; writer custody remains unresolved"
+        })
+        expect(original.currentRecord()).toEqual(before)
+        expect(recovered.turnCount()).toBe(1)
+        expect(recovered.interruptCount()).toBe(0)
+        expect(recovered.closeCount()).toBe(0)
+      }
       recovered.setActivityCensus({ _tag: "Absent" })
       yield* Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
@@ -4130,7 +4325,12 @@ it.effect("keeps a terminal turn observed after interrupt failure pending withou
     harness.makeInterruptTerminalBeforeFailure()
     const report = yield* executor.requestSuspension(attempt)
     expect(report).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
-    expect(harness.currentRecord()).toMatchObject({ _tag: "Running", observedTurnId: "codex-turn-1" })
+    expect(harness.currentRecord()).toMatchObject({
+      _tag: "SuspensionInterruptIntended",
+      observedTurnId: "codex-turn-1"
+    })
+    expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkTerminal")
+    expect(harness.currentRecord()).toMatchObject({ _tag: "Terminal", terminal: { _tag: "Accepted" } })
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -5140,6 +5340,70 @@ it.effect("normalizes unavailable and foreign resume observations without replac
     )
   )
 })
+
+it.effect("preserves ambiguous Suspend across an idle hint and restart before Resume", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const idle = yield* PubSub.unbounded<CodexThreadIdleHint>()
+      const idleConsumed = yield* Deferred.make<void>()
+      let loseRead = false
+      const harness = makeHarness({
+        disableExactCompletionHints: true,
+        threadIdleHints: () =>
+          PubSub.subscribe(idle).pipe(
+            Effect.map((subscription) =>
+              Stream.fromChannel(Channel.fromSubscriptionArray(subscription)).pipe(
+                Stream.tap(() => Deferred.succeed(idleConsumed, undefined))
+              )
+            )
+          ),
+        afterThreadResume: Effect.suspend(() =>
+          loseRead && harness.currentThread().turns.some((turn) => turn.status === "interrupted")
+            ? Effect.fail(
+                new CodexAppServerFailure({
+                  kind: "Unavailable",
+                  operation: "thread/resume",
+                  detail: "lost post-interrupt observation"
+                })
+              )
+            : Effect.void
+        )
+      })
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.makeInterruptUnavailable()
+        harness.makeInterruptSettleBeforeFailure()
+        loseRead = true
+        expect(yield* executor.requestSuspension(attempt).pipe(Effect.result)).toMatchObject({ _tag: "Failure" })
+        loseRead = false
+        const retained = harness.currentRecord()
+        const attachment = yield* lifecycle.attach(correlation)
+        const watching = yield* attachment.changes.pipe(Stream.runDrain, Effect.forkChild)
+        yield* PubSub.publish(idle, { threadId: harness.currentThread().id })
+        yield* Deferred.await(idleConsumed)
+        yield* TestClock.adjust(Duration.seconds(1))
+        expect(harness.currentRecord()).toEqual(retained)
+        expect(harness.currentRecord()?._tag).not.toBe("Terminal")
+        yield* Fiber.interrupt(watching)
+        yield* attachment.close
+      }).pipe(Effect.provide(layerFor(harness)))
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const recovered = yield* lifecycle.attach(correlation)
+        expect(recovered.current._tag).toBe("Unreadable")
+        yield* recovered.close
+        expect((yield* executor.requestSuspension(attempt))._tag).toBe("ExecutorWorkSafelySuspended")
+        expect((yield* executor.resume(request))._tag).toBe("ExecutorWorkExecuting")
+        expect(harness.interruptCount()).toBe(1)
+        expect(harness.turnCount()).toBe(2)
+        expect(harness.threadStarts()).toBe(1)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
 
 it.effect("reports safe suspension after an interrupted turn and resumes the same thread", () => {
   const harness = makeHarness()

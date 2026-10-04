@@ -63,6 +63,7 @@ import {
   CodexThreadWorkingDirectory,
   nodeCodexOwnedActivityCensusLayer,
   type CodexTurnCompletedHint,
+  type CodexThreadIdleHint,
   type CodexToolEffectNotification,
   type CodexOwnedActivityCensusProjection,
   type CodexOwnedProcessIdentity,
@@ -374,6 +375,7 @@ type OwnedTurnRecord = Extract<
       | "TurnIntentRecorded"
       | "TurnObserved"
       | "Running"
+      | "SuspensionInterruptIntended"
       | "SuspensionStopIntended"
       | "SafelySuspended"
       | "Terminal"
@@ -390,7 +392,10 @@ const isAcceptedTerminalRecord = (record: CodexTerminalRecord): record is CodexA
   record.terminal._tag === "Accepted" && record.evidenceManifest !== null
 
 const isPersistableOwnedRecord = (record: CodexAttemptRecord): record is CodexObservedRecord =>
-  record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended"
+  record._tag === "TurnObserved" ||
+  record._tag === "Running" ||
+  record._tag === "SuspensionInterruptIntended" ||
+  record._tag === "SafelySuspended"
 
 export const ownedRecordPersistenceDisposition = (
   tag: CodexAttemptRecord["_tag"]
@@ -400,6 +405,7 @@ export const ownedRecordPersistenceDisposition = (
       return "Intent"
     case "TurnObserved":
     case "Running":
+    case "SuspensionInterruptIntended":
     case "SafelySuspended":
       return "Persistable"
     case "SuspensionStopIntended":
@@ -937,6 +943,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     type TurnCompletionSubscription = {
       readonly close: Effect.Effect<void>
       readonly stream: Stream.Stream<CodexTurnCompletedHint>
+      readonly threadIdleHints: Stream.Stream<CodexThreadIdleHint>
       readonly toolEffects: Stream.Stream<CodexToolEffectNotification>
       readonly expectTurnId: (turnId: CodexTurnId) => Effect.Effect<void>
     }
@@ -974,10 +981,15 @@ const makeCodexPlannedAttemptExecutorContext = (
         app.attachToolEffects === undefined
           ? Stream.empty
           : yield* app.attachToolEffects.pipe(Effect.provideService(Scope.Scope, subscriptionScope))
+      const threadIdleHints =
+        app.attachThreadIdleHints === undefined
+          ? Stream.empty
+          : yield* app.attachThreadIdleHints(threadId).pipe(Effect.provideService(Scope.Scope, subscriptionScope))
       const subscription: TurnCompletionSubscription = {
         close: Scope.close(subscriptionScope, Exit.void).pipe(Effect.asVoid),
         stream: attached?.hints ?? Stream.fromIterable<CodexTurnCompletedHint>([]),
         toolEffects,
+        threadIdleHints,
         expectTurnId: attached?.expectTurnId ?? (() => Effect.void)
       }
       const key = plannedAttemptExecutorCorrelationKey(correlation)
@@ -1018,10 +1030,15 @@ const makeCodexPlannedAttemptExecutorContext = (
                 app.attachToolEffects === undefined
                   ? Stream.empty
                   : yield* app.attachToolEffects.pipe(Effect.provideService(Scope.Scope, attachmentScope))
+              const threadIdleHints =
+                app.attachThreadIdleHints === undefined
+                  ? Stream.empty
+                  : yield* app.attachThreadIdleHints(threadId).pipe(Effect.provideService(Scope.Scope, attachmentScope))
               return {
                 close: Effect.void,
                 stream: attached?.hints ?? Stream.fromIterable<CodexTurnCompletedHint>([]),
                 toolEffects,
+                threadIdleHints,
                 expectTurnId: attached?.expectTurnId ?? (() => Effect.void)
               }
             })
@@ -1498,7 +1515,8 @@ const makeCodexPlannedAttemptExecutorContext = (
       correlation: PlannedAttemptExecutorCorrelation,
       observedRecord: OwnedTurnRecord
     ) {
-      if (observedRecord._tag === "Terminal") return running(correlation)
+      if (observedRecord._tag === "Terminal" || observedRecord._tag === "SuspensionInterruptIntended")
+        return running(correlation)
       /* v8 ignore next -- @preserve Terminal observation converts TurnIntentRecorded before this function is called. */
       if (!isPersistableOwnedRecord(observedRecord)) {
         return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
@@ -1553,7 +1571,8 @@ const makeCodexPlannedAttemptExecutorContext = (
       completionHintAuthorized = false
     ) {
       const exactCompletionHintRequired = app.terminalSealPolicy !== "FreshLifecycleMaySeal"
-      const hasUnsealedOwnedTurn = record._tag === "Running" || record._tag === "SafelySuspended"
+      const hasUnsealedOwnedTurn =
+        record._tag === "Running" || record._tag === "SuspensionInterruptIntended" || record._tag === "SafelySuspended"
       if (exactCompletionHintRequired && hasUnsealedOwnedTurn && !completionHintAuthorized) {
         return { continueLifecycleObservation: false, report: running(correlation) }
       }
@@ -2023,9 +2042,25 @@ const makeCodexPlannedAttemptExecutorContext = (
       const turn = yield* requiredReconciliationTurn(current)
       // Exactly one interrupt is issued. The post-boundary read decides both
       // the lost-response and terminal-during-suspension races.
+      if (!hasOwnedTurnRecord(record)) return yield* new CodexTurnBoundaryUnknown({})
+      const observed = observedRecordFor(
+        attempt,
+        record.threadId,
+        record.currentToken,
+        turn.id,
+        record.priorObservedTurnId,
+        record.turnStartedAtMilliseconds,
+        record.turnStartIncarnation,
+        record.toolEffectPolicy
+      )
+      const intent = CodexAttemptRecord.cases.SuspensionInterruptIntended.make({
+        ...observed,
+        _tag: "SuspensionInterruptIntended"
+      })
+      yield* save(intent)
       yield* app
         .interruptTurn(record.threadId, turn.id)
-        .pipe(Effect.catch((error) => reconcileInterruptFailure(error, attempt, correlation, record)))
+        .pipe(Effect.catch((error) => reconcileInterruptFailure(error, attempt, correlation, intent)))
       const after = yield* reconcile(attempt, correlation, record)
       return yield* suspendAfterInterrupt(attempt, correlation, record, after)
     })
@@ -2247,7 +2282,8 @@ const makeCodexPlannedAttemptExecutorContext = (
     const projectStoredRecord = Effect.fn("CodexPlannedAttemptExecutor.projectStoredRecord")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
       purpose: PlannedAttemptExecutorObservationPurpose,
-      completionHintAuthorized = false
+      completionHintAuthorized = false,
+      abortionReadAuthorized = false
     ) {
       if (isBeginReconciliation(purpose)) yield* invalidateBeginProof(correlation)
       const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
@@ -2292,14 +2328,17 @@ const makeCodexPlannedAttemptExecutorContext = (
       // token-owned writers absent; its exact terminal read may settle recovery.
       const exactCompletionHintRequired = app.terminalSealPolicy !== "FreshLifecycleMaySeal"
       const priorServerReconciled =
-        (record._tag === "Running" || record._tag === "SafelySuspended") &&
+        (record._tag === "Running" ||
+          record._tag === "SuspensionInterruptIntended" ||
+          record._tag === "SafelySuspended") &&
         app.serverLaunch !== undefined &&
         record.turnStartIncarnation !== app.incarnation
       const terminalReadAuthorized = completionHintAuthorized || priorServerReconciled
       if (
         (record._tag === "Running" || record._tag === "SafelySuspended") &&
         exactCompletionHintRequired &&
-        !terminalReadAuthorized
+        !terminalReadAuthorized &&
+        !(abortionReadAuthorized && record._tag === "Running")
       ) {
         // Preserve the durable Safe projection without treating a lifecycle read
         // as completion authority; only Running projects as Executing here.
@@ -2307,6 +2346,13 @@ const makeCodexPlannedAttemptExecutorContext = (
         return projectionOutcome(exact(report), false, record.threadId, record.observedTurnId)
       }
       const reconciliation = yield* reconcile(attempt, correlation, record)
+      if (record._tag === "SuspensionInterruptIntended" && reconciliation._tag !== "Terminal")
+        return projectionOutcome(
+          unreadable(correlation, "Codex Suspend interruption awaits exact command reconciliation"),
+          false,
+          record.threadId,
+          record.observedTurnId
+        )
       // An interruption observed outside Suspend is an aborted owned turn.
       // Suspend itself still reconciles interruption as idle before proving its
       // stopped disposition; changing that command boundary would lose Resume.
@@ -2316,13 +2362,24 @@ const makeCodexPlannedAttemptExecutorContext = (
         (record._tag === "Running" || (record._tag === "Terminal" && record.terminal._tag === "Failed"))
           ? { ...reconciliation, _tag: "Terminal" as const, turn: reconciliation.turn }
           : reconciliation
+      const observedAbortion =
+        lifecycleReconciliation._tag === "Terminal" && lifecycleReconciliation.turn.status === "interrupted"
+      if (
+        record._tag === "Running" &&
+        abortionReadAuthorized &&
+        !terminalReadAuthorized &&
+        exactCompletionHintRequired &&
+        !observedAbortion
+      ) {
+        return projectionOutcome(exact(running(correlation)), false, record.threadId, record.observedTurnId)
+      }
       return yield* projectReconciliation(
         correlation,
         record,
         attempt,
         lifecycleReconciliation,
         purpose,
-        terminalReadAuthorized
+        terminalReadAuthorized || (abortionReadAuthorized && observedAbortion)
       )
     })
 
@@ -2386,12 +2443,14 @@ const makeCodexPlannedAttemptExecutorContext = (
     const projectLifecycle = Effect.fn("CodexPlannedAttemptExecutor.projectLifecycle")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
       allowInitialRunningRecovery = false,
-      completionHintAuthorized = false
+      completionHintAuthorized = false,
+      abortionReadAuthorized = false
     ) {
       return yield* projectStoredRecord(
         correlation,
         { _tag: "PassiveLifecycleObservation" },
-        completionHintAuthorized
+        completionHintAuthorized,
+        abortionReadAuthorized
       ).pipe(
         Effect.catch((error: unknown) =>
           Effect.gen(function* () {
@@ -2533,6 +2592,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         /* v8 ignore next -- @preserve replacementRecordMatchesRequest rejects EmptyPreTurn before replacementOwnedRecordIdentity is called. */
         case "EmptyPreTurn":
         case "TurnIntentRecorded":
+        case "SuspensionInterruptIntended":
         case "SuspensionStopIntended":
           return undefined
       }
@@ -2597,7 +2657,12 @@ const makeCodexPlannedAttemptExecutorContext = (
         }
         return { _tag: "Evidence", evidence: purge.evidence }
       }
-      if (record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended") {
+      if (
+        record._tag === "TurnObserved" ||
+        record._tag === "Running" ||
+        record._tag === "SuspensionInterruptIntended" ||
+        record._tag === "SafelySuspended"
+      ) {
         return {
           _tag: "Evidence",
           evidence: CodexPurgedWorkUnitEvidence.make({
@@ -3240,14 +3305,17 @@ const makeCodexPlannedAttemptExecutorContext = (
             Option.isSome(privateRecord.success) &&
             recordMatchesCorrelation(privateRecord.success.value, correlation) &&
             (privateRecord.success.value._tag === "Running" ||
+              privateRecord.success.value._tag === "SuspensionInterruptIntended" ||
               privateRecord.success.value._tag === "SafelySuspended" ||
               privateRecord.success.value._tag === "Terminal")
               ? privateRecord.success.value.observedTurnId
               : undefined
-          const turnSubscription =
+          const turnSubscription: TurnCompletionSubscription =
             retainedThreadId === undefined
               ? {
+                  close: Effect.void,
                   stream: Stream.fromIterable<CodexTurnCompletedHint>([]),
+                  threadIdleHints: Stream.empty,
                   toolEffects: Stream.fromIterable<CodexToolEffectNotification>([]),
                   expectTurnId: (_turnId: CodexTurnId) => Effect.void
                 }
@@ -3506,16 +3574,25 @@ const makeCodexPlannedAttemptExecutorContext = (
             (outcome.projection._tag === "Unreadable" ||
               (outcome.projection._tag === "Exact" && outcome.projection.report._tag === "ExecutorWorkExecuting"))
           const heldTerminalActivity = yield* Deferred.make<void>()
+          const idleHintObserved = yield* Ref.make(false)
           const readLifecycle = (
             initial: boolean,
             completionHintAuthorized = false,
-            allowInitialRunningRecovery = false
+            allowInitialRunningRecovery = false,
+            abortionReadAuthorized = false
           ) =>
             projectionGate.withPermit(
               Ref.updateAndGet(lifecycleReadOrdinal, (currentOrdinal) => currentOrdinal + 1).pipe(
                 Effect.flatMap((readOrdinal) =>
                   attemptGate
-                    .withPermit(projectLifecycle(correlation, allowInitialRunningRecovery, completionHintAuthorized))
+                    .withPermit(
+                      projectLifecycle(
+                        correlation,
+                        allowInitialRunningRecovery,
+                        completionHintAuthorized,
+                        abortionReadAuthorized
+                      )
+                    )
                     .pipe(
                       Effect.tap((outcome) =>
                         Ref.set(latestLifecycleOutcome, outcome).pipe(
@@ -3564,7 +3641,11 @@ const makeCodexPlannedAttemptExecutorContext = (
               Stream.fromSchedule(Schedule.spaced(ownedActivityObservationInterval)).pipe(
                 Stream.mapEffect(() =>
                   Ref.get(matchingCompletionHintObserved).pipe(
-                    Effect.flatMap((authorized) => readLifecycle(false, authorized))
+                    Effect.flatMap((authorized) =>
+                      Ref.get(idleHintObserved).pipe(
+                        Effect.flatMap((idle) => readLifecycle(false, authorized, false, idle))
+                      )
+                    )
                   )
                 ),
                 Stream.takeUntil((candidate) => !shouldContinueLifecycleObservation(candidate))
@@ -3617,6 +3698,7 @@ const makeCodexPlannedAttemptExecutorContext = (
                             record !== undefined &&
                             recordMatchesCorrelation(record, correlation) &&
                             (record._tag === "Running" ||
+                              record._tag === "SuspensionInterruptIntended" ||
                               record._tag === "SafelySuspended" ||
                               record._tag === "Terminal") &&
                             record.threadId === hint.threadId &&
@@ -3636,6 +3718,12 @@ const makeCodexPlannedAttemptExecutorContext = (
               )
             ),
             Stream.filter((candidate): candidate is LifecycleProjectionOutcome => candidate !== undefined)
+          )
+          const threadIdleCandidates = turnSubscription.threadIdleHints.pipe(
+            Stream.filter((hint) => hint.threadId === retainedThreadId),
+            Stream.mapEffect(() =>
+              Ref.set(idleHintObserved, true).pipe(Effect.andThen(readLifecycle(false, false, false, true)))
+            )
           )
           const activityNotificationCandidates = activityHints.pipe(
             Stream.mapEffect(() =>
@@ -3659,7 +3747,10 @@ const makeCodexPlannedAttemptExecutorContext = (
           const changes = Stream.merge(
             Stream.merge(
               Stream.merge(
-                Stream.merge(turnNotificationCandidates, activityNotificationCandidates),
+                Stream.merge(
+                  Stream.merge(turnNotificationCandidates, threadIdleCandidates),
+                  activityNotificationCandidates
+                ),
                 protocolFailureCandidates
               ),
               toolEffectCandidates

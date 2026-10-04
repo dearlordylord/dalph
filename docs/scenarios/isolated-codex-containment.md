@@ -79,20 +79,59 @@ inapplicable: this observation does not change tracker facts.
 
 Acceptance mapping:
 `reports unresolved custody for an aborted owned turn after completed tools`
-exercises restart without notification, unreadable census, subsequent fresh
-absence, immutable failure reread and no duplicate turn.
+exercises restart without notification, unreadable census, a live background
+writer, custody becoming unreadable at the final failure-seal census,
+subsequent fresh absence, immutable failure reread and no duplicate turn.
 `reconciles an exact abortion hint through unresolved custody without another turn`
 exercises same-incarnation notification, unresolved custody and paced reread to
 fresh absence without interruption or replacement. Both seed a Completed tool
 record and preserve the original private association until absence is proved.
 
-Outstanding acceptance evidence: an exact live writer after abortion, custody
-becoming unreadable at the final failure-seal census, and same-incarnation
-observation without a completion hint. That last case requires an observed
-boundary that authorizes failure reconciliation; elapsed silence alone is not
-authority. Ordinary successful completion without an exact hint retains its
-existing completion-authority requirements. These remaining cases still block
-completion of #434.
+### Same incarnation without a completion notification
+
+The original executor association and Completed tool history remain unchanged.
+Codex reports `thread/status/changed` with status idle for the exact retained
+thread, while no turn/completed hint arrives. Dalph subscribes before turn/start
+and retains this queued source observation until lifecycle attachment, so an
+early idle event is not lost. Decode and route the thread identity at ingress;
+a foreign thread or a non-idle/malformed event does not authorize any RPC.
+
+The idle event authorizes one diagnostic reread of the exact retained owned
+turn and its writer census. It does not authorize successful completion. If
+that exact turn is interrupted, publish unresolved custody until fresh absence
+permits ProviderFailed; paced reconciliation retains only this proved abortion
+authority. If the turn is still running or successfully completed, preserve
+the ordinary completion-hint requirement and do not start a polling cadence.
+A lost diagnostic response retains custody and grants no replacement. Restart
+follows S4. Claims, worktrees, Base and workflow history are preserved.
+
+Acceptance tests: `diagnoses an owned abortion from an idle thread hint without completion authority`;
+`an idle thread hint cannot accept a completed turn or route a foreign thread`.
+Native transport tests `routes early exact idle thread notifications without completion authority`
+and `provider closure ends the exact idle source without interrupting its consumer`
+cover exact decoding, early delivery and subscription closure.
+`a late idle hint preserves an immutable terminal seal` covers a retained result.
+
+### Idle after an ambiguous Suspend
+
+The workflow has authorized Suspend of one exact Running attempt. Before
+turn/interrupt, Dalph records that exact interruption intent at the provider
+boundary. Codex interrupts the turn, but its response or the subsequent read
+is lost. An idle notification then arrives while the original attempt remains
+unresolved. Passive observation must preserve the interruption intent and
+custody, never seal ProviderFailed from this operator-authorized interruption.
+Retry Suspend reconciles the original turn before another interrupt; after
+quiescence it records SafelySuspended. Resume may then create exactly one
+continuation under the existing thread and original attempt. A restart uses
+the retained intent and the same reconciliation. The provider record owns only
+this uncertain boundary effect; the journal still owns workflow history.
+
+Acceptance: `preserves ambiguous Suspend across an idle hint and restart before Resume`
+and `survives an application restart with an unresolved suspension interrupt intent`.
+If completion wins the interrupt race, its retained intent still requires the
+ordinary exact completion authority before successful sealing. Acceptance:
+`keeps a terminal turn observed after interrupt failure pending without its exact completion hint`.
+No tracker mutation or claim release occurs at this boundary.
 
 ## S5: Host-wide Exit
 
