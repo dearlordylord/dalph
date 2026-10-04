@@ -87,7 +87,7 @@ export const makeControlledCodexContainment = (name: string, stateDirectory: str
             items: [],
             ...(ownedTurnToken === undefined ? {} : { ownedTurnToken })
           }
-          yield* Ref.update(thread, (current) => ({ ...current, status: "active", turns: [turn] }))
+          yield* Ref.update(thread, (current) => ({ ...current, status: "active" as const, turns: [turn] }))
           return turn
         }),
       interruptTurn: () =>
@@ -95,7 +95,7 @@ export const makeControlledCodexContainment = (name: string, stateDirectory: str
           Effect.andThen(
             Ref.update(thread, (current) => ({
               ...current,
-              status: "idle",
+              status: "idle" as const,
               turns: current.turns.map((turn) => ({ ...turn, status: "interrupted" as const }))
             }))
           )
