@@ -1,3 +1,4 @@
+import { ExecutorProfile, ExecutorProfileId, ExecutorModelAlias } from "./executor-profile.js"
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -127,9 +128,15 @@ import {
   type ProductionRepositoryHostConfiguration,
   ProductionRepositoryHostConfigurationError
 } from "./production-configuration.js"
-import { CodexAppServer, CodexAppServerFailure, codexAppServerLaunchArguments } from "./codex-app-server.js"
+import {
+  CodexAppServer,
+  CodexAppServerFailure,
+  codexAppServerLaunchArguments,
+  type CodexThreadSnapshot
+} from "./codex-app-server.js"
 import {
   CodexAttemptRecord,
+  CodexSealedTerminal,
   CodexAttemptStore,
   CodexOwnedTurnToken,
   CodexServerIncarnation,
@@ -2601,5 +2608,196 @@ it.effect(
         expect(finalTrace.indexOf("h2.lock-conflict")).toBeGreaterThan(finalTrace.indexOf("github.execute"))
         expect(finalTrace.lastIndexOf("journal.sqlite.open")).toBeGreaterThan(finalTrace.indexOf("h2.lock-conflict"))
       }).pipe(Effect.provide(NodeServices.layer), Effect.provide(NodeCrypto.layer))
+    )
+)
+
+it.effect(
+  "production reconciles historical Failed custody through a fresh scoped transport after terminal retirement",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const input = yield* makeTemporaryProductionInput
+        const configuration = yield* decodeProductionRepositoryHostConfiguration(input)
+        const owners = yield* Ref.make<ReadonlyArray<ControlledCodexContainment>>([])
+        const retainedThread = yield* Ref.make<CodexThreadSnapshot | undefined>(undefined)
+        const adapters = {
+          codexProcessNative: isolatedCodexProcessNativeService,
+          codexAppServer: (scoped: ProductionRepositoryHostConfiguration) =>
+            Layer.effect(
+              CodexAppServer,
+              Effect.gen(function* () {
+                const existing = yield* Ref.get(owners)
+                const owner = yield* makeControlledCodexContainment(
+                  String(existing.length),
+                  scoped.codexExecutorPrivateStateDirectory
+                )
+                yield* Ref.set(owners, [...existing, owner])
+                const snapshot = yield* Ref.get(retainedThread)
+                const readRetained = Effect.gen(function* () {
+                  if (snapshot === undefined) return yield* Effect.die("retained snapshot required")
+                  if (yield* Ref.get(owner.closed))
+                    return yield* new CodexAppServerFailure({
+                      kind: "Unavailable",
+                      operation: "thread/read",
+                      detail: "fresh transport closed"
+                    })
+                  return snapshot
+                })
+                return snapshot === undefined
+                  ? owner.app
+                  : CodexAppServer.of({
+                      ...owner.app,
+                      readThread: () => readRetained,
+                      resumeThread: () => readRetained
+                    })
+              })
+            )
+        }
+        const graph = productionRepositoryHostTestGraph(adapters)
+        const shell = yield* graph.makeApplicationExit()
+        const admitted = yield* graph.acquireProvider(configuration, shell)
+        if (admitted._tag !== "CodexAppServer") return yield* Effect.die("Codex required")
+        const specification = makeTaskWorkSpecification({
+          body: "retained failure",
+          title: "retained failure",
+          taskId: TaskId.make("historical")
+        })
+        const plannedAttempt = PlannedTaskAttempt.make({
+          runId: RunId.make("historical-production"),
+          attemptId: AttemptId.make("historical"),
+          taskId: specification.taskId,
+          taskRevision: specification.fingerprint,
+          baseSha: GitCommitSha.make("a".repeat(40)),
+          branch: TaskBranchRef.make("refs/heads/historical"),
+          executor: TaskExecutorLocator.make(configuration.plannedAttemptExecutor),
+          worktree: WorktreeLocator.make(`${input.plannedAttemptWorktreeRoot}/historical`)
+        })
+        const subject = PlannedAttemptExecutorCorrelation.make({
+          runId: plannedAttempt.runId,
+          attemptId: plannedAttempt.attemptId
+        })
+        const executionOptions = {
+          configuration,
+          profile: ExecutorProfile.make({
+            adapter: "codex-app-server",
+            executable: "controlled",
+            id: ExecutorProfileId.make("codex/production"),
+            model: ExecutorModelAlias.make("controlled"),
+            permissionPolicy: "unattended",
+            provider: "codex"
+          }),
+          applicationExit: shell,
+          adapters,
+          app: Layer.succeed(CodexAppServer, admitted.appServer),
+          git: Layer.succeed(GitCommand, {
+            run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+            runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${plannedAttempt.baseSha}\n` }),
+            runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
+          }),
+          evidence: memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+          ownership: CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        } satisfies Parameters<typeof productionCodexExecutionLayers>[0]
+        const layers = productionCodexExecutionLayers(executionOptions)
+        const context = yield* Layer.build(layers.executor)
+        const executor = Context.get(context, PlannedAttemptExecutor)
+        yield* executor.begin(PlannedAttemptExecutorRequest.make({ plannedAttempt, specification }), {
+          _tag: "InitialDelivery"
+        })
+        const [integrationOwner, oldOwner] = yield* Ref.get(owners)
+        if (oldOwner === undefined || integrationOwner === undefined || executor.observeWriterCustody === undefined)
+          return yield* Effect.die("exact owners required")
+        const lifecycle = Context.get(context, PlannedAttemptExecutorLifecycleObservation)
+        const attachment = yield* lifecycle.attach(subject)
+        const outcome = yield* attachment.changes.pipe(Stream.runHead, Effect.forkChild)
+        yield* oldOwner.complete("historical terminal output", "failed")
+        expect(yield* Fiber.join(outcome)).toMatchObject({
+          _tag: "Some",
+          value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Failed" } } }
+        })
+        yield* Ref.set(retainedThread, yield* oldOwner.read)
+        const retained = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const store = yield* CodexAttemptStore
+            return yield* store.readAttempt(subject.runId, subject.attemptId)
+          }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: oldOwner.stateDirectory })))
+        )
+        expect(retained).toMatchObject({ _tag: "Some", value: { _tag: "Terminal" } })
+        expect(yield* executor.observeWriterCustody(plannedAttempt)).toMatchObject({ _tag: "Unresolved" })
+        expect(yield* Ref.get(owners)).toHaveLength(2)
+        yield* attachment.close
+        expect(yield* Ref.get(oldOwner.closed)).toBe(true)
+        expect(yield* executor.observeWriterCustody(plannedAttempt)).toEqual({ _tag: "Stopped", plannedAttempt })
+        const all = yield* Ref.get(owners)
+        expect(all).toHaveLength(3)
+        const fresh = all[2]
+        if (fresh === undefined) return yield* Effect.die("fresh owner required")
+        expect(fresh.stateDirectory).toBe(oldOwner.stateDirectory)
+        expect(yield* Ref.get(fresh.closed)).toBe(true)
+        expect(yield* Ref.get(fresh.turnStarts)).toBe(0)
+        expect(yield* Ref.get(integrationOwner.closed)).toBe(false)
+        expect(
+          yield* executor.observeWriterCustody({
+            ...plannedAttempt,
+            worktree: WorktreeLocator.make("/foreign/historical")
+          })
+        ).toMatchObject({ _tag: "Unresolved" })
+        const afterForeign = yield* Ref.get(owners)
+        expect(afterForeign).toHaveLength(4)
+        const foreignReadOwner = afterForeign[3]
+        if (foreignReadOwner === undefined) return yield* Effect.die("foreign read owner required")
+        expect(yield* Ref.get(foreignReadOwner.closed)).toBe(true)
+        expect(yield* Ref.get(foreignReadOwner.turnStarts)).toBe(0)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const store = yield* CodexAttemptStore
+            expect(yield* store.readAttempt(subject.runId, subject.attemptId)).toEqual(retained)
+          }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: oldOwner.stateDirectory })))
+        )
+        // A separate fixture store represents a pre-upgrade seal. Never rewrite
+        // the genuine ProviderFailed seal created above to fabricate migration.
+        if (Option.isNone(retained) || retained.value._tag !== "Terminal")
+          return yield* Effect.die("retained terminal fixture required")
+        const legacyConfiguration = yield* decodeProductionRepositoryHostConfiguration({
+          ...input,
+          codexExecutorPrivateStateDirectory: `${input.codexExecutorPrivateStateDirectory}/legacy`
+        })
+        const legacySeal = yield* Schema.decodeUnknownEffect(CodexAttemptRecord)(
+          Object.fromEntries(
+            Object.entries({ ...retained.value, terminal: CodexSealedTerminal.cases.Failed.make({}) }).filter(
+              ([key]) => key !== "resultCycle" && key !== "resultRecoveryHistory"
+            )
+          )
+        )
+        const legacyDirectory = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const provider = yield* acquireProductionCodexAttemptProvider(legacyConfiguration, shell, subject, adapters)
+            const storeContext = yield* Layer.build(provider.store)
+            yield* Context.get(storeContext, CodexAttemptStore).writeAttempt(legacySeal)
+            return provider.configuration.codexExecutorPrivateStateDirectory
+          })
+        )
+        const legacyLayers = productionCodexExecutionLayers({ ...executionOptions, configuration: legacyConfiguration })
+        const legacyContext = yield* Layer.build(legacyLayers.executor)
+        const legacyExecutor = Context.get(legacyContext, PlannedAttemptExecutor)
+        expect(yield* legacyExecutor.observe(subject, passiveLifecycleObservationPurpose)).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Failed" } }
+        })
+        if (legacyExecutor.observeWriterCustody === undefined) return yield* Effect.die("legacy custody required")
+        expect(yield* legacyExecutor.observeWriterCustody(plannedAttempt)).toEqual({ _tag: "Stopped", plannedAttempt })
+        const legacyOwners = (yield* Ref.get(owners)).slice(4)
+        expect(legacyOwners).toHaveLength(3)
+        for (const owner of legacyOwners) {
+          expect(owner.stateDirectory).toBe(legacyDirectory)
+          expect(yield* Ref.get(owner.closed)).toBe(true)
+          expect(yield* Ref.get(owner.turnStarts)).toBe(0)
+        }
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const store = yield* CodexAttemptStore
+            expect(yield* store.readAttempt(subject.runId, subject.attemptId)).toEqual(Option.some(legacySeal))
+          }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory: legacyDirectory })))
+        )
+      }).pipe(Effect.provide(NodeServices.layer))
     )
 )

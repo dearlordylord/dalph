@@ -15,6 +15,7 @@ import {
   type PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorReport,
   PlannedAttemptExecutorRequest,
+  PlannedAttemptResultRecoveryAuthorization,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -83,7 +84,7 @@ class QualificationConfigurationFailure extends Schema.TaggedError<Qualification
 ) {}
 
 const usage =
-  "dalph-codex-qualification-host <startup-cut|initialize-response-cut|initialize-observed-cut|allocate|associate|association-cut|workflow-association-cut|workflow-begin|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
+  "dalph-codex-qualification-host <startup-cut|initialize-response-cut|initialize-observed-cut|allocate|associate|association-cut|workflow-association-cut|workflow-begin|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|continue-result|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
 
 const envValue = (name: string): string | undefined => nodeProcess.env[name]
 
@@ -130,11 +131,10 @@ const threadRecordFor = (configuration: QualificationConfiguration, threadId: Co
     worktree: WorktreeLocator.make(configuration.worktree)
   })
 
-const reportEvent = (command: "Begin" | "Observe" | "Resume" | "Suspend", report: PlannedAttemptExecutorReport) => ({
-  event: "report" as const,
-  command,
-  report
-})
+const reportEvent = (
+  command: "Begin" | "Observe" | "Resume" | "Suspend" | "ContinueRejectedResult",
+  report: PlannedAttemptExecutorReport
+) => ({ event: "report" as const, command, report })
 
 const projectionEvent = (projection: PlannedAttemptExecutorProjection) => ({ event: "projection" as const, projection })
 
@@ -326,6 +326,17 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
         } else if (configuration.action === "resume") {
           yield* writeEvent(reportEvent("Resume", yield* executor.resume(request)))
+        } else if (configuration.action === "continue-result") {
+          if (executor.continueRejectedResult === undefined)
+            return yield* new QualificationConfigurationFailure({ detail: "executor does not expose result recovery" })
+          const authorization = PlannedAttemptResultRecoveryAuthorization.make({
+            nonce: "native-explicit-continue",
+            correlation
+          })
+          const initial = yield* executor.continueRejectedResult(request, authorization)
+          yield* writeEvent(reportEvent("ContinueRejectedResult", initial))
+          if (initial._tag === "ExecutorWorkExecuting")
+            yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation, store, lastCensus)))
         } else if (configuration.action === "project" || configuration.action === "read") {
           yield* writeEvent(
             projectionEvent(

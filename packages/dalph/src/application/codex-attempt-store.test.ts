@@ -1,3 +1,4 @@
+import { ProviderResultRecoveryRecord } from "./provider-result-recovery.js"
 /* eslint-disable import/no-nodejs-modules -- realpath canonicalizes macOS temporary-directory aliases for the filesystem fixture. */
 import { realpathSync } from "node:fs"
 import { NodeServices } from "@effect/platform-node"
@@ -43,6 +44,7 @@ import {
 } from "./codex-attempt-store.js"
 import { CodexToolEffectLimitMilliseconds, CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
 import { CodexServerStartupRecord } from "./codex-server-startup-record.js"
+import { ProviderResultCycle } from "./provider-result-correction.js"
 
 it.effect("only observed initialization permits a new startup intent in the original namespace", () =>
   Effect.gen(function* () {
@@ -174,6 +176,35 @@ const runningWithPolicy = CodexAttemptRecord.cases.Running.make({
   threadId: toolSubject.threadId,
   worktree: attempt.worktree
 })
+
+it.effect("retains result-cycle intent and refuses removal or deadline replenishment before a memory write", () =>
+  Effect.gen(function* () {
+    const store = yield* CodexAttemptStore
+    const resultCycle = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+      cycleId: "cycle:store",
+      responses: [
+        { _tag: "RequestIntended", intent: { _tag: "Initial", ordinal: 1, token: "result:initial", intendedAt: 1_000 } }
+      ]
+    })
+    const retained = CodexAttemptRecord.cases.Running.make({ ...runningWithPolicy, resultCycle })
+    yield* store.writeAttempt(retained)
+    yield* store.writeAttempt(retained)
+    const removed = yield* store.writeAttempt(runningWithPolicy).pipe(Effect.result)
+    expect(removed._tag).toBe("Failure")
+    const changed = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+      ...resultCycle,
+      responses: [
+        { _tag: "RequestIntended", intent: { _tag: "Initial", ordinal: 1, token: "result:initial", intendedAt: 2_000 } }
+      ]
+    })
+    expect(
+      (yield* store
+        .writeAttempt(CodexAttemptRecord.cases.Running.make({ ...runningWithPolicy, resultCycle: changed }))
+        .pipe(Effect.result))._tag
+    ).toBe("Failure")
+    expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(retained))
+  }).pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
+)
 const associated = CodexAttemptRecord.cases.AssociatedPreTurn.make({
   attemptId: attempt.attemptId,
   correlationAttemptId: attempt.attemptId,
@@ -221,6 +252,48 @@ const writePrivateFile = (fileSystem: FileSystem.FileSystem, filename: string, c
   fileSystem
     .writeFileString(filename, contents, { mode: 0o600 })
     .pipe(Effect.andThen(fileSystem.chmod(filename, 0o600)))
+
+it.effect("reopens the exact durable response cycle and preserves it after a refused budget reset", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-result-cycle-store-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const resultCycle = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+        cycleId: "cycle:durable",
+        responses: [
+          {
+            _tag: "RequestIntended",
+            intent: { _tag: "Initial", ordinal: 1, token: "result:durable", intendedAt: 1_000 }
+          }
+        ]
+      })
+      const retained = CodexAttemptRecord.cases.Running.make({ ...runningWithPolicy, resultCycle })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          yield* store.writeAttempt(retained)
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+      const before = yield* fs.readFileString(storePath)
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(retained))
+          expect((yield* store.writeAttempt(runningWithPolicy).pipe(Effect.result))._tag).toBe("Failure")
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+      expect(yield* fs.readFileString(storePath)).toBe(before)
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(retained))
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("survives an application restart with the exact private association and server launch", () =>
   Effect.scoped(
@@ -1177,6 +1250,165 @@ it.effect("persists an immutable purged-unit replacement ledger and reopens it e
           expect(read).toEqual(Option.some(ledger))
           expect(read._tag === "Some" ? read.value.history[0] : undefined).toEqual(purged)
           expect(read._tag === "Some" ? read.value.history.at(-1) : undefined).toEqual(sealed)
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("admits only one competing initial result-cycle intent and durably retains its winner", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-result-cycle-race-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const records = ["left", "right"].map((identity) =>
+        CodexAttemptRecord.cases.Running.make({
+          ...runningWithPolicy,
+          resultCycle: Schema.decodeUnknownSync(ProviderResultCycle)({
+            cycleId: `cycle:${identity}`,
+            responses: [
+              {
+                _tag: "RequestIntended",
+                intent: { _tag: "Initial", ordinal: 1, token: `token:${identity}`, intendedAt: 1_000 }
+              }
+            ]
+          })
+        })
+      )
+      const outcomes = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          return yield* Effect.all(
+            records.map((record) => store.writeAttempt(record).pipe(Effect.result)),
+            { concurrency: "unbounded" }
+          )
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+      expect(outcomes.filter((outcome) => outcome._tag === "Success")).toHaveLength(1)
+      expect(outcomes.filter((outcome) => outcome._tag === "Failure")).toHaveLength(1)
+      const winner = records[outcomes.findIndex((outcome) => outcome._tag === "Success")]
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const reopened = yield* CodexAttemptStore
+          expect(yield* reopened.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(winner))
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+const exerciseResultRecoveryStore = (includePrewriteRejection = true) =>
+  Effect.gen(function* () {
+    const store = yield* CodexAttemptStore
+    const initial = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+      cycleId: "store-recovery-original",
+      plannedBaseSha: attempt.baseSha,
+      responses: [
+        {
+          _tag: "RequestIntended",
+          intent: { _tag: "Initial", ordinal: 1, token: runningWithPolicy.currentToken, intendedAt: 1_000 }
+        }
+      ]
+    })
+    yield* store.writeAttempt(CodexAttemptRecord.cases.Running.make({ ...runningWithPolicy, resultCycle: initial }))
+    const observed = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+      ...initial,
+      responses: [{ ...initial.responses[0], _tag: "TurnObserved", turnId: toolSubject.turnId }]
+    })
+    yield* store.writeAttempt(CodexAttemptRecord.cases.Running.make({ ...runningWithPolicy, resultCycle: observed }))
+    const predecessor = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+      ...observed,
+      responses: [
+        {
+          ...observed.responses[0],
+          _tag: "ResponseRejected",
+          reason: "ResultEnvelopeInvalid",
+          responseObservedAt: 2_000
+        }
+      ]
+    })
+    const rejected = CodexAttemptRecord.cases.ResultRejected.make({
+      ...runningWithPolicy,
+      _tag: "ResultRejected",
+      resultCycle: predecessor,
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "WriterCustodyUnresolved",
+      custody: { _tag: "Stopped" }
+    })
+    yield* store.writeAttempt(rejected)
+    const successorInitial = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+      cycleId: "store-recovery-successor",
+      plannedBaseSha: attempt.baseSha,
+      responses: [
+        {
+          _tag: "RequestIntended",
+          intent: { _tag: "Initial", ordinal: 1, token: "store-recovery-new-token", intendedAt: 3_000 }
+        }
+      ]
+    })
+    const recovery = yield* Schema.decodeUnknownEffect(ProviderResultRecoveryRecord)({
+      authorizationId: { nonce: "store-continue", runId: attempt.runId, attemptId: attempt.attemptId },
+      predecessor,
+      successorInitial
+    })
+    const intent = CodexAttemptRecord.cases.TurnIntentRecorded.make({
+      ...runningWithPolicy,
+      _tag: "TurnIntentRecorded",
+      currentToken: CodexOwnedTurnToken.make("store-recovery-new-token"),
+      turnStartedAtMilliseconds: 3_000,
+      priorObservedTurnId: toolSubject.turnId,
+      resultCycle: successorInitial,
+      resultRecoveryHistory: [recovery]
+    })
+    if (includePrewriteRejection) expect((yield* store.writeAttempt(intent).pipe(Effect.result))._tag).toBe("Failure")
+    if (store.writeResultRecovery === undefined) return yield* Effect.die("real store must own recovery writes")
+    yield* store.writeResultRecovery(intent, recovery)
+    yield* store.writeResultRecovery(intent, recovery)
+    expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(intent))
+    const afterObservation = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+      ...successorInitial,
+      responses: [{ ...successorInitial.responses[0], _tag: "TurnObserved", turnId: "new-owned-turn" }]
+    })
+    const running = CodexAttemptRecord.cases.Running.make({
+      ...runningWithPolicy,
+      currentToken: intent.currentToken,
+      turnStartedAtMilliseconds: 3_000,
+      priorObservedTurnId: toolSubject.turnId,
+      observedTurnId: CodexTurnId.make("new-owned-turn"),
+      resultCycle: afterObservation
+    })
+    yield* store.writeAttempt(running)
+    const retained = yield* store.readAttempt(attempt.runId, attempt.attemptId)
+    expect(retained).toEqual(Option.some({ ...running, resultRecoveryHistory: [recovery] }))
+    expect((yield* store.writeResultRecovery(intent, recovery).pipe(Effect.result))._tag).toBe("Failure")
+    expect(
+      (yield* store
+        .writeAttempt(CodexAttemptRecord.cases.Running.make({ ...running, resultRecoveryHistory: [] }))
+        .pipe(Effect.result))._tag
+    ).toBe("Failure")
+    return { ...running, resultRecoveryHistory: [recovery] }
+  })
+
+it.effect("opens exactly one explicitly authorized cycle and preserves history across ordinary memory writes", () =>
+  exerciseResultRecoveryStore().pipe(Effect.provide(memoryCodexAttemptStoreLayer()))
+)
+
+it.effect("persists recovery permission and predecessor before native reopen without resetting the cycle", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-result-recovery-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const retained = yield* Effect.scoped(
+        exerciseResultRecoveryStore(false).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(retained))
         }).pipe(Effect.provide(nodeLayer(storePath)))
       )
     }).pipe(Effect.provide(NodeServices.layer))

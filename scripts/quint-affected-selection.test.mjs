@@ -41,3 +41,19 @@ void test("unknown inputs conservatively retain the full portfolio and invalid f
   for (const names of [[], ["unknown"], ["Run activation", "Run activation"]])
     assert.throws(() => createAffectedQuintSelection(profile, names))
 })
+
+void test("private response-cycle changes retain every correction check and native-free proof", async () => {
+  for (const path of ["specs/providerResultCorrection.qnt", "specs/providerResultCorrection_negative_test.qnt"]) {
+    const selected = await selectAffectedQuintFamilies({ profile, changedPaths: [path], worktree: process.cwd() })
+    assert.deepEqual(selected, ["provider result correction"])
+    assert.deepEqual(createAffectedQuintSelection(profile, selected).positions, [127, 128, 129, 130, 131])
+  }
+})
+
+void test("result recovery direction changes retain admission controls and the complete proof family", async () => {
+  for (const path of ["specs/resultRecoveryDirection.qnt", "specs/resultRecoveryDirection_negative_test.qnt"]) {
+    const selected = await selectAffectedQuintFamilies({ profile, changedPaths: [path], worktree: process.cwd() })
+    assert.deepEqual(selected, ["result recovery direction"])
+    assert.deepEqual(createAffectedQuintSelection(profile, selected).positions, [132, 133, 134, 135, 136])
+  }
+})

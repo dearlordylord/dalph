@@ -1,3 +1,4 @@
+import { deliverResultRecoveryContinue } from "./result-recovery-delivery.js"
 import type { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { Effect } from "effect"
 import {
@@ -25,6 +26,7 @@ import type {
 import type { ExecutorTransition } from "./planned-attempt-delivery-action-adapter.js"
 
 type ExecutorReportProtocolEffect =
+  | ReturnType<typeof deliverResultRecoveryContinue>
   | ReturnType<typeof authorizePlannedAttemptContinuationWithPermit>
   | ReturnType<typeof observeOrAttachPassiveOwner>
   | ReturnType<typeof reconcileOrObservePlannedAttemptExecutorStateResultWithPermit>
@@ -67,42 +69,50 @@ export const executorReportFor = (
   lease: DeliveryActionExecutionLease,
   eligibility: SafeContinuationRevalidationEligibility | undefined
 ): ExecutorReportEffect =>
-  transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
-    ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-        Effect.gen(function* () {
-          const report = yield* eligibility?.basis._tag === "ReconciledResumeStillSafe"
-            ? runPlannedAttemptExecutorResumeRedelivery(
-                permit,
-                transition.plannedAttempt,
-                eligibility,
-                transition.witness,
-                (receipt) => lease.bindPlannedAttemptPosition(transition.plannedAttempt, undefined, receipt)
-              )
-            : authorizePlannedAttemptContinuationWithPermit(permit, transition.plannedAttempt, transition.witness).pipe(
-                Effect.andThen(
-                  resumePlannedAttemptExecutorWorkWithPermit(
-                    permit,
-                    transition.plannedAttempt,
-                    undefined,
-                    eligibility === undefined
-                      ? undefined
-                      : (receipt) => lease.bindPlannedAttemptPosition(transition.plannedAttempt, undefined, receipt)
+  transition._tag === "ContinueRejectedResult"
+    ? deliverResultRecoveryContinue(lease, transition.plannedAttempt, transition.requestId).pipe(
+        Effect.map((report) => ({ acceptedFacts: "Changed" as const, report }))
+      )
+    : transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
+      ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
+          Effect.gen(function* () {
+            const report = yield* eligibility?.basis._tag === "ReconciledResumeStillSafe"
+              ? runPlannedAttemptExecutorResumeRedelivery(
+                  permit,
+                  transition.plannedAttempt,
+                  eligibility,
+                  transition.witness,
+                  (receipt) => lease.bindPlannedAttemptPosition(transition.plannedAttempt, undefined, receipt)
+                )
+              : authorizePlannedAttemptContinuationWithPermit(
+                  permit,
+                  transition.plannedAttempt,
+                  transition.witness
+                ).pipe(
+                  Effect.andThen(
+                    resumePlannedAttemptExecutorWorkWithPermit(
+                      permit,
+                      transition.plannedAttempt,
+                      undefined,
+                      eligibility === undefined
+                        ? undefined
+                        : (receipt) => lease.bindPlannedAttemptPosition(transition.plannedAttempt, undefined, receipt)
+                    )
                   )
                 )
-              )
-          return { acceptedFacts: "Changed" as const, report }
-        })
-      )
-    : transition._tag === "ObservePlannedAttemptExecutorWork"
-      ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-          observeOrAttachPassiveOwner(permit, transition.plannedAttempt)
+            return { acceptedFacts: "Changed" as const, report }
+          })
         )
-      : transition._tag === "ReconcilePlannedAttemptExecutorWork"
+      : transition._tag === "ObservePlannedAttemptExecutorWork"
         ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-            reconcileOrObservePlannedAttemptExecutorStateResultWithPermit(permit, transition.plannedAttempt)
+            observeOrAttachPassiveOwner(permit, transition.plannedAttempt)
           )
-        : lease.withPlannedAttemptProtocol(correlation, (permit) =>
-            suspendAndObserveIfExecuting(permit, transition.plannedAttempt).pipe(
-              Effect.map((report) => ({ acceptedFacts: "Changed" as const, report }))
+        : transition._tag === "ReconcilePlannedAttemptExecutorWork"
+          ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
+              reconcileOrObservePlannedAttemptExecutorStateResultWithPermit(permit, transition.plannedAttempt)
             )
-          )
+          : lease.withPlannedAttemptProtocol(correlation, (permit) =>
+              suspendAndObserveIfExecuting(permit, transition.plannedAttempt).pipe(
+                Effect.map((report) => ({ acceptedFacts: "Changed" as const, report }))
+              )
+            )

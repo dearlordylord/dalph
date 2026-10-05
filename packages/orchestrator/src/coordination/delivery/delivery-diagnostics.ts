@@ -1,3 +1,4 @@
+import { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
 /* eslint-disable functional/immutable-data -- Local reconstruction scratch is never persisted or exposed. */
 import {
   AttemptId,
@@ -5,6 +6,8 @@ import {
   TaskBranchRef,
   WorktreeLocator,
   PlannedAttemptExecutorFailureCode,
+  PlannedAttemptRejectedResultReport,
+  type PlannedTaskAttempt,
   RunId,
   TaskId,
   plannedAttemptExecutorCorrelationKey,
@@ -40,6 +43,7 @@ export const DeliveryDiagnostics = Schema.Struct({
         "Preparing",
         "Executing",
         "Suspended",
+        "Rejected",
         "Failed",
         "ExecutorCompleted",
         "Accepted",
@@ -62,11 +66,44 @@ export const DeliveryDiagnostics = Schema.Struct({
       failure: Schema.TaggedUnion({ None: {}, Unavailable: {}, Known: { code: PlannedAttemptExecutorFailureCode } }),
       recovery: Schema.TaggedUnion({
         NotApplicable: {},
+        RestartOnly: { subject: ResultRecoverySubject.cases.HistoricalUnknownFailure },
+        ExplicitDirectionRequired: {
+          rejection: PlannedAttemptRejectedResultReport,
+          subject: ResultRecoverySubject.cases.RejectedResult
+        },
         Unavailable: { reason: Schema.Literal("ExecutorFailureRecoveryNotImplemented") }
       })
     })
   )
-})
+}).check(
+  Schema.makeFilter(({ tasks }) =>
+    tasks.every((task) => {
+      const recovery = task.recovery
+      if (recovery._tag !== "RestartOnly" && recovery._tag !== "ExplicitDirectionRequired") return true
+      const attempt = recovery.subject.plannedAttempt
+      const retained = task.retainedAttempt
+      const bound =
+        attempt.attemptId === retained.attemptId &&
+        attempt.runId === retained.runId &&
+        attempt.taskId === task.taskId &&
+        attempt.taskId === retained.taskId &&
+        attempt.baseSha === retained.baseSha &&
+        attempt.branch === retained.branch &&
+        attempt.worktree === retained.worktree
+      return (
+        bound &&
+        (recovery._tag === "RestartOnly"
+          ? task.phase === "Failed" && task.failure._tag === "Unavailable"
+          : task.phase === "Rejected" &&
+            task.failure._tag === "None" &&
+            recovery.rejection.correlation.attemptId === retained.attemptId &&
+            recovery.rejection.correlation.runId === retained.runId)
+      )
+    })
+      ? undefined
+      : "recovery diagnostics must belong to the retained attempt and failure kind"
+  )
+)
 export type DeliveryDiagnostics = typeof DeliveryDiagnostics.Type
 
 type TaskDiagnostic = DeliveryDiagnostics["tasks"][number]
@@ -88,6 +125,7 @@ export const projectDeliveryDiagnostics = (
     target === undefined || taskTrackerTargetKey(observed) === taskTrackerTargetKey(target)
   let trackerWait: DeliveryDiagnostics["trackerWait"] = { _tag: "None" }
   const attempts = new Map<string, TaskDiagnostic>()
+  const plannedAttempts = new Map<string, PlannedTaskAttempt>()
   const reports = new Map<string, PlannedAttemptExecutorReport>()
   const retainedDescriptors = new Map<
     TaskId,
@@ -129,6 +167,7 @@ export const projectDeliveryDiagnostics = (
       titles.set(fact.taskId, { title: fact.title, observedAt: position })
     } else if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.runId === runId) {
       const attempt = event.plannedAttempt
+      plannedAttempts.set(plannedAttemptExecutorCorrelationKey(attempt), attempt)
       attempts.set(plannedAttemptExecutorCorrelationKey(attempt), {
         taskId: attempt.taskId,
         retainedAttempt: {
@@ -154,6 +193,22 @@ export const projectDeliveryDiagnostics = (
       if (task === undefined || (previous !== undefined && samePlannedAttemptExecutorReport(previous, report))) continue
       reports.set(key, report)
       const result = report._tag === "ExecutorWorkTerminal" ? report.result : null
+      const plannedAttempt = plannedAttempts.get(key)
+      if (report._tag === "ExecutorWorkResultRejected") {
+        if (plannedAttempt === undefined) continue
+        attempts.set(key, {
+          ...task,
+          phase: "Rejected",
+          lastSubstantiveAt: position,
+          failure: { _tag: "None" },
+          recovery: {
+            _tag: "ExplicitDirectionRequired",
+            rejection: report,
+            subject: ResultRecoverySubject.cases.RejectedResult.make({ plannedAttempt, reportOrdinal: event.ordinal })
+          }
+        })
+        continue
+      }
       attempts.set(key, {
         ...task,
         lastSubstantiveAt: position,
@@ -171,7 +226,15 @@ export const projectDeliveryDiagnostics = (
             : task.candidateHead,
         recovery:
           result?._tag === "Failed"
-            ? { _tag: "Unavailable", reason: "ExecutorFailureRecoveryNotImplemented" }
+            ? result.failureCode === undefined && plannedAttempt !== undefined
+              ? {
+                  _tag: "RestartOnly",
+                  subject: ResultRecoverySubject.cases.HistoricalUnknownFailure.make({
+                    plannedAttempt,
+                    reportOrdinal: event.ordinal
+                  })
+                }
+              : { _tag: "Unavailable", reason: "ExecutorFailureRecoveryNotImplemented" }
             : { _tag: "NotApplicable" },
         failure:
           result?._tag === "Failed"

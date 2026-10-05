@@ -1,14 +1,16 @@
+import { resultRecoveryDirectionQuintGateCommandKeys } from "./quint-gate-result-recovery-direction-command-oracle.mjs"
+import { providerResultCorrectionQuintGateCommandKeys } from "./quint-gate-provider-result-correction-command-oracle.mjs"
 import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
 import { acceptedAutomaticSuccessorQuintGateCommandKeys } from "./quint-gate-automatic-successor-command-oracle.mjs"
 import { publicationBatchGrantQuintGateCommandKeys } from "./quint-gate-publication-batch-grant-command-oracle.mjs"
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
-  total: 127,
-  typecheck: 19,
-  test: 56,
-  "sampled-run": 28,
-  verify: 24
+  total: 137,
+  typecheck: 21,
+  test: 60,
+  "sampled-run": 30,
+  verify: 26
 })
 
 export const legacyQuintGateExpectedCommandCounts = Object.freeze({
@@ -48,7 +50,9 @@ const acceptedQuintGateCommandKeysWithAutomaticSuccessor = Object.freeze([
 ])
 const acceptedQuintGateCommandKeysWithPublicationGrant = Object.freeze([
   ...acceptedQuintGateCommandKeysWithAutomaticSuccessor,
-  ...publicationBatchGrantQuintGateCommandKeys
+  ...publicationBatchGrantQuintGateCommandKeys,
+  ...providerResultCorrectionQuintGateCommandKeys,
+  ...resultRecoveryDirectionQuintGateCommandKeys
 ])
 
 /** Compare the retained pre-#315 commands with the independently accepted order. */
@@ -59,7 +63,9 @@ export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
         !name.startsWith("fresh-task admission") &&
         !name.startsWith("accepted-result automatic successor proof") &&
         !name.startsWith("accepted-result automatic successor counter proof") &&
-        !name.startsWith("publication exhaustion batch grant")
+        !name.startsWith("publication exhaustion batch grant") &&
+        !name.startsWith("provider result correction") &&
+        !name.startsWith("result recovery direction")
     )
     .map(commandKey)
   const mismatch = retained.findIndex((key, index) => key !== acceptedLegacyQuintGateCommandKeys[index])
@@ -94,7 +100,7 @@ const countManifestCommands = (manifest) => {
 
 /**
  * Keep the selected command count independent from the manifest and the
- * execution path. Both representations must retain the current 127-command
+ * execution path. Both representations must retain the current 132-command
  * command contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {

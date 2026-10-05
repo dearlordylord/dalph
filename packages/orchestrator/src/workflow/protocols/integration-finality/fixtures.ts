@@ -190,6 +190,7 @@ export const integrationFinalityFixture = (() => {
     trackerRevision
   })
   return {
+    acceptedResult,
     activeClaim,
     claim,
     graphObservation,

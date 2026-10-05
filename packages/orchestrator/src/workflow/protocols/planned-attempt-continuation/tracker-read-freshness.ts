@@ -49,11 +49,12 @@ const continuationTrackerReadMatchesTask = (
   operation: ContinuationTrackerReadOperation,
   target: ContinuationTrackerReadOperation["target"],
   taskId: PlannedTaskAttempt["taskId"],
-  plannedAttempt?: PlannedTaskAttempt
+  plannedAttempt?: PlannedTaskAttempt,
+  authority: "Continuation" | "Restart" = "Continuation"
 ): boolean => {
   if (!operationNamesTask(operation, target, taskId)) return false
   if (plannedAttempt === undefined) return true
-  return continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt)
+  return continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt, authority)
 }
 
 type RecordedTaskAttemptPlan = typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
@@ -70,7 +71,7 @@ const recordedPlanEntriesBefore = (
     if (record.event._tag === "TaskAttemptPlanned") {
       return [operation]
     }
-    if (record.event._tag === "PlannedAttemptReplaced") {
+    if (record.event._tag === "PlannedAttemptReplaced" || record.event._tag === "ResultRecoveryAttemptReplaced") {
       return [operation]
     }
     return []
@@ -169,11 +170,12 @@ export const acceptedExecutingAttemptsForAuthorityCheckIntent = (
 export const continuationTrackerReadHasExactPlanPredecessor = (
   records: JournalHistorySource,
   operation: ContinuationTrackerReadOperation,
-  plannedAttempt: PlannedTaskAttempt
+  plannedAttempt: PlannedTaskAttempt,
+  authority: "Continuation" | "Restart" = "Continuation"
 ): boolean => {
   const plans = recordedTaskAttemptPlans(records)
   const namedPlans = plans.filter(({ operationId }) => operation.predecessorOperationIds.includes(operationId))
-  return continuationReadNamesExactPlan(operation, namedPlans, plannedAttempt)
+  return continuationReadNamesExactPlan(operation, namedPlans, plannedAttempt, authority)
 }
 
 /** Exact durable outcome key for one tracker read operation. */
@@ -227,7 +229,8 @@ export const latestContinuationTrackerReadStatusAfter = (
   family: ContinuationTrackerReadOperation["_tag"],
   target: ContinuationTrackerReadOperation["target"],
   taskId: PlannedTaskAttempt["taskId"],
-  plannedAttempt?: PlannedTaskAttempt
+  plannedAttempt?: PlannedTaskAttempt,
+  authority: "Continuation" | "Restart" = "Continuation"
 ): ContinuationTrackerReadStatus | undefined => {
   const intent = Array.from(journalRecordsForTask(records, taskId)).findLast(
     (record): record is ContinuationTrackerReadIntent =>
@@ -236,7 +239,7 @@ export const latestContinuationTrackerReadStatusAfter = (
       isContinuationTrackerReadOperation(record.event.operation) &&
       record.event.operation._tag === family &&
       record.key === intentRecordKey(record.event.operation.operationId) &&
-      continuationTrackerReadMatchesTask(records, record.event.operation, target, taskId, plannedAttempt)
+      continuationTrackerReadMatchesTask(records, record.event.operation, target, taskId, plannedAttempt, authority)
   )
   if (intent === undefined) return undefined
 

@@ -1,17 +1,7 @@
-/* eslint-disable max-lines -- The closed event vocabulary and its exact durable-key descriptors stay exhaustive. */
-import { Match } from "effect"
 import {
-  type AttemptId,
-  type PlannedAttemptExecutorCorrelation,
-  type PlannedTaskAttempt,
-  type RunId
-} from "@dalph/contracts"
-import type { ControlDirectionApplicationOrdinal } from "../protocols/control-direction-application/events.js"
-import type { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
-import type { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
-import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
-import { type OperationId } from "../identity.js"
-import {
+  resultRecoveryAttemptReplacedRecordKey,
+  resultRecoveryDirectedRecordKey,
+  resultRecoveryContinueAuthorizedRecordKey,
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
   attemptRestartAuthorityReadFailedRecordKey,
@@ -112,6 +102,19 @@ import {
   integratorCandidateCleanupContradictedRecordKey,
   integratorCandidateCleanupSettledRecordKey
 } from "../../workflow-journal/record-key.js"
+/* eslint-disable max-lines -- The closed event vocabulary and its exact durable-key descriptors stay exhaustive. */
+import { Match } from "effect"
+import {
+  type AttemptId,
+  type PlannedAttemptExecutorCorrelation,
+  type PlannedTaskAttempt,
+  type RunId
+} from "@dalph/contracts"
+import type { ControlDirectionApplicationOrdinal } from "../protocols/control-direction-application/events.js"
+import type { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
+import type { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
+import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
+import { type OperationId } from "../identity.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import { integrationQuarantineDirectionSubject } from "../protocols/integration-quarantine/events.js"
 import type {
@@ -273,12 +276,34 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       ordinal: event.ordinal,
       runId: event.subject.runId
     }),
+    ResultRecoveryContinueAuthorized: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: resultRecoveryContinueAuthorizedRecordKey(event.requestId)
+    }),
+    ResultRecoveryDirected: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: resultRecoveryDirectedRecordKey(event.requestId)
+    }),
     AttemptChoiceApplied: (event) => ({
       _tag: "AttemptChoiceEventDescriptor",
       expectedKey: attemptChoiceAppliedRecordKey(event.requestId),
       requestId: event.requestId,
       runId: event.subject.plannedAttempt.runId
     }),
+    ResultRecoveryAttemptReplaced: (event) =>
+      operationEvent({
+        expectedKey: resultRecoveryAttemptReplacedRecordKey(event.subject.plannedAttempt.attemptId),
+        operationId: event.successorPlan.operationId,
+        plannedAttempt: event.successorPlan.plannedAttempt,
+        relatedOperationIds: [
+          event.witness.activeTaskContinuationRead.graphObservationOperationId,
+          event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
+          event.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
+          event.witness.worktreeObservationOperationId,
+          event.witness.targetLineageObservationOperationId
+        ],
+        requiredOperationIds: event.successorPlan.predecessorOperationIds
+      }),
     PlannedAttemptReplaced: (event) =>
       operationEvent({
         expectedKey: plannedAttemptReplacedRecordKey(event.subject.plannedAttempt.attemptId),

@@ -400,9 +400,17 @@ export const latestPlannedAttemptExecutorEvidence = (
 type CurrentAcceptedPlannedAttemptExecutorLifecycle =
   | { readonly _tag: "Executing"; readonly plannedAttempt: PlannedTaskAttempt }
   | {
+      readonly _tag: "ResultRejected"
+      readonly plannedAttempt: PlannedTaskAttempt
+      readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkResultRejected" }>
+    }
+  | {
       readonly _tag: "Settled"
       readonly plannedAttempt: PlannedTaskAttempt
-      readonly report: Exclude<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkExecuting" }>
+      readonly report: Exclude<
+        PlannedAttemptExecutorReport,
+        { readonly _tag: "ExecutorWorkExecuting" | "ExecutorWorkResultRejected" }
+      >
     }
   | { readonly _tag: "Ambiguous" }
 
@@ -419,6 +427,8 @@ export const currentAcceptedPlannedAttemptExecutorLifecycleFor = (
   if (responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return { _tag: "Ambiguous" }
   const evidence = latestAcceptedPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
   if (evidence === undefined) return { _tag: "Ambiguous" }
+  if (evidence.report._tag === "ExecutorWorkResultRejected")
+    return { _tag: "ResultRejected", plannedAttempt: responsibility.plannedAttempt, report: evidence.report }
   return evidence.report._tag === "ExecutorWorkExecuting"
     ? { _tag: "Executing", plannedAttempt: responsibility.plannedAttempt }
     : { _tag: "Settled", plannedAttempt: responsibility.plannedAttempt, report: evidence.report }

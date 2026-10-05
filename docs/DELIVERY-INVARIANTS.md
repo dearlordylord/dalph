@@ -710,6 +710,13 @@ cannot use that report to authorize replacement or abandonment. An Accepted
 result follows ordinary integration admission; Failed and Completed remain
 their exact terminal outcomes. Historical late-Resume cassette records remain
 decoder evidence only.
+An independently selected recovery direction does not revive that earlier
+choice. Under #428, a stopped pre-seal result rejection permits explicit
+Continue or Restart; a historical Failed seal of unknown cause permits only a
+fresh explicit Restart after current authority and stopped-writer proof.
+Neither action rewrites the predecessor seal or converts a known terminal
+failure into a rejected answer. A newer accepted terminal report invalidates
+an earlier recovery selection while preserving its original receipt.
 → `taskFactReconciliation` states
 `terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains`; the accepted-result integration
 model has no Restart-specific suppression branch; production admission queues
@@ -728,6 +735,16 @@ immutable attempt.
 tests reach exact redelivery, conflicting reuse, both race winners, the new
 fingerprint choice, and Restart redelivery; matching production cassette tests
 use those same cases.
+For #428 result recovery, identity also binds the complete immutable plan,
+selected report kind and ordinal, and direction. Exact receipt redelivery
+does not grant another correction cycle or a second replacement. A later
+rejection needs its own selection and request identity.
+→ `resultRecoveryDirection` states `directionIdentityIsExact`,
+`firstDirectionWinsSelectedReport`, `eachRecordedDirectionAppliedOnce`,
+`acceptedTerminalSealIsAbsorbing`, and `staleDirectionCannotAuthorize`; its
+production adapter invokes the serialized control's admission decision and
+current-selection guard. Private-cycle and fresh-authority proofs remain
+separate composition owners.
 
 ## Application Exit
 

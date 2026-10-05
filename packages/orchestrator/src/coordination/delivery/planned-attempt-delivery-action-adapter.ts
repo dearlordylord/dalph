@@ -1,3 +1,5 @@
+import { deliverResultRecoveryRestart } from "./result-recovery-delivery.js"
+import { authorizeResultRecoveryContinueWithPermit } from "../../workflow/protocols/result-recovery/control.js"
 import { plannedAttemptExecutorCorrelation, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { Effect } from "effect"
 import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -49,6 +51,9 @@ type PlannedAttemptTransition = Extract<
       | "ObservePlannedAttemptExecutorWork"
       | "AdvanceAttemptRestart"
       | "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
+      | "ContinueRejectedResult"
+      | "AuthorizeResultRecoveryContinue"
+      | "ReplaceRejectedResult"
       | "AdvanceAttemptStoppage"
       | "ObserveAttemptStoppageExecutor"
       | "ReconcilePlannedAttemptExecutorWork"
@@ -282,6 +287,10 @@ const executeAttemptStoppageTransition = Effect.fn("DeliveryAction.executeAttemp
 export type ExecutorTransition = Exclude<
   NonRestartPlannedAttemptTransition,
   | AttemptStoppageTransition
+  | Extract<
+      NonRestartPlannedAttemptTransition,
+      { readonly _tag: "AuthorizeResultRecoveryContinue" | "ReplaceRejectedResult" }
+    >
   | Extract<NonRestartPlannedAttemptTransition, { readonly _tag: "RecordStoppedAttemptClaimNoRelease" }>
 >
 
@@ -307,7 +316,11 @@ const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTrans
   }
   const result = yield* executorReportFor(transition, correlation, lease, eligibility)
   const report = result.report
-  if (report._tag === "ExecutorWorkSafelySuspended" || report._tag === "ExecutorWorkTerminal") {
+  if (
+    report._tag === "ExecutorWorkSafelySuspended" ||
+    report._tag === "ExecutorWorkTerminal" ||
+    (report._tag === "ExecutorWorkResultRejected" && report.custody._tag === "Stopped")
+  ) {
     yield* lease.releasePlannedAttemptPosition(correlation)
   }
   return result
@@ -361,6 +374,16 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
   transition: NonRestartPlannedAttemptTransition,
   lease: DeliveryActionExecutionLease
 ) {
+  if (transition._tag === "ReplaceRejectedResult") {
+    yield* deliverResultRecoveryRestart(lease, transition)
+    return deliveryActionCompleted(action.proposal.id)
+  }
+  if (transition._tag === "AuthorizeResultRecoveryContinue") {
+    yield* lease.withPlannedAttemptProtocol(plannedAttemptExecutorCorrelation(transition.plannedAttempt), (permit) =>
+      authorizeResultRecoveryContinueWithPermit(permit, transition.requestId, transition.witness)
+    )
+    return deliveryActionCompleted(action.proposal.id)
+  }
   if (transition._tag === "AdvanceAttemptStoppage" || transition._tag === "ObserveAttemptStoppageExecutor") {
     yield* executeAttemptStoppageTransition(transition, lease)
     return deliveryActionCompleted(action.proposal.id)

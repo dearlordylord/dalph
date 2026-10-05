@@ -1,4 +1,9 @@
 import {
+  resultRecoveryDirectedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
+} from "../../workflow-journal/record-key.js"
+import {
   TaskWorkSpecification,
   plannedTaskAttemptEquivalence,
   type PlannedTaskAttempt,
@@ -7,7 +12,6 @@ import {
 import { Schema } from "effect"
 import { isExactTaskClaim, type ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import {
   isJournalRecordEvidence,
@@ -269,6 +273,71 @@ const acceptedReplacementEvidenceFor = (
     : { causalClaim, records: acceptedRecords, replacement }
 }
 
+/** The distinct rejected-result Restart keeps its own direction and fresh witness authority. */
+const resultRecoveryContinuationAuthorityFrom = (
+  records: JournalHistorySource,
+  runId: RunId,
+  plannedAttempt: PlannedTaskAttempt,
+  successorPlanOperationId: OperationId
+): ReplacementContinuationAuthority | undefined => {
+  if (plannedAttempt.runId !== runId) return undefined
+  if (
+    !isJournalRecordEvidence(records) &&
+    reduceWorkflowJournalHistory(runId, records)._tag !== "ValidWorkflowJournalHistory"
+  )
+    return undefined
+  for (const replacement of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "ResultRecoveryAttemptReplaced"
+  )) {
+    if (
+      replacement.event._tag !== "ResultRecoveryAttemptReplaced" ||
+      replacement.runId !== runId ||
+      replacement.event.successorPlan.operationId !== successorPlanOperationId ||
+      !plannedTaskAttemptEquivalence(replacement.event.successorPlan.plannedAttempt, plannedAttempt)
+    )
+      continue
+    const direction = journalRecordByKey(records, resultRecoveryDirectedRecordKey(replacement.event.requestId))
+    if (
+      direction?.event._tag !== "ResultRecoveryDirected" ||
+      direction.position >= replacement.position ||
+      direction.event.direction !== "RestartTaskImplementation"
+    )
+      return undefined
+    const causalClaim = causalClaimForAttempt(records, plannedAttempt.attemptId)
+    const priorClaim = causalClaimForAttempt(records, replacement.event.subject.plannedAttempt.attemptId)
+    if (causalClaim === undefined || priorClaim === undefined || !isExactTaskClaim(causalClaim.claim, priorClaim.claim))
+      return undefined
+    const operationId = replacement.event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
+    const outcome = exactSpecificationOutcome(records, runId, operationId)
+    const intent = exactSpecificationIntent(records, runId, operationId)
+    if (
+      outcome === undefined ||
+      intent === undefined ||
+      !specificationChronologyMatches(intent, outcome, direction.position, replacement.position) ||
+      !specificationIdentityMatches(outcome, intent, plannedAttempt)
+    )
+      return undefined
+    const fact = outcome.event.observation.factFamily
+    const specification = { body: fact.body, fingerprint: fact.fingerprint, taskId: fact.taskId, title: fact.title }
+    if (!Schema.is(TaskWorkSpecification)(specification)) return undefined
+    const authority: ReplacementContinuationAuthority = {
+      [ReplacementContinuationAuthorityTypeId]: ReplacementContinuationAuthorityTypeId,
+      claim: immutableSnapshot(causalClaim.claim),
+      plannedAttempt: immutableSnapshot(plannedAttempt),
+      replacementAt: replacement.position,
+      specification: immutableSnapshot(specification),
+      specificationObservationOperationId: operationId,
+      successorPlanOperationId
+    }
+    Object.freeze(authority)
+    issuedReplacementContinuationAuthorities.add(authority)
+    return authority
+  }
+  return undefined
+}
+
 /**
  * Reconstructs continuation authority only when one exact accepted Restart,
  * its causal claim, successor plan, and F2 specification observation agree.
@@ -279,6 +348,13 @@ export const replacementContinuationAuthorityFrom = (
   plannedAttempt: PlannedTaskAttempt,
   successorPlanOperationId: OperationId
 ): ReplacementContinuationAuthority | undefined => {
+  const resultRecoveryAuthority = resultRecoveryContinuationAuthorityFrom(
+    records,
+    runId,
+    plannedAttempt,
+    successorPlanOperationId
+  )
+  if (resultRecoveryAuthority !== undefined) return resultRecoveryAuthority
   const evidence = acceptedReplacementEvidenceFor(records, runId, plannedAttempt, successorPlanOperationId)
   if (evidence === undefined) return undefined
   const { causalClaim, records: acceptedRecords, replacement } = evidence

@@ -1,5 +1,10 @@
 import { Schema } from "effect"
-import { PlannedTaskAttempt, PlannedAttemptExecutorReport, PlannedAttemptExecutorBeginProofId } from "@dalph/contracts"
+import {
+  PlannedTaskAttempt,
+  PlannedAttemptExecutorReport,
+  PlannedAttemptExecutorBeginProofId,
+  PlannedAttemptResultRecoveryAuthorization
+} from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -57,13 +62,27 @@ export type PlannedAttemptExecutorResumeRedeliveryIntendedEvent =
 
 /** Durable intent recorded before an executor begin, resume, or suspension request crosses its boundary. */
 export const PlannedAttemptExecutorCommandIntendedEvent = Schema.TaggedStruct("PlannedAttemptExecutorCommandIntended", {
-  command: Schema.Literals(["Begin", "Resume", "Suspend"]),
+  command: Schema.Literals(["Begin", "Resume", "Suspend", "ContinueRejectedResult"]),
+  recoveryAuthorization: Schema.optionalKey(PlannedAttemptResultRecoveryAuthorization),
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
   ordinal: PlannedAttemptExecutorCommandOrdinal,
   plannedAttempt: PlannedTaskAttempt,
   version: Schema.Literal(workflowJournalEventVersion)
-})
+}).check(
+  Schema.makeFilter((event) => {
+    if (event.command !== "ContinueRejectedResult")
+      return event.recoveryAuthorization === undefined
+        ? undefined
+        : "ordinary executor commands cannot carry result recovery permission"
+    const permission = event.recoveryAuthorization
+    return permission !== undefined &&
+      permission.correlation.runId === event.plannedAttempt.runId &&
+      permission.correlation.attemptId === event.plannedAttempt.attemptId
+      ? undefined
+      : "result recovery command requires its exact permission identity"
+  })
+)
 export type PlannedAttemptExecutorCommandIntendedEvent = typeof PlannedAttemptExecutorCommandIntendedEvent.Type
 
 export const PlannedAttemptExecutorCommandProjectionObservation = Schema.TaggedUnion({

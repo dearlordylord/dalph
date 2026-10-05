@@ -190,7 +190,12 @@ export const CodexPlannedAttemptExecutorRecordedCassette = Schema.Struct({
   name: Schema.NonEmptyString,
   replacementResultTag: Schema.NullOr(CodexReplacementResultTag),
   reportTags: Schema.Array(
-    Schema.Literals(["ExecutorWorkExecuting", "ExecutorWorkTerminal", "ExecutorWorkSafelySuspended"])
+    Schema.Literals([
+      "ExecutorWorkExecuting",
+      "ExecutorWorkTerminal",
+      "ExecutorWorkSafelySuspended",
+      "ExecutorWorkResultRejected"
+    ])
   ),
   scenario: CodexPlannedAttemptExecutorCassette.fields.scenario,
   threadStartCount: NonNegativeCount,

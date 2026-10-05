@@ -62,6 +62,14 @@ missing/deleted targets and removed headings fail, and fixture selection is boun
 
 ## Commands
 
+`pnpm test:cassettes:memory` reports each completed test and its duration. Retain
+that output when a bounded run stops so the next diagnostic can select the
+unfinished file or expensive scenario. This reporter changes verification
+observability only; it does not change Dalph runtime or cassette assertions.
+Budget the complete serial catalog plus setup, rather than treating a per-test
+timeout as the suite deadline. Use the current terminal summary when choosing
+a later operation's stop time; historical measurements are not a current budget.
+
 All commands below use `pnpm`. Script definitions live in
 [package.json](../../package.json); gate stages and bounds live in
 [candidate runner](../../scripts/run-candidate-checks.mjs) and [shared stage policy](../../scripts/quality-gate-stage-policy.mjs).
@@ -75,6 +83,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:artifacts` | Clean-build production packages in dependency order, then validate normal exports, declarations, bins, package boundaries, and packed contents. |
 | `exec vitest run <test-file>` | Focused development check; first select [source-only or built-fixture preparation](#focused-test-preparation). `test` runs the covered core suite. |
 | `typecheck` | Strict TypeScript-Go plus Effect errors/warnings; suggestions remain nonfatal. Each invocation uses disposable build-info so ignored incremental state cannot change the verdict for the same source candidate. |
+| `typecheck:dev` | Incremental edit-loop diagnostic with a worktree-local cache; does not qualify a candidate. See [finite implementation work](workflow.md#keeping-implementation-work-finite) for check selection. |
 | `typecheck:effect` | Optional standalone Effect diagnostics; errors/warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
 | `lint:code` | Type-aware Oxlint and dprint over repository files; warnings fail. |

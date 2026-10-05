@@ -105,7 +105,7 @@ export const makeControlledCodexContainment = (name: string, stateDirectory: str
       close
     })
     yield* Effect.addFinalizer(() => close)
-    const complete = (text: string) =>
+    const complete = (text: string, status: "completed" | "failed" = "completed") =>
       Effect.gen(function* () {
         const current = yield* Ref.get(thread)
         const turn = current.turns[0]
@@ -113,7 +113,7 @@ export const makeControlledCodexContainment = (name: string, stateDirectory: str
         yield* Ref.set(thread, {
           ...current,
           status: "idle",
-          turns: [{ ...turn, status: "completed", items: [{ type: "agentMessage", text }] }]
+          turns: [{ ...turn, status, items: [{ type: "agentMessage", text }] }]
         })
         yield* PubSub.publish(completions, { threadId: current.id, turnId: turn.id })
       })

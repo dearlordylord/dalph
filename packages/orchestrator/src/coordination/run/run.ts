@@ -1,3 +1,4 @@
+import type { ResultRecoveryControlService } from "../../workflow/protocols/result-recovery/control.js"
 /* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
 import { Context, Effect, type Layer, Ref, Schema, type Stream } from "effect"
@@ -268,6 +269,18 @@ export interface JournaledRunBootstrapService {
       | JournaledRunBootstrapError
       | JournaledRunIdentityMismatch
       | JournaledRunNotActive
+    >
+    readonly applyResultRecoveryDirection: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<ResultRecoveryControlService["apply"]>>,
+      Effect.Error<ReturnType<ResultRecoveryControlService["apply"]>> | ApplicationExiting | JournaledRunNotActive
+    >
+    readonly readResultRecoveryDirection: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<ResultRecoveryControlService["read"]>>,
+      Effect.Error<ReturnType<ResultRecoveryControlService["read"]>> | ApplicationExiting | JournaledRunNotActive
     >
     readonly applyAttemptChoice: (
       input: unknown

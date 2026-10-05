@@ -208,6 +208,23 @@ const addResponsibilityEntriesFor = (
   addTrackerFactEntryFor(subject, delivery, standing, taskOrder, entries)
   addUnavailableEvidenceEntryFor(subject, delivery, standing, taskOrder, entries)
   addRelinquishmentEntryFor(subject, delivery, standing, taskOrder, entries)
+  if (
+    standing.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+    standing.facts.disposition._tag === "PlannedAttemptExecutorResultRejected"
+  ) {
+    addEntry(
+      entries,
+      {
+        _tag: "ExecutorResultRejected",
+        recoverySubject: standing.facts.disposition.recoverySubject,
+        classification: "Blocked",
+        subject: taskStatusSubject(subject, delivery.taskId),
+        responsibility: standing.facts.responsibility,
+        rejection: standing.facts.disposition.report
+      },
+      taskOrder
+    )
+  }
   const failure = executorFailureFor(standing.facts)
   if (failure !== null) {
     addEntry(

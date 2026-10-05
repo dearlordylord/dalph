@@ -1,12 +1,56 @@
+import { materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
+import { beginPlannedAttemptExecutorWork } from "../../workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
+import { latestAcceptedPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { deriveFreshWorkflowDecisions } from "./fresh-workflow.js"
+import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
+import { replacementContinuationAuthorityFrom } from "../delivery/replacement-continuation-authority.js"
+import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { recordedTaskAttemptPlanFor } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
+import { projectWorkflowOccurrences } from "../../workflow/registry/occurrence-projection.js"
+import {
+  ResultRecoveryAttemptReplacedEvent,
+  allocateResultRecoveryReplacementWithPermit,
+  recordResultRecoveryReplacementWithPermit,
+  resultRecoveryReplacementProblem
+} from "../../workflow/protocols/result-recovery/replacement.js"
+import { evaluatePlannedAttemptCurrentFactsAuthorization } from "../../workflow/protocols/planned-attempt-continuation/authorization-evaluation.js"
+import { evaluateResultRecoveryContinueFacts } from "../../workflow/protocols/result-recovery/authorization.js"
+import { evaluateResultRecoveryRestartFacts } from "../../workflow/protocols/result-recovery/restart-authorization.js"
+import {
+  resultRecoveryRestartReadPlan,
+  nextResultRecoveryRestartRead,
+  resultRecoveryContinueReadPlan,
+  nextResultRecoveryContinueRead
+} from "../../workflow/protocols/result-recovery/current-facts.js"
+import { deliverResultRecoveryContinue, deliverResultRecoveryRestart } from "../delivery/result-recovery-delivery.js"
+import { isAcceptedExecutorCommandDelivery } from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
+import { executeResultRecoveryContinue } from "../../workflow/protocols/result-recovery/execution.js"
+import {
+  authorizeResultRecoveryContinueWithPermit,
+  makeResultRecoveryControl
+} from "../../workflow/protocols/result-recovery/control.js"
+import {
+  plannedAttemptProtocolControllerLayer,
+  PlannedAttemptProtocolController
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import {
+  ResultRecoveryDirectedEvent,
+  ResultRecoveryContinueAuthorizedEvent,
+  ResultRecoveryRequestId,
+  ResultRecoverySubject
+} from "../../workflow/protocols/result-recovery/events.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
+  plannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutor,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -98,7 +142,12 @@ import {
 } from "../../workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
-import { journalRecordsForOperationId } from "../../workflow-journal/record-evidence.js"
+import {
+  journalRecordByKey,
+  journalRecordsForOperationId,
+  journalRecordsOfKind,
+  journalRecordsAfter
+} from "../../workflow-journal/record-evidence.js"
 import { acceptedOperationIdsOf, pendingReadOperationIdsOf } from "../delivery/delivery-evidence.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { materializeDeliveryAction } from "../delivery/delivery-action-materialization.js"
@@ -2147,4 +2196,1317 @@ it.effect("recovers the exact active-work suspension after process loss without 
       continuationDecisionFor(suspend, records, undefined, Option.some(JournalPosition.make(23)), Option.none())
     ).toEqual({ transition: suspend })
   })
+)
+
+it("reconstructs accepted rejection as retained recovery work and preserves newer unavailable authority", () => {
+  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId },
+    reason: "ResultEnvelopeInvalid",
+    recoveryCause: "Deadline",
+    responseCount: PlannedAttemptResultResponseCount.make(2),
+    custody: { _tag: "Stopped" }
+  })
+  const records = [
+    ...buildPrefix("Healthy"),
+    record(
+      25,
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      26,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+  const direction = ResultRecoveryDirectedEvent.make({
+    direction: "ContinueRetainedAttempt",
+    requestId: ResultRecoveryRequestId.make({ nonce: "explicit-result-recovery", runId }),
+    subject: ResultRecoverySubject.cases.RejectedResult.make({
+      plannedAttempt,
+      reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+    }),
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    version: workflowJournalEventVersion
+  })
+  const directedHistory = [...records, record(27, direction)]
+  expect(reduceWorkflowJournalHistory(runId, directedHistory)._tag).toBe("ValidWorkflowJournalHistory")
+  const duplicateDirection = ResultRecoveryDirectedEvent.make({
+    ...direction,
+    requestId: ResultRecoveryRequestId.make({ nonce: "another-recovery", runId })
+  })
+  expect(reduceWorkflowJournalHistory(runId, [...directedHistory, record(28, duplicateDirection)])._tag).not.toBe(
+    "ValidWorkflowJournalHistory"
+  )
+  const staleDirection = ResultRecoveryDirectedEvent.make({
+    ...direction,
+    subject: ResultRecoverySubject.cases.RejectedResult.make({
+      plannedAttempt,
+      reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1)
+    })
+  })
+  expect(reduceWorkflowJournalHistory(runId, [...records, record(27, staleDirection)])._tag).not.toBe(
+    "ValidWorkflowJournalHistory"
+  )
+  const foreignPlanDirection = ResultRecoveryDirectedEvent.make({
+    ...direction,
+    subject: ResultRecoverySubject.cases.RejectedResult.make({
+      reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2),
+      plannedAttempt: PlannedTaskAttempt.make({ ...plannedAttempt, baseSha: GitCommitSha.make("f".repeat(40)) })
+    })
+  })
+  expect(reduceWorkflowJournalHistory(runId, [...records, record(27, foreignPlanDirection)])._tag).not.toBe(
+    "ValidWorkflowJournalHistory"
+  )
+  const unresolvedReport = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+    ...report,
+    custody: { _tag: "Unresolved" }
+  })
+  const unresolvedRecords = [
+    ...buildPrefix("Healthy"),
+    record(
+      25,
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+          report: unresolvedReport
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      26,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report: unresolvedReport,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(27, direction)
+  ]
+  expect(reduceWorkflowJournalHistory(runId, unresolvedRecords.slice(0, -1))._tag).toBe("ValidWorkflowJournalHistory")
+  expect(reduceWorkflowJournalHistory(runId, unresolvedRecords)._tag).not.toBe("ValidWorkflowJournalHistory")
+  for (const unavailable of [false, true]) {
+    const history = unavailable
+      ? [
+          ...records,
+          record(
+            27,
+            PlannedAttemptExecutorStateObservedEvent.make({
+              observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+              occurrenceClassification: "NonActionOccurrence",
+              ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(2),
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        ]
+      : records
+    const reduction = reduceWorkflowJournalHistory(runId, history)
+    if (reduction._tag !== "ValidWorkflowJournalHistory") return expect.fail("rejected-result history must reduce")
+    const facts = deriveJournalResponsibilityFacts(reduction.runState)
+    const exact = facts.find(
+      (fact) =>
+        fact._tag === "PlannedAttemptExecutorFreshFacts" &&
+        fact.responsibility.plannedAttempt.attemptId === plannedAttempt.attemptId
+    )
+    expect(exact?.disposition).toMatchObject(
+      unavailable
+        ? { _tag: "PlannedAttemptExecutorProjectionWait" }
+        : { _tag: "PlannedAttemptExecutorResultRejected", report }
+    )
+  }
+})
+
+it.effect("coalesces exact result recovery redelivery and refuses request identity reuse", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const report = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        reason: "ResultEnvelopeInvalid",
+        recoveryCause: "Deadline",
+        responseCount: PlannedAttemptResultResponseCount.make(2),
+        custody: { _tag: "Stopped" }
+      })
+      const records = [
+        ...buildPrefix("Healthy"),
+        record(
+          25,
+          PlannedAttemptExecutorStateObservedEvent.make({
+            observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+            occurrenceClassification: "NonActionOccurrence",
+            ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          26,
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+            report,
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const context = yield* Layer.build(
+        Layer.mergeAll(liveJournalTestLayer({ records, runId, target }), plannedAttemptProtocolControllerLayer)
+      )
+      const control = yield* makeResultRecoveryControl().pipe(Effect.provide(context))
+      const request = {
+        direction: "ContinueRetainedAttempt",
+        requestId: ResultRecoveryRequestId.make({ nonce: "result-recovery-redelivery", runId }),
+        subject: ResultRecoverySubject.cases.RejectedResult.make({
+          plannedAttempt,
+          reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+        })
+      }
+      const [first, duplicate] = yield* Effect.all([control.apply(request), control.apply(request)], {
+        concurrency: "unbounded"
+      })
+      expect(duplicate.position).toBe(first.position)
+      expect((yield* control.read(request.requestId)).position).toBe(first.position)
+      const operations = healthyAuthorityOperations()
+      const witness = {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: operations.graph.operationId,
+          taskClaimObservationOperationId: operations.claim.operationId,
+          taskWorkSpecificationObservationOperationId: operations.workSpecification.operationId
+        },
+        targetLineageObservationOperationId: operations.lineage.operationId,
+        worktreeObservationOperationId: operations.worktree.operationId
+      }
+      // Reads before the explicit direction cannot authorize a fresh correction cycle.
+      expect(yield* control.inspectContinueFacts(request.requestId, witness)).toMatchObject({
+        _tag: "Rejected",
+        reason: "StaleWitness"
+      })
+      expect(
+        yield* control.inspectContinueFacts({ ...request.requestId, nonce: "never-applied" }, witness)
+      ).toMatchObject({ _tag: "DirectionRejected" })
+      expect((yield* control.read(request.requestId)).position).toBe(first.position)
+      const recovered = yield* makeResultRecoveryControl().pipe(Effect.provide(context))
+      expect((yield* recovered.apply(request)).position).toBe(first.position)
+      const reused = yield* recovered.apply({ ...request, direction: "RestartTaskImplementation" }).pipe(Effect.result)
+      expect(reused).toMatchObject({ _tag: "Failure", failure: { _tag: "ResultRecoveryRequestIdentityContradiction" } })
+    })
+  )
+)
+
+it.effect("accepts only complete fresh Continue facts without appending execution authority", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const report = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        reason: "ResultEnvelopeInvalid",
+        recoveryCause: "Deadline",
+        responseCount: PlannedAttemptResultResponseCount.make(2),
+        custody: { _tag: "Stopped" }
+      })
+      const records = [
+        ...buildPrefix("Healthy").filter(({ position }) => position <= 14),
+        record(
+          15,
+          PlannedAttemptExecutorStateObservedEvent.make({
+            observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+            occurrenceClassification: "NonActionOccurrence",
+            ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          16,
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+            report,
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const context = yield* Layer.build(
+        Layer.mergeAll(liveJournalTestLayer({ records, runId, target }), plannedAttemptProtocolControllerLayer)
+      )
+      const control = yield* makeResultRecoveryControl().pipe(Effect.provide(context))
+      const request = {
+        direction: "ContinueRetainedAttempt",
+        requestId: ResultRecoveryRequestId.make({ nonce: "result-recovery-redelivery", runId }),
+        subject: ResultRecoverySubject.cases.RejectedResult.make({
+          plannedAttempt,
+          reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+        })
+      }
+      const first = yield* control.apply(request)
+      const operations = healthyAuthorityOperations()
+      const witness = {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: operations.graph.operationId,
+          taskClaimObservationOperationId: operations.claim.operationId,
+          taskWorkSpecificationObservationOperationId: operations.workSpecification.operationId
+        },
+        targetLineageObservationOperationId: operations.lineage.operationId,
+        worktreeObservationOperationId: operations.worktree.operationId
+      }
+      expect(yield* control.inspectContinueFacts(request.requestId, witness)).toMatchObject({
+        _tag: "Rejected",
+        reason: "MissingWitness"
+      })
+      const journal = Context.get(context, InRunJournal)
+      for (const fresh of buildPrefix("Healthy").filter(({ position }) => position > 14)) {
+        if (fresh.event._tag === "WorkflowRunBegan" || fresh.event._tag === "WorkflowRunTerminated")
+          return yield* Effect.die("fresh recovery facts must be ordinary in-Run events")
+        const event =
+          fresh.event._tag === "TaskTrackerReadIntentRecorded" &&
+          (fresh.event.operation._tag === "ReadTaskWorkSpecification" || fresh.event.operation._tag === "ReadTaskClaim")
+            ? {
+                ...fresh.event,
+                operation: {
+                  ...fresh.event.operation,
+                  predecessorOperationIds: [
+                    operations.plan.operationId,
+                    ...fresh.event.operation.predecessorOperationIds
+                  ].sort()
+                }
+              }
+            : fresh.event
+        const recoveryEvent =
+          event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+            ? { ...event, operation: { ...event.operation, cause: { _tag: "AttemptContinuation" as const } } }
+            : event
+        yield* journal.append(runId, fresh.key, recoveryEvent)
+        if (
+          recoveryEvent._tag === "TaskTrackerReadIntentRecorded" &&
+          recoveryEvent.operation._tag === "ReadTrackerGraph"
+        ) {
+          const pendingRecords = yield* Context.get(context, AcceptedJournalReader).readAccepted(runId)
+          const pendingPlan = resultRecoveryContinueReadPlan(pendingRecords, request.requestId, integrationTarget)
+          if (pendingPlan === undefined) return yield* Effect.die("pending graph intent lost its recovery plan")
+          expect(nextResultRecoveryContinueRead(pendingRecords, pendingPlan)?.operationId).toBe(
+            recoveryEvent.operation.operationId
+          )
+          const pendingHistory = reduceWorkflowJournalHistory(
+            runId,
+            Array.from(journalRecordsAfter(pendingRecords, null))
+          )
+          if (pendingHistory._tag !== "ValidWorkflowJournalHistory")
+            return yield* Effect.die("pending recovery history must reduce")
+          expect(
+            deriveJournalResponsibilityFacts(
+              pendingHistory.runState,
+              Option.none(),
+              Option.some(integrationTarget)
+            ).find(
+              (fact) =>
+                fact._tag === "PlannedAttemptExecutorFreshFacts" &&
+                fact.responsibility.plannedAttempt.attemptId === plannedAttempt.attemptId
+            )?.disposition
+          ).toMatchObject({
+            _tag: "PlannedAttemptExecutorResultRejected",
+            continueReadOperation: { operationId: recoveryEvent.operation.operationId }
+          })
+          const pendingFrontier = deriveRunnableFrontier({
+            freshEligibleTasks: [],
+            responsibility: pendingHistory.runState.responsibility,
+            responsibilityFacts: deriveJournalResponsibilityFacts(
+              pendingHistory.runState,
+              Option.none(),
+              Option.some(integrationTarget)
+            )
+          })
+          expect(pendingFrontier.transitions).toContainEqual(
+            RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+              plannedAttempt,
+              operation: recoveryEvent.operation
+            })
+          )
+          expect(pendingFrontier.transitions.some((transition) => transition._tag === "ContinueRejectedResult")).toBe(
+            false
+          )
+        }
+      }
+      expect(yield* control.inspectContinueFacts(request.requestId, witness)).toEqual({ _tag: "Authorized" })
+      expect(yield* control.inspectContinueFacts(request.requestId, witness)).toEqual({ _tag: "Authorized" })
+      expect((yield* control.read(request.requestId)).position).toBe(first.position)
+      const accepted = Context.get(context, AcceptedJournalReader)
+      const finalRecords = yield* accepted.readAccepted(runId)
+      const recoveredReadPlan = resultRecoveryContinueReadPlan(finalRecords, request.requestId, integrationTarget)
+      expect(recoveredReadPlan?.witness).toEqual(witness)
+      expect(recoveredReadPlan?.operations.map((operation) => operation.operationId)).toEqual([
+        operations.graph.operationId,
+        operations.workSpecification.operationId,
+        operations.claim.operationId,
+        operations.worktree.operationId,
+        operations.lineage.operationId
+      ])
+      if (recoveredReadPlan === undefined) return yield* Effect.die("missing accepted recovery read plan")
+      expect(nextResultRecoveryContinueRead(finalRecords, recoveredReadPlan)).toBeUndefined()
+      const readyHistory = reduceWorkflowJournalHistory(runId, Array.from(journalRecordsAfter(finalRecords, null)))
+      if (readyHistory._tag !== "ValidWorkflowJournalHistory")
+        return yield* Effect.die("ready recovery history must reduce")
+      const readyDisposition = deriveJournalResponsibilityFacts(
+        readyHistory.runState,
+        Option.none(),
+        Option.some(integrationTarget)
+      ).find(
+        (fact) =>
+          fact._tag === "PlannedAttemptExecutorFreshFacts" &&
+          fact.responsibility.plannedAttempt.attemptId === plannedAttempt.attemptId
+      )?.disposition
+      expect(readyDisposition).toMatchObject({
+        _tag: "PlannedAttemptExecutorResultRejected",
+        continueReadPlan: { witness }
+      })
+      expect(readyDisposition).not.toHaveProperty("continueReadOperation")
+      expect(readyDisposition).not.toHaveProperty("continueRequestId")
+      const readyFrontier = deriveRunnableFrontier({
+        freshEligibleTasks: [],
+        responsibility: readyHistory.runState.responsibility,
+        responsibilityFacts: deriveJournalResponsibilityFacts(
+          readyHistory.runState,
+          Option.none(),
+          Option.some(integrationTarget)
+        )
+      })
+      expect(readyFrontier.transitions).toContainEqual(
+        RunnableFrontierTransition.AuthorizeResultRecoveryContinue({
+          plannedAttempt,
+          requestId: request.requestId,
+          witness
+        })
+      )
+      expect(readyFrontier.transitions.some((transition) => transition._tag === "ContinueRejectedResult")).toBe(false)
+      expect(finalRecords.records).toHaveLength(27)
+      expect(Array.from(journalRecordsOfKind(finalRecords, "PlannedAttemptContinuationAuthorized"))).toHaveLength(0)
+      const prefix = Array.from(journalRecordsAfter(finalRecords, null))
+      const permission = ResultRecoveryContinueAuthorizedEvent.make({
+        requestId: request.requestId,
+        plannedAttempt,
+        witness,
+        version: workflowJournalEventVersion
+      })
+      expect(reduceWorkflowJournalHistory(runId, [...prefix, record(28, permission)])._tag).toBe(
+        "ValidWorkflowJournalHistory"
+      )
+      for (const invalid of [
+        ResultRecoveryContinueAuthorizedEvent.make({
+          ...permission,
+          plannedAttempt: { ...plannedAttempt, baseSha: GitCommitSha.make("f".repeat(40)) }
+        }),
+        ResultRecoveryContinueAuthorizedEvent.make({
+          ...permission,
+          witness: { ...witness, worktreeObservationOperationId: OperationId.make("missing-recovery-read") }
+        }),
+        ResultRecoveryContinueAuthorizedEvent.make({
+          ...permission,
+          requestId: ResultRecoveryRequestId.make({ nonce: "unapplied-recovery", runId })
+        })
+      ]) {
+        expect(reduceWorkflowJournalHistory(runId, [...prefix, record(28, invalid)])._tag).toBe(
+          "InvalidWorkflowJournalHistory"
+        )
+      }
+      const suppliedAuthorization = yield* Context.get(context, PlannedAttemptProtocolController).withPermit(
+        plannedAttemptExecutorCorrelation(plannedAttempt),
+        (permit) =>
+          authorizeResultRecoveryContinueWithPermit(permit, request.requestId, witness).pipe(Effect.provide(context))
+      )
+      const [authorization, redelivery] = yield* Effect.all(
+        [control.authorizeContinue(request.requestId, witness), control.authorizeContinue(request.requestId, witness)],
+        { concurrency: "unbounded" }
+      )
+      expect(authorization.event._tag).toBe("ResultRecoveryContinueAuthorized")
+      expect(authorization.position).toBe(suppliedAuthorization.position)
+      expect(redelivery.position).toBe(authorization.position)
+      const recovered = yield* makeResultRecoveryControl().pipe(Effect.provide(context))
+      expect((yield* recovered.authorizeContinue(request.requestId, witness)).position).toBe(authorization.position)
+      expect(
+        yield* recovered
+          .authorizeContinue(request.requestId, {
+            ...witness,
+            worktreeObservationOperationId: OperationId.make("changed-recovery-witness")
+          })
+          .pipe(Effect.result)
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "ResultRecoveryRequestIdentityContradiction" } })
+      const authorizedHistory = yield* accepted.readAccepted(runId)
+      const reducedPermission = reduceWorkflowJournalHistory(
+        runId,
+        Array.from(journalRecordsAfter(authorizedHistory, null))
+      )
+      if (reducedPermission._tag !== "ValidWorkflowJournalHistory")
+        return yield* Effect.die("Continue permission prefix must reduce")
+      const recoveryFacts = deriveJournalResponsibilityFacts(reducedPermission.runState)
+      expect(
+        recoveryFacts.find(
+          (fact) =>
+            fact._tag === "PlannedAttemptExecutorFreshFacts" &&
+            fact.responsibility.plannedAttempt.attemptId === plannedAttempt.attemptId
+        )?.disposition
+      ).toMatchObject({ _tag: "PlannedAttemptExecutorResultRejected", continueRequestId: request.requestId })
+      let providerCalls = 0
+      let positionBinds = 0
+      const provider = PlannedAttemptExecutor.of({
+        begin: () => Effect.die("recovery must not Begin"),
+        resume: () => Effect.die("recovery must not Resume"),
+        requestSuspension: () => Effect.die("recovery must not Suspend"),
+        observe: () => Effect.die("settled recovery must not reconcile"),
+        continueRejectedResult: (request, permission) =>
+          Effect.gen(function* () {
+            providerCalls += 1
+            expect(positionBinds).toBe(2)
+            expect(request.plannedAttempt).toEqual(plannedAttempt)
+            expect(permission.nonce).toBe(requestIdForProvider)
+            const committed = yield* accepted.readAccepted(runId).pipe(Effect.orDie)
+            expect(
+              Array.from(journalRecordsOfKind(committed, "PlannedAttemptExecutorCommandIntended")).at(-1)?.event
+            ).toMatchObject({ command: "ContinueRejectedResult", recoveryAuthorization: permission })
+            return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+              correlation: { runId, attemptId: plannedAttempt.attemptId }
+            })
+          })
+      })
+      const requestIdForProvider = request.requestId.nonce
+      const dispatch = executeResultRecoveryContinue(request.requestId).pipe(
+        Effect.provide(context),
+        Effect.provideService(PlannedAttemptExecutor, provider)
+      )
+      const protocols = Context.get(context, PlannedAttemptProtocolController)
+      const lease: Parameters<typeof deliverResultRecoveryContinue>[0] = {
+        bindPlannedAttemptPosition: (attempt, _responsibility, receipt) =>
+          Effect.sync(() => {
+            expect(attempt).toEqual(plannedAttempt)
+            positionBinds += 1
+            if (positionBinds === 2) expect(isAcceptedExecutorCommandDelivery(receipt)).toBe(true)
+          }),
+        withPlannedAttemptProtocol: protocols.withPermit
+      }
+      for (const foreignPlan of [
+        { ...plannedAttempt, baseSha: GitCommitSha.make("f".repeat(40)) },
+        { ...plannedAttempt, worktree: WorktreeLocator.make("/tmp/foreign-recovery-worktree") }
+      ]) {
+        expect(
+          yield* deliverResultRecoveryContinue(lease, foreignPlan, request.requestId).pipe(
+            Effect.provide(context),
+            Effect.provideService(PlannedAttemptExecutor, provider),
+            Effect.result
+          )
+        ).toMatchObject({ _tag: "Failure", failure: { _tag: "ResultRecoveryNotAvailable" } })
+        expect(positionBinds).toBe(0)
+        expect(providerCalls).toBe(0)
+      }
+      expect(
+        yield* deliverResultRecoveryContinue(lease, plannedAttempt, request.requestId).pipe(
+          Effect.provide(context),
+          Effect.provideService(PlannedAttemptExecutor, provider)
+        )
+      ).toMatchObject({ _tag: "ExecutorWorkExecuting" })
+
+      expect(yield* dispatch).toMatchObject({ _tag: "ExecutorWorkExecuting" })
+      expect(providerCalls).toBe(1)
+      const settled = yield* accepted.readAccepted(runId)
+      const originalCommand = Array.from(journalRecordsOfKind(settled, "PlannedAttemptExecutorCommandIntended")).at(-1)
+      if (originalCommand?.event._tag !== "PlannedAttemptExecutorCommandIntended")
+        return yield* Effect.die("expected a committed result recovery command")
+      const duplicateSemanticCommand = PlannedAttemptExecutorCommandIntendedEvent.make({
+        ...originalCommand.event,
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(3)
+      })
+      expect(
+        reduceWorkflowJournalHistory(runId, [
+          ...Array.from(journalRecordsAfter(settled, null)),
+          record(32, duplicateSemanticCommand)
+        ])._tag
+      ).toBe("InvalidWorkflowJournalHistory")
+
+      const unavailable = record(
+        29,
+        PlannedAttemptExecutorStateObservedEvent.make({
+          observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(2),
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      if (unavailable.event._tag !== "PlannedAttemptExecutorStateObserved")
+        return yield* Effect.die("recovery fixture requires an executor state observation")
+      yield* journal.append(runId, unavailable.key, unavailable.event)
+      expect(yield* control.inspectContinueFacts(request.requestId, witness)).toMatchObject({
+        _tag: "DirectionRejected",
+        detail: "the selected accepted report is no longer current"
+      })
+      expect((yield* control.apply(request)).position).toBe(first.position)
+      expect((yield* recovered.authorizeContinue(request.requestId, witness)).position).toBe(authorization.position)
+    })
+  )
+)
+
+it.effect("rejects a pre-direction read whose outcome arrives after Continue", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const report = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        reason: "ResultEnvelopeInvalid",
+        recoveryCause: "Deadline",
+        responseCount: PlannedAttemptResultResponseCount.make(2),
+        custody: { _tag: "Stopped" }
+      })
+      const records = [
+        ...buildPrefix("Healthy").filter(({ position }) => position <= 14),
+        record(
+          15,
+          PlannedAttemptExecutorStateObservedEvent.make({
+            observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+            occurrenceClassification: "NonActionOccurrence",
+            ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          16,
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+            report,
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const context = yield* Layer.build(
+        Layer.mergeAll(liveJournalTestLayer({ records, runId, target }), plannedAttemptProtocolControllerLayer)
+      )
+      const control = yield* makeResultRecoveryControl().pipe(Effect.provide(context))
+      const request = {
+        direction: "ContinueRetainedAttempt",
+        requestId: ResultRecoveryRequestId.make({ nonce: "result-recovery-redelivery", runId }),
+        subject: ResultRecoverySubject.cases.RejectedResult.make({
+          plannedAttempt,
+          reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+        })
+      }
+      const operations = healthyAuthorityOperations()
+      const journal = Context.get(context, InRunJournal)
+      const earlyIntent = buildPrefix("Healthy").find(({ position }) => position === 15)
+      if (earlyIntent?.event._tag !== "TaskTrackerReadIntentRecorded")
+        return yield* Effect.die("recovery fixture requires a graph read intent")
+      yield* journal.append(runId, earlyIntent.key, earlyIntent.event)
+      const first = yield* control.apply(request)
+      const witness = {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: operations.graph.operationId,
+          taskClaimObservationOperationId: operations.claim.operationId,
+          taskWorkSpecificationObservationOperationId: operations.workSpecification.operationId
+        },
+        targetLineageObservationOperationId: operations.lineage.operationId,
+        worktreeObservationOperationId: operations.worktree.operationId
+      }
+      for (const fresh of buildPrefix("Healthy").filter(({ position }) => position > 15)) {
+        if (fresh.event._tag === "WorkflowRunBegan" || fresh.event._tag === "WorkflowRunTerminated")
+          return yield* Effect.die("fresh recovery facts must be ordinary in-Run events")
+        const event =
+          fresh.event._tag === "TaskTrackerReadIntentRecorded" &&
+          (fresh.event.operation._tag === "ReadTaskWorkSpecification" || fresh.event.operation._tag === "ReadTaskClaim")
+            ? {
+                ...fresh.event,
+                operation: {
+                  ...fresh.event.operation,
+                  predecessorOperationIds: [
+                    ...fresh.event.operation.predecessorOperationIds,
+                    operations.plan.operationId
+                  ]
+                }
+              }
+            : fresh.event
+        yield* journal.append(runId, fresh.key, event)
+      }
+      expect(yield* control.inspectContinueFacts(request.requestId, witness)).toMatchObject({
+        _tag: "Rejected",
+        reason: "StaleWitness",
+        witness: "ActiveTaskContinuationGraph"
+      })
+      expect((yield* control.read(request.requestId)).position).toBe(first.position)
+    })
+  )
+)
+
+it.effect(
+  "verifies Restart against fresh revision and target Base while preserving separate custody requirements",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const freshSpecification = makeTaskWorkSpecification({ taskId, body: "Fresh F2", title: "Fresh F2" })
+        const operations = healthyAuthorityOperations()
+        const witness = {
+          activeTaskContinuationRead: {
+            graphObservationOperationId: operations.graph.operationId,
+            taskWorkSpecificationObservationOperationId: operations.workSpecification.operationId,
+            taskClaimObservationOperationId: operations.claim.operationId
+          },
+          worktreeObservationOperationId: operations.worktree.operationId,
+          targetLineageObservationOperationId: operations.lineage.operationId
+        }
+        for (const historical of [false, true]) {
+          const report = historical
+            ? PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                correlation: { attemptId: plannedAttempt.attemptId, runId },
+                result: { _tag: "Failed" }
+              })
+            : PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+                correlation: { attemptId: plannedAttempt.attemptId, runId },
+                reason: "ResultEnvelopeInvalid",
+                recoveryCause: "Deadline",
+                responseCount: PlannedAttemptResultResponseCount.make(2),
+                custody: { _tag: "Stopped" }
+              })
+          const subject = historical
+            ? ResultRecoverySubject.cases.HistoricalUnknownFailure.make({
+                plannedAttempt,
+                reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+              })
+            : ResultRecoverySubject.cases.RejectedResult.make({
+                plannedAttempt,
+                reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+              })
+          const requestId = ResultRecoveryRequestId.make({ nonce: `fresh-restart-${historical}`, runId })
+          const direction = ResultRecoveryDirectedEvent.make({
+            direction: "RestartTaskImplementation",
+            requestId,
+            subject,
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            version: workflowJournalEventVersion
+          })
+          const start = [
+            ...buildPrefix("Healthy").filter(({ position }) => position <= 14),
+            record(
+              15,
+              PlannedAttemptExecutorStateObservedEvent.make({
+                plannedAttempt,
+                ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+                observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+                occurrenceClassification: "NonActionOccurrence",
+                version: workflowJournalEventVersion
+              })
+            ),
+            record(
+              16,
+              PlannedAttemptExecutorWorkReportedEvent.make({
+                report,
+                ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+                version: workflowJournalEventVersion
+              })
+            ),
+            record(17, direction)
+          ]
+          expect(evaluateResultRecoveryRestartFacts(start, requestId, witness, integrationTarget)).toMatchObject({
+            _tag: "Rejected",
+            reason: "MissingWitness"
+          })
+          const fresh = buildPrefix("Healthy")
+            .filter(({ position }) => position > 14)
+            .map(({ event, position }) => {
+              if (event._tag === "TaskTrackerReadIntentRecorded") {
+                if (event.operation._tag === "ReadTrackerGraph")
+                  return record(position + 3, {
+                    ...event,
+                    operation: { ...event.operation, cause: { _tag: "AttemptRestartAuthorityCheck" } }
+                  })
+                if (event.operation._tag === "ReadTaskWorkSpecification" || event.operation._tag === "ReadTaskClaim")
+                  return record(position + 3, {
+                    ...event,
+                    operation: {
+                      ...event.operation,
+                      predecessorOperationIds: [
+                        operations.plan.operationId,
+                        ...event.operation.predecessorOperationIds
+                      ].sort()
+                    }
+                  })
+              }
+              if (
+                event._tag === "TaskTrackerFactsObserved" &&
+                event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+              )
+                return record(position + 3, {
+                  ...event,
+                  observation: makeFocusedTaskWorkSpecificationFactsObserved(
+                    operations.workSpecification,
+                    freshSpecification
+                  )
+                })
+              if (event._tag === "TargetLineageObserved")
+                return record(position + 3, {
+                  ...event,
+                  observation: {
+                    ...event.observation,
+                    targetHeadSha: GitCommitSha.make("b".repeat(40)),
+                    plannedBaseIsAncestorOfTargetHead: false
+                  }
+                })
+              return record(position + 3, event)
+            })
+          const complete = [...start, ...fresh]
+          expect(reduceWorkflowJournalHistory(runId, complete)._tag).toBe("ValidWorkflowJournalHistory")
+          expect(
+            evaluatePlannedAttemptCurrentFactsAuthorization(
+              complete,
+              plannedAttempt,
+              witness,
+              JournalPosition.make(17),
+              freshSpecification.fingerprint
+            )
+          ).toMatchObject({ _tag: "Rejected", reason: "WrongAttemptWitness", witness: "ActiveTaskContinuationGraph" })
+          const verified = evaluateResultRecoveryRestartFacts(complete, requestId, witness, integrationTarget)
+          expect(verified._tag, JSON.stringify(verified)).toBe("FreshRestartFactsVerified")
+          expect(verified).toMatchObject({
+            _tag: "FreshRestartFactsVerified",
+            plannedAttempt,
+            taskRevision: freshSpecification.fingerprint,
+            baseSha: "b".repeat(40),
+            custody: historical ? "RequiresExecutorReconciliation" : "AcceptedStoppedRejection"
+          })
+          expect(resultRecoveryRestartReadPlan(complete, requestId, integrationTarget)?.witness).toEqual(witness)
+          const initialRestartReads = resultRecoveryRestartReadPlan(start, requestId, integrationTarget)
+          expect(initialRestartReads).toBeDefined()
+          if (initialRestartReads === undefined) return expect.fail("applied Restart must derive fresh reads")
+          expect(nextResultRecoveryRestartRead(start, initialRestartReads, integrationTarget)?._tag).toBe(
+            "ReadTrackerGraph"
+          )
+          const completedRestartReads = resultRecoveryRestartReadPlan(complete, requestId, integrationTarget)
+          if (completedRestartReads === undefined)
+            return expect.fail("fresh Restart reads must retain their actual identities")
+          expect(nextResultRecoveryRestartRead(complete, completedRestartReads, integrationTarget)).toBeUndefined()
+          for (const [completedBoundary, expectedNext] of [
+            [operations.graph.operationId, "ReadTaskWorkSpecification"],
+            [operations.workSpecification.operationId, "ReadTaskClaim"],
+            [operations.claim.operationId, "ReadTaskWorktree"],
+            [operations.worktree.operationId, "ReadTargetLineage"]
+          ] as const) {
+            const outcome = journalRecordByKey(complete, outcomeRecordKey(completedBoundary))
+            if (outcome === undefined) return expect.fail("fresh boundary must have an outcome")
+            const partial = complete.filter(({ position }) => position <= outcome.position)
+            const partialPlan = resultRecoveryRestartReadPlan(partial, requestId, integrationTarget)
+            if (partialPlan === undefined) return expect.fail("partial Restart must retain its read plan")
+            expect(nextResultRecoveryRestartRead(partial, partialPlan, integrationTarget)?._tag).toBe(expectedNext)
+          }
+
+          const successor = PlannedTaskAttempt.make({
+            ...plannedAttempt,
+            attemptId: AttemptId.make("result-recovery-successor"),
+            baseSha: GitCommitSha.make("b".repeat(40)),
+            taskRevision: freshSpecification.fingerprint,
+            branch: TaskBranchRef.make("refs/heads/dalph/result-recovery-successor"),
+            worktree: WorktreeLocator.make("/worktrees/result-recovery-successor")
+          })
+          const successorPlan = makeTaskAttemptPlanOperation({
+            operationId: OperationId.make("result-recovery-successor-plan"),
+            plannedAttempt: successor,
+            predecessorOperationIds: [
+              operations.plan.operationId,
+              exactAcquisition.operationId,
+              operations.graph.operationId,
+              operations.workSpecification.operationId,
+              operations.claim.operationId,
+              operations.worktree.operationId,
+              operations.lineage.operationId
+            ]
+          })
+          const replacement = ResultRecoveryAttemptReplacedEvent.make({
+            requestId,
+            subject,
+            integrationTarget,
+            witness,
+            successorPlan,
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            version: workflowJournalEventVersion
+          })
+          const replacementPosition = Math.max(...complete.map(({ position }) => position)) + 1
+          const replaced = reduceWorkflowJournalHistory(runId, [...complete, record(replacementPosition, replacement)])
+          if (historical) {
+            const history = reduceWorkflowJournalHistory(runId, complete)
+            if (history._tag !== "ValidWorkflowJournalHistory")
+              return expect.fail("historical Restart must retain accepted history")
+            const frontier = deriveRunnableFrontier({
+              freshEligibleTasks: [],
+              responsibility: history.runState.responsibility,
+              responsibilityFacts: deriveJournalResponsibilityFacts(
+                history.runState,
+                Option.none(),
+                Option.some(integrationTarget)
+              )
+            })
+            expect(frontier.transitions).toContainEqual(
+              RunnableFrontierTransition.ReplaceRejectedResult({
+                plannedAttempt,
+                requestId,
+                witness,
+                integrationTarget,
+                specification: freshSpecification
+              })
+            )
+            expect(
+              frontier.transitions.some(
+                ({ _tag }) => _tag === "ContinueRejectedResult" || _tag === "AuthorizeResultRecoveryContinue"
+              )
+            ).toBe(false)
+
+            expect(resultRecoveryReplacementProblem(complete, replacement)).toContain("writer custody")
+            expect(replaced._tag).toBe("InvalidWorkflowJournalHistory")
+            for (const stopped of [false, true]) {
+              const context = yield* Layer.build(
+                Layer.mergeAll(
+                  liveJournalTestLayer({ records: complete, runId, target }),
+                  plannedAttemptProtocolControllerLayer
+                )
+              )
+              const protocols = Context.get(context, PlannedAttemptProtocolController)
+              let allocations = 0
+              let observations = 0
+              const outcome = yield* protocols.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+                allocateResultRecoveryReplacementWithPermit(
+                  permit,
+                  requestId,
+                  witness,
+                  integrationTarget,
+                  freshSpecification,
+                  plannedAttempt
+                ).pipe(
+                  Effect.provide(context),
+                  Effect.provideService(PlannedAttemptExecutor, {
+                    observe: () => Effect.die("custody must not rewrite or reobserve terminal reports"),
+                    begin: () => Effect.die("custody must not begin work"),
+                    resume: () => Effect.die("custody must not resume work"),
+                    requestSuspension: () => Effect.die("custody must not send stop"),
+                    observeWriterCustody: (attempt) =>
+                      Effect.sync(() => {
+                        observations += 1
+                        expect(attempt).toEqual(plannedAttempt)
+                        return stopped
+                          ? { _tag: "Stopped" as const, plannedAttempt: attempt }
+                          : {
+                              _tag: "Unresolved" as const,
+                              plannedAttempt: attempt,
+                              detail: "retained writers remain unproved"
+                            }
+                      })
+                  }),
+                  Effect.provideService(PlannedTaskAttemptPlanner, {
+                    plan: () =>
+                      Effect.sync(() => {
+                        allocations += 1
+                        return successor
+                      })
+                  }),
+                  Effect.provideService(OperationIdAllocator, {
+                    allocate: () => Effect.succeed(successorPlan.operationId)
+                  }),
+                  Effect.result
+                )
+              )
+              expect(observations).toBe(1)
+              expect(allocations).toBe(stopped ? 1 : 0)
+              if (!stopped)
+                expect(outcome).toMatchObject({ _tag: "Failure", failure: { _tag: "ResultRecoveryNotAvailable" } })
+              else {
+                expect(outcome).toMatchObject({
+                  _tag: "Success",
+                  success: { event: { writerCustody: { _tag: "Stopped", plannedAttempt } } }
+                })
+                const accepted = yield* Context.get(context, AcceptedJournalReader).readAccepted(runId)
+                expect(Array.from(journalRecordsOfKind(accepted, "ResultRecoveryAttemptReplaced"))).toHaveLength(1)
+                expect(latestAcceptedPlannedAttemptExecutorEvidence(accepted, plannedAttempt)?.report).toEqual(report)
+                expect(
+                  replacementContinuationAuthorityFrom(accepted, runId, successor, successorPlan.operationId)
+                ).toMatchObject({ plannedAttempt: successor, specification: freshSpecification })
+                const projected = yield* projectWorkflowOccurrences(Array.from(journalRecordsAfter(accepted, null)))
+                expect(
+                  projected.occurrences.find(({ _tag }) => _tag === "ResultRecoveryAttemptReplaced")
+                ).toMatchObject({ writerCustody: { _tag: "Stopped", plannedAttempt } })
+              }
+            }
+          } else {
+            expect(resultRecoveryReplacementProblem(complete, replacement)).toBeUndefined()
+            const foreignRunId = RunId.make("foreign-result-recovery-run")
+            const foreignReplacement = ResultRecoveryAttemptReplacedEvent.make({
+              ...replacement,
+              requestId: ResultRecoveryRequestId.make({ nonce: requestId.nonce, runId: foreignRunId }),
+              subject: { ...subject, plannedAttempt: { ...plannedAttempt, runId: foreignRunId } },
+              successorPlan: { ...successorPlan, plannedAttempt: { ...successor, runId: foreignRunId } }
+            })
+            expect(
+              reduceWorkflowJournalHistory(runId, [...complete, record(replacementPosition, foreignReplacement)])._tag
+            ).toBe("InvalidWorkflowJournalHistory")
+
+            const readyState = reduceWorkflowJournalHistory(runId, complete)
+            if (readyState._tag !== "ValidWorkflowJournalHistory")
+              return expect.fail("ready Restart history must reduce")
+            const readyFrontier = deriveRunnableFrontier({
+              freshEligibleTasks: [],
+              responsibility: readyState.runState.responsibility,
+              responsibilityFacts: deriveJournalResponsibilityFacts(
+                readyState.runState,
+                Option.none(),
+                Option.some(integrationTarget)
+              )
+            })
+            expect(readyFrontier.transitions).toContainEqual(
+              RunnableFrontierTransition.ReplaceRejectedResult({
+                plannedAttempt,
+                requestId,
+                witness,
+                integrationTarget,
+                specification: freshSpecification
+              })
+            )
+            expect(
+              readyFrontier.transitions.some(
+                ({ _tag }) => _tag === "ContinueRejectedResult" || _tag === "AuthorizeResultRecoveryContinue"
+              )
+            ).toBe(false)
+
+            const replacementTransition = readyFrontier.transitions.find(
+              (transition) => transition._tag === "ReplaceRejectedResult"
+            )
+            if (replacementTransition === undefined) return expect.fail("Restart must select replacement delivery")
+            const proposal = deliveryProposalsOf({
+              acceptedOperationIds: acceptedOperationIdsOf(complete),
+              fresh: [],
+              runId,
+              transitions: [replacementTransition]
+            }).ticketDelivery[0]
+            if (proposal === undefined) return expect.fail("replacement must produce one delivery proposal")
+            const action = yield* materializeDeliveryAction(proposal).pipe(
+              Effect.provideService(OperationIdAllocator, {
+                allocate: () => Effect.die("replacement routing must not allocate an operation")
+              }),
+              Effect.provideService(PlannedTaskAttemptPlanner, {
+                plan: () => Effect.die("replacement routing must not allocate an attempt")
+              })
+            )
+            expect(action._tag).toBe("IdentityFreeAction")
+            expect(action.proposal.route).toMatchObject({
+              _tag: "IdentityFreeWorkflowRoute",
+              transition: replacementTransition
+            })
+            expect(replaced._tag).toBe("ValidWorkflowJournalHistory")
+            if (replaced._tag !== "ValidWorkflowJournalHistory")
+              return expect.fail("exact result replacement must reduce")
+            expect(
+              replaced.runState.responsibility.entries.some(
+                (entry) =>
+                  entry._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+                  entry.plannedAttempt.attemptId === plannedAttempt.attemptId
+              )
+            ).toBe(false)
+            const replacedRecords = [...complete, record(replacementPosition, replacement)]
+            const occurrences = yield* projectWorkflowOccurrences(replacedRecords)
+            expect(
+              occurrences.occurrences.find((occurrence) => occurrence._tag === "ResultRecoveryAttemptReplaced")
+            ).toMatchObject({ requestId, subject, successorPlan, recordedAt: replacementPosition })
+            expect(recordedTaskAttemptPlanFor(replacedRecords, plannedAttempt)).toEqual(operations.plan)
+            expect(recordedTaskAttemptPlanFor(replacedRecords, successor)).toEqual(successorPlan)
+            expect(
+              replacementContinuationAuthorityFrom(replacedRecords, runId, successor, successorPlan.operationId)
+            ).toMatchObject({
+              claim: exactAcquisition,
+              plannedAttempt: successor,
+              specification: freshSpecification,
+              successorPlanOperationId: successorPlan.operationId,
+              specificationObservationOperationId: operations.workSpecification.operationId
+            })
+            const successorDecisions = deriveFreshWorkflowDecisions(
+              {
+                acceptedAt: Option.getOrThrow(Option.fromNullishOr(replaced.runState.appliedThrough)),
+                currentGraph: Option.getOrThrow(reconstructedTaskGraphFor(replaced.runState.graphKnowledge, target)),
+                currentGraphOperationId: operations.graph.operationId,
+                pause: replaced.runState.pause,
+                responsibility: replaced.runState.responsibility,
+                runControlPolicy: Option.getOrThrow(replaced.runState.controlPolicy),
+                runId,
+                workflowHistory: replaced.runState.workflowHistory
+              },
+              new Set(),
+              target
+            )
+            expect(successorDecisions).toContainEqual(
+              expect.objectContaining({
+                step: expect.objectContaining({
+                  _tag: "ReconcileTaskWorktree",
+                  plannedAttempt: successor,
+                  predecessorOperationId: successorPlan.operationId
+                })
+              })
+            )
+            const successorWorktree = makeTaskWorktreeReconciliationOperation({
+              operationId: OperationId.make("result-recovery-successor-worktree"),
+              plannedAttempt: successor,
+              predecessorOperationIds: [successorPlan.operationId]
+            })
+            const readySuccessorRecords = [
+              ...replacedRecords,
+              record(
+                replacementPosition + 1,
+                TaskWorktreeReconciliationIntendedEvent.make({
+                  operation: successorWorktree,
+                  version: workflowJournalEventVersion
+                })
+              ),
+              record(
+                replacementPosition + 2,
+                TaskWorktreeReadyEvent.make({
+                  operationId: successorWorktree.operationId,
+                  proof: PlannedWorktreeReady.make({
+                    baseSha: successor.baseSha,
+                    headSha: successor.baseSha,
+                    branch: successor.branch,
+                    worktree: successor.worktree
+                  }),
+                  version: workflowJournalEventVersion
+                })
+              )
+            ]
+            const readySuccessor = reduceWorkflowJournalHistory(runId, readySuccessorRecords)
+            expect(readySuccessor._tag).toBe("ValidWorkflowJournalHistory")
+            if (readySuccessor._tag !== "ValidWorkflowJournalHistory")
+              return expect.fail("exact successor worktree must reduce")
+            const beginDecisions = deriveFreshWorkflowDecisions(
+              {
+                acceptedAt: JournalPosition.make(replacementPosition + 2),
+                currentGraph: Option.getOrThrow(
+                  reconstructedTaskGraphFor(readySuccessor.runState.graphKnowledge, target)
+                ),
+                currentGraphOperationId: operations.graph.operationId,
+                pause: readySuccessor.runState.pause,
+                responsibility: readySuccessor.runState.responsibility,
+                runControlPolicy: Option.getOrThrow(readySuccessor.runState.controlPolicy),
+                runId,
+                workflowHistory: readySuccessor.runState.workflowHistory
+              },
+              new Set(),
+              target
+            )
+            expect(beginDecisions).toContainEqual(
+              expect.objectContaining({
+                step: expect.objectContaining({
+                  _tag: "BeginPlannedAttemptExecutorWork",
+                  plannedAttempt: successor,
+                  specification: freshSpecification
+                })
+              })
+            )
+            let successorBegins = 0
+            const successorContext = yield* Layer.build(
+              Layer.mergeAll(
+                liveJournalTestLayer({ records: readySuccessorRecords, runId, target }),
+                plannedAttemptProtocolControllerLayer,
+                Layer.succeed(PlannedAttemptExecutor, {
+                  observe: () => Effect.die("settled successor Begin must not reconcile"),
+                  begin: (request) =>
+                    Effect.sync(() => {
+                      successorBegins += 1
+                      expect(request.plannedAttempt).toEqual(successor)
+                      expect(request.specification).toEqual(freshSpecification)
+                      return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                        correlation: plannedAttemptExecutorCorrelation(successor)
+                      })
+                    }),
+                  requestSuspension: () => Effect.die("Restart must not suspend the successor"),
+                  resume: () => Effect.die("Restart must Begin the successor")
+                })
+              )
+            )
+            const started = yield* beginPlannedAttemptExecutorWork(successor, freshSpecification).pipe(
+              Effect.provide(successorContext)
+            )
+            expect(started).toEqual(
+              PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                correlation: plannedAttemptExecutorCorrelation(successor)
+              })
+            )
+            expect(
+              yield* beginPlannedAttemptExecutorWork(successor, freshSpecification).pipe(
+                Effect.provide(successorContext),
+                Effect.result
+              )
+            ).toMatchObject({ _tag: "Failure", failure: { _tag: "PlannedAttemptExecutorAlreadyBegan" } })
+            expect(successorBegins).toBe(1)
+            const afterBegin = yield* Context.get(successorContext, AcceptedJournalReader).readAccepted(runId)
+            expect(reduceWorkflowJournalHistory(runId, materializeJournalRecords(afterBegin.records))._tag).toBe(
+              "ValidWorkflowJournalHistory"
+            )
+            expect(latestAcceptedPlannedAttemptExecutorEvidence(afterBegin, plannedAttempt)).toEqual(
+              latestAcceptedPlannedAttemptExecutorEvidence(readySuccessorRecords, plannedAttempt)
+            )
+            expect(
+              replacementContinuationAuthorityFrom(complete, runId, successor, successorPlan.operationId)
+            ).toBeUndefined()
+            expect(
+              replacementContinuationAuthorityFrom(replacedRecords, runId, plannedAttempt, successorPlan.operationId)
+            ).toBeUndefined()
+
+            const context = yield* Layer.build(
+              Layer.mergeAll(
+                liveJournalTestLayer({ records: complete, runId, target }),
+                plannedAttemptProtocolControllerLayer
+              )
+            )
+            const protocols = Context.get(context, PlannedAttemptProtocolController)
+            for (const foreignPlan of [
+              { ...plannedAttempt, baseSha: GitCommitSha.make("f".repeat(40)) },
+              { ...plannedAttempt, worktree: WorktreeLocator.make("/worktrees/foreign-retained-plan") }
+            ]) {
+              const refused = yield* protocols.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+                allocateResultRecoveryReplacementWithPermit(
+                  permit,
+                  requestId,
+                  witness,
+                  integrationTarget,
+                  freshSpecification,
+                  foreignPlan
+                ).pipe(
+                  Effect.provide(context),
+                  Effect.provideService(PlannedTaskAttemptPlanner, {
+                    plan: () => Effect.die("foreign plan must not allocate")
+                  }),
+                  Effect.provideService(OperationIdAllocator, {
+                    allocate: () => Effect.die("foreign plan must not allocate identities")
+                  }),
+                  Effect.result
+                )
+              )
+              expect(refused).toMatchObject({ _tag: "Failure", failure: { _tag: "ResultRecoveryNotAvailable" } })
+            }
+            let allocationCount = 0
+            let operationAllocationCount = 0
+            const allocate = () =>
+              deliverResultRecoveryRestart(
+                { withPlannedAttemptProtocol: protocols.withPermit },
+                replacementTransition
+              ).pipe(
+                Effect.provide(context),
+                Effect.provideService(PlannedTaskAttemptPlanner, {
+                  plan: (request) =>
+                    Effect.sync(() => {
+                      allocationCount += 1
+                      expect(request).toMatchObject({
+                        _tag: "ExactReplacement",
+                        baseSha: successor.baseSha,
+                        specification: freshSpecification,
+                        ordinal: 1
+                      })
+                      return successor
+                    })
+                }),
+                Effect.provideService(OperationIdAllocator, {
+                  allocate: () =>
+                    Effect.sync(() => {
+                      operationAllocationCount += 1
+                      return successorPlan.operationId
+                    })
+                })
+              )
+
+            const allocated = yield* allocate()
+            expect(allocated.event.successorPlan).toEqual(successorPlan)
+            expect((yield* allocate()).position).toBe(allocated.position)
+            expect(allocationCount).toBe(1)
+            expect(operationAllocationCount).toBe(1)
+
+            const commit = (candidate: ResultRecoveryAttemptReplacedEvent) =>
+              protocols.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+                recordResultRecoveryReplacementWithPermit(permit, candidate).pipe(Effect.provide(context))
+              )
+            const lostResponse = yield* commit(replacement).pipe(
+              Effect.andThen(Effect.fail("ReplacementResponseLost")),
+              Effect.result
+            )
+            expect(lostResponse).toMatchObject({ _tag: "Failure", failure: "ReplacementResponseLost" })
+            const first = yield* commit(replacement)
+            expect(first.event._tag).toBe("ResultRecoveryAttemptReplaced")
+            expect((yield* commit(replacement)).position).toBe(first.position)
+            const replayedAllocation = yield* protocols.withPermit(
+              plannedAttemptExecutorCorrelation(plannedAttempt),
+              (permit) =>
+                allocateResultRecoveryReplacementWithPermit(
+                  permit,
+                  requestId,
+                  witness,
+                  integrationTarget,
+                  specification
+                ).pipe(
+                  Effect.provide(context),
+                  Effect.provideService(PlannedTaskAttemptPlanner, {
+                    plan: () => Effect.die("replay must not allocate another attempt")
+                  }),
+                  Effect.provideService(OperationIdAllocator, {
+                    allocate: () => Effect.die("replay must not allocate another operation")
+                  })
+                )
+            )
+            expect(replayedAllocation.position).toBe(first.position)
+            const changed = ResultRecoveryAttemptReplacedEvent.make({
+              ...replacement,
+              successorPlan: {
+                ...successorPlan,
+                plannedAttempt: { ...successor, worktree: WorktreeLocator.make("/worktrees/another-successor") }
+              }
+            })
+            expect(yield* commit(changed).pipe(Effect.result)).toMatchObject({
+              _tag: "Failure",
+              failure: { _tag: "ResultRecoveryRequestIdentityContradiction" }
+            })
+            const committed = yield* Context.get(context, AcceptedJournalReader).readAccepted(runId)
+            expect(Array.from(journalRecordsOfKind(committed, "ResultRecoveryAttemptReplaced"))).toHaveLength(1)
+            expect(resultRecoveryReplacementProblem(replacedRecords, replacement)).toContain("already replaced")
+            for (const successorMismatch of [
+              { ...successor, baseSha: plannedAttempt.baseSha },
+              { ...successor, taskRevision: plannedAttempt.taskRevision }
+            ])
+              expect(
+                reduceWorkflowJournalHistory(runId, [
+                  ...complete,
+                  record(
+                    replacementPosition,
+                    ResultRecoveryAttemptReplacedEvent.make({
+                      ...replacement,
+                      successorPlan: { ...successorPlan, plannedAttempt: successorMismatch }
+                    })
+                  )
+                ])._tag
+              ).toBe("InvalidWorkflowJournalHistory")
+          }
+
+          expect(
+            evaluateResultRecoveryRestartFacts(
+              complete,
+              requestId,
+              witness,
+              IntegrationTarget.make({ ...integrationTarget, ref: IntegrationTargetRef.make("refs/heads/foreign") })
+            )
+          ).toMatchObject({ _tag: "Rejected", reason: "WrongAttemptWitness", witness: "PlannedAttemptTargetLineage" })
+          expect(evaluateResultRecoveryContinueFacts(complete, requestId, witness)).toMatchObject({
+            _tag: "DirectionRejected"
+          })
+          const early = fresh.map((entry) =>
+            entry.event._tag === "TaskTrackerReadIntentRecorded" && entry.event.operation._tag === "ReadTrackerGraph"
+              ? record(16, entry.event)
+              : entry
+          )
+          expect(
+            evaluateResultRecoveryRestartFacts([...start, ...early], requestId, witness, integrationTarget)
+          ).toMatchObject({ _tag: "Rejected", reason: "StaleWitness" })
+        }
+      })
+    )
 )

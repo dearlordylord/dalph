@@ -200,6 +200,26 @@ Combined with uncollected tests and unreachable actions, the recurring failure
 mode is a passing gate that measures nothing. Treat every green result as a claim
 that needs a negative control.
 
+## Model-based replay budgets
+
+Agents adding or diagnosing `quint-connect` replay tests must set both
+`nTraces` and `maxSamples` explicitly. In the pinned library, `nTraces` limits
+the saved traces; with a seed and no `maxSamples`, generation still explores
+10,000 simulations. A ten-trace replay can therefore spend its entire test
+timeout generating unused traces.
+
+Use `maxSamples: nTraces` for an ordinary bounded production replay and
+`maxSamples: 1` for a directed one-trace negative control. Keep the scenario's
+required trace count and depth. Increase the generation budget only to meet a
+named coverage obligation; record the added sampling assurance and expected
+duration. The canonical sampled and exhaustive profiles remain independent
+and retain their declared budgets.
+
+The #428 direction adapter reproduced a 30-second timeout with ten retained
+traces and the implicit 10,000 simulations. Explicit budgets completed its
+positive replay and directed mutant control together in about six seconds.
+That observation is a local measurement, not a runtime guarantee.
+
 ## Syntax worth knowing
 
 - Parameterless pure defs take no parentheses: `pure def name = ...`

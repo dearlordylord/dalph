@@ -14,6 +14,7 @@ export const transitionTaskWorkPosition = (transition: RunnableFrontierTransitio
     "CommitFreshTaskClaimIntent",
     "ObserveAttemptStoppageExecutor",
     "ObservePlannedAttemptExecutorWork",
+    "ContinueRejectedResult",
     "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
   ])
   return reserveOrReuse.has(transition._tag) ? "ReserveOrReuse" : null

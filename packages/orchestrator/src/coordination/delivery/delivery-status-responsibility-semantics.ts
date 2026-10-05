@@ -81,6 +81,7 @@ export const responsibilityHasStatusProjection = (
   facts: ResponsibilityFreshFacts,
   acceptedStanding: boolean
 ): boolean =>
+  facts.disposition._tag === "PlannedAttemptExecutorResultRejected" ||
   trackerFactForDisposition(facts) !== null ||
   unavailableFromFacts(facts)?._tag === "ResponsibilityFacts" ||
   dependencyWaitHasPrerequisites(facts) ||
@@ -137,6 +138,7 @@ const responsibilityStatusMeaningByTag = {
   FinalOutcome: "NoEntry",
   PlannedAttemptExecutorWorkSafelySuspended: "NoEntry",
   PlannedAttemptExecutorWorkTerminal: "NoEntry",
+  PlannedAttemptExecutorResultRejected: "NoEntry",
   PlannedAttemptExecutorProjectionWait: "UnavailableEvidence",
   PlannedAttemptExecutorSuspensionRequested: "NoEntry",
   StoppedAttemptClaimNoReleaseRequired: "NoEntry",

@@ -30,6 +30,8 @@ import {
   acceptedResultIntegrationAutomaticSuccessorProofObligations,
   freshTaskAdmissionObligations,
   plannedAttemptExecutorObligations,
+  providerResultCorrectionObligations,
+  resultRecoveryDirectionObligations,
   runCancellationObligations,
   runActivationObligations,
   taskFactReconciliationObligations
@@ -48,6 +50,18 @@ if (pnpmEntryPoint === undefined) {
 }
 
 const SPECS = [
+  {
+    name: "providerResultCorrection",
+    file: "specs/providerResultCorrection.qnt",
+    invariants: providerResultCorrectionObligations.invariants,
+    witnesses: providerResultCorrectionObligations.witnesses
+  },
+  {
+    name: "resultRecoveryDirection",
+    file: "specs/resultRecoveryDirection.qnt",
+    invariants: resultRecoveryDirectionObligations.invariants,
+    witnesses: resultRecoveryDirectionObligations.witnesses
+  },
   applicationExitMutationRegistry,
   {
     name: "plannedAttemptExecutor",

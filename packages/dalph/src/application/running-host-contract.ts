@@ -1,5 +1,7 @@
 import { PlannedAttemptExecutorCorrelation, PlannedTaskAttempt, RunId, TaskId, TaskRevision } from "@dalph/contracts"
 import {
+  ApplyResultRecoveryRequest,
+  ResultRecoveryRequestId,
   BoundedTicketRank,
   ControlDirectionApplicationOrdinal,
   RunControlPolicy,
@@ -96,18 +98,23 @@ export type RefreshInterest = typeof RefreshInterest.Type
 const Operation = Schema.TaggedUnion({
   ReadSnapshot: {},
   ReadRunControl: {},
+  ReadResultRecoveryDirection: { recoveryRequestId: ResultRecoveryRequestId },
+  ApplyResultRecoveryDirection: { recovery: ApplyResultRecoveryRequest },
   StartWork: {},
   Unpause: {},
   Refresh: { interest: RefreshInterest },
   WatchSnapshots: {}
 })
-const CommandOperation = Schema.Literals(["StartWork", "Unpause", "Refresh"])
+const CommandOperation = Schema.Literals(["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"])
 const requestFields = { hostInstanceId: HostInstanceId, requestId: RequestId, runId: RunId, operation: Operation }
 export const RunningHostRequest = Schema.Struct({ protocolVersion: Schema.Literal(1), ...requestFields })
 export type RunningHostRequest = typeof RunningHostRequest.Type
 /** Only explicit commands may acquire host operation ownership. */
 export type RunningHostCommandRequest = Omit<RunningHostRequest, "operation"> & {
-  readonly operation: Extract<RunningHostRequest["operation"], { readonly _tag: "StartWork" | "Unpause" | "Refresh" }>
+  readonly operation: Extract<
+    RunningHostRequest["operation"],
+    { readonly _tag: "StartWork" | "Unpause" | "Refresh" | "ApplyResultRecoveryDirection" }
+  >
 }
 const VersionedRequest = Schema.Struct({ protocolVersion: SafeInteger, ...requestFields })
 
@@ -283,6 +290,11 @@ export type RunningHostRunControl = typeof RunningHostRunControl.Type
 const Value = Schema.Union([
   RunningHostSnapshot,
   RunningHostRunControl,
+  Schema.TaggedStruct("ResultRecoveryDirectionRecorded", {
+    recovery: ApplyResultRecoveryRequest,
+    acceptedAt: TraceCursor
+  }),
+  Schema.TaggedStruct("ResultRecoveryDirectionNotRecorded", { recoveryRequestId: ResultRecoveryRequestId }),
   Schema.TaggedStruct("WakeSubmitted", {}),
   Schema.TaggedStruct("RefreshSubmitted", { interest: RefreshInterest }),
   Schema.TaggedStruct("WatchOpened", { subscriptionId: SubscriptionId, uri: Schema.NonEmptyString }),
@@ -292,7 +304,7 @@ const Value = Schema.Union([
 export type RunningHostValue = typeof Value.Type
 export type RunningHostCommandValue = Extract<
   RunningHostValue,
-  { readonly _tag: "WakeSubmitted" | "UnpauseApplied" | "RefreshSubmitted" }
+  { readonly _tag: "WakeSubmitted" | "UnpauseApplied" | "RefreshSubmitted" | "ResultRecoveryDirectionRecorded" }
 >
 const RunningHostEnvelopeShape = Schema.Union([
   Schema.Struct({
@@ -347,6 +359,12 @@ export const decodeRunningHostRequest = Effect.fn("RunningHost.decodeRequest")(f
       _tag: "RunMismatch",
       requestedRunId: request.runId,
       selectedRunId: descriptor.selectedRun.runId
+    })
+  if (!coherentWire(request.operation, request.runId))
+    return yield* Effect.fail<RunningHostError>({
+      _tag: "InvalidRequest",
+      fieldPath: "/operation",
+      code: "RecoveryRunMismatch"
     })
   return { ...request, protocolVersion: 1 as const }
 })

@@ -1,7 +1,14 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AttemptId, GitCommitSha, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
-import { Effect, Exit, FileSystem, Layer, Option, Path } from "effect"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedAttemptExecutorResult,
+  RunId,
+  TaskExecutorLocator,
+  WorktreeLocator
+} from "@dalph/contracts"
+import { Effect, Exit, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { expect } from "vitest"
 import type { KimiAttemptPrivatePhase } from "./kimi-attempt-store.js"
 import {
@@ -13,6 +20,9 @@ import {
   nodeKimiAttemptPrivateStoreLayer
 } from "./kimi-attempt-store.js"
 import { KimiAcpSessionId } from "./kimi-acp.js"
+import { KimiResultCycle } from "./kimi-result-cycle.js"
+import { KimiPromptRequestHistory } from "./kimi-prompt-history.js"
+import { ProviderResultCycle } from "./provider-result-correction.js"
 import {
   controlledCodexAttemptStoreNativeLayer,
   type CodexAttemptStoreNativeService
@@ -33,6 +43,74 @@ const record = KimiAttemptPrivateRecord.make({
 
 const layerAt = (stateDirectory: string) =>
   nodeKimiAttemptPrivateStoreLayer({ stateDirectory }).pipe(Layer.provide(NodeServices.layer))
+
+it.effect("preserves Kimi ownership and terminal seals across native reopen", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-kimi-immutable-" })
+      const sealed = KimiAttemptPrivateRecord.make({
+        ...record,
+        phase: "Terminal",
+        terminal: PlannedAttemptExecutorResult.cases.Completed.make({})
+      })
+      yield* Effect.gen(function* () {
+        const store = yield* KimiAttemptPrivateStore
+        yield* store.write(sealed)
+      }).pipe(Effect.provide(layerAt(root)))
+      const filename = path.join(root, "kimi-executor-private-state.json")
+      const before = yield* fs.readFileString(filename)
+      yield* Effect.gen(function* () {
+        const store = yield* KimiAttemptPrivateStore
+        const changedRecords = [
+          { ...sealed, baseSha: GitCommitSha.make("b".repeat(40)) },
+          { ...sealed, worktree: WorktreeLocator.make("/worktrees/foreign") },
+          { ...sealed, executor: TaskExecutorLocator.make("executor:foreign") },
+          { ...sealed, sessionId: KimiAcpSessionId.make("foreign-session") },
+          { ...sealed, terminal: PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "ProviderFailed" }) },
+          { ...sealed, phase: "Executing" as const }
+        ]
+        for (const changed of changedRecords) {
+          expect((yield* store.write(KimiAttemptPrivateRecord.make(changed)).pipe(Effect.result))._tag).toBe("Failure")
+          expect(yield* store.read(runId, attemptId)).toEqual(Option.some(sealed))
+          expect(yield* fs.readFileString(filename)).toBe(before)
+        }
+        yield* store.write(KimiAttemptPrivateRecord.make({ ...sealed, sessionClosed: true }))
+      }).pipe(Effect.provide(layerAt(root)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("preserves Kimi result-cycle intent across restart and refuses to remove its consumed budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-kimi-result-cycle-" })
+      const filename = path.join(root, "kimi-executor-private-state.json")
+      const resultCycle = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+        cycleId: "cycle:kimi",
+        responses: [
+          { _tag: "RequestIntended", intent: { _tag: "Initial", ordinal: 1, token: "result:kimi", intendedAt: 1_000 } }
+        ]
+      })
+      const retained = KimiAttemptPrivateRecord.make({ ...record, resultCycle })
+      yield* Effect.gen(function* () {
+        const store = yield* KimiAttemptPrivateStore
+        yield* store.write(retained)
+      }).pipe(Effect.provide(layerAt(root)))
+      const before = yield* fs.readFileString(filename)
+      yield* Effect.gen(function* () {
+        const store = yield* KimiAttemptPrivateStore
+        expect(yield* store.read(runId, attemptId)).toEqual(Option.some(retained))
+        expect((yield* store.write(record).pipe(Effect.result))._tag).toBe("Failure")
+        expect(yield* store.read(runId, attemptId)).toEqual(Option.some(retained))
+      }).pipe(Effect.provide(layerAt(root)))
+      expect(yield* fs.readFileString(filename)).toBe(before)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("reopens the exact Kimi session association without persisting credentials or ACP messages", () =>
   Effect.scoped(
@@ -185,4 +263,111 @@ it.effect("fails closed when another process owns the Kimi private-store lease",
       if (Exit.isFailure(result)) expect(result.cause).toBeDefined()
     }).pipe(Effect.provide(NodeServices.layer))
   )
+)
+
+it.effect("retains exact Kimi prompt intent and acknowledgement across native store restart", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-kimi-prompt-history-" })
+      const pending = yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+        { token: "prompt:one", intendedAt: 1_000, response: "Pending" }
+      ])
+      const observed = yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+        { token: "prompt:one", intendedAt: 1_000, response: "Observed" }
+      ])
+      const original = KimiAttemptPrivateRecord.make({
+        ...record,
+        phase: "PromptIntentRecorded",
+        promptRequests: pending
+      })
+      yield* Effect.gen(function* () {
+        const store = yield* KimiAttemptPrivateStore
+        yield* store.write(original)
+      }).pipe(Effect.provide(layerAt(root)))
+      yield* Effect.gen(function* () {
+        const store = yield* KimiAttemptPrivateStore
+        expect(yield* store.read(runId, attemptId)).toEqual(Option.some(original))
+        for (const mutation of [
+          record,
+          KimiAttemptPrivateRecord.make({
+            ...original,
+            promptRequests: yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+              { token: "prompt:foreign", intendedAt: 1_000, response: "Pending" }
+            ])
+          }),
+          KimiAttemptPrivateRecord.make({
+            ...original,
+            promptRequests: yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+              { token: "prompt:one", intendedAt: 2_000, response: "Pending" }
+            ])
+          }),
+          KimiAttemptPrivateRecord.make({
+            ...original,
+            promptRequests: yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+              ...observed,
+              { token: "prompt:two", intendedAt: 2_000, response: "Pending" }
+            ])
+          })
+        ]) {
+          expect((yield* store.write(mutation).pipe(Effect.result))._tag).toBe("Failure")
+          expect(yield* store.read(runId, attemptId)).toEqual(Option.some(original))
+        }
+        const acknowledged = KimiAttemptPrivateRecord.make({
+          ...original,
+          phase: "Executing",
+          promptRequests: observed
+        })
+        yield* store.write(acknowledged)
+        expect((yield* store.write(original).pipe(Effect.result))._tag).toBe("Failure")
+        expect(yield* store.read(runId, attemptId)).toEqual(Option.some(acknowledged))
+      }).pipe(Effect.provide(layerAt(root)))
+      yield* Effect.gen(function* () {
+        const store = yield* KimiAttemptPrivateStore
+        expect((yield* store.read(runId, attemptId)).pipe(Option.map((value) => value.promptRequests))).toEqual(
+          Option.some(observed)
+        )
+        const next = yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+          ...observed,
+          { token: "prompt:two", intendedAt: 2_000, response: "Pending" }
+        ])
+        yield* store.write(KimiAttemptPrivateRecord.make({ ...record, promptRequests: next }))
+        expect((yield* store.read(runId, attemptId)).pipe(Option.map((value) => value.promptRequests))).toEqual(
+          Option.some(next)
+        )
+      }).pipe(Effect.provide(layerAt(root)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("refuses to drop or rewrite a retained ACP result-cycle budget", () =>
+  Effect.gen(function* () {
+    const store = yield* KimiAttemptPrivateStore
+    const kimiResultCycle = yield* Schema.decodeUnknownEffect(KimiResultCycle)({
+      cycleId: "kimi:retained-budget",
+      plannedBaseSha: record.baseSha,
+      responses: [
+        {
+          _tag: "RequestIntended",
+          intent: { _tag: "Initial", ordinal: 1, token: "prompt:retained", intendedAt: 1_000 }
+        }
+      ]
+    })
+    const promptRequests = yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+      { token: "prompt:retained", intendedAt: 1_000, response: "Pending" }
+    ])
+    const retained = KimiAttemptPrivateRecord.make({ ...record, kimiResultCycle, promptRequests })
+    yield* store.write(retained)
+    expect((yield* store.write(record).pipe(Effect.result))._tag).toBe("Failure")
+    const rewritten = yield* Schema.decodeUnknownEffect(KimiResultCycle)({
+      ...kimiResultCycle,
+      cycleId: "kimi:replacement-budget"
+    })
+    expect(
+      (yield* store
+        .write(KimiAttemptPrivateRecord.make({ ...retained, kimiResultCycle: rewritten }))
+        .pipe(Effect.result))._tag
+    ).toBe("Failure")
+    expect(yield* store.read(runId, attemptId)).toEqual(Option.some(retained))
+  }).pipe(Effect.provide(memoryKimiAttemptPrivateStoreLayer()))
 )

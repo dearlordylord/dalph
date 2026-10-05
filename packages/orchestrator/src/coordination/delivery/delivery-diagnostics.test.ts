@@ -4,7 +4,8 @@ import {
   RunId,
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation,
-  PlannedAttemptExecutorReport
+  PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount
 } from "@dalph/contracts"
 import { describe, expect, it } from "vitest"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -43,6 +44,28 @@ const reported = (position: number, report: PlannedAttemptExecutorReport): Journ
   })
 
 describe("transient delivery diagnostics", () => {
+  it("projects rejection with its exact explicit recovery subject rather than Suspended or Failed", () => {
+    const rejection = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+      correlation: plannedAttemptExecutorCorrelation(attempt),
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "CorrectionExhausted",
+      responseCount: PlannedAttemptResultResponseCount.make(3),
+      custody: { _tag: "Stopped" }
+    })
+    const diagnostics = projectDeliveryDiagnostics(attempt.runId, [began, reported(2, rejection)], {
+      _tag: "GraphNotEstablished"
+    })
+    expect(diagnostics.tasks[0]).toMatchObject({
+      phase: "Rejected",
+      failure: { _tag: "None" },
+      recovery: {
+        _tag: "ExplicitDirectionRequired",
+        rejection,
+        subject: { _tag: "RejectedResult", plannedAttempt: attempt, reportOrdinal: 2 }
+      }
+    })
+  })
+
   it("projects throttle and circuit observations without inventing retry times", () => {
     const observation = (reason: "Throttled" | "CircuitOpen") =>
       record(
@@ -114,6 +137,14 @@ describe("transient delivery diagnostics", () => {
       result: { _tag: "Failed" }
     })
     expect(projectDeliveryDiagnostics(attempt.runId, [began, reported(2, failed)]).tasks[0]?.recovery).toEqual({
+      _tag: "RestartOnly",
+      subject: { _tag: "HistoricalUnknownFailure", plannedAttempt: attempt, reportOrdinal: 2 }
+    })
+    const known = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation: plannedAttemptExecutorCorrelation(attempt),
+      result: { _tag: "Failed", failureCode: "ProviderFailed" }
+    })
+    expect(projectDeliveryDiagnostics(attempt.runId, [began, reported(2, known)]).tasks[0]?.recovery).toEqual({
       _tag: "Unavailable",
       reason: "ExecutorFailureRecoveryNotImplemented"
     })

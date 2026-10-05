@@ -1,3 +1,8 @@
+import {
+  ResultRecoveryDirectedEvent,
+  ResultRecoveryRequestId,
+  ResultRecoverySubject
+} from "../protocols/result-recovery/events.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
@@ -3221,12 +3226,14 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     TargetPromotionReconciliationDeferred: true,
     TaskTrackerFactsObserved: true,
     TaskTrackerReadInitiated: true,
+    DirectedResultRecovery: true,
+    ResultRecoveryAttemptReplaced: true,
     RunCancellationApplied: true,
     WorktreeCleanupOccurred: true
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(65)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(67)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })
 
@@ -3328,5 +3335,32 @@ it.effect("fails closed on historical resume receipts for nonresumable or exhaus
       const failure = yield* projectWorkflowOccurrences(records).pipe(Effect.flip)
       expect(failure).toMatchObject({ _tag: "HistoricalOutcomeWithoutInitiatingAction", detail })
     }
+  })
+)
+
+it.effect("projects a distinct result recovery direction as an Operator action", () =>
+  Effect.gen(function* () {
+    const event = ResultRecoveryDirectedEvent.make({
+      direction: "ContinueRetainedAttempt",
+      requestId: ResultRecoveryRequestId.make({ nonce: "result-recovery-trace", runId }),
+      subject: ResultRecoverySubject.cases.RejectedResult.make({
+        plannedAttempt,
+        reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+      }),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    })
+    const projection = yield* projectWorkflowOccurrences([record(1, event)])
+    expect(projection.occurrences).toMatchObject([
+      {
+        _tag: "DirectedResultRecovery",
+        direction: event.direction,
+        requestId: event.requestId,
+        subject: event.subject,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction"
+      }
+    ])
   })
 )

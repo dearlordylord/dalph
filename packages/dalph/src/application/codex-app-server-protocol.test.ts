@@ -2049,3 +2049,23 @@ it.effect("maps an initialization RPC error to unavailable app-server behavior",
 it("selects the node process-native layer when no test-native override is supplied", () => {
   expect(codexAppServerNodeLayer()).toBeDefined()
 })
+
+it.effect("rearms the same completion receiver and retains the next turn hint before acknowledgement", () =>
+  withFixture("turn-completed-before-start-response", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* attachExactCompletionHints(app)
+        yield* hints.expectTurnId(CodexTurnId.make("predecessor-turn"))
+        if (hints.expectNextTurn === undefined)
+          return yield* Effect.die("production receiver must support exact rearming")
+        yield* hints.expectNextTurn()
+        const thread = yield* app.startThread("/fixture/worktree")
+        const received = yield* hints.hints.pipe(Stream.runHead, Effect.forkChild)
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "fresh correction")
+        expect(received.pollUnsafe()).toBeUndefined()
+        yield* hints.expectTurnId(turn.id)
+        expect(yield* Fiber.join(received)).toEqual(Option.some({ threadId: thread.id, turnId: turn.id }))
+      })
+    )
+  )
+)

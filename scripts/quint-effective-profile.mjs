@@ -9,6 +9,8 @@ import {
   freshTaskAdmissionProofObligations,
   plannedAttemptExecutorProofObligations,
   runCancellationObligations,
+  providerResultCorrectionObligations,
+  resultRecoveryDirectionObligations,
   runActivationObligations,
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
@@ -1386,6 +1388,105 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
         "5000",
         "--seed",
         "38603",
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+  run("provider result correction model typecheck", ["typecheck", "specs/providerResultCorrection.qnt"])
+  runFamily([
+    {
+      name: "provider result correction deterministic tests",
+      args: ["test", "specs/providerResultCorrection_test.qnt", "--main", "providerResultCorrectionTest"]
+    },
+    {
+      name: "provider result correction negative mutation profile",
+      args: [
+        "test",
+        "specs/providerResultCorrection_negative_test.qnt",
+        "--main",
+        "providerResultCorrectionNegativeTest"
+      ]
+    },
+    {
+      name: "provider result correction sampled model",
+      args: [
+        "run",
+        "specs/providerResultCorrection.qnt",
+        "--main",
+        "providerResultCorrection",
+        "--invariants",
+        ...providerResultCorrectionObligations.invariants,
+        "--witnesses",
+        ...providerResultCorrectionObligations.witnesses,
+        "--max-steps",
+        "32",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "428",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "provider result correction exhaustive model",
+      args: [
+        "verify",
+        "specs/providerResultCorrection.qnt",
+        "--main",
+        "providerResultCorrection",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...providerResultCorrectionObligations.invariants,
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+  run("result recovery direction model typecheck", ["typecheck", "specs/resultRecoveryDirection.qnt"])
+  runFamily([
+    {
+      name: "result recovery direction deterministic tests",
+      args: ["test", "specs/resultRecoveryDirection_test.qnt", "--main", "resultRecoveryDirectionTest"]
+    },
+    {
+      name: "result recovery direction negative mutation profile",
+      args: ["test", "specs/resultRecoveryDirection_negative_test.qnt", "--main", "resultRecoveryDirectionNegativeTest"]
+    },
+    {
+      name: "result recovery direction sampled model",
+      args: [
+        "run",
+        "specs/resultRecoveryDirection.qnt",
+        "--main",
+        "resultRecoveryDirection",
+        "--invariants",
+        ...resultRecoveryDirectionObligations.invariants,
+        "--witnesses",
+        ...resultRecoveryDirectionObligations.witnesses,
+        "--max-steps",
+        "32",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "428",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "result recovery direction exhaustive model",
+      args: [
+        "verify",
+        "specs/resultRecoveryDirection.qnt",
+        "--main",
+        "resultRecoveryDirection",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...resultRecoveryDirectionObligations.invariants,
         "--verbosity",
         "1"
       ]

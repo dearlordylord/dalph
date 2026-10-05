@@ -64,9 +64,13 @@ const badRequest = (detail: string) => new HermeticProviderRequestFailure({ deta
 export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")(function* (
   configuration: ProductionRepositoryHostConfiguration,
   observeBoundary: (boundary: BoundaryReached) => Effect.Effect<void>,
-  invocationId: HermeticInvocationId
+  invocationId: HermeticInvocationId,
+  selectResultProducer?: (
+    produce: Effect.Success<ReturnType<typeof makeHermeticProviderResult>>
+  ) => Effect.Success<ReturnType<typeof makeHermeticProviderResult>>
 ) {
-  const produceResult = yield* makeHermeticProviderResult(configuration)
+  const defaultResultProducer = yield* makeHermeticProviderResult(configuration)
+  const produceResult = selectResultProducer?.(defaultResultProducer) ?? defaultResultProducer
   const fingerprint = yield* makeHermeticProviderFingerprint()
   const {
     dependantIssueNodeId: dependantIssueId,

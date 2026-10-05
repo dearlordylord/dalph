@@ -6,6 +6,8 @@ import {
   IntegrationTarget,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
+  PlannedAttemptExecutorWriterCustody,
+  plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type RunId
 } from "@dalph/contracts"
@@ -177,6 +179,10 @@ export interface ProductionHostObservation {
   /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
   readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
   /** Exact Run control, serialized by the established Journal and coordinator owner. */
+  readonly resultRecoveryControl?: Pick<
+    JournaledRunBootstrap["Service"]["operatorControl"],
+    "applyResultRecoveryDirection" | "readResultRecoveryDirection"
+  >
   readonly remotePublicationControl?: Pick<
     JournaledRunBootstrap["Service"]["operatorControl"],
     "applyRemotePublicationResume" | "applyRemotePublicationBatchGrant"
@@ -646,41 +652,55 @@ export const productionCodexExecutionLayers = <ECodex, EGit, EEvidence>(options:
   readonly ownership: CoordinatorOwnership["Service"]
 }) => {
   const native = options.adapters.codexProcessNative ?? nodeCodexProcessNativeService
+  const acquireExecutor = (correlation: PlannedAttemptExecutorCorrelation) =>
+    Effect.gen(function* () {
+      const { app, store } = yield* acquireProductionCodexAttemptProvider(
+        options.configuration,
+        options.applicationExit,
+        correlation,
+        options.adapters
+      )
+      const isolatedApp = Layer.succeed(CodexAppServer, app)
+      return yield* Layer.build(
+        nodeCodexPlannedAttemptExecutorLayerWithOptions({
+          ...(options.configuration.codexToolEffectPolicy === undefined
+            ? {}
+            : { toolEffectPolicy: options.configuration.codexToolEffectPolicy }),
+          ...(options.profile.worktreePreparation === undefined
+            ? {}
+            : {
+                taskInstructions: [
+                  "Dalph already prepared this exact worktree with its repository Node and frozen dependencies. Run every later Node and pnpm check through `mise exec --` so a login shell cannot select the host Node.",
+                  ...defaultCodexTaskInstructions
+                ]
+              })
+        }).pipe(
+          Layer.provide(isolatedApp),
+          Layer.provide(codexOwnedActivityCensusLayer(native).pipe(Layer.provide(isolatedApp))),
+          Layer.provide(store),
+          Layer.provide(options.evidence),
+          Layer.provide(options.git),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(NodeServices.layer)
+        )
+      )
+    }).pipe(Effect.provide(NodeCrypto.layer))
   const executor = isolatedPlannedAttemptExecutorLayer(
-    (correlation) =>
+    acquireExecutor,
+    () => "isolated Codex containment could not be acquired; retained custody must be reconciled",
+    (plannedAttempt) =>
       Effect.gen(function* () {
-        const { app, store } = yield* acquireProductionCodexAttemptProvider(
-          options.configuration,
-          options.applicationExit,
-          correlation,
-          options.adapters
-        )
-        const isolatedApp = Layer.succeed(CodexAppServer, app)
-        return yield* Layer.build(
-          nodeCodexPlannedAttemptExecutorLayerWithOptions({
-            ...(options.configuration.codexToolEffectPolicy === undefined
-              ? {}
-              : { toolEffectPolicy: options.configuration.codexToolEffectPolicy }),
-            ...(options.profile.worktreePreparation === undefined
-              ? {}
-              : {
-                  taskInstructions: [
-                    "Dalph already prepared this exact worktree with its repository Node and frozen dependencies. Run every later Node and pnpm check through `mise exec --` so a login shell cannot select the host Node.",
-                    ...defaultCodexTaskInstructions
-                  ]
-                })
-          }).pipe(
-            Layer.provide(isolatedApp),
-            Layer.provide(codexOwnedActivityCensusLayer(native).pipe(Layer.provide(isolatedApp))),
-            Layer.provide(store),
-            Layer.provide(options.evidence),
-            Layer.provide(options.git),
-            Layer.provide(NodeCrypto.layer),
-            Layer.provide(NodeServices.layer)
-          )
-        )
-      }).pipe(Effect.provide(NodeCrypto.layer)),
-    () => "isolated Codex containment could not be acquired; retained custody must be reconciled"
+        const context = yield* acquireExecutor(plannedAttemptExecutorCorrelation(plannedAttempt))
+        const observe = Context.get(context, PlannedAttemptExecutor).observeWriterCustody
+        return yield* observe === undefined
+          ? Effect.succeed(
+              PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                plannedAttempt,
+                detail: "fresh Codex owner does not expose writer custody observation"
+              })
+            )
+          : observe(plannedAttempt)
+      })
   )
   const integratorConfiguration = CodexIntegratorConfiguration.make({
     candidateWorktreeRoot: options.configuration.integratorCandidateWorktreeRoot,
@@ -1343,6 +1363,52 @@ export const withDecodedProductionRepositoryHost = <
         registerObservationDrain: applicationExit.registerProcessLocalDrain,
         executeAttachedCommand: Effect.fn("ProductionHost.executeAttachedCommand")(function* (request) {
           const owner = Context.getOption(run, RunReactivationOwner)
+          if (request.operation._tag === "ApplyResultRecoveryDirection") {
+            if (Option.isNone(bootstrap) || Option.isNone(owner))
+              return yield* Effect.fail<RunningHostError>({
+                _tag: "CommandFailed",
+                operation: "ApplyResultRecoveryDirection",
+                stage: "BeforeApplication",
+                causeTag: "RunOwnerUnavailable",
+                detail: "The result recovery Run owner is unavailable."
+              })
+            const applied = yield* bootstrap.value.operatorControl
+              .applyResultRecoveryDirection(request.operation.recovery)
+              .pipe(
+                Effect.mapError(
+                  (error): RunningHostError =>
+                    error._tag === "ResultRecoveryNotAvailable" ||
+                    error._tag === "ResultRecoveryRequestIdentityContradiction" ||
+                    error._tag === "SchemaError" ||
+                    error._tag === "ApplicationExiting" ||
+                    error._tag === "JournaledRunNotActive"
+                      ? {
+                          _tag: "CommandFailed",
+                          operation: "ApplyResultRecoveryDirection",
+                          stage: "BeforeApplication",
+                          causeTag: error._tag,
+                          detail: "The exact result recovery direction was refused."
+                        }
+                      : {
+                          _tag: "CommandOutcomeUnknown",
+                          operation: "ApplyResultRecoveryDirection",
+                          requestId: request.requestId,
+                          phase: "AdmittedCompletionUnconfirmed",
+                          acceptedAt: null
+                        }
+                )
+              )
+            yield* owner.value.hint(RunReactivationHint.OperatorWake())
+            return {
+              _tag: "ResultRecoveryDirectionRecorded" as const,
+              recovery: {
+                direction: applied.event.direction,
+                requestId: applied.event.requestId,
+                subject: applied.event.subject
+              },
+              acceptedAt: TraceCursor.make({ runId: applied.runId, position: applied.position })
+            }
+          }
           if (request.operation._tag === "StartWork" || request.operation._tag === "Refresh") {
             if (Option.isNone(owner))
               return yield* Effect.fail<RunningHostError>({
@@ -1424,7 +1490,12 @@ export const withDecodedProductionRepositoryHost = <
             })
           )
         }),
-        ...(Option.isSome(bootstrap) ? { remotePublicationControl: bootstrap.value.operatorControl } : {})
+        ...(Option.isSome(bootstrap)
+          ? {
+              remotePublicationControl: bootstrap.value.operatorControl,
+              resultRecoveryControl: bootstrap.value.operatorControl
+            }
+          : {})
       } satisfies ProductionRunningHostObservation<EActivation>
       // Invocation callers end their scope on an activation failure. A listening
       // host retains that failure for passive readers and keeps its existing

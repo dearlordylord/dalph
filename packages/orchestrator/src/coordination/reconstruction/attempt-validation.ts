@@ -1722,7 +1722,12 @@ export const validatePlan = (
   indexes: FoldIndexes,
   issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
-  if (record.event._tag !== "TaskAttemptPlanned" && record.event._tag !== "PlannedAttemptReplaced") return indexes
+  if (
+    record.event._tag !== "TaskAttemptPlanned" &&
+    record.event._tag !== "PlannedAttemptReplaced" &&
+    record.event._tag !== "ResultRecoveryAttemptReplaced"
+  )
+    return indexes
   const plannedAttempt =
     record.event._tag === "TaskAttemptPlanned"
       ? record.event.operation.plannedAttempt

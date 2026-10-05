@@ -15,6 +15,7 @@ export const CodexQualificationAction = Schema.Literals([
   "pre-thread-cut",
   "create",
   "resume",
+  "continue-result",
   "project",
   "read",
   "suspend",
@@ -57,7 +58,7 @@ export const CodexQualificationHostEvent = Schema.Union([
   }),
   Schema.Struct({
     event: Schema.Literal("report"),
-    command: Schema.Literals(["Begin", "Observe", "Resume", "Suspend"]),
+    command: Schema.Literals(["Begin", "Observe", "Resume", "Suspend", "ContinueRejectedResult"]),
     report: PlannedAttemptExecutorReport
   }),
   Schema.Struct({ event: Schema.Literal("projection"), projection: PlannedAttemptExecutorProjection }),

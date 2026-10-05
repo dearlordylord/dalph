@@ -13,6 +13,9 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorWriterCustody,
+  PlannedAttemptResultRecoveryAuthorization,
+  PlannedAttemptResultResponseCount,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorCorrelation,
   passiveLifecycleObservationPurpose
@@ -29,6 +32,104 @@ import { isolatedPlannedAttemptExecutorLayer } from "./isolated-planned-attempt-
 
 const correlation = (id: string) =>
   PlannedAttemptExecutorCorrelation.make({ runId: RunId.make("isolated-run"), attemptId: AttemptId.make(id) })
+
+it.effect("renews only a stopped rejected owner for a new Continue permission after old attachments leave", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const subject = correlation("rejected-a")
+      const specification = makeTaskWorkSpecification({
+        body: "recover retained work",
+        title: "recovery",
+        taskId: TaskId.make("recovery-task")
+      })
+      const plannedAttempt = PlannedTaskAttempt.make({
+        ...subject,
+        baseSha: GitCommitSha.make("a".repeat(40)),
+        branch: TaskBranchRef.make("refs/heads/dalph/recovery"),
+        executor: TaskExecutorLocator.make("codex:production"),
+        taskId: specification.taskId,
+        taskRevision: specification.fingerprint,
+        worktree: WorktreeLocator.make("/tmp/recovery")
+      })
+      const request = PlannedAttemptExecutorRequest.make({ plannedAttempt, specification })
+      const authorization = PlannedAttemptResultRecoveryAuthorization.make({
+        nonce: "fresh-cycle",
+        correlation: subject
+      })
+      const acquired: Array<string> = []
+      const closed: Array<string> = []
+      const continued: Array<string> = []
+      const layer = isolatedPlannedAttemptExecutorLayer(
+        (ownerSubject) =>
+          Effect.gen(function* () {
+            const key = `${ownerSubject.attemptId}:${acquired.length + 1}`
+            acquired.push(key)
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                closed.push(key)
+              })
+            )
+            const report =
+              ownerSubject.attemptId === subject.attemptId && key.endsWith(":1")
+                ? PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+                    correlation: ownerSubject,
+                    reason: "ResultEnvelopeInvalid",
+                    recoveryCause: "CorrectionExhausted",
+                    responseCount: PlannedAttemptResultResponseCount.make(3),
+                    custody: { _tag: "Stopped" }
+                  })
+                : PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: ownerSubject })
+            const current = PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+            return Context.make(PlannedAttemptExecutor, {
+              observe: () => Effect.succeed(current),
+              begin: () => Effect.succeed(report),
+              requestSuspension: () => Effect.succeed(report),
+              resume: () => Effect.succeed(report),
+              continueRejectedResult: () =>
+                Effect.sync(() => {
+                  expect(key).not.toBe("rejected-a:1")
+                  continued.push(key)
+                  return report
+                })
+            }).pipe(
+              Context.add(PlannedAttemptExecutorLifecycleObservation, {
+                attach: () => Effect.succeed({ current, changes: Stream.empty, close: Effect.void })
+              })
+            )
+          }),
+        () => "acquisition unavailable"
+      )
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const observations = yield* PlannedAttemptExecutorLifecycleObservation
+        if (executor.continueRejectedResult === undefined) return yield* Effect.die("recovery must be exposed")
+        const foreign = PlannedAttemptResultRecoveryAuthorization.make({
+          nonce: "foreign",
+          correlation: correlation("foreign")
+        })
+        expect((yield* executor.continueRejectedResult(request, foreign).pipe(Effect.result))._tag).toBe("Failure")
+        expect(acquired).toEqual([])
+        const attachment = yield* observations.attach(subject)
+        yield* executor.observe(correlation("neighbour-b"), passiveLifecycleObservationPurpose)
+        expect((yield* executor.continueRejectedResult(request, authorization).pipe(Effect.result))._tag).toBe(
+          "Failure"
+        )
+        expect(acquired).toEqual(["rejected-a:1", "neighbour-b:2"])
+        expect(continued).toEqual([])
+        expect(closed).toEqual([])
+        yield* attachment.close
+        expect(closed).toEqual([])
+        yield* executor.continueRejectedResult(request, authorization)
+        yield* executor.continueRejectedResult(request, authorization)
+        expect(acquired).toEqual(["rejected-a:1", "neighbour-b:2", "rejected-a:3"])
+        expect(closed).toEqual(["rejected-a:1"])
+        expect(continued).toEqual(["rejected-a:3", "rejected-a:3"])
+        yield* executor.observe(correlation("neighbour-b"), passiveLifecycleObservationPurpose)
+        expect(acquired).toHaveLength(3)
+      }).pipe(Effect.provide(layer))
+    })
+  )
+)
 
 it.effect("reuses one exact execution owner across concurrent observation and attachment", () =>
   Effect.scoped(
@@ -215,6 +316,30 @@ it.effect("retires a terminal owner only after its last attachment closes and cl
         yield* executor.observe(subject, passiveLifecycleObservationPurpose)
         expect(yield* Ref.get(acquired)).toBe(1)
         expect(yield* Ref.get(stopped)).toBe(1)
+        const specification = makeTaskWorkSpecification({
+          body: "retain historical terminal custody",
+          title: "historical custody",
+          taskId: TaskId.make("historical-task")
+        })
+        const plannedAttempt = PlannedTaskAttempt.make({
+          ...subject,
+          baseSha: GitCommitSha.make("a".repeat(40)),
+          branch: TaskBranchRef.make("refs/heads/dalph/historical"),
+          executor: TaskExecutorLocator.make("codex:production"),
+          taskId: specification.taskId,
+          taskRevision: specification.fingerprint,
+          worktree: WorktreeLocator.make("/tmp/historical")
+        })
+        // Scope retirement and a Failed seal do not prove native writer absence.
+        if (executor.observeWriterCustody === undefined) return yield* Effect.die("missing custody observer")
+        expect(yield* executor.observeWriterCustody(plannedAttempt)).toEqual(
+          PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+            plannedAttempt,
+            detail: "isolated attempt owner does not expose writer custody observation"
+          })
+        )
+        expect(yield* Ref.get(acquired)).toBe(1)
+        expect(yield* Ref.get(stopped)).toBe(1)
       }).pipe(Effect.provide(layer))
     })
   )
@@ -255,7 +380,16 @@ it.effect("routes Begin, Suspend, Resume and work-unit replacement through the s
               observe: () => Effect.succeed(current),
               begin: (input) => record("Begin", input.plannedAttempt).pipe(Effect.as(report)),
               requestSuspension: (input) => record("Suspend", input).pipe(Effect.as(report)),
-              resume: (input) => record("Resume", input.plannedAttempt).pipe(Effect.as(report))
+              resume: (input) => record("Resume", input.plannedAttempt).pipe(Effect.as(report)),
+              observeWriterCustody: (input) =>
+                record("Custody", input).pipe(
+                  Effect.as(PlannedAttemptExecutorWriterCustody.cases.Stopped.make({ plannedAttempt: input }))
+                ),
+              continueRejectedResult: (input, authorization) =>
+                record("ContinueRejectedResult", input.plannedAttempt).pipe(
+                  Effect.tap(() => Effect.sync(() => expect(authorization.correlation).toEqual(subject))),
+                  Effect.as(report)
+                )
             }).pipe(
               Context.add(PlannedAttemptExecutorLifecycleObservation, {
                 attach: () => Effect.succeed({ current, changes: Stream.empty, close: Effect.void })
@@ -276,6 +410,18 @@ it.effect("routes Begin, Suspend, Resume and work-unit replacement through the s
         yield* executor.begin(request, { _tag: "InitialDelivery" })
         yield* executor.requestSuspension(plannedAttempt)
         yield* executor.resume(request)
+        if (executor.observeWriterCustody === undefined || executor.continueRejectedResult === undefined)
+          return yield* Effect.die("isolated owner must expose recovery boundaries")
+        expect(yield* executor.observeWriterCustody(plannedAttempt)).toEqual(
+          PlannedAttemptExecutorWriterCustody.cases.Stopped.make({ plannedAttempt })
+        )
+        yield* executor.continueRejectedResult(
+          request,
+          PlannedAttemptResultRecoveryAuthorization.make({
+            nonce: "isolated-continue",
+            correlation: correlation("routing-attempt")
+          })
+        )
         yield* replacement.replacePurgedProviderWorkUnit(
           CodexProviderWorkUnitReplacementRequest.make({
             claim: ActiveTaskClaim.make({
@@ -290,7 +436,80 @@ it.effect("routes Begin, Suspend, Resume and work-unit replacement through the s
           })
         )
         expect(yield* Ref.get(acquired)).toBe(1)
-        expect(yield* Ref.get(calls)).toEqual(["Begin", "Suspend", "Resume", "Replace"])
+        expect(yield* Ref.get(calls)).toEqual([
+          "Begin",
+          "Suspend",
+          "Resume",
+          "Custody",
+          "ContinueRejectedResult",
+          "Replace"
+        ])
+      }).pipe(Effect.provide(layer))
+    })
+  )
+)
+
+it.effect("scopes fresh recovery custody separately from a retired terminal routing owner", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const subject = correlation("retired-custody")
+      const specification = makeTaskWorkSpecification({
+        body: "recover",
+        title: "recover",
+        taskId: TaskId.make("retired")
+      })
+      const plannedAttempt = PlannedTaskAttempt.make({
+        ...subject,
+        baseSha: GitCommitSha.make("a".repeat(40)),
+        branch: TaskBranchRef.make("refs/heads/dalph/retired"),
+        executor: TaskExecutorLocator.make("codex:production"),
+        taskId: specification.taskId,
+        taskRevision: specification.fingerprint,
+        worktree: WorktreeLocator.make("/tmp/retired")
+      })
+      const acquired = yield* Ref.make(0)
+      const closed = yield* Ref.make(0)
+      const custodyAcquired = yield* Ref.make(0)
+      const custodyClosed = yield* Ref.make(0)
+      const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation: subject,
+        result: { _tag: "Failed" }
+      })
+      const layer = isolatedPlannedAttemptExecutorLayer(
+        () =>
+          Effect.gen(function* () {
+            yield* Ref.update(acquired, (n) => n + 1)
+            yield* Effect.addFinalizer(() => Ref.update(closed, (n) => n + 1))
+            return Context.make(PlannedAttemptExecutor, {
+              observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report })),
+              begin: () => Effect.succeed(report),
+              requestSuspension: () => Effect.succeed(report),
+              resume: () => Effect.succeed(report)
+            }).pipe(
+              Context.add(PlannedAttemptExecutorLifecycleObservation, { attach: () => Effect.die("unused attachment") })
+            )
+          }),
+        () => "acquisition failed",
+        (input) =>
+          Effect.gen(function* () {
+            expect(yield* Ref.get(closed)).toBe(1)
+            yield* Ref.update(custodyAcquired, (n) => n + 1)
+            yield* Effect.addFinalizer(() => Ref.update(custodyClosed, (n) => n + 1))
+            return PlannedAttemptExecutorWriterCustody.cases.Stopped.make({ plannedAttempt: input })
+          })
+      )
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.observe(subject, passiveLifecycleObservationPurpose)
+        if (executor.observeWriterCustody === undefined) return yield* Effect.die("missing custody observer")
+        expect(yield* executor.observeWriterCustody(plannedAttempt)).toEqual(
+          PlannedAttemptExecutorWriterCustody.cases.Stopped.make({ plannedAttempt })
+        )
+        expect(yield* Ref.get(custodyAcquired)).toBe(1)
+        expect(yield* Ref.get(custodyClosed)).toBe(1)
+        yield* executor.observe(subject, passiveLifecycleObservationPurpose)
+        expect(yield* Ref.get(acquired)).toBe(1)
+        expect(yield* Ref.get(custodyAcquired)).toBe(1)
       }).pipe(Effect.provide(layer))
     })
   )

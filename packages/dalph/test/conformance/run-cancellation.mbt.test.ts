@@ -827,6 +827,10 @@ const runtimeLayer = (
     taskWorkCapacityControlLayer,
     taskClaimReacquisitionControlLayer,
     deterministicOperationIdAllocatorLayer(`run-cancellation:${activeRunId}`),
+    Layer.succeed(
+      PlannedTaskAttemptPlanner,
+      PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("cancellation must not plan replacement task work") })
+    ),
     plannedAttemptProtocolControllerLayer,
     journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter)),
     remoteBaselineGitLayerForTest,
@@ -1899,6 +1903,10 @@ const makeCancellationDriverImplementation = () => {
               owner: ClaimOwner.make("dalph-run-cancellation-planner"),
               tokenPrefix: "run-cancellation"
             })
+          ),
+          Effect.provideService(
+            PlannedTaskAttemptPlanner,
+            PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("cancellation must not plan replacement task work") })
           ),
           Effect.provideService(CoordinatorOwnership, ownership),
           Effect.provideService(Integrator, integrator),

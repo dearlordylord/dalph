@@ -1,7 +1,8 @@
 import { it } from "@effect/vitest"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { Cause, Context, Effect, Exit, Layer, Option, Queue, Sink, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Sink, Stream } from "effect"
 import { expect } from "vitest"
+import { TestClock } from "effect/testing"
 import {
   ExecutorModelAlias,
   ExecutorProfile,
@@ -12,6 +13,7 @@ import {
   KimiAcpClient,
   KimiAcpFailure,
   KimiAcpSessionId,
+  KimiAcpPromptToken,
   nodeKimiAcpClientLayer,
   preflightKimiExecutable
 } from "./kimi-acp.js"
@@ -168,113 +170,165 @@ it.effect("performs the ACP authentication and model-selection handshake in orde
 )
 
 it.effect("records ACP progress and rejects a permission request under the deny policy", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const commands: Array<ChildProcess.Command> = []
-      const requests: Array<string> = []
-      const permissionReplies: Array<unknown> = []
-      const output = yield* Queue.unbounded<Uint8Array>()
-      const encoder = new TextEncoder()
-      const decoder = new TextDecoder()
-      const session = KimiAcpSessionId.make("kimi-progress-session")
-      const interactiveHandle = ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(3),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-        isRunning: Effect.succeed(true),
-        kill: () => Effect.void,
-        stdin: Sink.forEach((chunk: Uint8Array) =>
-          Effect.gen(function* () {
-            const message = JSON.parse(decoder.decode(chunk)) as { id?: number; method?: string; result?: unknown }
-            if (message.method !== undefined) requests.push(message.method)
-            if (message.id === 99) {
-              permissionReplies.push(message.result)
-              return
-            }
-            if (message.id === undefined) return
-            const result =
-              message.method === "initialize"
-                ? { agentCapabilities: { sessionCapabilities: { loadSession: true, resume: true, close: true } } }
-                : message.method === "session/new"
-                  ? { sessionId: session }
-                  : {}
-            if (message.method === "session/prompt") {
+  Effect.forEach([false, true], (lostAck) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const commands: Array<ChildProcess.Command> = []
+        const requests: Array<string> = []
+        const permissionReplies: Array<unknown> = []
+        const promptSent = yield* Deferred.make<void>()
+        const output = yield* Queue.unbounded<Uint8Array>()
+        const encoder = new TextEncoder()
+        const decoder = new TextDecoder()
+        const session = KimiAcpSessionId.make("kimi-progress-session")
+        const interactiveHandle = ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(3),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          stdin: Sink.forEach((chunk: Uint8Array) =>
+            Effect.gen(function* () {
+              const message = JSON.parse(decoder.decode(chunk)) as { id?: number; method?: string; result?: unknown }
+              if (message.method !== undefined) requests.push(message.method)
+              if (message.id === 99) {
+                permissionReplies.push(message.result)
+                return
+              }
+              if (message.id === undefined) return
+              const result =
+                message.method === "initialize"
+                  ? { agentCapabilities: { sessionCapabilities: { loadSession: true, resume: true, close: true } } }
+                  : message.method === "session/new"
+                    ? { sessionId: session }
+                    : {}
+              if (message.method === "session/prompt") {
+                yield* Queue.offer(
+                  output,
+                  encoder.encode(
+                    `${JSON.stringify({
+                      jsonrpc: "2.0",
+                      method: "session/update",
+                      params: {
+                        sessionId: session,
+                        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "work" } }
+                      }
+                    })}\n`
+                  )
+                )
+                yield* Queue.offer(
+                  output,
+                  encoder.encode(
+                    `${JSON.stringify({
+                      jsonrpc: "2.0",
+                      method: "session/update",
+                      params: {
+                        sessionId: session,
+                        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ing" } }
+                      }
+                    })}\n`
+                  )
+                )
+                yield* Queue.offer(
+                  output,
+                  encoder.encode(
+                    `${JSON.stringify({
+                      jsonrpc: "2.0",
+                      id: 99,
+                      method: "session/request_permission",
+                      params: { sessionId: session, options: [{ optionId: "allow" }] }
+                    })}\n`
+                  )
+                )
+              }
+              if (lostAck && message.method === "session/prompt") {
+                yield* Queue.offer(
+                  output,
+                  encoder.encode(
+                    `${JSON.stringify({
+                      jsonrpc: "2.0",
+                      method: "session/update",
+                      params: { sessionId: session, update: { status: "completed" } }
+                    })}\n`
+                  )
+                )
+                yield* Deferred.succeed(promptSent, undefined)
+                return
+              }
               yield* Queue.offer(
                 output,
-                encoder.encode(
-                  `${JSON.stringify({
-                    jsonrpc: "2.0",
-                    method: "session/update",
-                    params: {
-                      sessionId: session,
-                      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "work" } }
-                    }
-                  })}\n`
-                )
+                encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`)
               )
-              yield* Queue.offer(
-                output,
-                encoder.encode(
-                  `${JSON.stringify({
-                    jsonrpc: "2.0",
-                    method: "session/update",
-                    params: {
-                      sessionId: session,
-                      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ing" } }
-                    }
-                  })}\n`
-                )
-              )
-              yield* Queue.offer(
-                output,
-                encoder.encode(
-                  `${JSON.stringify({
-                    jsonrpc: "2.0",
-                    id: 99,
-                    method: "session/request_permission",
-                    params: { sessionId: session, options: [{ optionId: "allow" }] }
-                  })}\n`
-                )
-              )
-            }
-            yield* Queue.offer(
-              output,
-              encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`)
-            )
-          })
-        ),
-        stdout: Stream.fromQueue(output),
-        stderr: Stream.empty,
-        all: Stream.empty,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-        unref: Effect.succeed(Effect.void)
-      })
-      const spawner = ChildProcessSpawner.make((command) =>
-        Effect.sync(() => {
-          commands.push(command)
-          const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
-          return isPreflight ? fakeHandle(0) : interactiveHandle
+            })
+          ),
+          stdout: Stream.fromQueue(output),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void)
         })
-      )
-      const services = yield* Effect.provide(
-        Layer.build(nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository" })),
-        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)
-      )
-      const client = Context.get(services, KimiAcpClient)
-      yield* client.newSession("/srv/dalph/repository")
-      yield* client.prompt(session, "do work")
-      const observation = yield* client.observe(session)
-      expect(observation).toMatchObject({
-        sessionId: session,
-        status: "executing",
-        updateCount: 2,
-        lastMessage: "working",
-        permissionDenied: true
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.sync(() => {
+            commands.push(command)
+            const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
+            return isPreflight ? fakeHandle(0) : interactiveHandle
+          })
+        )
+        const services = yield* Effect.provide(
+          Layer.build(nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository" })),
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)
+        )
+        const client = Context.get(services, KimiAcpClient)
+        yield* client.newSession("/srv/dalph/repository")
+        const promptToken = KimiAcpPromptToken.make("owned-prompt:one")
+        if (lostAck) {
+          const pending = yield* client.prompt(session, "do work", promptToken).pipe(Effect.result, Effect.forkChild)
+          yield* Deferred.await(promptSent)
+          expect(yield* client.observe(session)).toMatchObject({
+            promptRequest: { token: promptToken, response: "Pending" }
+          })
+          expect(
+            yield* client
+              .prompt(session, "duplicate while pending", KimiAcpPromptToken.make("owned-prompt:pending-other"))
+              .pipe(Effect.flip)
+          ).toMatchObject({ _tag: "KimiAcpFailure", kind: "Protocol" })
+          expect(requests.filter((method) => method === "session/prompt")).toHaveLength(1)
+          yield* TestClock.adjust("60 seconds")
+          expect(yield* Fiber.join(pending)).toMatchObject({
+            _tag: "Failure",
+            failure: { _tag: "KimiAcpFailure", kind: "Unavailable" }
+          })
+        } else {
+          yield* client.prompt(session, "do work", promptToken)
+        }
+        const observation = yield* client.observe(session)
+        expect(observation).toMatchObject({
+          sessionId: session,
+          status: lostAck ? "terminal" : "executing",
+          updateCount: lostAck ? 3 : 2,
+          lastMessage: "working",
+          promptRequest: { token: promptToken, response: lostAck ? "Pending" : "Observed" },
+          permissionDenied: true
+        })
+        expect(permissionReplies).toEqual([{ outcome: { outcome: "cancelled" } }])
+        expect(yield* client.prompt(session, "do work", promptToken).pipe(Effect.flip)).toMatchObject({
+          _tag: "KimiAcpFailure",
+          kind: "Protocol"
+        })
+        expect(
+          yield* client.prompt(KimiAcpSessionId.make("foreign-session"), "do work", promptToken).pipe(Effect.flip)
+        ).toMatchObject({ _tag: "KimiAcpFailure", kind: "Unavailable" })
+        expect(
+          yield* client
+            .prompt(session, "overlapping work", KimiAcpPromptToken.make("owned-prompt:two"))
+            .pipe(Effect.flip)
+        ).toMatchObject({ _tag: "KimiAcpFailure", kind: "Protocol" })
+        expect(requests.filter((method) => method === "session/prompt")).toHaveLength(1)
+        expect(yield* client.observe(session)).toEqual(observation)
+        expect(requests).toContain("session/prompt")
+        expect(commands).toHaveLength(2)
       })
-      expect(permissionReplies).toEqual([{ outcome: { outcome: "cancelled" } }])
-      expect(requests).toContain("session/prompt")
-      expect(commands).toHaveLength(2)
-    })
+    )
   )
 )
 

@@ -35,13 +35,15 @@ const namesSingleContinuationPlan = (namedPlans: ReadonlyArray<Plan>, plannedAtt
 export const continuationReadNamesExactPlan = (
   operation: TrackerRead,
   namedPlans: ReadonlyArray<Plan>,
-  plannedAttempt: PlannedTaskAttempt
+  plannedAttempt: PlannedTaskAttempt,
+  authority: "Continuation" | "Restart" = "Continuation"
 ): boolean => {
   if (operation._tag === "ReadTrackerGraph") {
     if (operation.cause._tag === "ExecutingWorkAuthorityCheck") {
       return executingReadCoversNamedPlans(operation, namedPlans, plannedAttempt)
     }
-    if (operation.cause._tag !== "AttemptContinuation") return false
+    if (operation.cause._tag !== (authority === "Restart" ? "AttemptRestartAuthorityCheck" : "AttemptContinuation"))
+      return false
   }
   return namesSingleContinuationPlan(namedPlans, plannedAttempt)
 }

@@ -1,3 +1,12 @@
+import { evaluateResultRecoveryRestartFacts } from "../../workflow/protocols/result-recovery/restart-authorization.js"
+import {
+  resultRecoveryContinueReadPlan,
+  nextResultRecoveryContinueRead,
+  resultRecoveryRestartReadPlan,
+  nextResultRecoveryRestartRead
+} from "../../workflow/protocols/result-recovery/current-facts.js"
+import { evaluateResultRecoveryContinueFacts } from "../../workflow/protocols/result-recovery/authorization.js"
+import { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
 /* eslint-disable max-lines -- Exact history reconstruction spans every delivery authority boundary. */
 import { Context, Effect, HashSet, Iterable, Match, Option, Schema } from "effect"
 import {
@@ -1977,11 +1986,170 @@ export const deriveJournalResponsibilityFacts = (
       // executor had already reported a failed terminal result.
       if (cancellationDisposition !== undefined) return cancellationDisposition
       if (report?.report._tag === "ExecutorWorkTerminal") {
+        if (
+          report.report.result._tag === "Failed" &&
+          report.report.result.failureCode === undefined &&
+          Option.isSome(integrationTarget)
+        ) {
+          const direction = Array.from(
+            journalRecordsForAttemptKind(records, responsibility.plannedAttempt.attemptId, "ResultRecoveryDirected")
+          ).findLast(
+            ({ event }) =>
+              event._tag === "ResultRecoveryDirected" &&
+              event.direction === "RestartTaskImplementation" &&
+              event.subject._tag === "HistoricalUnknownFailure" &&
+              event.subject.reportOrdinal === report.source.ordinal &&
+              plannedTaskAttemptEquivalence(event.subject.plannedAttempt, responsibility.plannedAttempt)
+          )
+          const readPlan =
+            direction?.event._tag === "ResultRecoveryDirected"
+              ? resultRecoveryRestartReadPlan(records, direction.event.requestId, integrationTarget.value)
+              : undefined
+          if (readPlan !== undefined) {
+            const readOperation = nextResultRecoveryRestartRead(records, readPlan, integrationTarget.value)
+            const evaluation = evaluateResultRecoveryRestartFacts(
+              records,
+              readPlan.requestId,
+              readPlan.witness,
+              integrationTarget.value
+            )
+            const observed = journalRecordByKey(
+              records,
+              outcomeRecordKey(readPlan.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId)
+            )
+            const fact =
+              observed?.event._tag === "TaskTrackerFactsObserved" &&
+              observed.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+                ? observed.event.observation.factFamily
+                : undefined
+            return ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({
+              report: report.report,
+              historicalRestart: {
+                readPlan,
+                ...(readOperation === undefined ? {} : { readOperation }),
+                ...(evaluation._tag === "FreshRestartFactsVerified" && fact !== undefined
+                  ? {
+                      ready: {
+                        integrationTarget: integrationTarget.value,
+                        specification: {
+                          taskId: fact.taskId,
+                          fingerprint: fact.fingerprint,
+                          body: fact.body,
+                          title: fact.title
+                        }
+                      }
+                    }
+                  : {})
+              }
+            })
+          }
+        }
         return terminalTaskStateDisposition(
           report.report,
           explicitAttemptDispositionApplied,
           externalSuccessDisposition()
         )
+      }
+      if (report?.report._tag === "ExecutorWorkResultRejected") {
+        if (projectionWait)
+          return ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: projectionIssue.reason })
+        const permission = Array.from(
+          journalRecordsForAttemptKind(
+            records,
+            responsibility.plannedAttempt.attemptId,
+            "ResultRecoveryContinueAuthorized"
+          )
+        ).findLast(
+          ({ event }) =>
+            event._tag === "ResultRecoveryContinueAuthorized" &&
+            plannedTaskAttemptEquivalence(event.plannedAttempt, responsibility.plannedAttempt) &&
+            evaluateResultRecoveryContinueFacts(records, event.requestId, event.witness)._tag === "Authorized"
+        )
+        const direction = Array.from(
+          journalRecordsForAttemptKind(records, responsibility.plannedAttempt.attemptId, "ResultRecoveryDirected")
+        ).findLast(
+          ({ event }) =>
+            event._tag === "ResultRecoveryDirected" &&
+            event.subject._tag === "RejectedResult" &&
+            plannedTaskAttemptEquivalence(event.subject.plannedAttempt, responsibility.plannedAttempt) &&
+            event.subject.reportOrdinal === report.source.ordinal
+        )
+        const readPlan =
+          permission !== undefined ||
+          direction?.event._tag !== "ResultRecoveryDirected" ||
+          direction.event.direction !== "ContinueRetainedAttempt" ||
+          Option.isNone(integrationTarget)
+            ? undefined
+            : resultRecoveryContinueReadPlan(records, direction.event.requestId, integrationTarget.value)
+        const nextRead = readPlan === undefined ? undefined : nextResultRecoveryContinueRead(records, readPlan)
+        const readsReady =
+          readPlan !== undefined &&
+          evaluateResultRecoveryContinueFacts(records, readPlan.requestId, readPlan.witness)._tag === "Authorized"
+        const restartReadPlan =
+          direction?.event._tag === "ResultRecoveryDirected" &&
+          direction.event.direction === "RestartTaskImplementation" &&
+          Option.isSome(integrationTarget)
+            ? resultRecoveryRestartReadPlan(records, direction.event.requestId, integrationTarget.value)
+            : undefined
+        const restartReadOperation =
+          restartReadPlan !== undefined && Option.isSome(integrationTarget)
+            ? nextResultRecoveryRestartRead(records, restartReadPlan, integrationTarget.value)
+            : undefined
+        const restartFacts =
+          restartReadPlan !== undefined && Option.isSome(integrationTarget)
+            ? evaluateResultRecoveryRestartFacts(
+                records,
+                restartReadPlan.requestId,
+                restartReadPlan.witness,
+                integrationTarget.value
+              )
+            : undefined
+        const restartSpecificationRecord =
+          restartReadPlan === undefined
+            ? undefined
+            : journalRecordByKey(
+                records,
+                outcomeRecordKey(
+                  restartReadPlan.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
+                )
+              )
+        const restartSpecification =
+          restartSpecificationRecord?.event._tag === "TaskTrackerFactsObserved" &&
+          restartSpecificationRecord.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+            ? {
+                taskId: restartSpecificationRecord.event.observation.factFamily.taskId,
+                title: restartSpecificationRecord.event.observation.factFamily.title,
+                body: restartSpecificationRecord.event.observation.factFamily.body,
+                fingerprint: restartSpecificationRecord.event.observation.factFamily.fingerprint
+              }
+            : undefined
+        return ResponsibilityDisposition.PlannedAttemptExecutorResultRejected({
+          ...(restartReadPlan !== undefined &&
+          (restartReadOperation !== undefined || restartFacts?._tag === "FreshRestartFactsVerified")
+            ? {
+                restartReadPlan,
+                ...(restartReadOperation === undefined ? {} : { restartReadOperation }),
+                ...(restartFacts?._tag === "FreshRestartFactsVerified" &&
+                restartSpecification !== undefined &&
+                Option.isSome(integrationTarget)
+                  ? {
+                      restartReady: { integrationTarget: integrationTarget.value, specification: restartSpecification }
+                    }
+                  : {})
+              }
+            : {}),
+          ...(readPlan !== undefined && (nextRead !== undefined || readsReady)
+            ? { continueReadPlan: readPlan, ...(nextRead === undefined ? {} : { continueReadOperation: nextRead }) }
+            : {}),
+          ...(permission?.event._tag === "ResultRecoveryContinueAuthorized"
+            ? { continueRequestId: permission.event.requestId }
+            : {}),
+          report: report.report,
+          recoverySubject: ResultRecoverySubject.cases.RejectedResult.make({
+            plannedAttempt: responsibility.plannedAttempt,
+            reportOrdinal: report.source.ordinal
+          })
+        })
       }
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition

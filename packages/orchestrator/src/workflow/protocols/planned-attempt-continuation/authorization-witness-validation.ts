@@ -61,7 +61,8 @@ export const validateContinuationGraphWitness = (
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,
   freshnessBaseline: JournalPosition,
-  immutableRunTarget: TrackerTarget
+  immutableRunTarget: TrackerTarget,
+  authority: "Continuation" | "Restart" = "Continuation"
 ): WitnessValidation => {
   const observation = witness.activeTaskContinuationRead
   const intent = journalRecordByKey(records, intentRecordKey(observation.graphObservationOperationId))
@@ -94,7 +95,12 @@ export const validateContinuationGraphWitness = (
     currentIntent.event.operation._tag !== "ReadTrackerGraph" ||
     !trackerReadTargetMatchesRun(currentIntent.event.operation.target, immutableRunTarget) ||
     !trackerOutcomeTargetMatchesRun(currentOutcome, immutableRunTarget) ||
-    !continuationTrackerReadHasExactPlanPredecessor(records, currentIntent.event.operation, plannedAttempt) ||
+    !continuationTrackerReadHasExactPlanPredecessor(
+      records,
+      currentIntent.event.operation,
+      plannedAttempt,
+      authority
+    ) ||
     !currentIntent.event.operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId)
   ) {
     return reject(
@@ -133,7 +139,8 @@ export const validateContinuationGraphWitness = (
       "ReadTrackerGraph",
       currentOutcome.event.observation.target,
       plannedAttempt.taskId,
-      plannedAttempt
+      plannedAttempt,
+      authority
     ) !== undefined
   ) {
     return reject(

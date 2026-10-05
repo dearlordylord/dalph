@@ -21,13 +21,14 @@ export const recordedTaskAttemptPlans = (records: JournalHistorySource): Readonl
   const candidates = isJournalRecordEvidence(records)
     ? [
         ...journalRecordsOfKind(records, "TaskAttemptPlanned"),
-        ...journalRecordsOfKind(records, "PlannedAttemptReplaced")
+        ...journalRecordsOfKind(records, "PlannedAttemptReplaced"),
+        ...journalRecordsOfKind(records, "ResultRecoveryAttemptReplaced")
       ].sort((left, right) => left.position - right.position)
     : records
   const plans = candidates.flatMap(({ event }) =>
     event._tag === "TaskAttemptPlanned"
       ? [event.operation]
-      : event._tag === "PlannedAttemptReplaced"
+      : event._tag === "PlannedAttemptReplaced" || event._tag === "ResultRecoveryAttemptReplaced"
         ? [event.successorPlan]
         : []
   )
@@ -49,7 +50,8 @@ const recordedPlansForAttempt = (
   if (!isJournalRecordEvidence(records)) return recordedTaskAttemptPlans(records)
   const candidates = [
     ...journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "TaskAttemptPlanned"),
-    ...journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptReplaced")
+    ...journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptReplaced"),
+    ...journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "ResultRecoveryAttemptReplaced")
   ].sort((left, right) => left.position - right.position)
   return recordedTaskAttemptPlans(candidates)
 }

@@ -593,6 +593,14 @@ const provideLiveJournal = <A, E, R>(
     Effect.provideService(AcceptedJournalReader, harness.accepted),
     Effect.provideService(Journal, coordinatedJournal),
     Effect.provideService(InRunJournal, journal),
+    Effect.provideService(
+      PlannedTaskAttemptPlanner,
+      PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("this route must not allocate replacement task work") })
+    ),
+    Effect.provideService(
+      OperationIdAllocator,
+      OperationIdAllocator.of({ allocate: () => Effect.die("this route must not allocate replacement identities") })
+    ),
     Effect.provide(unexpectedRemoteDeliveryLayer)
   )
 

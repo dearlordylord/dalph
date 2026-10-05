@@ -54,6 +54,61 @@ export const PlannedAttemptExecutorResult = Schema.TaggedUnion({
 })
 export type PlannedAttemptExecutorResult = typeof PlannedAttemptExecutorResult.Type
 
+/** Proven answer defects are distinct from genuine terminal provider failure. */
+export const PlannedAttemptResultRejectionReason = Schema.Literals([
+  "ResultEnvelopeInvalid",
+  "CandidateHeadMismatch",
+  "CandidateLineageInvalid"
+])
+export type PlannedAttemptResultRejectionReason = typeof PlannedAttemptResultRejectionReason.Type
+
+/** Count of durably intended responses in one cycle, including its initial response. */
+const firstCorrectedResponseCount = 2
+const finalCorrectedResponseCount = 3
+export const PlannedAttemptResultResponseCount = Schema.Literals([
+  1,
+  firstCorrectedResponseCount,
+  finalCorrectedResponseCount
+]).pipe(Schema.brand("PlannedAttemptResultResponseCount"))
+export type PlannedAttemptResultResponseCount = typeof PlannedAttemptResultResponseCount.Type
+
+/** The executor proves exact stopped writers; elapsed deadlines supply no such proof. */
+export const PlannedAttemptRejectedResultCustody = Schema.TaggedUnion({ Stopped: {}, Unresolved: {} })
+export type PlannedAttemptRejectedResultCustody = typeof PlannedAttemptRejectedResultCustody.Type
+
+/** Why this cycle requires operator recovery; separate from the last proven answer defect. */
+export const PlannedAttemptResultRecoveryCause = Schema.Literals([
+  "CorrectionExhausted",
+  "Deadline",
+  "WriterCustodyUnresolved"
+])
+export type PlannedAttemptResultRecoveryCause = typeof PlannedAttemptResultRecoveryCause.Type
+
+const rejectionCycleConsistency = (report: {
+  readonly recoveryCause: PlannedAttemptResultRecoveryCause
+  readonly responseCount: PlannedAttemptResultResponseCount
+}): string | undefined => {
+  if (report.recoveryCause === "CorrectionExhausted" && report.responseCount !== finalCorrectedResponseCount)
+    return "Correction exhaustion requires all three responses"
+  if (report.recoveryCause === "Deadline" && report.responseCount < firstCorrectedResponseCount)
+    return "Only an additional correction response has a deadline"
+  return undefined
+}
+
+/**
+ * Pre-seal recovery observation. This is deliberately outside the terminal
+ * result algebra. Lifecycle admission is added only with its Run composition;
+ * neither custody case grants Continue authorization by itself.
+ */
+export const PlannedAttemptRejectedResultReport = Schema.TaggedStruct("ExecutorWorkResultRejected", {
+  correlation: PlannedAttemptExecutorCorrelation,
+  reason: PlannedAttemptResultRejectionReason,
+  recoveryCause: PlannedAttemptResultRecoveryCause,
+  responseCount: PlannedAttemptResultResponseCount,
+  custody: PlannedAttemptRejectedResultCustody
+}).check(Schema.makeFilter(rejectionCycleConsistency))
+export type PlannedAttemptRejectedResultReport = typeof PlannedAttemptRejectedResultReport.Type
+
 /**
  * The executor's current report for its complete work on one planned attempt.
  * Safe suspension proves that no executor-owned activity for the attempt remains
@@ -62,8 +117,19 @@ export type PlannedAttemptExecutorResult = typeof PlannedAttemptExecutorResult.T
 export const PlannedAttemptExecutorReport = Schema.TaggedUnion({
   ExecutorWorkExecuting: { correlation: PlannedAttemptExecutorCorrelation },
   ExecutorWorkSafelySuspended: { correlation: PlannedAttemptExecutorCorrelation },
+  ExecutorWorkResultRejected: {
+    correlation: PlannedAttemptExecutorCorrelation,
+    reason: PlannedAttemptResultRejectionReason,
+    recoveryCause: PlannedAttemptResultRecoveryCause,
+    responseCount: PlannedAttemptResultResponseCount,
+    custody: PlannedAttemptRejectedResultCustody
+  },
   ExecutorWorkTerminal: { correlation: PlannedAttemptExecutorCorrelation, result: PlannedAttemptExecutorResult }
-})
+}).check(
+  Schema.makeFilter((report) =>
+    report._tag === "ExecutorWorkResultRejected" ? rejectionCycleConsistency(report) : undefined
+  )
+)
 export type PlannedAttemptExecutorReport = typeof PlannedAttemptExecutorReport.Type
 
 const samePlannedAttemptExecutorResult = (
@@ -89,6 +155,13 @@ export const samePlannedAttemptExecutorReport = (
   if (!samePlannedAttemptExecutorCorrelation(left.correlation, right.correlation) || left._tag !== right._tag) {
     return false
   }
+  if (left._tag === "ExecutorWorkResultRejected" && right._tag === "ExecutorWorkResultRejected")
+    return (
+      left.reason === right.reason &&
+      left.recoveryCause === right.recoveryCause &&
+      left.responseCount === right.responseCount &&
+      left.custody._tag === right.custody._tag
+    )
   if (left._tag !== "ExecutorWorkTerminal" || right._tag !== "ExecutorWorkTerminal") return true
   return samePlannedAttemptExecutorResult(left.result, right.result)
 }
@@ -155,7 +228,7 @@ export const samePlannedAttemptExecutorProjection = Schema.toEquivalence(Planned
 /** Distinguishes a passive lifecycle read from reconciliation of one exact ambiguous command. */
 export const PlannedAttemptExecutorObservationPurpose = Schema.TaggedUnion({
   PassiveLifecycleObservation: {},
-  ReconcileCommand: { command: Schema.Literals(["Begin", "Resume", "Suspend"]) }
+  ReconcileCommand: { command: Schema.Literals(["Begin", "Resume", "Suspend", "ContinueRejectedResult"]) }
 })
 export type PlannedAttemptExecutorObservationPurpose = typeof PlannedAttemptExecutorObservationPurpose.Type
 export const passiveLifecycleObservationPurpose =
@@ -188,13 +261,31 @@ export type PlannedAttemptExecutorRequest = typeof PlannedAttemptExecutorRequest
 export class PlannedAttemptExecutorCommandFailure extends Schema.TaggedError<PlannedAttemptExecutorCommandFailure>()(
   "PlannedAttemptExecutorCommandFailure",
   {
-    command: Schema.Literals(["Begin", "Resume", "Suspend"]),
+    command: Schema.Literals(["Begin", "Resume", "Suspend", "ContinueRejectedResult"]),
     correlation: PlannedAttemptExecutorCorrelation,
     detail: Schema.String
   }
 ) {}
 
+/** Exact identity of a committed Run-owned permission; only the application supplies it. */
+export const PlannedAttemptResultRecoveryAuthorization = Schema.Struct({
+  nonce: Schema.NonEmptyString,
+  correlation: PlannedAttemptExecutorCorrelation
+}).pipe(Schema.brand("PlannedAttemptResultRecoveryAuthorization"))
+export type PlannedAttemptResultRecoveryAuthorization = typeof PlannedAttemptResultRecoveryAuthorization.Type
+
+/** Fresh execution-substrate observation; a terminal report alone never proves writer absence. */
+export const PlannedAttemptExecutorWriterCustody = Schema.TaggedUnion({
+  Stopped: { plannedAttempt: PlannedTaskAttempt },
+  Unresolved: { plannedAttempt: PlannedTaskAttempt, detail: Schema.NonEmptyString }
+})
+export type PlannedAttemptExecutorWriterCustody = typeof PlannedAttemptExecutorWriterCustody.Type
+
 export interface PlannedAttemptExecutorService {
+  /** Reconciles exact retained writers without rewriting any accepted result or terminal seal. */
+  readonly observeWriterCustody?: (
+    plannedAttempt: PlannedTaskAttempt
+  ) => Effect.Effect<PlannedAttemptExecutorWriterCustody>
   /** Passively reads the executor-owned lifecycle report without changing work. */
   readonly observe: (
     correlation: PlannedAttemptExecutorCorrelation,
@@ -207,6 +298,11 @@ export interface PlannedAttemptExecutorService {
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   readonly requestSuspension: (
     plannedAttempt: PlannedTaskAttempt
+  ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
+  /** Opens one explicitly authorized result cycle; exact redelivery reconciles without replenishing it. */
+  readonly continueRejectedResult?: (
+    request: PlannedAttemptExecutorRequest,
+    authorization: PlannedAttemptResultRecoveryAuthorization
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   /** Resumes the same exact attempt only after it was safely suspended. */
   readonly resume: (

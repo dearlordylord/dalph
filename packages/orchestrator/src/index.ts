@@ -1113,3 +1113,21 @@ export {
 } from "./authorities/git/sender-custody.js"
 
 export { DeliveryDiagnostics, projectDeliveryDiagnostics } from "./coordination/delivery/delivery-diagnostics.js"
+
+export {
+  ResultRecoveryDirection,
+  ResultRecoveryRequestId,
+  ResultRecoverySubject,
+  ApplyResultRecoveryRequest,
+  ResultRecoveryDirectedEvent
+} from "./workflow/protocols/result-recovery/events.js"
+
+export { ResultRecoveryContinueAuthorizedEvent } from "./workflow/protocols/result-recovery/events.js"
+
+export {
+  ResultRecoveryDirectionNotFound,
+  ResultRecoveryNotAvailable,
+  ResultRecoveryRequestIdentityContradiction
+} from "./workflow/protocols/result-recovery/control.js"
+
+export { ResultRecoveryAttemptReplacedEvent } from "./workflow/protocols/result-recovery/replacement-events.js"
