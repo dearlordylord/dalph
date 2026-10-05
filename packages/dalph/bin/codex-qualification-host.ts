@@ -7,8 +7,6 @@ import { access } from "node:fs/promises"
 import nodePath from "node:path"
 import { NodeServices } from "@effect/platform-node"
 import {
-  AttemptId,
-  GitCommitSha,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   type PlannedAttemptExecutorLifecycleObservationService,
@@ -16,10 +14,7 @@ import {
   PlannedAttemptExecutorRequest,
   PlannedAttemptResultRecoveryAuthorization,
   PlannedTaskAttempt,
-  RunId,
-  TaskBranchRef,
   TaskExecutorLocator,
-  TaskId,
   WorktreeLocator,
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
@@ -37,7 +32,7 @@ import {
   JournalDatabaseLocator,
   InRunJournal
 } from "@dalph/orchestrator"
-import { Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
 import {
   CodexAppServer,
   codexAppServerNodeLayer,
@@ -59,66 +54,17 @@ import {
 import { qualificationWorkflowJournalLayer } from "../src/application/qualification-journal.js"
 import { qualificationCutStore } from "./codex-qualification-startup-cut.js"
 import { exerciseNativeGuidance } from "./codex-qualification-guidance.js"
-import { CodexQualificationAction } from "./codex-qualification-host-contract.js"
+import {
+  decodeConfiguration,
+  rawConfiguration,
+  QualificationConfigurationFailure,
+  type QualificationConfiguration
+} from "./codex-qualification-configuration.js"
 
 import { writeEvent, reportEvent, projectionEvent, runQualificationProgram } from "./codex-qualification-host-output.js"
 
-const QualificationConfiguration = Schema.Struct({
-  action: CodexQualificationAction,
-  worktree: Schema.NonEmptyString,
-  stateDirectory: Schema.NonEmptyString,
-  evidenceDirectory: Schema.NonEmptyString,
-  codexHome: Schema.NonEmptyString,
-  codexExecutable: Schema.NonEmptyString,
-  baseSha: GitCommitSha,
-  branch: TaskBranchRef,
-  taskId: TaskId,
-  runId: RunId,
-  attemptId: AttemptId,
-  holdAfterAction: Schema.Boolean,
-  waitForOwnedChild: Schema.Boolean,
-  waitForTerminalProjection: Schema.Boolean,
-  controlledProviderCredential: Schema.optionalKey(Schema.String)
-})
-type QualificationConfiguration = typeof QualificationConfiguration.Type
-
-class QualificationConfigurationFailure extends Schema.TaggedError<QualificationConfigurationFailure>()(
-  "QualificationConfigurationFailure",
-  { detail: Schema.String }
-) {}
-
 const usage =
   "dalph-codex-qualification-host <startup-cut|initialize-response-cut|initialize-observed-cut|allocate|associate|association-cut|workflow-association-cut|workflow-begin|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|continue-result|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
-
-const envValue = (name: string): string | undefined => nodeProcess.env[name]
-
-const rawConfiguration = {
-  action: nodeProcess.argv[2],
-  worktree: envValue("DALPH_CODEX_QUALIFICATION_WORKTREE"),
-  stateDirectory: envValue("DALPH_CODEX_QUALIFICATION_STATE"),
-  evidenceDirectory: envValue("DALPH_CODEX_QUALIFICATION_EVIDENCE"),
-  codexHome: envValue("CODEX_HOME"),
-  codexExecutable: envValue("CODEX_BIN") ?? "codex",
-  baseSha: envValue("DALPH_CODEX_QUALIFICATION_BASE_SHA"),
-  branch: envValue("DALPH_CODEX_QUALIFICATION_BRANCH") ?? "refs/heads/dalph/real-codex-qualification",
-  taskId: envValue("DALPH_CODEX_QUALIFICATION_TASK_ID") ?? "real-codex-qualification-task",
-  runId: envValue("DALPH_CODEX_QUALIFICATION_RUN_ID") ?? "real-codex-qualification-run",
-  attemptId: envValue("DALPH_CODEX_QUALIFICATION_ATTEMPT_ID") ?? "real-codex-qualification-attempt",
-  holdAfterAction: envValue("DALPH_CODEX_QUALIFICATION_HOLD") === "1",
-  waitForOwnedChild: envValue("DALPH_CODEX_QUALIFICATION_WAIT_FOR_OWNED_CHILD") === "1",
-  waitForTerminalProjection: envValue("DALPH_CODEX_QUALIFICATION_WAIT_FOR_TERMINAL_PROJECTION") === "1",
-  ...(envValue("DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL") === undefined
-    ? {}
-    : { controlledProviderCredential: envValue("DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL") })
-}
-
-const decodeConfiguration = (): Effect.Effect<QualificationConfiguration, QualificationConfigurationFailure> =>
-  Schema.decodeUnknownEffect(QualificationConfiguration)(rawConfiguration).pipe(
-    Effect.mapError(
-      (error) =>
-        new QualificationConfigurationFailure({ detail: `invalid qualification host configuration: ${String(error)}` })
-    )
-  )
 
 const threadRecordFor = (configuration: QualificationConfiguration, threadId: CodexThreadSnapshot["id"]) =>
   CodexAttemptRecord.cases.AssociatedPreTurn.make({
@@ -261,7 +207,9 @@ const configurationProgram = Effect.gen(function* () {
         Layer.provide(NodeServices.layer)
       )
       const { lastCensus, layer: diagnosticCensusLayer } = yield* makeQualificationCensusDiagnostic
-      const runtimeLayer = codexPlannedAttemptExecutorLayerWithOptions({}).pipe(
+      const runtimeLayer = codexPlannedAttemptExecutorLayerWithOptions(
+        configuration.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: configuration.toolEffectPolicy }
+      ).pipe(
         Layer.provide(diagnosticCensusLayer),
         Layer.provideMerge(Layer.mergeAll(appAndStoreLayer, gitLayer, evidenceLayer, exitLayer))
       )
