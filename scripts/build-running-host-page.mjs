@@ -4,15 +4,12 @@ import { fileURLToPath } from "node:url"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 await runBoundedCommand({
-  executable: "pnpm",
+  executable: process.execPath,
   args: [
-    "--dir",
-    "prototypes/reducer-lab",
-    "exec",
-    "tsc",
+    fileURLToPath(new URL("../node_modules/@typescript/native/bin/tsc", import.meta.url)),
     "--noEmit",
     "--project",
-    "../../packages/dalph/browser/tsconfig.json"
+    "packages/dalph/browser/tsconfig.json"
   ],
   cwd: root,
   name: "Running host browser typecheck",

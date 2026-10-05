@@ -45,8 +45,8 @@ failures before retrying; different hardware is not a calibrated baseline.
 
 ### Running-host graph page
 
-The package build invokes [build-running-host-page.mjs](../../scripts/build-running-host-page.mjs), which uses the Lab’s pinned TypeScript browser checker and
-[Vite configuration](../../prototypes/reducer-lab/vite.live-host.config.ts).
+The package build invokes [build-running-host-page.mjs](../../scripts/build-running-host-page.mjs), which uses the repository’s pinned native TypeScript compiler for the browser
+configuration and the Lab’s [Vite configuration](../../prototypes/reducer-lab/vite.live-host.config.ts).
 It emits only `packages/dalph/dist/browser/index.html`, `graph.js`, and
 `graph.css`; the host serves a fixed allowlist, independent of its working
 directory. The shared graph renderer has no cassette playback input in this page.
