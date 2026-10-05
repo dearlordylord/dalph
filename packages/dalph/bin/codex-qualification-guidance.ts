@@ -7,6 +7,7 @@ import {
 import { Effect, Option, Schema } from "effect"
 import { CodexClientUserMessageId, type CodexAppServerService } from "../src/application/codex-app-server.js"
 import type { CodexAttemptStoreService } from "../src/application/codex-attempt-store.js"
+import { awaitQualificationGuidanceSelection } from "../src/qualification/codex-guidance-readiness.js"
 
 class NativeGuidanceFailure extends Schema.TaggedError<NativeGuidanceFailure>()("NativeGuidanceFailure", {
   detail: Schema.String
@@ -37,7 +38,7 @@ export const exerciseNativeGuidance = (
       })
     )
     const launch = yield* store.readServerLaunch()
-    const selected = yield* select(attempt)
+    const selected = yield* awaitQualificationGuidanceSelection(select(attempt), censusDiagnostic)
     if (selected._tag !== "Selected")
       return yield* new NativeGuidanceFailure({
         detail: `native active guidance target refused: ${selected.reason}/census=${yield* censusDiagnostic}`
