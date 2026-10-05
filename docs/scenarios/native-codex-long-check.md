@@ -48,8 +48,9 @@ containment path if that item expires. It must not parse arbitrary JavaScript,
 match a substring, grant a fresh timer on a poll, or stop another attempt.
 
 Acceptance: `codex-tool-effect-policy.test.ts`, `does not give a wrapper,
-lookalike, or unknown tool the long allowance`, plus the new exact observed
-shell/raw-input negative control; `codex-planned-attempt-executor.test.ts`,
+lookalike, or unknown tool the long allowance`, and `matches the observed native
+shell command and rejects raw input, foreign cwd and opaque items`;
+`codex-planned-attempt-executor.test.ts`,
 `cuts a self-matching Codex item at its exact default deadline and retains dirty
 evidence`. Native sibling and resistant-writer proof remains owned by the
 [per-attempt containment scenarios](isolated-codex-containment.md).

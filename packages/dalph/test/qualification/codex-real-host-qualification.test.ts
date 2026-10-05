@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest"
 import { Effect, Schema } from "effect"
 import {
   CodexAttemptRecord,
+  CodexToolEffectRecord,
   CodexServerLaunchRecord,
   type CodexAttemptRecord as CodexAttemptRecordType
 } from "../../src/application/codex-attempt-store.js"
@@ -61,6 +62,24 @@ const shellCommand = (_worktree: string): Record<string, unknown> => ({
     })
   }
 })
+/** Calls the pinned provider's advertised tools; no production JavaScript parsing is involved. */
+const nativeCheckCall = (
+  name: "exec_command" | "write_stdin",
+  args: Record<string, unknown>,
+  wrapped: boolean,
+  ordinal: number
+): Record<string, unknown> => ({
+  type: "response.output_item.done",
+  item: wrapped
+    ? {
+        type: "custom_tool_call",
+        call_id: `native-check-${ordinal}`,
+        name: "exec",
+        input: `text(await tools.${name}(${JSON.stringify(args)}));`
+      }
+    : { type: "function_call", call_id: `native-check-${ordinal}`, name, arguments: JSON.stringify(args) }
+})
+
 const longLivedShellCommand = (
   worktree: string,
   kind: "foreground" | "escaped" | "stuck"
@@ -101,6 +120,8 @@ const assistantMessage = (text: string): Record<string, unknown> => ({
 
 type ModelMode =
   | "accepted"
+  | "native-long-check"
+  | "code-mode-long-check"
   | "rejected-result"
   | "accepted-race"
   | "failed"
@@ -222,6 +243,52 @@ class ResponsesFixture {
     }
     if (this.mode === "failed") {
       response.write(sse(failed(responseId)))
+      response.end()
+      return
+    }
+    if (this.mode === "native-long-check" || this.mode === "code-mode-long-check") {
+      const wrapped = this.mode === "code-mode-long-check"
+      if (this.calls.length === 1) {
+        response.write(
+          sse(
+            nativeCheckCall(
+              "exec_command",
+              { cmd: "sleep 3", workdir: this.worktree, yield_time_ms: 1_000 },
+              wrapped,
+              1
+            )
+          )
+        )
+      } else if (this.calls.length === 2) {
+        const session =
+          /Process running with session ID (\d+)/u.exec(body) ?? /session_id\\?["']\s*:\s*(\d+)/u.exec(body)
+        if (session === null) {
+          response.write(sse(failed(responseId)))
+          response.end()
+          return
+        }
+        response.write(
+          sse(
+            nativeCheckCall(
+              "write_stdin",
+              { session_id: Number(session[1]), chars: "", yield_time_ms: 10_000 },
+              wrapped,
+              2
+            )
+          )
+        )
+      } else if (this.calls.length === 3) {
+        response.write(sse(shellCommand(this.worktree)))
+      } else {
+        response.write(
+          sse(
+            assistantMessage(
+              JSON.stringify({ version: 1, outcome: "Accepted", commit: await git(this.worktree, "rev-parse", "HEAD") })
+            )
+          )
+        )
+      }
+      response.write(sse(completed(responseId)))
       response.end()
       return
     }
@@ -429,6 +496,14 @@ type HostOptions = {
   readonly runId?: string
   readonly attemptId?: string
   readonly taskId?: string
+  readonly toolEffectPolicy?: {
+    readonly defaultLimitMilliseconds: number
+    readonly longCommands: ReadonlyArray<{
+      readonly command: string
+      readonly cwd: { readonly _tag: "PlannedWorktree" }
+      readonly limitMilliseconds: number
+    }>
+  }
 }
 
 const privateSnapshotLineSchema = Schema.Struct({
@@ -439,6 +514,7 @@ const privateSnapshotLineSchema = Schema.Struct({
 const privateSnapshotSchema = Schema.Struct({
   attempts: Schema.Array(CodexAttemptRecord),
   serverLaunch: Schema.NullOr(CodexServerLaunchRecord),
+  toolEffects: Schema.optionalKey(Schema.Array(CodexToolEffectRecord)),
   serverStartup: Schema.optionalKey(CodexServerStartupRecord)
 })
 type PrivateSnapshot = typeof privateSnapshotSchema.Type
@@ -605,6 +681,7 @@ const makeFixture = async (mode: ModelMode): Promise<Fixture> => {
     [
       // Plugin marketplace cloning is outside this local provider/process qualification.
       "features.plugins = false",
+      ...(mode === "code-mode-long-check" ? ["features.code_mode = true", "features.code_mode_only = false"] : []),
       'model_provider = "dalph-fixture"',
       'model = "dalph-fixture-model"',
       'approval_policy = "never"',
@@ -647,7 +724,10 @@ const spawnRawHost = (
       DALPH_CODEX_QUALIFICATION_WAIT_FOR_TERMINAL_PROJECTION: options.waitForTerminalProjection === true ? "1" : "0",
       DALPH_CODEX_QUALIFICATION_RUN_ID: options.runId ?? "real-codex-qualification-run",
       DALPH_CODEX_QUALIFICATION_ATTEMPT_ID: options.attemptId ?? "real-codex-qualification-attempt",
-      DALPH_CODEX_QUALIFICATION_TASK_ID: options.taskId ?? "real-codex-qualification-task"
+      DALPH_CODEX_QUALIFICATION_TASK_ID: options.taskId ?? "real-codex-qualification-task",
+      ...(options.toolEffectPolicy === undefined
+        ? {}
+        : { DALPH_CODEX_QUALIFICATION_TOOL_EFFECT_POLICY: JSON.stringify(options.toolEffectPolicy) })
     },
     stdio: ["pipe", "pipe", "pipe"]
   })
@@ -700,6 +780,49 @@ const terminalReport = (event: HostEvent) => {
 }
 
 describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
+  qualificationTest(
+    "native long check completes with its exact shell allowance through direct and code-mode tools",
+    async () => {
+      for (const mode of ["native-long-check", "code-mode-long-check"] as const) {
+        const fixture = await makeFixture(mode)
+        const hosts: Array<BuiltHost> = []
+        try {
+          const host = await spawnHost(fixture, "settle", {
+            toolEffectPolicy: {
+              defaultLimitMilliseconds: 1_000,
+              longCommands: [
+                { command: "/bin/bash -lc 'sleep 3'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 8_000 }
+              ]
+            }
+          })
+          hosts.push(host)
+          expect(requireEvent(await host.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
+          const terminal = terminalReport(await host.waitForReport(2))
+          expect(
+            terminal.result._tag,
+            JSON.stringify({ mode, result: terminal.result, calls: fixture.model.calls.length })
+          ).toBe("Accepted")
+          await acceptedEvidenceFor(fixture, { event: "report", command: "Begin", report: terminal })
+          expect(await host.waitForExit()).toEqual({ code: 0, signal: null })
+          const snapshot = await latestPrivateSnapshot(fixture)
+          const admitted = snapshot.toolEffects?.find(
+            (item) => item.deadlineMilliseconds - item.startedAtMilliseconds === 8_000
+          )
+          if (admitted?._tag !== "Completed") throw new Error("native long check has no exact completed allowance")
+          expect(admitted.worktree).toBe(fixture.worktree)
+          expect(admitted.completedAtMilliseconds - admitted.startedAtMilliseconds).toBeGreaterThan(1_000)
+          expect(admitted.completedAtMilliseconds).toBeLessThan(admitted.deadlineMilliseconds)
+          expect(
+            snapshot.toolEffects?.some((item) => item._tag === "StopIntended" || item._tag === "LimitReached")
+          ).toBe(false)
+          expect(fixture.model.calls).toHaveLength(4)
+        } finally {
+          await dispose(fixture, hosts)
+        }
+      }
+    },
+    45_000
+  )
   qualificationTest(
     "native guidance reaches the existing active turn and refuses its completed target",
     async () => {

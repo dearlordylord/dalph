@@ -18,6 +18,37 @@ const policy = Schema.decodeUnknownSync(CodexToolEffectPolicy)({
 })
 
 describe("Codex tool-effect allowance", () => {
+  it("matches the observed native shell command and rejects raw input, foreign cwd and opaque items", () => {
+    const admitted = bindCodexToolEffectPolicy(
+      Schema.decodeUnknownSync(CodexToolEffectPolicy)({
+        defaultLimitMilliseconds: 1_000,
+        longCommands: [
+          { command: "/bin/bash -lc 'sleep 3'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 8_000 }
+        ]
+      }),
+      "/repo/task"
+    )
+    expect(
+      codexToolEffectLimit(admitted, {
+        kind: "commandExecution",
+        command: "/bin/bash -lc 'sleep 3'",
+        cwd: "/repo/task"
+      })
+    ).toBe(8_000)
+    expect(codexToolEffectLimit(admitted, { kind: "commandExecution", command: "sleep 3", cwd: "/repo/task" })).toBe(
+      1_000
+    )
+    expect(
+      codexToolEffectLimit(admitted, {
+        kind: "commandExecution",
+        command: "/bin/bash -lc 'sleep 3'",
+        cwd: "/repo/other"
+      })
+    ).toBe(1_000)
+    expect(
+      codexToolEffectLimit(admitted, { kind: "dynamicToolCall", command: "/bin/bash -lc 'sleep 3'", cwd: "/repo/task" })
+    ).toBe(1_000)
+  })
   it("binds a declared long check to the owned worktree before turn start", () => {
     const configured = Schema.decodeUnknownSync(CodexToolEffectPolicy)({
       longCommands: [
