@@ -22,9 +22,11 @@ Choose checks by affected behavior, not by commit or handoff alone:
   before typecheck and the hosted full lint census, then runs the in-memory
   cassette suite.
   The lint and cassette checks address
-  failures first discovered in hosted #309 runs; prior local measurements were
-  about 33 seconds for `check:fast` plus the lint census and 45 seconds for the
-  cassette suite. It does not run the full local qualification or repeat after
+  failures first discovered in hosted #309 runs. Estimate its wall-clock budget
+  from recent complete runs of this command, including artifact preparation,
+  fresh typecheck, the full lint census, cassette imports and all selected tests.
+  A focused test's duration or an old smaller catalog cannot size this budget.
+  It does not run the full local qualification or repeat after
   documentation-only edits. The artifact preparation matches hosted preflight:
   workspace package exports resolve through `dist`, so a fresh worktree's
   type-aware lint must not depend on build output left by earlier work.

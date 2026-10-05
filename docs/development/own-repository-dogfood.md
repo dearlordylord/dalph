@@ -154,8 +154,8 @@ const configuration = {
   codexToolEffectPolicy: {
     defaultLimitMilliseconds: 420000,
     longCommands: [
-      { command: "pnpm check:lab", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 420000 },
-      { command: "pnpm check:submit", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 600000 }
+      { command: "/bin/bash -lc 'pnpm check:lab'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 420000 },
+      { command: "/bin/bash -lc 'pnpm check:submit'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 900000 }
     ]
   }
 }
@@ -172,13 +172,23 @@ The CLI injects the target and environment-only `GITHUB_TOKEN`; do not add
 `target` or `githubToken` to JSON. Do not copy Codex authentication into the
 root.
 The ordinary seven-minute item limit is chosen before Codex starts its turn.
-It covers opaque `functions.exec` calls, which do not expose the nested shell
-command for exact matching. Every item, including edits, receives that bound;
-Dalph retains it across restart and stops an item that reaches it. The two
-declared check allowances bind to each generated task worktree and apply only
-to exact `commandExecution` items; they do not extend `functions.exec`.
-Adjust the ordinary limit and check list for a different repository only after
-choosing its actual checks and deadlines.
+Every unmatched item, including edits and genuinely opaque tool calls, receives
+that bound; Dalph retains it across restart. Codex 0.160.0's native shell tool
+reports the complete shell command and cwd, including when its built-in code-mode
+`exec` invokes `tools.exec_command`. The two allowances match those native child
+items, not the JavaScript wrapper text. A session handle or poll does not renew
+the original item deadline.
+
+These Linux/Bash examples match the observed `/bin/bash -lc '…'` strings.
+The model's raw `cmd`, an added prefix such as `mise exec --`, another shell, or
+a different cwd is a different command and receives the ordinary limit. Before
+admitting a profile on another host or mode, characterize its actual native
+command/cwd and configure that exact complete string; do not guess or parse
+JavaScript to grant an exception. The [native long-check qualification](../scenarios/native-codex-long-check.md)
+covers the pinned Codex version with a real executable and local fake provider.
+It does not qualify older Codex versions, Claude, or other adapters. Adjust the
+ordinary limit and check list for a different repository only after choosing
+its actual checks and deadlines.
 
 Check the selected issue and no-other-coordinator preconditions again,
 and verify the hosted Base before launch:
