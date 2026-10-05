@@ -1163,7 +1163,14 @@ const readTokenMember = async (
       native.platform === "linux"
         ? await native.readFile(`/proc/${stat.pid}/environ`)
         : (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(stat.pid)])).stdout
-    return tokenMemberForThread(stat, environment, token, threadId, native.platform, providerHostInfrastructure)
+    const member = tokenMemberForThread(stat, environment, token, threadId, native.platform, providerHostInfrastructure)
+    // Enumeration and environ are separate native reads. A token-bearing helper
+    // can exit between them; only fresh absence removes its ambiguous identity.
+    if (member !== undefined && "detail" in member && native.platform === "linux") {
+      const current = await readLinuxProcessStatObservation(stat.pid, native)
+      if (current._tag === "Absent") return undefined
+    }
+    return member
   } catch (error) {
     return tokenReadFailure(stat.pid, error, native)
   }
