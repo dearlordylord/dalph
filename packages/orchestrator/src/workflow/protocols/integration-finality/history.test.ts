@@ -1,6 +1,6 @@
 import { expect, it } from "vitest"
 import { Schema } from "effect"
-import { RunId } from "@dalph/contracts"
+import { RunId, TaskRevision } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { journalEvidenceFrom, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
@@ -983,6 +983,22 @@ it("projects each phase from exact stored evidence without rescanning authority 
   expect(deriveIntegrationFinalityStateFor(journalEvidenceFrom(canonicalRecords), fixture.claim)).toEqual(
     deriveIntegrationFinalityStateFor(records, fixture.claim)
   )
+  const foreignClaim = {
+    ...fixture.claim,
+    plannedAttempt: { ...fixture.claim.plannedAttempt, taskRevision: TaskRevision.make("foreign-revision") }
+  }
+  for (const [tag, expected] of [
+    ["CompletionClaimReplacementIntended", "ReplacementPending"],
+    ["CompletionClaimReplaced", "CompletionClaimReplaced"],
+    ["CompletionClaimDeletionIntended", "DeletionPending"],
+    ["CompletionClaimDeleted", "CompletionClaimDeleted"],
+    ["IntegrationFinalitySettled", "IntegrationFinalitySettled"]
+  ] as const) {
+    const evidence = journalEvidenceFrom(recordsThroughTag(canonicalRecords, tag))
+    expect(deriveIntegrationFinalityStateFor(evidence, fixture.claim)?._tag).toBe(expected)
+    expect(deriveIntegrationFinalityStateFor(evidence, foreignClaim)).toBeUndefined()
+    expect(deriveIntegrationFinalityStateFor(evidence, { ...fixture.claim })?._tag).toBe(expected)
+  }
 })
 
 it("keeps every finality event accepted while excluding unrelated or malformed records", () => {
