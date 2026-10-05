@@ -1,6 +1,9 @@
+import type { ResultRecoveryContinueReadPlan } from "../../workflow/protocols/result-recovery/current-facts.js"
+import type { ResultRecoverySubject, ResultRecoveryRequestId } from "../../workflow/protocols/result-recovery/events.js"
 import { Data, Schema } from "effect"
 import {
   type IntegrationTarget,
+  type TaskWorkSpecification,
   type PlannedTaskAttempt,
   TaskId,
   type TaskRevision,
@@ -93,7 +96,26 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   DependencyWait: { readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
   FinalOutcome: { readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed" }
   PlannedAttemptExecutorWorkSafelySuspended: { readonly correlation: PlannedAttemptExecutorCorrelation }
+  /** Retained pre-seal rejection requires a fresh explicit recovery direction. */
+  PlannedAttemptExecutorResultRejected: {
+    readonly restartReadPlan?: ResultRecoveryContinueReadPlan
+    readonly restartReadOperation?: ResultRecoveryContinueReadPlan["operations"][number]
+    readonly restartReady?: {
+      readonly integrationTarget: IntegrationTarget
+      readonly specification: TaskWorkSpecification
+    }
+    readonly continueRequestId?: ResultRecoveryRequestId
+    readonly continueReadPlan?: ResultRecoveryContinueReadPlan
+    readonly continueReadOperation?: ResultRecoveryContinueReadPlan["operations"][number]
+    readonly recoverySubject: Extract<ResultRecoverySubject, { readonly _tag: "RejectedResult" }>
+    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkResultRejected" }>
+  }
   PlannedAttemptExecutorWorkTerminal: {
+    readonly historicalRestart?: {
+      readonly readPlan: ResultRecoveryContinueReadPlan
+      readonly readOperation?: ResultRecoveryContinueReadPlan["operations"][number]
+      readonly ready?: { readonly integrationTarget: IntegrationTarget; readonly specification: TaskWorkSpecification }
+    }
     readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>
   }
   /** A normalized executor projection was not trusted; retain the exact responsibility and resources. */
@@ -174,6 +196,7 @@ export type PlannedAttemptExecutorDisposition =
         readonly _tag:
           | "PlannedAttemptExecutorWorkSafelySuspended"
           | "PlannedAttemptExecutorWorkTerminal"
+          | "PlannedAttemptExecutorResultRejected"
           | "PlannedAttemptExecutorProjectionWait"
           | "PlannedAttemptExecutorSuspensionRequested"
           | "AttemptStoppageRequired"
@@ -223,6 +246,7 @@ type WorkflowOperationDisposition = Exclude<
     readonly _tag:
       | "PlannedAttemptExecutorWorkSafelySuspended"
       | "PlannedAttemptExecutorWorkTerminal"
+      | "PlannedAttemptExecutorResultRejected"
       | "PlannedAttemptExecutorProjectionWait"
       | "PlannedAttemptExecutorSuspensionRequested"
       | "AttemptStoppageRequired"

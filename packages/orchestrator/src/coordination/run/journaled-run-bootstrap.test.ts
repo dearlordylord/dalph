@@ -13,6 +13,7 @@ import {
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -5477,6 +5478,88 @@ it.effect("rejects a second process-local Run reactivation observer pair instead
       yield* bootstrap.registerAcceptedRunReactivationObservers(observers)
       const failure = yield* bootstrap.registerAcceptedRunReactivationObservers(observers).pipe(Effect.flip)
       expect(failure).toMatchObject({ _tag: "JournaledRunReactivationObserverAlreadyRegistered" })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("records and reads exact result recovery while the established Run has no active runtime", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("idle-result-recovery-control")
+      const runId = yield* freshWorkflowRunId(target)
+      const plannedAttempt = captureTestAttempt(runId, "idle-result-recovery", "idle-result-recovery")
+      const context = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(context, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+      yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
+      const rejection = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+        correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+        reason: "ResultEnvelopeInvalid",
+        recoveryCause: "CorrectionExhausted",
+        responseCount: PlannedAttemptResultResponseCount.make(3),
+        custody: { _tag: "Stopped" }
+      })
+      const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+      yield* storage.append(
+        runId,
+        plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+        PlannedAttemptExecutorStateObservedEvent.make({
+          observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: rejection }),
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: observationOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+      yield* storage.append(
+        runId,
+        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: reportOrdinal,
+          report: rejection,
+          version: workflowJournalEventVersion
+        })
+      )
+      const tracker = TrackerGraphReader.of({
+        read: () => Effect.die("recording a recovery direction cannot reread the graph"),
+        readTaskWorkSpecification: () => Effect.die("recording a recovery direction cannot reread the specification")
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage, tracker)
+      const request = {
+        direction: "ContinueRetainedAttempt",
+        requestId: { nonce: "idle-explicit-continue", runId },
+        subject: { _tag: "RejectedResult", plannedAttempt, reportOrdinal }
+      }
+      expect(yield* bootstrap.operatorControl.applyResultRecoveryDirection(request).pipe(Effect.flip)).toMatchObject({
+        _tag: "JournaledRunNotActive"
+      })
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
+      const applied = yield* Effect.all(
+        [
+          bootstrap.operatorControl.applyResultRecoveryDirection(request),
+          bootstrap.operatorControl.applyResultRecoveryDirection(request)
+        ],
+        { concurrency: "unbounded" }
+      )
+      expect(applied[0]).toEqual(applied[1])
+      expect(yield* bootstrap.operatorControl.readResultRecoveryDirection(request.requestId)).toEqual(applied[0])
+      expect(
+        yield* bootstrap.operatorControl
+          .applyResultRecoveryDirection({ ...request, direction: "RestartTaskImplementation" })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "ResultRecoveryRequestIdentityContradiction" })
+      const records = yield* storage.read(runId)
+      expect(records.filter(({ event }) => event._tag === "ResultRecoveryDirected")).toHaveLength(1)
+      expect(
+        records.filter(
+          ({ event }) =>
+            event._tag === "ResultRecoveryContinueAuthorized" ||
+            event._tag === "ResultRecoveryAttemptReplaced" ||
+            (event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "ContinueRejectedResult")
+        )
+      ).toEqual([])
+      expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

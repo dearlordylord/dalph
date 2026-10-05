@@ -16,15 +16,21 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptReplacedRecordKey,
+  resultRecoveryAttemptReplacedRecordKey,
   taskClaimReacquisitionDirectedRecordKey
 } from "../workflow-journal/record-key.js"
 
 type PlannedAttemptRecord = JournalRecord & {
-  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptReplaced" | "TaskAttemptPlanned" }>
+  readonly event: Extract<
+    WorkflowJournalEvent,
+    { readonly _tag: "PlannedAttemptReplaced" | "ResultRecoveryAttemptReplaced" | "TaskAttemptPlanned" }
+  >
 }
 
 const isPlannedAttemptRecord = (record: JournalRecord): record is PlannedAttemptRecord =>
-  record.event._tag === "TaskAttemptPlanned" || record.event._tag === "PlannedAttemptReplaced"
+  record.event._tag === "TaskAttemptPlanned" ||
+  record.event._tag === "PlannedAttemptReplaced" ||
+  record.event._tag === "ResultRecoveryAttemptReplaced"
 
 const exactPlanRecordForAttempt = (
   records: JournalHistorySource,
@@ -41,7 +47,11 @@ const exactPlanRecordForAttempt = (
       (record.event._tag === "PlannedAttemptReplaced" &&
         record.event.successorPlan.plannedAttempt.attemptId === attemptId &&
         record.runId === record.event.successorPlan.plannedAttempt.runId &&
-        record.key === plannedAttemptReplacedRecordKey(record.event.subject.plannedAttempt.attemptId))
+        record.key === plannedAttemptReplacedRecordKey(record.event.subject.plannedAttempt.attemptId)) ||
+      (record.event._tag === "ResultRecoveryAttemptReplaced" &&
+        record.event.successorPlan.plannedAttempt.attemptId === attemptId &&
+        record.runId === record.event.successorPlan.plannedAttempt.runId &&
+        record.key === resultRecoveryAttemptReplacedRecordKey(record.event.subject.plannedAttempt.attemptId))
     if (!matches) return true
     if (exact !== undefined) return false
     exact = record
@@ -51,6 +61,9 @@ const exactPlanRecordForAttempt = (
     if (!accept(record)) return undefined
   }
   for (const record of journalRecordsForAttemptKind(records, attemptId, "PlannedAttemptReplaced")) {
+    if (!accept(record)) return undefined
+  }
+  for (const record of journalRecordsForAttemptKind(records, attemptId, "ResultRecoveryAttemptReplaced")) {
     if (!accept(record)) return undefined
   }
   return exact

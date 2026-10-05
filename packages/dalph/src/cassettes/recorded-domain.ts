@@ -1,11 +1,11 @@
-/* eslint-disable max-lines -- The versioned recorded-cassette schema stays one exhaustive compatibility boundary. */
-import { Schema } from "effect"
 import {
+  PlannedAttemptExecutorWriterCustody,
   AcceptedResult,
   AttemptId,
   GitCommitSha,
   IntegrationTarget,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultRecoveryAuthorization,
   PlannedTaskAttempt,
   RemotePublicationTarget,
   RunId,
@@ -14,6 +14,9 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import {
+  ResultRecoveryDirection,
+  ResultRecoveryRequestId,
+  ResultRecoverySubject,
   ActiveTaskClaim,
   AttemptChoice,
   AttemptQuiescenceProof,
@@ -111,6 +114,8 @@ import {
   RemoteBaselineObservation,
   LocalTargetCatchUpResult
 } from "@dalph/orchestrator"
+/* eslint-disable max-lines -- The versioned recorded-cassette schema stays one exhaustive compatibility boundary. */
+import { Schema } from "effect"
 
 const initiatedByCoordinator = {
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
@@ -291,6 +296,27 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
       IntegratorCandidateCleanupMutationResult.cases.Removed,
       IntegratorCandidateCleanupMutationResult.cases.AlreadyAbsent
     ])
+  },
+  ResultRecoveryAttemptReplaced: {
+    ...initiatedByCoordinator,
+    requestId: ResultRecoveryRequestId,
+    subject: ResultRecoverySubject,
+    integrationTarget: IntegrationTarget,
+    witness: PlannedAttemptContinuationWitness,
+    writerCustody: Schema.optionalKey(PlannedAttemptExecutorWriterCustody.cases.Stopped),
+    successorPlan: WorkflowOperation.cases.RecordTaskAttemptPlan
+  },
+  ResultRecoveryContinueAuthorized: {
+    requestId: ResultRecoveryRequestId,
+    plannedAttempt: PlannedTaskAttempt,
+    witness: PlannedAttemptContinuationWitness
+  },
+  ResultRecoveryDirected: {
+    direction: ResultRecoveryDirection,
+    requestId: ResultRecoveryRequestId,
+    subject: ResultRecoverySubject,
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
   },
   AttemptChoiceApplied: {
     choice: AttemptChoice,
@@ -650,7 +676,8 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     report: PlannedAttemptExecutorReport
   },
   PlannedAttemptExecutorCommandIntended: {
-    command: Schema.Literals(["Begin", "Resume", "Suspend"]),
+    command: Schema.Literals(["Begin", "Resume", "Suspend", "ContinueRejectedResult"]),
+    recoveryAuthorization: Schema.optionalKey(PlannedAttemptResultRecoveryAuthorization),
     ...initiatedByCoordinator,
     ordinal: PlannedAttemptExecutorCommandOrdinal,
     plannedAttempt: PlannedTaskAttempt

@@ -1,4 +1,9 @@
 import {
+  attachControlledResultCompletions,
+  makeRetainedTaskResultSelector
+} from "./production-running-host-result-cycle.js"
+import { isolatedCodexProcessNativeService } from "./isolated-codex-process-native.js"
+import {
   projectControlledThread,
   failControlledGraphRead,
   failControlledProviderClose
@@ -33,7 +38,6 @@ import {
   CodexThreadListSummary,
   type CodexThreadSnapshot
 } from "../src/application/codex-app-server.js"
-import type { CodexTurnId } from "../src/application/codex-attempt-store.js"
 import { createHermeticFixture } from "./production-hermetic-fixture.js"
 import { makeHermeticProviderState } from "./production-hermetic-provider-state.js"
 import { ProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
@@ -123,18 +127,21 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     )
   )
   const closeFailureEnabled = yield* Ref.make(false)
+  const rejectResult = yield* Ref.make(diagnostics?.rejectResult === true)
+  const selectRetainedTaskResult = yield* makeRetainedTaskResultSelector
   const provider = yield* makeHermeticProviderState(
     configuration,
     (boundary) =>
       boundary._tag === "CompletionResponse"
         ? Deferred.succeed(completionEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseCompletion)))
         : Effect.void,
-    fixture.manifest.invocationId
+    fixture.manifest.invocationId,
+    diagnostics?.rejectResult !== true ? undefined : selectRetainedTaskResult
   )
   // The shutdown fixture acknowledges interrupt, then reconciliation observes an idle interrupted turn.
   const interrupted = yield* Ref.make(false)
-  const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean) =>
-    projectControlledThread(thread, visible, stopped, diagnostics?.rejectResult === true)
+  const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean, rejected: boolean) =>
+    projectControlledThread(thread, visible, stopped, rejected)
   const codex = CodexAppServer.of({
     ...provider.codex,
     interruptTurn: (threadId, turnId) =>
@@ -143,20 +150,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .pipe(Effect.andThen(interruptStopsTurn ? Ref.set(interrupted, true) : Effect.void)),
     unattendedPolicyAdmission: Effect.void,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
-    attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
-      Effect.gen(function* () {
-        const expected = yield* Deferred.make<CodexTurnId>()
-        if (expectedTurnId !== undefined) yield* Deferred.succeed(expected, expectedTurnId)
-        return {
-          expectTurnId: (turnId: CodexTurnId) => Deferred.succeed(expected, turnId).pipe(Effect.asVoid),
-          hints: Stream.fromEffect(
-            Deferred.await(turnCompletedHint).pipe(
-              Effect.andThen(Deferred.await(expected)),
-              Effect.map((turnId) => ({ threadId, turnId }))
-            )
-          )
-        }
-      }),
+    attachExactTurnCompletedHints: attachControlledResultCompletions(turnCompletedHint),
     listThreads: () =>
       (provider.codex.listThreads ?? (() => Effect.die("fixture requires thread listing")))().pipe(
         Effect.zip(Ref.get(turnTerminalVisible)),
@@ -181,8 +175,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .readThread(id)
         .pipe(
           Effect.flatMap((thread) =>
-            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted)]).pipe(
-              Effect.map(([visible, stopped]) => maskThread(thread, visible, stopped))
+            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted), Ref.get(rejectResult)]).pipe(
+              Effect.map(([visible, stopped, rejected]) => maskThread(thread, visible, stopped, rejected))
             )
           )
         ),
@@ -191,8 +185,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .resumeThread(id, cwd)
         .pipe(
           Effect.flatMap((thread) =>
-            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted)]).pipe(
-              Effect.map(([visible, stopped]) => maskThread(thread, visible, stopped))
+            Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted), Ref.get(rejectResult)]).pipe(
+              Effect.map(([visible, stopped, rejected]) => maskThread(thread, visible, stopped, rejected))
             )
           )
         ),
@@ -290,6 +284,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     ...reactivationObserversFor(paused),
     ...(discovery?.onTimerStateChange === undefined ? {} : { onTimerStateChange: discovery.onTimerStateChange }),
     githubRequestCircuitMaxRequests: 2000,
+    ...(diagnostics?.rejectResult !== true ? {} : { codexProcessNative: isolatedCodexProcessNativeService }),
     onActivationFinalizationStart: () =>
       Deferred.succeed(activationFinalizing, undefined).pipe(Effect.andThen(Deferred.await(releaseObservationCut))),
     onActivationHandoffIdle: () =>
@@ -398,6 +393,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     activationFinalizing,
     activationIdle,
     provider,
+    allowValidResult: Ref.set(rejectResult, false),
     failures,
     trackerCalls,
     gitCalls,

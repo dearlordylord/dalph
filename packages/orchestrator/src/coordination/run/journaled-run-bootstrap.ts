@@ -1,3 +1,7 @@
+import {
+  makeResultRecoveryControl,
+  type ResultRecoveryControlService
+} from "../../workflow/protocols/result-recovery/control.js"
 /* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
 import { plannedAttemptExecutorCorrelation, RemotePublicationTarget, RunId } from "@dalph/contracts"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
@@ -253,6 +257,7 @@ type ProcessJournalHolder =
       readonly _tag: "Established"
       readonly context: ProcessJournalContext
       readonly controlDirection: ControlDirectionApplication["Service"]
+      readonly resultRecovery: ResultRecoveryControlService
       readonly integrationQuarantineDirection: IntegrationQuarantineDirectionControlService
       readonly journal: Journal["Service"]
       readonly target: TrackerTarget
@@ -465,6 +470,10 @@ export const journaledRunBootstrapLayer = (
             _tag: "Established",
             context,
             controlDirection: Context.get(controlContext, ControlDirectionApplication),
+            resultRecovery: yield* makeResultRecoveryControl().pipe(
+              Effect.provide(context),
+              Effect.provideService(PlannedAttemptProtocolController, processPlannedAttemptProtocolController)
+            ),
             integrationQuarantineDirection: yield* makeIntegrationQuarantineDirectionControl(inRun).pipe(
               Effect.provideService(AcceptedJournalReader, accepted)
             ),
@@ -1199,6 +1208,22 @@ export const journaledRunBootstrapLayer = (
               )
             )
           }),
+        applyResultRecoveryDirection: (input) =>
+          withJournalControl(
+            Effect.gen(function* () {
+              const holder = yield* Ref.get(processJournal)
+              if (holder._tag !== "Established") return yield* new JournaledRunNotActive()
+              return yield* holder.resultRecovery.apply(input)
+            })
+          ),
+        readResultRecoveryDirection: (input) =>
+          withJournalControl(
+            Effect.gen(function* () {
+              const holder = yield* Ref.get(processJournal)
+              if (holder._tag !== "Established") return yield* new JournaledRunNotActive()
+              return yield* holder.resultRecovery.read(input)
+            })
+          ),
         applyAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.apply(input)),
         applyControlDirection: (input) =>
           Effect.gen(function* () {

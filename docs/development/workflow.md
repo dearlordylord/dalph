@@ -4,6 +4,30 @@
 
 ## Keeping implementation work finite
 
+- **Close a complete outcome before expanding another adapter.** Establish one
+  accepted end-to-end recovery path through the actual owner early, including
+  refusal and custody. Keep its unexecuted suffix in the existing issue. Finish
+  that suffix before adding more helper laws or another provider's equivalent
+  machinery; narrow passing tests do not move the delivery milestone by themselves.
+- **Batch edit-loop checks.** Use `pnpm typecheck:dev` for incremental diagnostics
+  within one worktree, then focused scenario tests and lint for the changed batch.
+  Run the fresh `pnpm typecheck` at a coherent milestone or to distinguish a
+  suspected stale diagnostic. Existing submission and qualification commands
+  keep their fresh checks. The incremental cache supplies no qualification credit.
+- **Choose the next action before waiting.** When sending a candidate to CI,
+  select independent work in another worktree or read-only planning for a blocked
+  successor. Return to the job on completion, failure evidence, or its recorded
+  deadline; repeated observations of a live handle do not advance implementation.
+- **Retire tests by acceptance value.** Identify each expensive test's unique
+  accepted scenario before repair. Move deterministic rules to controlled unit
+  tests; delete redundant orchestration fixtures when their boundaries have
+  direct coverage, retaining the real composition proof and its explicit gaps.
+- **Bound generated work as well as replayed work.** Model-based tests set
+  `maxSamples` explicitly alongside `nTraces`; the latter limits retained
+  traces, not the generation budget. Read the
+  [replay budget guidance](../QUINT-GUIDE.md#model-based-replay-budgets) before
+  increasing a replay timeout or reducing its accepted trace count.
+
 - Attempt a minimally instrumented complete-story diagnostic before polishing
   prefixes. Check accepted outcomes, causal requirements, and forbidden effects;
   predicted internal call order is a hypothesis. Record the first obstruction

@@ -11,6 +11,17 @@ import { type ExecutorPermissionPolicy, type ExecutorProfile } from "./executor-
 export const KimiAcpSessionId = Schema.NonEmptyString.pipe(Schema.brand("KimiAcpSessionId"))
 export type KimiAcpSessionId = typeof KimiAcpSessionId.Type
 
+/** Application-owned prompt identity; it is not a provider turn ID or a durable ACP lookup key. */
+export const KimiAcpPromptToken = Schema.NonEmptyString.pipe(Schema.brand("KimiAcpPromptToken"))
+export type KimiAcpPromptToken = typeof KimiAcpPromptToken.Type
+
+/** Acknowledgement proves this process received the matching JSON-RPC response, not writer absence. */
+export const KimiAcpPromptObservation = Schema.Struct({
+  token: KimiAcpPromptToken,
+  response: Schema.Literals(["Pending", "Observed"])
+})
+export type KimiAcpPromptObservation = typeof KimiAcpPromptObservation.Type
+
 /** ACP operation labels used for typed, redacted diagnostics. */
 export const KimiAcpOperation = Schema.Literals([
   "initialize",
@@ -59,6 +70,8 @@ export const KimiAcpSessionObservation = Schema.Struct({
   status: Schema.Literals(["executing", "idle", "terminal", "unavailable"]),
   updateCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   lastMessage: Schema.optionalKey(Schema.String),
+  /** Omitted after provider restore: ACP offers no persistent prompt-token lookup. */
+  promptRequest: Schema.optionalKey(KimiAcpPromptObservation),
   stopReason: Schema.optionalKey(Schema.String),
   permissionDenied: Schema.Boolean
 })
@@ -72,7 +85,11 @@ export interface KimiAcpClientService {
   readonly loadSession: (sessionId: KimiAcpSessionId, cwd: string) => Effect.Effect<KimiAcpSessionId, KimiAcpFailure>
   readonly resumeSession: (sessionId: KimiAcpSessionId, cwd: string) => Effect.Effect<KimiAcpSessionId, KimiAcpFailure>
   /** Sends one prompt and returns when ACP accepts it; updates carry progress and completion. */
-  readonly prompt: (sessionId: KimiAcpSessionId, text: string) => Effect.Effect<void, KimiAcpFailure>
+  readonly prompt: (
+    sessionId: KimiAcpSessionId,
+    text: string,
+    token?: KimiAcpPromptToken
+  ) => Effect.Effect<void, KimiAcpFailure>
   readonly observe: (sessionId: KimiAcpSessionId) => Effect.Effect<KimiAcpSessionObservation, KimiAcpFailure>
   readonly cancel: (sessionId: KimiAcpSessionId) => Effect.Effect<void, KimiAcpFailure>
   /** Closes one terminal session while retaining the shared ACP process for other attempts. */
@@ -120,6 +137,7 @@ type SessionState = {
   readonly status: "executing" | "idle" | "terminal" | "unavailable"
   readonly updateCount: number
   readonly lastMessage?: string
+  readonly promptRequest?: KimiAcpPromptObservation
   readonly stopReason?: string
   readonly permissionDenied: boolean
 }
@@ -544,43 +562,76 @@ const baseNodeKimiAcpClientLayer = (
       const resumeSession = Effect.fn("KimiAcp.resumeSession")(function* (sessionId: KimiAcpSessionId, cwd: string) {
         return yield* restore("session/resume", sessionId, cwd)
       })
-      const prompt = Effect.fn("KimiAcp.prompt")(function* (sessionId: KimiAcpSessionId, text: string) {
+      const promptAdmissions = yield* Semaphore.make(1)
+      const prompt = Effect.fn("KimiAcp.prompt")(function* (
+        sessionId: KimiAcpSessionId,
+        text: string,
+        token?: KimiAcpPromptToken
+      ) {
         const client = yield* requireRpc()
-        yield* Ref.update(sessions, (current) => {
-          const state = current.get(sessionId)
-          return state === undefined
-            ? current
-            : new Map([
-                ...current,
-                [
-                  sessionId,
-                  {
-                    sessionId: state.sessionId,
-                    cwd: state.cwd,
-                    status: "executing" as const,
-                    updateCount: state.updateCount,
-                    permissionDenied: state.permissionDenied
-                  }
-                ] as const
-              ])
-        })
+        yield* promptAdmissions.withPermit(
+          Effect.gen(function* () {
+            const prior = (yield* Ref.get(sessions)).get(sessionId)
+            if (prior === undefined)
+              return yield* failure("session/prompt", "Unavailable", "Kimi prompt session is unknown")
+            if (
+              prior.promptRequest?.response === "Pending" ||
+              (token !== undefined && (prior.promptRequest?.token === token || prior.status === "executing"))
+            )
+              return yield* failure(
+                "session/prompt",
+                "Protocol",
+                "Kimi prompt requires reconciliation; it cannot be resent"
+              )
+            yield* Ref.update(sessions, (current) => {
+              const state = current.get(sessionId)
+              return state === undefined
+                ? current
+                : new Map([
+                    ...current,
+                    [
+                      sessionId,
+                      {
+                        sessionId: state.sessionId,
+                        cwd: state.cwd,
+                        status: "executing" as const,
+                        updateCount: state.updateCount,
+                        permissionDenied: state.permissionDenied,
+                        ...(token === undefined
+                          ? {}
+                          : { promptRequest: KimiAcpPromptObservation.make({ token, response: "Pending" }) })
+                      }
+                    ] as const
+                  ])
+            })
+          })
+        )
         const response = yield* client.request("session/prompt", "session/prompt", {
           sessionId,
           prompt: [{ type: "text", text }]
         })
-        // Some ACP servers return the final stop reason in the response; retain it as terminal evidence.
+        // Set acknowledgement and returned terminal status together, so a successor prompt cannot
+        // inherit the predecessor's stop reason between two state writes.
         const responseStopReason = isJsonRecord(response) ? asNonEmptyString(response["stopReason"]) : undefined
-        if (responseStopReason !== undefined) {
-          yield* Ref.update(sessions, (current) => {
-            const state = current.get(sessionId)
-            return state === undefined
-              ? current
-              : new Map([
-                  ...current,
-                  [sessionId, { ...state, status: "terminal", stopReason: responseStopReason }] as const
-                ])
-          })
-        }
+        yield* Ref.update(sessions, (current) => {
+          const state = current.get(sessionId)
+          if (state === undefined || (token !== undefined && state.promptRequest?.token !== token)) return current
+          return new Map([
+            ...current,
+            [
+              sessionId,
+              {
+                ...state,
+                ...(token === undefined
+                  ? {}
+                  : { promptRequest: KimiAcpPromptObservation.make({ token, response: "Observed" }) }),
+                ...(responseStopReason === undefined
+                  ? {}
+                  : { status: "terminal" as const, stopReason: responseStopReason })
+              }
+            ] as const
+          ])
+        })
       })
       const observe = Effect.fn("KimiAcp.observe")(function* (sessionId: KimiAcpSessionId) {
         const state = (yield* Ref.get(sessions)).get(sessionId)
@@ -592,6 +643,7 @@ const baseNodeKimiAcpClientLayer = (
           status: state.status,
           updateCount: state.updateCount,
           ...(state.lastMessage === undefined ? {} : { lastMessage: state.lastMessage }),
+          ...(state.promptRequest === undefined ? {} : { promptRequest: state.promptRequest }),
           ...(state.stopReason === undefined ? {} : { stopReason: state.stopReason }),
           permissionDenied: state.permissionDenied
         })

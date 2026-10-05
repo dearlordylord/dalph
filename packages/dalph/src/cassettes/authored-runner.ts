@@ -969,6 +969,9 @@ const proposalActionLabels = {
   CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
   ContinueFreshWorkflowOperation: "Send the already-journaled request to its recorded owning system",
   ObservePlannedAttemptExecutorWork: "Passively observe the executor's current report for the exact planned attempt",
+  ContinueRejectedResult: "Continue retained rejected work under the exact explicit permission",
+  ReplaceRejectedResult: "Record one fresh successor after result recovery Restart authority",
+  AuthorizeResultRecoveryContinue: "Authorize one result recovery after fresh tracker and Git facts",
   ResumePlannedAttemptExecutorWorkAfterCurrentFacts:
     "Authorize current tracker and Git facts, then tell the executor to resume the exact safely suspended attempt",
   FixIntegratorSuccessorSession: "Fix the one FullRerun successor after the operator direction and fresh Git lineage",

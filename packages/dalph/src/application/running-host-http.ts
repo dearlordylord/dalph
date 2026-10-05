@@ -1,3 +1,4 @@
+import { TraceCursor } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { NodeCrypto } from "@effect/platform-node"
@@ -131,7 +132,8 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
     if (
       request.operation._tag === "StartWork" ||
       request.operation._tag === "Unpause" ||
-      request.operation._tag === "Refresh"
+      request.operation._tag === "Refresh" ||
+      request.operation._tag === "ApplyResultRecoveryDirection"
     ) {
       const commandOperation = request.operation._tag
       const control = yield* observation.readRunControl.pipe(
@@ -164,6 +166,37 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
           detail: "The connection closed before command admission."
         })
       return runningHostSuccessEnvelope(request, yield* command({ ...request, operation: request.operation }))
+    }
+    if (request.operation._tag === "ReadResultRecoveryDirection") {
+      const recoveryRequestId = request.operation.recoveryRequestId
+      if (observation.resultRecoveryControl === undefined)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "ReadFailed",
+          causeTag: "RunOwnerUnavailable",
+          detail: "The result recovery reader is unavailable."
+        })
+      const outcome = yield* observation.resultRecoveryControl
+        .readResultRecoveryDirection(recoveryRequestId)
+        .pipe(Effect.result)
+      if (outcome._tag === "Failure") {
+        if (outcome.failure._tag === "ResultRecoveryDirectionNotFound")
+          return runningHostSuccessEnvelope(request, { _tag: "ResultRecoveryDirectionNotRecorded", recoveryRequestId })
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "ReadFailed",
+          causeTag: outcome.failure._tag,
+          detail: "The exact result recovery direction could not be read."
+        })
+      }
+      const recorded = outcome.success
+      return runningHostSuccessEnvelope(request, {
+        _tag: "ResultRecoveryDirectionRecorded",
+        recovery: {
+          direction: recorded.event.direction,
+          requestId: recorded.event.requestId,
+          subject: recorded.event.subject
+        },
+        acceptedAt: TraceCursor.make({ runId: recorded.runId, position: recorded.position })
+      })
     }
     const value =
       request.operation._tag === "ReadSnapshot"

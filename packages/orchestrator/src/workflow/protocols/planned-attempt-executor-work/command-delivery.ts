@@ -25,7 +25,10 @@ export interface AcceptedExecutorCommandDelivery {
   readonly plannedAttempt: PlannedTaskAttempt
   readonly commandOrdinal: PlannedAttemptExecutorCommandOrdinal
   readonly delivery:
-    | { readonly _tag: "InitialCommandDelivery"; readonly command: "Begin" | "Resume" | "Suspend" }
+    | {
+        readonly _tag: "InitialCommandDelivery"
+        readonly command: "Begin" | "Resume" | "Suspend" | "ContinueRejectedResult"
+      }
     | {
         readonly _tag: "ResumeRedelivery"
         readonly ordinal: PlannedAttemptExecutorResumeRedeliveryOrdinal

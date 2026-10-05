@@ -62,7 +62,7 @@ export const makeHermeticProviderResult = Effect.fn("HermeticProvider.makeResult
     if (!cwd.startsWith(`${configuration.plannedAttemptWorktreeRoot}/`) || promptFact(text, "worktree") !== cwd)
       return yield* providerFailure("turn/start", "foreign task worktree")
     const base = yield* Schema.decodeUnknownEffect(GitCommitSha)(promptFact(text, "base_sha"))
-    if (base !== configuration.plannedAttemptBaseSha || (yield* runGit(cwd, ["rev-parse", "HEAD"])) !== base)
+    if ((yield* runGit(cwd, ["rev-parse", "HEAD"])) !== base)
       return yield* providerFailure("turn/start", "task head differs from planned Base")
     const worktreeDigest = yield* crypto.digest("SHA-256", new TextEncoder().encode(cwd))
     const resultFile = `hermetic-result-${Array.from(worktreeDigest, (byte) =>

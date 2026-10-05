@@ -1,6 +1,6 @@
-/* eslint-disable functional/immutable-data, max-lines -- The closed occurrence schema, relationship validation, and journal projection share one exhaustive boundary. */
-import { Effect, Match, Option, Schema } from "effect"
 import {
+  PlannedAttemptExecutorWriterCustody,
+  IntegrationTarget,
   AttemptId,
   PlannedTaskAttempt,
   RunId,
@@ -8,6 +8,14 @@ import {
   PlannedAttemptExecutorReport,
   plannedTaskAttemptEquivalence
 } from "@dalph/contracts"
+import { PlannedAttemptContinuationWitness } from "../protocols/planned-attempt-continuation/events.js"
+import {
+  ResultRecoveryDirection,
+  ResultRecoveryRequestId,
+  ResultRecoverySubject
+} from "../protocols/result-recovery/events.js"
+/* eslint-disable functional/immutable-data, max-lines -- The closed occurrence schema, relationship validation, and journal projection share one exhaustive boundary. */
+import { Effect, Match, Option, Schema } from "effect"
 import type { RemotePublicationTarget } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
@@ -324,6 +332,32 @@ export const AppliedAttemptChoice = Schema.TaggedStruct("AppliedAttemptChoice", 
 })
 export type AppliedAttemptChoice = typeof AppliedAttemptChoice.Type
 
+/** Operator chose recovery of one accepted result without changing its terminal history. */
+export const DirectedResultRecovery = Schema.TaggedStruct("DirectedResultRecovery", {
+  direction: ResultRecoveryDirection,
+  requestId: ResultRecoveryRequestId,
+  subject: ResultRecoverySubject,
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: initiatedActionFields.occurrenceClassification,
+  recordedAt: JournalPosition
+})
+export type DirectedResultRecovery = typeof DirectedResultRecovery.Type
+
+/** Explicit result recovery records a distinct successor without resurrecting instruction-change choices. */
+export const ResultRecoveryAttemptReplaced = Schema.TaggedStruct("ResultRecoveryAttemptReplaced", {
+  requestId: ResultRecoveryRequestId,
+  subject: ResultRecoverySubject,
+  integrationTarget: IntegrationTarget,
+  writerCustody: Schema.optionalKey(PlannedAttemptExecutorWriterCustody.cases.Stopped),
+  witness: PlannedAttemptContinuationWitness,
+  successorPlan: WorkflowOperation.cases.RecordTaskAttemptPlan,
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  occurrenceClassification: initiatedActionFields.occurrenceClassification,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type ResultRecoveryAttemptReplaced = typeof ResultRecoveryAttemptReplaced.Type
+
 /** Dalph atomically superseded P1 and recorded its exact immutable successor P2. */
 export const PlannedAttemptReplaced = Schema.TaggedStruct("PlannedAttemptReplaced", {
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
@@ -362,6 +396,7 @@ export type AppliedTaskWorkCapacity = typeof AppliedTaskWorkCapacity.Type
 
 /** Closed decoded member type kept explicit at the public occurrence schema boundary. */
 export type WorkflowOccurrence =
+  | DirectedResultRecovery
   | AppliedAttemptChoice
   | AttemptRestartAuthorityReadFailed
   | AppliedControlDirection
@@ -373,6 +408,7 @@ export type WorkflowOccurrence =
   | PlannedAttemptExecutorWorkReported
   | PlannedAttemptExecutorWorkResponsibilityBegan
   | PlannedAttemptReplaced
+  | ResultRecoveryAttemptReplaced
   | PlannedAttemptWorktreeObserved
   | TargetLineageObserved
   | TaskTrackerReadInitiated
@@ -380,6 +416,7 @@ export type WorkflowOccurrence =
   | HistoricalWorkflowOccurrence
 
 export const WorkflowOccurrence: Schema.Codec<WorkflowOccurrence, unknown, never, never> = Schema.Union([
+  DirectedResultRecovery,
   AppliedAttemptChoice,
   AttemptRestartAuthorityReadFailed,
   AppliedControlDirection,
@@ -391,6 +428,7 @@ export const WorkflowOccurrence: Schema.Codec<WorkflowOccurrence, unknown, never
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
   PlannedAttemptReplaced,
+  ResultRecoveryAttemptReplaced,
   PlannedAttemptWorktreeObserved,
   TargetLineageObserved,
   TaskTrackerReadInitiated,
@@ -829,7 +867,9 @@ type ProjectedJournalEvent = Extract<
       | "TargetLineageObserved"
       | "TaskWorkCapacityChanged"
       | "AttemptChoiceApplied"
+      | "ResultRecoveryDirected"
       | "PlannedAttemptReplaced"
+      | "ResultRecoveryAttemptReplaced"
       | "AttemptRestartAuthorityReadFailed"
       | "ControlDirectionApplied"
       | "TaskClaimReacquisitionDirected"
@@ -870,6 +910,7 @@ const nonProjectedJournalEventKinds = {
   TargetPromotionObservedSuccess: true,
   TargetPromotionStale: true,
   PlannedAttemptContinuationAuthorized: true,
+  ResultRecoveryContinueAuthorized: true,
   CompletionClaimReplacementIntended: true,
   CompletionClaimReplacementAttemptIntended: true,
   CompletionClaimReplaced: true,
@@ -1108,7 +1149,9 @@ type DirectlyProjectedJournalEvent = Extract<
       | "PlannedAttemptExecutorWorkResponsibilityBegan"
       | "TaskWorkCapacityChanged"
       | "AttemptChoiceApplied"
+      | "ResultRecoveryDirected"
       | "PlannedAttemptReplaced"
+      | "ResultRecoveryAttemptReplaced"
       | "ControlDirectionApplied"
       | "TaskClaimReacquisitionDirected"
   }
@@ -1119,7 +1162,9 @@ const isDirectlyProjectedJournalEvent = (event: WorkflowJournalEvent): event is 
   event._tag === "IntegrationStarted" ||
   event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
   event._tag === "AttemptChoiceApplied" ||
+  event._tag === "ResultRecoveryDirected" ||
   event._tag === "PlannedAttemptReplaced" ||
+  event._tag === "ResultRecoveryAttemptReplaced" ||
   event._tag === "ControlDirectionApplied" ||
   event._tag === "TaskClaimReacquisitionDirected" ||
   event._tag === "TaskWorkCapacityChanged"
@@ -1130,6 +1175,19 @@ const projectDirectOccurrence = (
   executorResponsibilities: Set<string>,
   occurrences: Array<WorkflowOccurrence>
 ): void => {
+  if (event._tag === "ResultRecoveryDirected") {
+    occurrences.push(
+      DirectedResultRecovery.make({
+        direction: event.direction,
+        requestId: event.requestId,
+        subject: event.subject,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        recordedAt: record.position
+      })
+    )
+    return
+  }
   if (event._tag === "AttemptChoiceApplied") {
     occurrences.push(
       AppliedAttemptChoice.make({
@@ -1139,6 +1197,23 @@ const projectDirectOccurrence = (
         recordedAt: record.position,
         requestId: event.requestId,
         subject: event.subject
+      })
+    )
+    return
+  }
+  if (event._tag === "ResultRecoveryAttemptReplaced") {
+    occurrences.push(
+      ResultRecoveryAttemptReplaced.make({
+        requestId: event.requestId,
+        subject: event.subject,
+        integrationTarget: event.integrationTarget,
+        witness: event.witness,
+        successorPlan: event.successorPlan,
+        ...(event.writerCustody === undefined ? {} : { writerCustody: event.writerCustody }),
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        recordedAt: record.position,
+        runId: record.runId
       })
     )
     return

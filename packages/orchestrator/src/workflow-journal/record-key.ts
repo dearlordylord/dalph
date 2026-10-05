@@ -1,3 +1,4 @@
+import type { ResultRecoveryRequestId } from "../workflow/protocols/result-recovery/events.js"
 /* eslint-disable max-lines -- Durable workflow record keys stay in one complete, searchable vocabulary. */
 import { type AttemptId } from "@dalph/contracts"
 import type { RemoteBaselineId } from "../workflow/protocols/direct-publication/baseline-events.js"
@@ -580,3 +581,14 @@ export const completionTaskRequestLookupRecordKey = (
   request: CompletionTaskRequest,
   ordinal: CompletionTaskRequestOrdinal
 ): JournalRecordKey => JournalRecordKey.make(`${completionTaskRecordKeyPrefix(request.operationId)}:lookup:${ordinal}`)
+
+/** One immutable request identity; a second delivery rereads this exact direction. */
+export const resultRecoveryDirectedRecordKey = (requestId: ResultRecoveryRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`result-recovery:${requestId.nonce}:directed`)
+
+export const resultRecoveryContinueAuthorizedRecordKey = (requestId: ResultRecoveryRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`result-recovery:${requestId.nonce}:continue-authorized`)
+
+/** One retained predecessor can acknowledge only one explicit result-recovery successor. */
+export const resultRecoveryAttemptReplacedRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`result-recovery-replacement:${attemptId}`)

@@ -1,3 +1,4 @@
+import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 import { Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { RefreshInterest, RunningHostEnvelope } from "./running-host-contract.js"
@@ -12,7 +13,29 @@ const inputSchema = {
 const refreshInput = Schema.toJsonSchemaDocument(Schema.Struct({ runId: RunId, interest: RefreshInterest }), {
   additionalProperties: false
 })
+const recoveryApplyInput = Schema.toJsonSchemaDocument(
+  Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest }),
+  { additionalProperties: false }
+)
+const recoveryReadInput = Schema.toJsonSchemaDocument(
+  Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId }),
+  { additionalProperties: false }
+)
 export const runningHostMcpTools = [
+  {
+    name: "dalph_apply_result_recovery",
+    description:
+      "Record an explicit recovery direction for one retained result. Never automatically replay an uncertain submission.",
+    inputSchema: { ...recoveryApplyInput.schema, $defs: recoveryApplyInput.definitions },
+    outputSchema
+  },
+  {
+    name: "dalph_read_result_recovery",
+    description:
+      "Read the exact recorded recovery request after an uncertain response; this does not execute recovery.",
+    inputSchema: { ...recoveryReadInput.schema, $defs: recoveryReadInput.definitions },
+    outputSchema
+  },
   {
     name: "dalph_refresh",
     description:

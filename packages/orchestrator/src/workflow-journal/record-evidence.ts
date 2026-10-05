@@ -209,7 +209,11 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
   )
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
-  event._tag === "PlannedAttemptReplaced" ? event.successorPlan : "operation" in event ? event.operation : undefined
+  event._tag === "PlannedAttemptReplaced" || event._tag === "ResultRecoveryAttemptReplaced"
+    ? event.successorPlan
+    : "operation" in event
+      ? event.operation
+      : undefined
 
 const quarantineDirectionRequestKey = ({ nonce, runId }: IntegrationQuarantineDirectionRequestId): string =>
   `${runId.length}:${runId}${nonce}`
@@ -331,7 +335,8 @@ const attemptIdsOf = (record: JournalRecord): HashSet.HashSet<AttemptId> => {
   if ("subject" in event && "plannedAttempt" in event.subject) {
     ids = HashSet.add(ids, event.subject.plannedAttempt.attemptId)
   }
-  if (event._tag === "PlannedAttemptReplaced") ids = HashSet.add(ids, event.successorPlan.plannedAttempt.attemptId)
+  if (event._tag === "PlannedAttemptReplaced" || event._tag === "ResultRecoveryAttemptReplaced")
+    ids = HashSet.add(ids, event.successorPlan.plannedAttempt.attemptId)
   if ("run" in event) ids = HashSet.add(ids, event.run.session.plannedAttempt.attemptId)
   if (
     event._tag === "RemoteBaselineReadIntended" ||
@@ -519,7 +524,7 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): HashSet.Ha
   ids = requestTaskIds(record, ids)
   ids = operationTaskIds(record, ids)
   const event = record.event
-  if (event._tag === "PlannedAttemptReplaced") {
+  if (event._tag === "PlannedAttemptReplaced" || event._tag === "ResultRecoveryAttemptReplaced") {
     ids = HashSet.add(ids, event.subject.plannedAttempt.taskId)
     ids = HashSet.add(ids, event.successorPlan.plannedAttempt.taskId)
   }

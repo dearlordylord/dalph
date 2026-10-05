@@ -1,30 +1,12 @@
 import type { RunId } from "@dalph/contracts"
 import { HashMap, Match } from "effect"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
-import { targetPromotionRunIdOf } from "../../workflow/protocols/target-promotion/events.js"
+import { invalidTargetPromotionRunBinding } from "./target-promotion-run-binding.js"
 import { integratorCandidateCleanupSessionOf } from "../../workflow/protocols/disposition-cleanup/disposition.js"
 
 /** Adds one causal fact without mutating the accepted prefix's index. */
 export const setMapValue = <K, V>(map: HashMap.HashMap<K, V>, key: K, value: V): HashMap.HashMap<K, V> =>
   HashMap.set(map, key, value)
-
-type TargetPromotionRunBindingEvent = Extract<
-  WorkflowJournalEvent,
-  {
-    readonly _tag:
-      | "TargetPromotionIntended"
-      | "TargetPromotionAttemptIntended"
-      | "TargetPromotionReconciliationDeferred"
-      | "TargetPromotionObservedSuccess"
-      | "TargetPromotionStale"
-      | "TargetPromotionNonConvergence"
-  }
->
-
-const invalidTargetPromotionRunBinding = (event: TargetPromotionRunBindingEvent, runId: RunId): string | undefined =>
-  targetPromotionRunIdOf(event.correlation) === runId
-    ? undefined
-    : `target promotion binds run ${targetPromotionRunIdOf(event.correlation)}`
 
 const invalidNestedRunBinding = (
   label: string,
@@ -211,6 +193,28 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
       TargetPromotionObservedSuccess: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
       TargetPromotionStale: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
       TargetPromotionNonConvergence: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
+      ResultRecoveryDirected: (candidate) =>
+        invalidNestedRunBinding(
+          "result recovery direction",
+          [candidate.requestId.runId, candidate.subject.plannedAttempt.runId],
+          runId
+        ),
+      ResultRecoveryContinueAuthorized: (candidate) =>
+        invalidNestedRunBinding(
+          "result recovery Continue authorization",
+          [candidate.requestId.runId, candidate.plannedAttempt.runId],
+          runId
+        ),
+      ResultRecoveryAttemptReplaced: (candidate) =>
+        invalidNestedRunBinding(
+          "result recovery replacement",
+          [
+            candidate.requestId.runId,
+            candidate.subject.plannedAttempt.runId,
+            candidate.successorPlan.plannedAttempt.runId
+          ],
+          runId
+        ),
       PlannedAttemptReplaced: (candidate) => {
         const choiceIssue = invalidAttemptChoiceRunBinding(candidate, runId, "planned-attempt replacement")
         const successorRunId = candidate.successorPlan.plannedAttempt.runId

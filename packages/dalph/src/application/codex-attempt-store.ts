@@ -1,3 +1,8 @@
+import {
+  ProviderResultRecoveryHistory,
+  ProviderResultRecoveryRecord,
+  providerResultRecoveryHistoryTransitionProblem
+} from "./provider-result-recovery.js"
 /* eslint-disable import/no-nodejs-modules -- the lease adapter owns the native descriptor lock. */
 /* eslint-disable max-lines -- The private snapshot and crash-recoverable lease share one durable authority. */
 import type { FileHandle } from "node:fs/promises"
@@ -9,6 +14,9 @@ import {
   GitCommitSha,
   PlannedTaskAttempt,
   PlannedAttemptExecutorFailureCode,
+  PlannedAttemptResultRejectionReason,
+  PlannedAttemptResultRecoveryCause,
+  PlannedAttemptRejectedResultCustody,
   RunId,
   samePlannedTaskAttempt,
   WorktreeLocator,
@@ -23,6 +31,11 @@ import {
   type CodexAttemptStoreNativeService
 } from "./codex-attempt-store-native.js"
 import { CodexToolEffectPolicy } from "./codex-tool-effect-policy.js"
+import {
+  ProviderResultCycle,
+  providerResultCycleTransitionProblem,
+  sameProviderResultResponseIntent
+} from "./provider-result-correction.js"
 
 /** The opaque identity returned by one persisted Codex app-server thread. */
 export const CodexThreadId = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadId"))
@@ -442,6 +455,7 @@ const invalidCodexTerminalEvidence = (
 const turnStartedAtMilliseconds = Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))
 const turnStartIncarnation = Schema.optionalKey(CodexServerIncarnation)
 const retainedToolEffectPolicy = Schema.optionalKey(CodexToolEffectPolicy)
+const retainedResultCycle = Schema.optionalKey(ProviderResultCycle)
 
 /**
  * Exact durable attempt/thread state. Each tag carries only the fields that
@@ -473,6 +487,8 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: retainedResultCycle,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
     worktree: WorktreeLocator
@@ -486,6 +502,8 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: retainedResultCycle,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -500,6 +518,61 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: retainedResultCycle,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** Pre-seal answer rejection retains exact turn ownership and writer custody. */
+  ResultRejected: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: ProviderResultCycle,
+    reason: PlannedAttemptResultRejectionReason,
+    recoveryCause: PlannedAttemptResultRecoveryCause,
+    custody: PlannedAttemptRejectedResultCustody,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** A proven rejected response awaits its next bounded correction or final custody disposition. */
+  ResultCorrectionPending: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: ProviderResultCycle,
+    reason: PlannedAttemptResultRejectionReason,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
+  /** Deadline stop intent is retained before exact interrupt and writer reconciliation. */
+  ResultCorrectionStopIntended: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    turnStartedAtMilliseconds,
+    turnStartIncarnation,
+    toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: ProviderResultCycle,
+    reason: PlannedAttemptResultRejectionReason,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -514,6 +587,8 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: retainedResultCycle,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -528,6 +603,8 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: retainedResultCycle,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -542,6 +619,8 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: retainedResultCycle,
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
     threadId: CodexThreadId,
@@ -556,6 +635,8 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy: retainedToolEffectPolicy,
+    resultRecoveryHistory: Schema.optionalKey(ProviderResultRecoveryHistory),
+    resultCycle: retainedResultCycle,
     evidenceManifest: Schema.NullOr(EvidenceReference),
     observedTurnId: CodexTurnId,
     priorObservedTurnId: Schema.NullOr(CodexTurnId),
@@ -567,6 +648,30 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
   Schema.makeFilter((record) => {
     const correlationFailure = invalidCodexAttemptCorrelation(record.attemptId, record.correlationAttemptId)
     if (correlationFailure !== undefined) return correlationFailure
+    if ("resultRecoveryHistory" in record) {
+      for (const entry of record.resultRecoveryHistory) {
+        if (
+          entry.authorizationId.runId !== record.correlationRunId ||
+          entry.authorizationId.attemptId !== record.correlationAttemptId
+        )
+          return "result recovery history belongs to another exact attempt"
+      }
+      const last = record.resultRecoveryHistory.at(lastElementOffset)
+      if (last !== undefined) {
+        const initial = last.successorInitial.responses[0]
+        const currentInitial = record.resultCycle?.responses[0]
+        if (
+          initial === undefined ||
+          currentInitial === undefined ||
+          record.resultCycle === undefined ||
+          last.successorInitial.cycleId !== record.resultCycle.cycleId ||
+          last.successorInitial.plannedBaseSha !== record.resultCycle.plannedBaseSha ||
+          !sameProviderResultResponseIntent(initial.intent, currentInitial.intent)
+        )
+          return "current result cycle must extend its exact retained recovery intent"
+      }
+    }
+
     return record._tag === "Terminal"
       ? invalidCodexTerminalEvidence(record.terminal, record.evidenceManifest)
       : undefined
@@ -783,6 +888,12 @@ export interface CodexAttemptStoreService {
     attemptId: AttemptId
   ) => Effect.Effect<Option.Option<CodexAttemptRecord>, CodexAttemptStoreFailure>
   readonly writeAttempt: (record: CodexAttemptRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
+  /** Explicit permission and its retained predecessor are written atomically before a recovery request. */
+  readonly writeResultRecovery?: (
+    record: CodexAttemptRecord,
+    recovery: ProviderResultRecoveryRecord
+  ) => Effect.Effect<void, CodexAttemptStoreFailure>
+
   readonly readServerLaunch: () => Effect.Effect<Option.Option<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
   readonly writeServerLaunch: (record: CodexServerLaunchRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   readonly clearServerLaunch: (incarnation: CodexServerIncarnation) => Effect.Effect<void, CodexAttemptStoreFailure>
@@ -841,6 +952,77 @@ const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: n
 export const errorCode = (error: unknown): string =>
   typeof error === "object" && error !== null && "code" in error ? String(error.code) : ""
 
+/** Preserve private correction intents across phase writes; old terminal seals gain no new cycle. */
+const validateResultCycleTransition = (
+  previous: CodexAttemptRecord | undefined,
+  next: CodexAttemptRecord,
+  recovery?: ProviderResultRecoveryRecord
+): Effect.Effect<void, CodexAttemptStoreFailure> => {
+  const before = previous !== undefined && "resultCycle" in previous ? previous.resultCycle : undefined
+  const after = "resultCycle" in next ? next.resultCycle : undefined
+  const oldHistory =
+    previous !== undefined && "resultRecoveryHistory" in previous ? (previous.resultRecoveryHistory ?? []) : []
+  const newHistory = "resultRecoveryHistory" in next ? (next.resultRecoveryHistory ?? []) : []
+  const historyProblem = providerResultRecoveryHistoryTransitionProblem(oldHistory, newHistory)
+  if (historyProblem !== undefined)
+    return Effect.fail(new CodexAttemptStoreFailure({ operation: "writeAttempt", detail: historyProblem }))
+  if (recovery !== undefined) {
+    const sameCycle = Schema.toEquivalence(ProviderResultCycle)
+    const sameRecovery = Schema.toEquivalence(ProviderResultRecoveryRecord)
+    const retained = newHistory.find((entry) => entry.authorizationId.nonce === recovery.authorizationId.nonce)
+    const redelivery =
+      oldHistory.some((entry) => sameRecovery(entry, recovery)) &&
+      before !== undefined &&
+      after !== undefined &&
+      sameCycle(before, after) &&
+      previous !== undefined &&
+      Schema.toEquivalence(CodexAttemptRecord)(previous, next)
+    const exact =
+      recovery.authorizationId.runId === next.correlationRunId &&
+      recovery.authorizationId.attemptId === next.correlationAttemptId &&
+      retained !== undefined &&
+      sameRecovery(retained, recovery) &&
+      before !== undefined &&
+      after !== undefined &&
+      ((previous?._tag === "ResultRejected" &&
+        previous.custody._tag === "Stopped" &&
+        next._tag === "TurnIntentRecorded" &&
+        next.worktree === previous.worktree &&
+        next.attemptId === previous.attemptId &&
+        String(next.currentToken) === String(recovery.successorInitial.responses[0]?.intent.token) &&
+        newHistory.length === oldHistory.length + 1 &&
+        sameCycle(before, recovery.predecessor) &&
+        sameCycle(after, recovery.successorInitial)) ||
+        redelivery)
+    if (!exact)
+      return Effect.fail(
+        new CodexAttemptStoreFailure({
+          operation: "writeAttempt",
+          detail: "result recovery lacks exact stopped predecessor and retained permission"
+        })
+      )
+    return Effect.void
+  }
+  if (newHistory.length !== oldHistory.length)
+    return Effect.fail(
+      new CodexAttemptStoreFailure({
+        operation: "writeAttempt",
+        detail: "ordinary writes cannot append recovery permission"
+      })
+    )
+  const problem =
+    before !== undefined && after === undefined
+      ? "retained result cycle cannot be removed"
+      : after === undefined
+        ? undefined
+        : previous?._tag === "Terminal" && before === undefined
+          ? "historical terminal seal cannot acquire a result correction cycle"
+          : providerResultCycleTransitionProblem(before, after)
+  return problem === undefined
+    ? Effect.void
+    : Effect.fail(new CodexAttemptStoreFailure({ operation: "writeAttempt", detail: problem }))
+}
+
 const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -865,13 +1047,35 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         const value = (yield* Ref.get(attempts)).get(keyOf(runId, attemptId))
         return value === undefined ? Option.none() : Option.some(value)
       })
-      const writeAttempt = Effect.fn("CodexAttemptStore.Memory.writeAttempt")(function* (record: CodexAttemptRecord) {
+      const writeAttempt = Effect.fn("CodexAttemptStore.Memory.writeAttempt")(function* (
+        record: CodexAttemptRecord,
+        recovery?: ProviderResultRecoveryRecord
+      ) {
         yield* snapshotGate.withPermit(
           Effect.gen(function* () {
             const current = yield* Ref.get(attempts)
+            const previous = current.get(keyOf(record.correlationRunId, record.correlationAttemptId))
+            const history =
+              previous !== undefined && "resultRecoveryHistory" in previous ? previous.resultRecoveryHistory : undefined
+            const written =
+              "resultRecoveryHistory" in record || history === undefined
+                ? record
+                : yield* Schema.decodeUnknownEffect(CodexAttemptRecord)({
+                    ...record,
+                    resultRecoveryHistory: history
+                  }).pipe(
+                    Effect.mapError(
+                      (error) => new CodexAttemptStoreFailure({ operation: "writeAttempt", detail: String(error) })
+                    )
+                  )
+            yield* validateResultCycleTransition(
+              current.get(keyOf(record.correlationRunId, record.correlationAttemptId)),
+              written,
+              recovery
+            )
             const next = new Map([
               ...current,
-              [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
+              [keyOf(record.correlationRunId, record.correlationAttemptId), written] as const
             ])
             yield* validateSnapshot(
               next,
@@ -1039,7 +1243,8 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
       return Context.make(CodexAttemptStore, {
         hasRetainedAttempts: () => Ref.get(attempts).pipe(Effect.map((current) => current.size > 0)),
         readAttempt,
-        writeAttempt,
+        writeAttempt: (record) => writeAttempt(record),
+        writeResultRecovery: (record, recovery) => writeAttempt(record, recovery),
         readServerLaunch,
         writeServerLaunch,
         clearServerLaunch,
@@ -1614,6 +1819,10 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
       )
       const loadFailure = yield* Ref.make<Option.Option<CodexAttemptStoreFailure>>(initial.failure)
       const persistence = yield* Semaphore.make(1)
+      // Keep transition validation, in-memory publication and durable append in
+      // one attempt-write critical section. A stale writer must see the intent
+      // retained by its predecessor before it can replace any response facts.
+      const attemptWriteGate = yield* Semaphore.make(1)
       const guard = <A>(
         operation: CodexAttemptStoreOperation,
         effect: Effect.Effect<A, CodexAttemptStoreFailure>
@@ -1655,27 +1864,50 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
             })
           )
         )
-      const writeAttempt: CodexAttemptStoreService["writeAttempt"] = (record) =>
-        guard(
-          "writeAttempt",
-          Effect.gen(function* () {
-            const current = yield* Ref.get(attempts)
-            const next = new Map([
-              ...current,
-              [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
-            ])
-            yield* validateSnapshot(
-              next,
-              yield* Ref.get(launch),
-              yield* Ref.get(replacements),
-              yield* Ref.get(toolEffects),
-              "writeAttempt"
-            )
-            yield* Ref.set(attempts, next)
-          })
-        ).pipe(
-          Effect.andThen(persist("writeAttempt")),
-          Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "writeAttempt"))
+      const writeAttempt = (record: CodexAttemptRecord, recovery?: ProviderResultRecoveryRecord) =>
+        attemptWriteGate.withPermit(
+          guard(
+            "writeAttempt",
+            Effect.gen(function* () {
+              const current = yield* Ref.get(attempts)
+              const previous = current.get(keyOf(record.correlationRunId, record.correlationAttemptId))
+              const history =
+                previous !== undefined && "resultRecoveryHistory" in previous
+                  ? previous.resultRecoveryHistory
+                  : undefined
+              const written =
+                "resultRecoveryHistory" in record || history === undefined
+                  ? record
+                  : yield* Schema.decodeUnknownEffect(CodexAttemptRecord)({
+                      ...record,
+                      resultRecoveryHistory: history
+                    }).pipe(
+                      Effect.mapError(
+                        (error) => new CodexAttemptStoreFailure({ operation: "writeAttempt", detail: String(error) })
+                      )
+                    )
+              yield* validateResultCycleTransition(
+                current.get(keyOf(record.correlationRunId, record.correlationAttemptId)),
+                written,
+                recovery
+              )
+              const next = new Map([
+                ...current,
+                [keyOf(record.correlationRunId, record.correlationAttemptId), written] as const
+              ])
+              yield* validateSnapshot(
+                next,
+                yield* Ref.get(launch),
+                yield* Ref.get(replacements),
+                yield* Ref.get(toolEffects),
+                "writeAttempt"
+              )
+              yield* Ref.set(attempts, next)
+            })
+          ).pipe(
+            Effect.andThen(persist("writeAttempt")),
+            Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "writeAttempt"))
+          )
         )
       const readServerLaunch: CodexAttemptStoreService["readServerLaunch"] = () =>
         guard("readServerLaunch", Ref.get(launch))
@@ -1976,7 +2208,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         hasRetainedAttempts: () =>
           guard("readAttemptInventory", Ref.get(attempts).pipe(Effect.map((current) => current.size > 0))),
         readAttempt,
-        writeAttempt,
+        writeAttempt: (record) => writeAttempt(record),
+        writeResultRecovery: (record, recovery) => writeAttempt(record, recovery),
         readServerLaunch,
         writeServerLaunch,
         clearServerLaunch,

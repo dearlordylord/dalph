@@ -1,3 +1,4 @@
+import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- The MCP stdio adapter owns only its process-local byte streams. */
 import { RunId } from "@dalph/contracts"
 import { Effect, FiberMap, Schema, Stream } from "effect"
@@ -177,9 +178,13 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
           const args = yield* Schema.decodeUnknownEffect(
             call.success.name === "dalph_close_watch"
               ? Schema.Struct({ runId: RunId, subscriptionId: SubscriptionId })
-              : call.success.name === "dalph_refresh"
-                ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
-                : ToolArguments
+              : call.success.name === "dalph_apply_result_recovery"
+                ? Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest })
+                : call.success.name === "dalph_read_result_recovery"
+                  ? Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId })
+                  : call.success.name === "dalph_refresh"
+                    ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
+                    : ToolArguments
           )(call.success.arguments, { onExcessProperty: "error" }).pipe(Effect.result)
           if (args._tag === "Failure")
             return yield* reject(
@@ -241,18 +246,36 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
                 ).pipe(Effect.result)
               : null
           if (refreshInterest?._tag === "Failure") return yield* reject(rpcInvalidParams, "Invalid refresh interest")
+          const recovery =
+            call.success.name === "dalph_apply_result_recovery"
+              ? yield* Schema.decodeUnknownEffect(ApplyResultRecoveryRequest)(
+                  "recovery" in args.success ? args.success.recovery : undefined
+                ).pipe(Effect.result)
+              : null
+          const recoveryRequestId =
+            call.success.name === "dalph_read_result_recovery"
+              ? yield* Schema.decodeUnknownEffect(ResultRecoveryRequestId)(
+                  "recoveryRequestId" in args.success ? args.success.recoveryRequestId : undefined
+                ).pipe(Effect.result)
+              : null
+          if (recovery?._tag === "Failure" || recoveryRequestId?._tag === "Failure")
+            return yield* reject(rpcInvalidParams, "Invalid result recovery request")
           const operation =
-            refreshInterest?._tag === "Success"
-              ? { _tag: "Refresh" as const, interest: refreshInterest.success }
-              : call.success.name === "dalph_read_snapshot"
-                ? { _tag: "ReadSnapshot" as const }
-                : call.success.name === "dalph_read_run_control"
-                  ? { _tag: "ReadRunControl" as const }
-                  : call.success.name === "dalph_start_work"
-                    ? { _tag: "StartWork" as const }
-                    : call.success.name === "dalph_unpause"
-                      ? { _tag: "Unpause" as const }
-                      : null
+            recovery?._tag === "Success"
+              ? { _tag: "ApplyResultRecoveryDirection" as const, recovery: recovery.success }
+              : recoveryRequestId?._tag === "Success"
+                ? { _tag: "ReadResultRecoveryDirection" as const, recoveryRequestId: recoveryRequestId.success }
+                : refreshInterest?._tag === "Success"
+                  ? { _tag: "Refresh" as const, interest: refreshInterest.success }
+                  : call.success.name === "dalph_read_snapshot"
+                    ? { _tag: "ReadSnapshot" as const }
+                    : call.success.name === "dalph_read_run_control"
+                      ? { _tag: "ReadRunControl" as const }
+                      : call.success.name === "dalph_start_work"
+                        ? { _tag: "StartWork" as const }
+                        : call.success.name === "dalph_unpause"
+                          ? { _tag: "Unpause" as const }
+                          : null
           if (operation === null) return yield* reject(rpcInvalidParams, "Unknown tool")
           sequence += 1
           const execute = Effect.gen(function* () {
@@ -269,7 +292,12 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
               isError: envelope.result._tag === "Failure"
             })
           })
-          if (operation._tag === "StartWork" || operation._tag === "Unpause" || operation._tag === "Refresh") {
+          if (
+            operation._tag === "StartWork" ||
+            operation._tag === "Unpause" ||
+            operation._tag === "Refresh" ||
+            operation._tag === "ApplyResultRecoveryDirection"
+          ) {
             if (yield* FiberMap.has(commands, id))
               return yield* reject(rpcInvalidRequest, "Request ID is already pending")
             yield* FiberMap.run(commands, id, execute, { startImmediately: true })

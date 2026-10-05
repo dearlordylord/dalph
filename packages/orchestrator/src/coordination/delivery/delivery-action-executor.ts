@@ -1,3 +1,8 @@
+import type {
+  ResultRecoveryNotAvailable,
+  ResultRecoveryDirectionNotFound,
+  ResultRecoveryRequestIdentityContradiction
+} from "../../workflow/protocols/result-recovery/control.js"
 import {
   PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport,
@@ -234,6 +239,9 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
 
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
 export type DeliveryActionExecutionError =
+  | ResultRecoveryNotAvailable
+  | ResultRecoveryDirectionNotFound
+  | ResultRecoveryRequestIdentityContradiction
   | DeliveryActionProtocolAdmissionMissing
   | EffectFunctionFailure<typeof advanceAttemptRestart>
   | EffectFunctionFailure<typeof advanceAttemptStoppage>

@@ -1,3 +1,4 @@
+import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This client allocates process-local request correlation only. */
 import { NodeCrypto, NodeHttpClient } from "@effect/platform-node"
 import { type RunId } from "@dalph/contracts"
@@ -20,6 +21,8 @@ const redirectStatusMaximum = 400
 const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], ReadonlyArray<string>>> = {
   ReadSnapshot: ["NotReady", "Ready", "Closed"],
   ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
+  ReadResultRecoveryDirection: ["ResultRecoveryDirectionRecorded", "ResultRecoveryDirectionNotRecorded"],
+  ApplyResultRecoveryDirection: ["ResultRecoveryDirectionRecorded"],
   StartWork: ["WakeSubmitted"],
   Refresh: ["RefreshSubmitted"],
   Unpause: ["UnpauseApplied"],
@@ -30,20 +33,92 @@ const compatibleFailures: Readonly<
 > = {
   SubscriptionLimitExceeded: ["WatchSnapshots"],
   UnpausePartiallyApplied: ["Unpause"],
-  RunClosed: ["StartWork", "Unpause", "Refresh"],
-  ReadFailed: ["ReadSnapshot", "ReadRunControl"],
-  ProjectionFailed: ["ReadSnapshot", "ReadRunControl"],
-  CommandFailed: ["StartWork", "Unpause", "Refresh"],
-  CommandOutcomeUnknown: ["StartWork", "Unpause", "Refresh"],
-  FrameTooLarge: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  HostClosing: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  HostInstanceMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  HostUnavailable: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  InvalidRequest: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  ProtocolVersionUnsupported: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  RunMismatch: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  TransportFailed: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"],
-  WriteTimedOut: ["ReadSnapshot", "ReadRunControl", "StartWork", "Unpause", "Refresh"]
+  RunClosed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
+  ReadFailed: ["ReadSnapshot", "ReadRunControl", "ReadResultRecoveryDirection"],
+  ProjectionFailed: ["ReadSnapshot", "ReadRunControl", "ReadResultRecoveryDirection"],
+  CommandFailed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
+  CommandOutcomeUnknown: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
+  FrameTooLarge: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  HostClosing: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  HostInstanceMismatch: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  HostUnavailable: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  InvalidRequest: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  ProtocolVersionUnsupported: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  RunMismatch: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  TransportFailed: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ],
+  WriteTimedOut: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "StartWork",
+    "Unpause",
+    "Refresh",
+    "ApplyResultRecoveryDirection",
+    "ReadResultRecoveryDirection"
+  ]
 }
 const compatibleFailure = (request: RunningHostRequest, error: RunningHostError): boolean =>
   (!("operation" in error) || error.operation === request.operation._tag) &&
@@ -171,6 +246,26 @@ const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (reques
     )
   )
   yield* validateRunningHostResponseCorrelation(request, envelope)
+  if (envelope.result._tag === "Success") {
+    const value = envelope.result.value
+    const operation = request.operation
+    const recoveryMatches =
+      operation._tag === "ApplyResultRecoveryDirection"
+        ? value._tag === "ResultRecoveryDirectionRecorded" &&
+          Schema.toEquivalence(ApplyResultRecoveryRequest)(operation.recovery, value.recovery)
+        : operation._tag === "ReadResultRecoveryDirection"
+          ? (value._tag === "ResultRecoveryDirectionRecorded" &&
+              Schema.toEquivalence(ResultRecoveryRequestId)(operation.recoveryRequestId, value.recovery.requestId)) ||
+            (value._tag === "ResultRecoveryDirectionNotRecorded" &&
+              Schema.toEquivalence(ResultRecoveryRequestId)(operation.recoveryRequestId, value.recoveryRequestId))
+          : true
+    if (!recoveryMatches)
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "TransportFailed",
+        phase: "Response",
+        reason: "RecoveryResponseCorrelationMismatch"
+      })
+  }
   const compatible =
     envelope.result._tag === "Success"
       ? successTags[request.operation._tag].includes(envelope.result.value._tag)
@@ -193,7 +288,11 @@ const failureAfterSubmission = (
 ) =>
   runningHostFailureEnvelope(
     correlation,
-    submitted && (operation._tag === "StartWork" || operation._tag === "Unpause" || operation._tag === "Refresh")
+    submitted &&
+      (operation._tag === "StartWork" ||
+        operation._tag === "Unpause" ||
+        operation._tag === "Refresh" ||
+        operation._tag === "ApplyResultRecoveryDirection")
       ? {
           _tag: "CommandOutcomeUnknown",
           operation: operation._tag,

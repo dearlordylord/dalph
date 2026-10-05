@@ -4,12 +4,16 @@ import { it } from "@effect/vitest"
 import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorRequest,
+  PlannedAttemptResultRecoveryAuthorization,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorBeginProofId,
   plannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   AttemptId,
   GitCommitSha,
+  EvidenceReference,
+  EvidenceDigest,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -3223,4 +3227,113 @@ it.effect("requires command reconciliation before either direct permit path", ()
       .pipe(Effect.flip)
     expect(pendingFailure._tag).toBe("PlannedAttemptExecutorCommandReconciliationRequired")
   }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(runOnlyJournalLayer()))
+)
+
+it.effect("retains rejection custody until stopped proof and refuses passive resume or budget changes", () =>
+  Effect.gen(function* () {
+    const journal = yield* InRunJournal
+    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+    const rejection = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+      correlation,
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "WriterCustodyUnresolved",
+      responseCount: PlannedAttemptResultResponseCount.make(3),
+      custody: { _tag: "Unresolved" }
+    })
+    const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
+      PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report: rejection, version: workflowJournalEventVersion })
+    )
+    const history = yield* journal.read(plannedAttempt.runId)
+    const transition = (report: PlannedAttemptExecutorReport) =>
+      plannedAttemptExecutorLifecycleTransitionError(history, plannedAttempt, report)
+    expect(transition(rejection)).toBeUndefined()
+    expect(
+      transition(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+          ...rejection,
+          custody: { _tag: "Stopped" }
+        })
+      )
+    ).toBeUndefined()
+    const passiveReports = [
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: {
+          _tag: "Accepted",
+          acceptedResult: {
+            commit: plannedAttempt.baseSha,
+            evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
+          }
+        }
+      }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+        ...rejection,
+        responseCount: PlannedAttemptResultResponseCount.make(1)
+      })
+    ]
+    for (const report of passiveReports)
+      for (const custody of ["Unresolved", "Stopped"] as const) {
+        const selectedHistory = history.map((record) =>
+          record.event._tag === "PlannedAttemptExecutorWorkReported"
+            ? { ...record, event: { ...record.event, report: { ...rejection, custody: { _tag: custody } } } }
+            : record
+        )
+        expect(plannedAttemptExecutorLifecycleTransitionError(selectedHistory, plannedAttempt, report)).toMatchObject({
+          _tag: "PlannedAttemptExecutorLifecycleTransitionContradiction"
+        })
+      }
+    // Pure chronological fixtures exercise the immediate-response seam; the
+    // accepted-prefix Run tests separately prove durable permission admission.
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    const intent: JournalRecord = {
+      runId: plannedAttempt.runId,
+      position: JournalPosition.make(2),
+      key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      event: PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "ContinueRejectedResult",
+        recoveryAuthorization: PlannedAttemptResultRecoveryAuthorization.make({
+          nonce: "unit-result-continue",
+          correlation
+        }),
+        plannedAttempt,
+        ordinal: commandOrdinal,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    }
+    for (const report of passiveReports) {
+      if (report._tag !== "ExecutorWorkExecuting" && report._tag !== "ExecutorWorkTerminal") continue
+      const response: JournalRecord = {
+        runId: plannedAttempt.runId,
+        position: JournalPosition.make(3),
+        key: plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+        event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          plannedAttempt,
+          report,
+          commandOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      }
+      const stoppedHistory = history.map((record) =>
+        record.event._tag === "PlannedAttemptExecutorWorkReported"
+          ? { ...record, event: { ...record.event, report: { ...rejection, custody: { _tag: "Stopped" as const } } } }
+          : record
+      )
+      expect(
+        plannedAttemptExecutorLifecycleTransitionError([...stoppedHistory, intent, response], plannedAttempt, report)
+      ).toBeUndefined()
+      expect(
+        plannedAttemptExecutorLifecycleTransitionError([...history, intent, response], plannedAttempt, report)
+      ).toMatchObject({ _tag: "PlannedAttemptExecutorLifecycleTransitionContradiction" })
+    }
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )

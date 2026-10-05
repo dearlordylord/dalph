@@ -139,6 +139,8 @@ const isCodexToolEffectKind = (value: string): value is NonNullable<CodexToolEff
 export interface CodexTurnCompletedSubscription {
   readonly hints: Stream.Stream<CodexTurnCompletedHint>
   readonly expectTurnId: (turnId: CodexTurnId) => Effect.Effect<void>
+  /** Buffer the next turn crossing before its exact ID is known, on the same receiver. */
+  readonly expectNextTurn?: () => Effect.Effect<void>
 }
 
 const CodexExternalItem = Schema.Record(Schema.String, Schema.Json)
@@ -2552,7 +2554,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
             return next
           }).pipe(Effect.andThen(subscriber.shutdown))
         )
-        return { hints: stream, expectTurnId: subscriber.expectTurnId }
+        return {
+          hints: stream,
+          expectTurnId: subscriber.expectTurnId,
+          expectNextTurn: () => Ref.set(routing, { expectedTurnId: Option.none(), pending: [] })
+        }
       }),
     attachProtocolFailures: Effect.gen(function* () {
       // Subscribe before reading the sticky state so a failure concurrent with

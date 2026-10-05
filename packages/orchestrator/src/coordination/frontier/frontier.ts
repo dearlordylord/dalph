@@ -1,8 +1,11 @@
+import type { ResultRecoveryContinueReadPlan } from "../../workflow/protocols/result-recovery/current-facts.js"
+import type { ResultRecoverySubject, ResultRecoveryRequestId } from "../../workflow/protocols/result-recovery/events.js"
 /* eslint-disable max-lines -- The closed transition/explanation algebra and its exhaustive mapping share one owner. */
 import { Data, Match, Option, Schema } from "effect"
 import {
   type GitCommitSha,
   type IntegrationTarget,
+  type TaskWorkSpecification,
   type PlannedTaskAttempt,
   type TaskId,
   type TaskRevision,
@@ -117,6 +120,19 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly plannedAttempt: PlannedTaskAttempt
   }
   /** Continue one retained responsibility only after the named current tracker and Git facts are authorized. */
+  ReplaceRejectedResult: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly requestId: ResultRecoveryRequestId
+    readonly witness: PlannedAttemptContinuationWitness
+    readonly integrationTarget: IntegrationTarget
+    readonly specification: TaskWorkSpecification
+  }
+  AuthorizeResultRecoveryContinue: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly requestId: ResultRecoveryRequestId
+    readonly witness: PlannedAttemptContinuationWitness
+  }
+  ContinueRejectedResult: { readonly plannedAttempt: PlannedTaskAttempt; readonly requestId: ResultRecoveryRequestId }
   ResumePlannedAttemptExecutorWorkAfterCurrentFacts: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
@@ -318,6 +334,9 @@ const runnableFrontierTransitionTags = [
   "BeginPlannedAttemptExecutorWork",
   "ObservePlannedAttemptExecutorWork",
   "ResumePlannedAttemptExecutorWorkAfterCurrentFacts",
+  "ContinueRejectedResult",
+  "AuthorizeResultRecoveryContinue",
+  "ReplaceRejectedResult",
   "ObservePlannedAttemptContinuationGraph",
   "ObservePlannedAttemptContinuationSpecification",
   "ObservePlannedAttemptContinuationClaim",
@@ -421,6 +440,9 @@ const transitionTrackerGraphRequirements = {
   ContinueFreshWorkflowOperation: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   ResumePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
+  ContinueRejectedResult: "CurrentTrackerGraphRequired",
+  AuthorizeResultRecoveryContinue: "CurrentTrackerGraphRequired",
+  ReplaceRejectedResult: "CurrentTrackerGraphRequired",
   RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
   RecordPromotionStaleIntegrationQuarantine: "CurrentTrackerGraphRequired",
   RecordInitialConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
@@ -553,6 +575,11 @@ export type FrontierExplanation = Data.TaggedEnum<{
   }
   PlannedAttemptExecutorWorkSafelySuspended: {
     readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
+  }
+  PlannedAttemptExecutorResultRejected: {
+    readonly recoverySubject: Extract<ResultRecoverySubject, { readonly _tag: "RejectedResult" }>
+    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkResultRejected" }>
     readonly taskId: TaskId
   }
   PlannedAttemptExecutorWorkTerminal: {
@@ -814,12 +841,106 @@ const executorDecisionFor = (
           taskId: facts.responsibility.plannedAttempt.taskId
         })
       }),
-      PlannedAttemptExecutorWorkTerminal: ({ report }) => ({
-        explanation: FrontierExplanation.PlannedAttemptExecutorWorkTerminal({
-          report,
-          taskId: facts.responsibility.plannedAttempt.taskId
-        })
-      }),
+      PlannedAttemptExecutorResultRejected: ({
+        continueReadOperation,
+        continueReadPlan,
+        continueRequestId,
+        recoverySubject,
+        report,
+        restartReadOperation,
+        restartReadPlan,
+        restartReady
+      }) => {
+        const plannedAttempt = facts.responsibility.plannedAttempt
+        if (report.custody._tag === "Stopped") {
+          const restart = resultRecoveryRestartTransition(
+            plannedAttempt,
+            restartReadPlan,
+            restartReadOperation,
+            restartReady
+          )
+          if (restart !== undefined) return restart
+          if (continueRequestId !== undefined)
+            return {
+              transition: RunnableFrontierTransition.ContinueRejectedResult({
+                plannedAttempt,
+                requestId: continueRequestId
+              })
+            }
+          if (continueReadPlan !== undefined) {
+            if (continueReadOperation === undefined)
+              return {
+                transition: RunnableFrontierTransition.AuthorizeResultRecoveryContinue({
+                  plannedAttempt,
+                  requestId: continueReadPlan.requestId,
+                  witness: continueReadPlan.witness
+                })
+              }
+            const operation = continueReadOperation
+            if (operation._tag === "ReadTrackerGraph")
+              return {
+                transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+                  operation,
+                  plannedAttempt
+                })
+              }
+            if (operation._tag === "ReadTaskWorkSpecification")
+              return {
+                transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+                  operation,
+                  plannedAttempt
+                })
+              }
+            if (operation._tag === "ReadTaskClaim")
+              return {
+                transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+                  operation,
+                  plannedAttempt
+                })
+              }
+            if (operation._tag === "ReadTaskWorktree")
+              return {
+                transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+                  operation,
+                  plannedAttempt
+                })
+              }
+            return {
+              transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+                operation,
+                plannedAttempt,
+                operationIdentity: "Allocate"
+              })
+            }
+          }
+        }
+        return {
+          explanation: FrontierExplanation.PlannedAttemptExecutorResultRejected({
+            report,
+            recoverySubject,
+            taskId: plannedAttempt.taskId
+          })
+        }
+      },
+      PlannedAttemptExecutorWorkTerminal: ({ historicalRestart, report }) => {
+        const restart =
+          historicalRestart === undefined
+            ? undefined
+            : resultRecoveryRestartTransition(
+                facts.responsibility.plannedAttempt,
+                historicalRestart.readPlan,
+                historicalRestart.readOperation,
+                historicalRestart.ready
+              )
+        return (
+          restart ?? {
+            explanation: FrontierExplanation.PlannedAttemptExecutorWorkTerminal({
+              report,
+              taskId: facts.responsibility.plannedAttempt.taskId
+            })
+          }
+        )
+      },
       PlannedAttemptExecutorProjectionWait: ({ reason }) => ({
         explanation: FrontierExplanation.PlannedAttemptExecutorProjectionWait({
           correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
@@ -1140,6 +1261,56 @@ const decisionFor = (
   facts._tag === "PlannedAttemptExecutorFreshFacts" ? executorDecisionFor(facts) : operationDecisionFor(facts)
 
 /** Derives process-local choices in responsibility-first, canonical task order. */
+const resultRecoveryRestartTransition = (
+  plannedAttempt: PlannedTaskAttempt,
+  restartReadPlan: ResultRecoveryContinueReadPlan | undefined,
+  restartReadOperation: ResultRecoveryContinueReadPlan["operations"][number] | undefined,
+  restartReady:
+    | { readonly integrationTarget: IntegrationTarget; readonly specification: TaskWorkSpecification }
+    | undefined
+): { readonly transition: RunnableFrontierTransition } | undefined => {
+  if (restartReadPlan !== undefined) {
+    if (restartReady !== undefined)
+      return {
+        transition: RunnableFrontierTransition.ReplaceRejectedResult({
+          plannedAttempt,
+          requestId: restartReadPlan.requestId,
+          witness: restartReadPlan.witness,
+          ...restartReady
+        })
+      }
+    const operation = restartReadOperation
+    if (operation?._tag === "ReadTrackerGraph")
+      return {
+        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({ operation, plannedAttempt })
+      }
+    if (operation?._tag === "ReadTaskWorkSpecification")
+      return {
+        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+          operation,
+          plannedAttempt
+        })
+      }
+    if (operation?._tag === "ReadTaskClaim")
+      return {
+        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({ operation, plannedAttempt })
+      }
+    if (operation?._tag === "ReadTaskWorktree")
+      return {
+        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({ operation, plannedAttempt })
+      }
+    if (operation?._tag === "ReadTargetLineage")
+      return {
+        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+          operation,
+          plannedAttempt,
+          operationIdentity: "Allocate"
+        })
+      }
+  }
+  return undefined
+}
+
 export const deriveRunnableFrontier = (input: RunnableFrontierInput): RunnableFrontier => {
   const responsibleDecisions = input.responsibility.entries.map((responsibility) => {
     const responsibilityKey = workflowResponsibilityKey(responsibility)

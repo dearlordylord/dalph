@@ -170,7 +170,7 @@ import {
   ProtocolStoryItem,
   RecordedCassette,
   recordedCassetteVersion,
-  type RecordedCassetteEntry,
+  RecordedCassetteEntry,
   renameRecordedCassette,
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
@@ -7256,6 +7256,9 @@ it.effect(
         TaskWorkCapacityChanged: true,
         WorkflowRunBegan: true,
         WorkflowRunTerminated: true,
+        ResultRecoveryDirected: true,
+        ResultRecoveryContinueAuthorized: true,
+        ResultRecoveryAttemptReplaced: true,
         RunCancellationApplied: true
       } satisfies Record<RecordedCassetteEntry["_tag"], true>
       const operationVariants = {
@@ -7413,6 +7416,66 @@ it.effect(
           { from: replacementEntry.successorPlan.plannedAttempt.worktree, to: "/dalph/renamed-successor-attempt" }
         ]
       })
+      const recoveryWitness = {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: replacementEntry.witness.graphObservationOperationId,
+          taskWorkSpecificationObservationOperationId: replacementEntry.witness.specificationObservationOperationId,
+          taskClaimObservationOperationId: replacementEntry.witness.claimObservationOperationId
+        },
+        worktreeObservationOperationId: replacementEntry.witness.oldWorktreeObservationOperationId,
+        targetLineageObservationOperationId: replacementEntry.witness.targetLineageObservationOperationId
+      }
+      const recoveryRequestId = { nonce: "alpha-result-recovery", runId: replacementEntry.subject.plannedAttempt.runId }
+      const recoverySubject = {
+        _tag: "RejectedResult" as const,
+        plannedAttempt: replacementEntry.subject.plannedAttempt,
+        reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1)
+      }
+      const recoveryEntries = yield* Schema.decodeUnknownEffect(Schema.Array(RecordedCassetteEntry))([
+        {
+          _tag: "ResultRecoveryDirected",
+          direction: "RestartTaskImplementation",
+          requestId: recoveryRequestId,
+          subject: recoverySubject,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction"
+        },
+        {
+          _tag: "ResultRecoveryContinueAuthorized",
+          requestId: recoveryRequestId,
+          plannedAttempt: recoverySubject.plannedAttempt,
+          witness: recoveryWitness
+        },
+        {
+          _tag: "ResultRecoveryAttemptReplaced",
+          requestId: recoveryRequestId,
+          subject: recoverySubject,
+          integrationTarget: { repository: "/repositories/alpha-recovery", ref: "refs/heads/master" },
+          witness: recoveryWitness,
+          writerCustody: { _tag: "Stopped", plannedAttempt: recoverySubject.plannedAttempt },
+          successorPlan: replacementEntry.successorPlan,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction"
+        }
+      ])
+      const recoveryRecorded = RecordedCassette.make({ ...replacementRecorded, entries: recoveryEntries })
+      const renamedRecovery = yield* renameRecordedCassette(recoveryRecorded, replacementRenaming)
+      const restoredRecovery = yield* renameRecordedCassette(
+        renamedRecovery,
+        invertCassetteIdentityRenaming(replacementRenaming)
+      )
+      expect(restoredRecovery).toEqual(recoveryRecorded)
+      const recoveryJson = JSON.stringify(renamedRecovery.entries)
+      for (const { from, to } of [
+        ...replacementRenaming.attemptIds,
+        ...replacementRenaming.runIds,
+        ...replacementRenaming.taskBranchRefs,
+        ...replacementRenaming.worktreeLocators
+      ]) {
+        expect(recoveryJson).not.toContain(`"${from}"`)
+        expect(recoveryJson).toContain(`"${to}"`)
+      }
+      expect(recoveryJson).toContain(recoveryRequestId.nonce)
       const renamedReplacement = yield* renameRecordedCassette(replacementRecorded, replacementRenaming)
       const renamedRestartFailure = yield* renameRecordedCassette(restartFailureRecorded, replacementRenaming)
       const encodedReplacement = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamedReplacement))
@@ -7756,7 +7819,8 @@ it.effect(
             ...completionEntries,
             ...directPublicationEntries,
             ...automaticSuccessorEntries,
-            ...quarantineEntries
+            ...quarantineEntries,
+            ...recoveryEntries
           ]
             .map(({ _tag }) => _tag)
             .concat("WorkflowRunTerminated")

@@ -612,7 +612,7 @@ const historicalFacetFactories = {
 const occurrenceRunId = (occurrence: WorkflowOccurrenceValue): RunId =>
   occurrence._tag === "AppliedControlDirection"
     ? occurrence.subject.runId
-    : occurrence._tag === "AppliedAttemptChoice"
+    : occurrence._tag === "AppliedAttemptChoice" || occurrence._tag === "DirectedResultRecovery"
       ? occurrence.subject.plannedAttempt.runId
       : occurrence.runId
 
@@ -1034,7 +1034,9 @@ const operationOfEvent = (event: WorkflowJournalEvent): WorkflowOperation | unde
   ) {
     return event.operation
   }
-  return event._tag === "PlannedAttemptReplaced" ? event.successorPlan : undefined
+  return event._tag === "PlannedAttemptReplaced" || event._tag === "ResultRecoveryAttemptReplaced"
+    ? event.successorPlan
+    : undefined
 }
 
 const uniqueOperationIds = (operationIds: ReadonlyArray<OperationId>): ReadonlyArray<OperationId> => [
@@ -1447,7 +1449,9 @@ const operationIdsOfObservedOccurrence = (
 const operationIdsOfReplacementOccurrence = (
   occurrence: WorkflowOccurrenceValue
 ): ReadonlyArray<OperationId> | undefined =>
-  occurrence._tag === "PlannedAttemptReplaced" ? [workflowOperationId(occurrence.successorPlan)] : undefined
+  occurrence._tag === "PlannedAttemptReplaced" || occurrence._tag === "ResultRecoveryAttemptReplaced"
+    ? [workflowOperationId(occurrence.successorPlan)]
+    : undefined
 
 const operationIdsOfHistoricalAttemptOccurrence = (
   occurrence: WorkflowOccurrenceValue

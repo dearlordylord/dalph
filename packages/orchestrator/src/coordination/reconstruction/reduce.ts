@@ -78,7 +78,9 @@ const responsibilityForRecord = (record: JournalRecord): WorkflowResponsibilityE
 const reduceWorkflowResponsibility = (records: ReadonlyArray<JournalRecord>): WorkflowResponsibilityState => {
   const replacedAttemptIds = new Set(
     records.flatMap(({ event }) =>
-      event._tag === "PlannedAttemptReplaced" ? [event.subject.plannedAttempt.attemptId] : []
+      event._tag === "PlannedAttemptReplaced" || event._tag === "ResultRecoveryAttemptReplaced"
+        ? [event.subject.plannedAttempt.attemptId]
+        : []
     )
   )
   const entries = records.flatMap<WorkflowResponsibilityEntry>((record) => {
@@ -110,7 +112,7 @@ const appendResponsibility = (
   prior: WorkflowResponsibilityState,
   record: JournalRecord
 ): WorkflowResponsibilityState => {
-  if (record.event._tag === "PlannedAttemptReplaced") {
+  if (record.event._tag === "PlannedAttemptReplaced" || record.event._tag === "ResultRecoveryAttemptReplaced") {
     const attemptId = record.event.subject.plannedAttempt.attemptId
     const index = responsibilityIndexFor(prior)
     const positions = Option.getOrElse(HashMap.get(index.attemptPositions, attemptId), () => HashSet.empty<number>())

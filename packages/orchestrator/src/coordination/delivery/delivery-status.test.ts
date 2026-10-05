@@ -1,3 +1,5 @@
+import { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 /* eslint-disable import/no-nodejs-modules -- The capability guard reads this module's static imports only. */
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -6,6 +8,7 @@ import {
   makeTaskWorkSpecification,
   PlannedTaskAttempt,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   RunId,
   TaskId,
   plannedAttemptExecutorCorrelation,
@@ -3593,5 +3596,51 @@ it("orders and filters established settlements while failing closed on missing t
     expect(settlements).toHaveLength(2)
     expect(settlements[0]).toMatchObject({ settlement: { _tag: "DeliverySettlement" } })
     expect(settlements[1]).toMatchObject({ settlement: { _tag: "CancelledAttemptSettled" } })
+  }
+})
+
+it("projects retained result rejection as blocked work with exact reason and custody", () => {
+  const plannedAttempt = integrationFinalityFixture.plannedAttempt
+  const responsibility = {
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: JournalPosition.make(2),
+    plannedAttempt
+  }
+  for (const custody of [{ _tag: "Stopped" }, { _tag: "Unresolved" }] as const) {
+    const rejection = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+      correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "Deadline",
+      responseCount: PlannedAttemptResultResponseCount.make(2),
+      custody
+    })
+    const status = statusFor(
+      evaluationOf({
+        runtimeRunId: plannedAttempt.runId,
+        tasks: [{ id: String(plannedAttempt.taskId) }],
+        evidence: [
+          {
+            _tag: "ResponsibilityFacts",
+            facts: {
+              _tag: "PlannedAttemptExecutorFreshFacts",
+              responsibility,
+              disposition: ResponsibilityDisposition.PlannedAttemptExecutorResultRejected({
+                report: rejection,
+                recoverySubject: ResultRecoverySubject.cases.RejectedResult.make({
+                  plannedAttempt,
+                  reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+                })
+              })
+            }
+          }
+        ]
+      }),
+      { _tag: "Task", runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
+    )
+    expect(status).toMatchObject({
+      _tag: "DeliveryStatusAvailable",
+      entries: [{ _tag: "ExecutorResultRejected", classification: "Blocked", responsibility, rejection }]
+    })
+    if (status._tag === "DeliveryStatusAvailable") expect(status.entries).toHaveLength(1)
   }
 })

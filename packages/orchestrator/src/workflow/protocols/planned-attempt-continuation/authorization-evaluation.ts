@@ -1,4 +1,4 @@
-import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { type PlannedTaskAttempt, type TaskRevision, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import { outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import {
@@ -33,7 +33,12 @@ const reject = (
   witness: ContinuationAuthorizationWitness,
   reason: ContinuationAuthorizationReason,
   detail: string
-): PlannedAttemptContinuationAuthorizationEvaluation => ({ _tag: "Rejected", detail, reason, witness })
+): Extract<PlannedAttemptContinuationAuthorizationEvaluation, { readonly _tag: "Rejected" }> => ({
+  _tag: "Rejected",
+  detail,
+  reason,
+  witness
+})
 
 const isRejected = (
   validation: WitnessValidation
@@ -144,12 +149,38 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
     executorAuthority.observedAt
   )
 
+  return evaluatePlannedAttemptCurrentFactsAuthorization(
+    records,
+    plannedAttempt,
+    witness,
+    freshnessBaseline,
+    authorizedTaskRevision
+  )
+}
+
+/** Four current authority checks shared by Continue and fresh-specification Restart. */
+export const evaluatePlannedAttemptCurrentTrackerAndWorktreeFacts = (
+  records: JournalHistorySource,
+  plannedAttempt: PlannedTaskAttempt,
+  witness: PlannedAttemptContinuationWitness,
+  freshnessBaseline: JournalPosition,
+  authorizedTaskRevision: TaskRevision,
+  authority: "Continuation" | "Restart" = "Continuation"
+): WitnessValidation => {
+  const immutableRunTarget = exactWorkflowRunTargetForRun(records, plannedAttempt.runId)
+  if (immutableRunTarget === undefined)
+    return reject(
+      "ActiveTaskContinuationGraph",
+      "MissingWitness",
+      "current-fact authorization requires the immutable Run target"
+    )
   const graph = validateContinuationGraphWitness(
     records,
     plannedAttempt,
     witness,
     freshnessBaseline,
-    immutableRunTarget
+    immutableRunTarget,
+    authority
   )
   if (isRejected(graph)) return graph
 
@@ -183,6 +214,25 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
   )
   if (isRejected(worktree)) return worktree
 
+  return worktree
+}
+
+/** Continue additionally requires compatible lineage from its immutable original Base. */
+export const evaluatePlannedAttemptCurrentFactsAuthorization = (
+  records: JournalHistorySource,
+  plannedAttempt: PlannedTaskAttempt,
+  witness: PlannedAttemptContinuationWitness,
+  freshnessBaseline: JournalPosition,
+  authorizedTaskRevision: TaskRevision
+): PlannedAttemptContinuationAuthorizationEvaluation => {
+  const worktree = evaluatePlannedAttemptCurrentTrackerAndWorktreeFacts(
+    records,
+    plannedAttempt,
+    witness,
+    freshnessBaseline,
+    authorizedTaskRevision
+  )
+  if (isRejected(worktree)) return worktree
   const targetLineage = validateContinuationTargetLineageWitness(
     records,
     plannedAttempt,

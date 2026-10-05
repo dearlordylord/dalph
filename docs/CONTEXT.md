@@ -1029,7 +1029,7 @@ _Avoid_: Plan, attempt plan, task, task work, retry counter
 **Planned attempt replacement**:
 The workflow event that atomically makes one exact pre-integration planned task
 attempt no longer unsettled and records its one exact successor. It requires
-the matching applied Restart choice, current executor quiescence evidence, the
+the matching explicit Restart authority, current executor quiescence evidence, the
 fresh exact task and claim facts, the current ready old worktree with its
 lineage proof, and the fresh target head. It preserves the old attempt's
 immutable plan and resources; neither this event nor its Journal envelope
@@ -1042,6 +1042,24 @@ one exact pre-integration planned task attempt under one exact earlier/current
 task-revision fingerprint pair. It coalesces exact request redelivery and
 cannot identify another Run, task, attempt, fingerprint pair, or choice.
 _Avoid_: Operator identity, attempt identity, operation identity, idempotency key
+
+**Rejected provider result**:
+An executor observation that retains one exact planned attempt after its provider
+response fails result qualification and its correction cycle ends. It carries
+the rejection cause, consumed response budget and current writer custody proof.
+_Avoid_: Semantic failure, terminal Failed result, safely suspended work
+
+**Provider result cycle**:
+One initial provider response and at most two additional corrections for one
+planned attempt, with a retained absolute deadline for each additional response.
+Process loss preserves that cycle's consumed budget and deadlines.
+_Avoid_: Implementation retry, refreshed response budget, task replacement
+
+**Result-recovery direction**:
+An explicit Operator decision selecting one exact retained rejection for Continue
+or Restart, or one historical failure with unknown cause for Restart. Continue
+retains the immutable attempt; Restart requires fresh authority for a successor.
+_Avoid_: Instruction-change choice, automatic retry, retrospective acceptance
 
 **Accepted result**:
 The exact Git commit and content-addressed executor evidence manifest returned

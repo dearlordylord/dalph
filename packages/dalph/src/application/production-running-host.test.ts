@@ -1,3 +1,4 @@
+import { makeTaskWorkSpecification } from "@dalph/contracts"
 /* eslint-disable import/no-nodejs-modules -- Qualification starts actual public client processes and allocates a local listener port. */
 import { execFile, spawn } from "node:child_process"
 import { createServer } from "node:net"
@@ -551,9 +552,9 @@ it.live(
   60000
 )
 
-it.live(
-  "shows an executor failure without accepting its retained candidate",
-  () =>
+it.live.each(["ContinueRetainedAttempt", "RestartTaskImplementation"] as const)(
+  "recovers the exact rejected result with %s through the public CLI and ordinary production Run",
+  (direction) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeRunningHostFixture(builtEntry, false, undefined, undefined, false, {
@@ -570,23 +571,35 @@ it.live(
                 yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
                 const attached = yield* attachCurrentSignal(observation.current)
                 yield* fixture.release
-                const isFailed = (state: typeof attached.current): state is DeliveryRuntimeReadyObservation =>
+                const isRejected = (state: typeof attached.current): state is DeliveryRuntimeReadyObservation =>
                   state._tag === "Ready" &&
-                  state.evaluation.diagnostics?.tasks.some((task) => task.phase === "Failed") === true
-                const state = isFailed(attached.current)
+                  state.evaluation.diagnostics?.tasks.some(
+                    (task) =>
+                      task.phase === "Rejected" &&
+                      task.recovery._tag === "ExplicitDirectionRequired" &&
+                      task.recovery.rejection.custody._tag === "Stopped"
+                  ) === true
+                const state = isRejected(attached.current)
                   ? attached.current
                   : Option.getOrThrow(
                       yield* attached.changes.pipe(
-                        Stream.filter(isFailed),
+                        Stream.filter(isRejected),
                         Stream.runHead,
                         Effect.timeout("20 seconds")
                       )
                     )
                 expect(state.evaluation.diagnostics?.tasks[0]).toMatchObject({
-                  phase: "Failed",
-                  failure: { _tag: "Known", code: "ResultEnvelopeInvalid" },
-                  candidateHead: { _tag: "Observed" },
-                  recovery: { _tag: "Unavailable" }
+                  phase: "Rejected",
+                  failure: { _tag: "None" },
+                  recovery: {
+                    _tag: "ExplicitDirectionRequired",
+                    rejection: {
+                      reason: "ResultEnvelopeInvalid",
+                      recoveryCause: "CorrectionExhausted",
+                      responseCount: 3,
+                      custody: { _tag: "Stopped" }
+                    }
+                  }
                 })
                 const cli = yield* childClient([
                   "attach",
@@ -606,19 +619,15 @@ it.live(
                     delivery: {
                       entries: expect.arrayContaining([
                         expect.objectContaining({
-                          _tag: "ExecutorFailure",
-                          reason: { _tag: "Known", code: "ResultEnvelopeInvalid" }
+                          _tag: "ExecutorResultRejected",
+                          rejection: expect.objectContaining({ reason: "ResultEnvelopeInvalid", responseCount: 3 })
                         })
                       ]),
                       diagnostics: {
                         tasks: expect.arrayContaining([
                           expect.objectContaining({
-                            phase: "Failed",
-                            candidateHead: {
-                              _tag: "Observed",
-                              commit: expect.any(String),
-                              observedAt: expect.any(Number)
-                            }
+                            phase: "Rejected",
+                            recovery: expect.objectContaining({ _tag: "ExplicitDirectionRequired" })
                           })
                         ])
                       }
@@ -634,7 +643,7 @@ it.live(
                   _tag: "Success",
                   value: {
                     delivery: {
-                      diagnostics: { tasks: expect.arrayContaining([expect.objectContaining({ phase: "Failed" })]) }
+                      diagnostics: { tasks: expect.arrayContaining([expect.objectContaining({ phase: "Rejected" })]) }
                     }
                   }
                 })
@@ -647,6 +656,161 @@ it.live(
                       event._tag === "CompletionTaskAcknowledged"
                   )
                 ).toBe(false)
+                if (envelope.result._tag !== "Success" || envelope.result.value._tag !== "Ready")
+                  return expect.fail("the public snapshot must expose the retained rejected result")
+                if (envelope.result.value.delivery._tag !== "DeliveryStatusAvailable")
+                  return expect.fail("the exact recovery entry must be available")
+                const entry = envelope.result.value.delivery.entries.find(
+                  ({ _tag }) => _tag === "ExecutorResultRejected"
+                )
+                if (entry?._tag !== "ExecutorResultRejected")
+                  return expect.fail("missing exact public recovery subject")
+                const git = yield* GitCommand
+                const beforeHead = (yield* git.runInWorktree(entry.plannedAttempt.worktree, [
+                  "rev-parse",
+                  "HEAD"
+                ])).stdout.trim()
+                const freshSpecification = makeTaskWorkSpecification({
+                  taskId: entry.plannedAttempt.taskId,
+                  body: "Fresh F2 instructions for the explicit replacement.",
+                  title: "Fresh replacement instructions"
+                })
+                const freshBase =
+                  direction === "ContinueRetainedAttempt"
+                    ? entry.plannedAttempt.baseSha
+                    : (yield* git.runInWorktree(fixture.configuration.repository, [
+                        "-c",
+                        "user.name=Recovery fixture",
+                        "-c",
+                        "user.email=recovery@example.invalid",
+                        "commit-tree",
+                        (yield* git.runInWorktree(fixture.configuration.repository, [
+                          "rev-parse",
+                          `${entry.plannedAttempt.baseSha}^{tree}`
+                        ])).stdout.trim(),
+                        "-p",
+                        entry.plannedAttempt.baseSha,
+                        "-m",
+                        "Fresh H2 for explicit Restart"
+                      ])).stdout.trim()
+                if (direction === "RestartTaskImplementation") {
+                  yield* fixture.provider.setPublicTaskSpecification(freshSpecification)
+                  const changed = yield* git.runInWorktree(fixture.configuration.repository, [
+                    "update-ref",
+                    fixture.configuration.integrationRef,
+                    freshBase,
+                    entry.plannedAttempt.baseSha
+                  ])
+                  expect(changed.exitCode).toBe(0)
+                }
+                const recovery = {
+                  direction,
+                  requestId: { nonce: `public-${direction}-rejected-result`, runId: observation.selection.runId },
+                  subject: entry.recoverySubject
+                }
+                const fs = yield* FileSystem.FileSystem
+                const requestFile = `${fixture.configuration.journalDatabase}.recovery.json`
+                yield* fs.writeFileString(requestFile, JSON.stringify(recovery))
+                yield* fixture.allowValidResult
+                const applyArgs = [
+                  "attach",
+                  "recovery-apply",
+                  "--host",
+                  address,
+                  "--run",
+                  observation.selection.runId,
+                  "--request-file",
+                  requestFile,
+                  "--json"
+                ]
+                const applied = yield* childClient(applyArgs)
+                expect(applied.failed, `${applied.stderr}\n${applied.stdout}`).toBe(false)
+                expect(readEnvelope(applied.stdout).result).toMatchObject({
+                  _tag: "Success",
+                  value: { _tag: "ResultRecoveryDirectionRecorded", recovery }
+                })
+                const after = Option.getOrThrow(
+                  yield* attached.changes.pipe(
+                    Stream.filter(
+                      (current) =>
+                        current._tag === "Ready" &&
+                        current.evaluation.diagnostics?.tasks.some(
+                          (task) =>
+                            task.taskId === entry.plannedAttempt.taskId &&
+                            (task.phase === "Accepted" || task.phase === "Integrating" || task.phase === "Delivered")
+                        ) === true
+                    ),
+                    Stream.runHead,
+                    Effect.timeout("20 seconds")
+                  )
+                )
+                expect(after._tag).toBe("Ready")
+                const duplicate = yield* childClient(applyArgs)
+                expect(duplicate.failed, duplicate.stderr).toBe(false)
+                expect(readEnvelope(duplicate.stdout).result).toEqual(readEnvelope(applied.stdout).result)
+                const recoveredRecords = yield* fixture.readHistory(observation.selection.runId)
+                expect(recoveredRecords.filter(({ event }) => event._tag === "ResultRecoveryDirected")).toHaveLength(1)
+                expect(
+                  recoveredRecords.filter(({ event }) => event._tag === "ResultRecoveryContinueAuthorized")
+                ).toHaveLength(direction === "ContinueRetainedAttempt" ? 1 : 0)
+                const continued = recoveredRecords.filter(
+                  ({ event }) =>
+                    event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "ContinueRejectedResult"
+                )
+                expect(continued).toHaveLength(direction === "ContinueRetainedAttempt" ? 1 : 0)
+                const replacements = recoveredRecords.filter(
+                  ({ event }) => event._tag === "ResultRecoveryAttemptReplaced"
+                )
+                expect(replacements).toHaveLength(direction === "ContinueRetainedAttempt" ? 0 : 1)
+                const replacement = replacements[0]?.event
+                const acceptedAttempt =
+                  direction === "ContinueRetainedAttempt"
+                    ? entry.plannedAttempt
+                    : replacement?._tag === "ResultRecoveryAttemptReplaced"
+                      ? replacement.successorPlan.plannedAttempt
+                      : undefined
+                if (acceptedAttempt === undefined) return expect.fail("Restart must retain its exact successor plan")
+                if (direction === "ContinueRetainedAttempt") {
+                  expect(continued[0]?.event).toMatchObject({ plannedAttempt: entry.plannedAttempt })
+                } else {
+                  expect(acceptedAttempt).toMatchObject({
+                    baseSha: freshBase,
+                    taskRevision: freshSpecification.fingerprint
+                  })
+                  expect(acceptedAttempt.worktree).not.toBe(entry.plannedAttempt.worktree)
+                  expect(acceptedAttempt.attemptId).not.toBe(entry.plannedAttempt.attemptId)
+                  expect(
+                    (yield* git.runInWorktree(entry.plannedAttempt.worktree, ["rev-parse", "HEAD"])).stdout.trim()
+                  ).toBe(beforeHead)
+                  expect(
+                    recoveredRecords.some(
+                      ({ event }) =>
+                        event._tag === "TaskWorktreeReady" &&
+                        event.proof.worktree === acceptedAttempt.worktree &&
+                        event.proof.baseSha === freshBase
+                    )
+                  ).toBe(true)
+                  expect(
+                    recoveredRecords.filter(
+                      ({ event }) =>
+                        event._tag === "PlannedAttemptExecutorCommandIntended" &&
+                        event.command === "Begin" &&
+                        event.plannedAttempt.attemptId === acceptedAttempt.attemptId
+                    )
+                  ).toHaveLength(1)
+                }
+                const accepted = recoveredRecords.find(
+                  ({ event }) =>
+                    event._tag === "PlannedAttemptExecutorWorkReported" &&
+                    event.report._tag === "ExecutorWorkTerminal" &&
+                    event.report.result._tag === "Accepted"
+                )
+                expect(accepted?.event).toMatchObject({
+                  report: {
+                    correlation: { attemptId: acceptedAttempt.attemptId, runId: observation.selection.runId },
+                    result: { _tag: "Accepted" }
+                  }
+                })
               })
             ),
           "Run",
@@ -654,7 +818,7 @@ it.live(
         )
       })
     ).pipe(Effect.provide(runningHostFixtureLayer)),
-  45_000
+  60_000
 )
 
 for (const disposition of ["Completed", "Cancelled"] as const)

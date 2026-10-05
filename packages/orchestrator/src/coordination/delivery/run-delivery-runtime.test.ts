@@ -1,3 +1,4 @@
+import { ResultRecoveryRequestId } from "../../workflow/protocols/result-recovery/events.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
@@ -2216,129 +2217,145 @@ it.effect("admits independent D while recovered A and C perform read-only restar
   }).pipe(Effect.scoped)
 )
 
-it.effect("gives retained B1 the released position before D and rejects uncorrelated B replacement work", () =>
-  Effect.gen(function* () {
-    const taskB = TaskId.make("retained-B")
-    const retainedB = PlannedTaskAttempt.make({
-      ...plannedAttempt,
-      attemptId: AttemptId.make("retained-B1"),
-      branch: TaskBranchRef.make("refs/heads/dalph/retained-B1"),
-      taskId: taskB,
-      worktree: WorktreeLocator.make("/runtime-test/retained-B1")
-    })
-    const resumeB = RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
-      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
-      plannedAttempt: retainedB,
-      witness: {
-        activeTaskContinuationRead: {
-          graphObservationOperationId: OperationId.make("retained-B-current-graph"),
-          taskClaimObservationOperationId: OperationId.make("retained-B-current-claim"),
-          taskWorkSpecificationObservationOperationId: OperationId.make("retained-B-current-specification")
-        },
-        targetLineageObservationOperationId: OperationId.make("retained-B-current-lineage"),
-        worktreeObservationOperationId: OperationId.make("retained-B-current-worktree")
-      }
-    })
-    const freshClaim = (taskId: TaskId) => {
-      const task = { id: taskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
-      const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-        taskId,
-        taskRevision: taskRevisionFor(task)
+it.effect("gives retained Resume or explicit result Continue the released position before fresh replacement work", () =>
+  Effect.forEach(["Resume", "Continue"] as const, (mode) =>
+    Effect.gen(function* () {
+      const taskB = TaskId.make("retained-B")
+      const retainedB = PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("retained-B1"),
+        branch: TaskBranchRef.make("refs/heads/dalph/retained-B1"),
+        taskId: taskB,
+        worktree: WorktreeLocator.make("/runtime-test/retained-B1")
       })
-      return {
-        step: FreshWorkflowStep.AcquireTaskClaim({
-          predecessorOperationId: OperationId.make(`retained-priority-${taskId}-graph`),
-          task
-        }),
-        transition
-      }
-    }
-    const freshD = freshClaim(TaskId.make("retained-priority-D"))
-    const replacementB = freshClaim(taskB)
-    const freshCandidates = yield* freshTaskCandidateFrontierOf({ decisions: [freshD, replacementB], runId })
-    const proposals = deliveryProposalsOf({
-      acceptedOperationIds: HashSet.empty(),
-      fresh: [],
-      responsibilities: [
-        {
-          _tag: "PlannedAttemptExecutorWorkResponsibility",
-          beganAt: JournalPosition.make(3),
-          plannedAttempt: retainedB
+      const resumeB =
+        mode === "Continue"
+          ? RunnableFrontierTransition.ContinueRejectedResult({
+              plannedAttempt: retainedB,
+              requestId: ResultRecoveryRequestId.make({ nonce: "retained-B-result-continue", runId })
+            })
+          : RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
+              acceptedProgress: {
+                _tag: "ExecutorReportAccepted",
+                ordinal: PlannedAttemptExecutorReportOrdinal.make(2)
+              },
+              plannedAttempt: retainedB,
+              witness: {
+                activeTaskContinuationRead: {
+                  graphObservationOperationId: OperationId.make("retained-B-current-graph"),
+                  taskClaimObservationOperationId: OperationId.make("retained-B-current-claim"),
+                  taskWorkSpecificationObservationOperationId: OperationId.make("retained-B-current-specification")
+                },
+                targetLineageObservationOperationId: OperationId.make("retained-B-current-lineage"),
+                worktreeObservationOperationId: OperationId.make("retained-B-current-worktree")
+              }
+            })
+      const freshClaim = (taskId: TaskId) => {
+        const task = {
+          id: taskId,
+          lifecycle: TaskLifecycle.cases.Open.make({}),
+          parentTaskId: null,
+          prerequisiteIds: []
         }
-      ],
-      runId,
-      transitions: [resumeB]
-    }).ticketDelivery
-    const retainedResume = proposals[0]
-    if (retainedResume === undefined) {
-      return yield* Effect.die("retained priority chronology did not derive B1")
-    }
-    expect(retainedResume.admission).toMatchObject({
-      plannedAttemptProtocol: {
-        _tag: "PlannedAttemptProtocolRequired",
-        correlation: { attemptId: retainedB.attemptId, runId }
-      },
-      taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: taskB }
-    })
+        const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+          taskId,
+          taskRevision: taskRevisionFor(task)
+        })
+        return {
+          step: FreshWorkflowStep.AcquireTaskClaim({
+            predecessorOperationId: OperationId.make(`retained-priority-${taskId}-graph`),
+            task
+          }),
+          transition
+        }
+      }
+      const freshD = freshClaim(TaskId.make("retained-priority-D"))
+      const replacementB = freshClaim(taskB)
+      const freshCandidates = yield* freshTaskCandidateFrontierOf({ decisions: [freshD, replacementB], runId })
+      const proposals = deliveryProposalsOf({
+        acceptedOperationIds: HashSet.empty(),
+        fresh: [],
+        responsibilities: [
+          {
+            _tag: "PlannedAttemptExecutorWorkResponsibility",
+            beganAt: JournalPosition.make(3),
+            plannedAttempt: retainedB
+          }
+        ],
+        runId,
+        transitions: [resumeB]
+      }).ticketDelivery
+      const retainedResume = proposals[0]
+      if (retainedResume === undefined) {
+        return yield* Effect.die("retained priority chronology did not derive B1")
+      }
+      expect(retainedResume.admission).toMatchObject({
+        plannedAttemptProtocol: {
+          _tag: "PlannedAttemptProtocolRequired",
+          correlation: { attemptId: retainedB.attemptId, runId }
+        },
+        taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: taskB }
+      })
 
-    const heldA = PlannedTaskAttempt.make({
-      ...plannedAttempt,
-      attemptId: AttemptId.make("retained-priority-held-A"),
-      branch: TaskBranchRef.make("refs/heads/dalph/retained-priority-held-A"),
-      taskId: TaskId.make("retained-priority-A"),
-      worktree: WorktreeLocator.make("/runtime-test/retained-priority-held-A")
-    })
-    const releasing = PlannedTaskAttempt.make({
-      ...plannedAttempt,
-      attemptId: AttemptId.make("retained-priority-releasing"),
-      branch: TaskBranchRef.make("refs/heads/dalph/retained-priority-releasing"),
-      taskId: TaskId.make("retained-priority-releasing"),
-      worktree: WorktreeLocator.make("/runtime-test/retained-priority-releasing")
-    })
-    const initial = {
-      ...withProposals(yield* baseEvaluation, proposals, 2, freshCandidates.candidates),
-      taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(2), held: [heldA, releasing] })
-    }
-    const relation = yield* dynamicEvaluationSignal(initial)
-    const retainedDeferred = yield* Deferred.make<void>()
-    const retainedStarted = yield* Deferred.make<void>()
-    const freshStarted = yield* Deferred.make<void>()
-    const executor = DeliveryActionExecutor.of({
-      execute: ({ proposal }) =>
-        proposal.id === retainedResume.id
-          ? Deferred.succeed(retainedStarted, undefined).pipe(Effect.andThen(Effect.never))
-          : Deferred.succeed(freshStarted, undefined).pipe(Effect.andThen(Effect.never))
-    })
-    const trace = DeliverySemanticTrace.of({
-      emit: (event) =>
-        event._tag === "ProposalDeferred" && event.proposalId === retainedResume.id
-          ? Deferred.succeed(retainedDeferred, undefined)
-          : Effect.void
-    })
-    const firstActivation = yield* runDeliveryRuntimeDecision(relation).pipe(
-      Effect.provide(identityLayers),
-      Effect.provideService(DeliveryActionExecutor, executor),
-      Effect.provideService(DeliverySemanticTrace, trace)
-    )
+      const heldA = PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("retained-priority-held-A"),
+        branch: TaskBranchRef.make("refs/heads/dalph/retained-priority-held-A"),
+        taskId: TaskId.make("retained-priority-A"),
+        worktree: WorktreeLocator.make("/runtime-test/retained-priority-held-A")
+      })
+      const releasing = PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("retained-priority-releasing"),
+        branch: TaskBranchRef.make("refs/heads/dalph/retained-priority-releasing"),
+        taskId: TaskId.make("retained-priority-releasing"),
+        worktree: WorktreeLocator.make("/runtime-test/retained-priority-releasing")
+      })
+      const initial = {
+        ...withProposals(yield* baseEvaluation, proposals, 2, freshCandidates.candidates),
+        taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(2), held: [heldA, releasing] })
+      }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const retainedDeferred = yield* Deferred.make<void>()
+      const retainedStarted = yield* Deferred.make<void>()
+      const freshStarted = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal }) =>
+          proposal.id === retainedResume.id
+            ? Deferred.succeed(retainedStarted, undefined).pipe(Effect.andThen(Effect.never))
+            : Deferred.succeed(freshStarted, undefined).pipe(Effect.andThen(Effect.never))
+      })
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) =>
+          event._tag === "ProposalDeferred" && event.proposalId === retainedResume.id
+            ? Deferred.succeed(retainedDeferred, undefined)
+            : Effect.void
+      })
+      const firstActivation = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliverySemanticTrace, trace)
+      )
 
-    yield* Deferred.await(retainedDeferred)
-    expect(firstActivation).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
-    expect(yield* Deferred.isDone(retainedStarted)).toBe(false)
-    yield* relation.publish({
-      ...initial,
-      taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(2), held: [heldA] })
-    })
-    const resumedRuntime = yield* runDeliveryRuntimeDecision(relation).pipe(
-      Effect.provide(identityLayers),
-      Effect.provideService(DeliveryActionExecutor, executor),
-      Effect.provideService(DeliverySemanticTrace, trace),
-      Effect.forkChild
-    )
-    yield* Deferred.await(retainedStarted)
-    yield* Effect.yieldNow
-    expect(yield* Deferred.isDone(freshStarted)).toBe(false)
-    yield* Fiber.interrupt(resumedRuntime)
-  }).pipe(Effect.scoped)
+      yield* Deferred.await(retainedDeferred)
+      expect(firstActivation).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      expect(yield* Deferred.isDone(retainedStarted)).toBe(false)
+      yield* relation.publish({
+        ...initial,
+        taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(2), held: [heldA] })
+      })
+      const resumedRuntime = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliverySemanticTrace, trace),
+        Effect.forkChild
+      )
+      yield* Deferred.await(retainedStarted)
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(freshStarted)).toBe(false)
+      yield* Fiber.interrupt(resumedRuntime)
+    }).pipe(Effect.scoped)
+  )
 )
 
 it.effect("does not repeat one recovered observation after only its causal route changes while it is live", () =>

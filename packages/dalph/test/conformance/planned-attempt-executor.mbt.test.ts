@@ -808,7 +808,7 @@ const executorConformanceDriver = defineDriver(
         | undefined
       const settlements: Array<{
         readonly ordinal: PlannedAttemptExecutorCommandOrdinal
-        readonly command: "Begin" | "Resume" | "Suspend"
+        readonly command: "Begin" | "Resume" | "Suspend" | "ContinueRejectedResult"
         readonly recordIndex: number
         readonly report: PlannedAttemptExecutorReport
         readonly source: "Projection" | "Response"

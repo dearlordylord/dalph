@@ -1,6 +1,7 @@
 import {
   AttemptId,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   RunId,
   type PlannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
@@ -92,7 +93,29 @@ describe("application Exit lifecycle decisions", () => {
     expect(decideInterruptibleOwnerRelease(true, "KnownResult")._tag).toBe("RecordKnownObservationAndRelease")
   })
 
-  it("releases a task-work position only for exact safe-or-terminal evidence", () => {
+  it("releases a task-work position only for exact stopped-writer evidence", () => {
+    const rejected = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+      correlation: expectedCorrelation,
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "WriterCustodyUnresolved",
+      responseCount: PlannedAttemptResultResponseCount.make(3),
+      custody: { _tag: "Unresolved" }
+    })
+    expect(decideExecutorPosition(expectedCorrelation, rejected)).toMatchObject({
+      _tag: "RetainPosition",
+      reason: "RejectedResultCustodyUnresolved"
+    })
+    expect(decideExecutorPosition(expectedCorrelation, { ...rejected, custody: { _tag: "Stopped" } })).toMatchObject({
+      _tag: "ReleasePosition",
+      evidence: "RejectedResultWritersStopped"
+    })
+    expect(
+      decideExecutorPosition(expectedCorrelation, {
+        ...rejected,
+        correlation: foreignCorrelation,
+        custody: { _tag: "Stopped" }
+      })
+    ).toMatchObject({ _tag: "RetainPosition", reason: "ForeignCorrelation" })
     const running = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: expectedCorrelation })
     const suspended = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
       correlation: expectedCorrelation

@@ -3,6 +3,9 @@
 import { Effect, Match, Schema, SchemaParser } from "effect"
 import {
   AttemptChoiceAppliedEvent,
+  ResultRecoveryDirectedEvent,
+  ResultRecoveryAttemptReplacedEvent,
+  ResultRecoveryContinueAuthorizedEvent,
   AttemptRestartAuthorityReadFailedEvent,
   AttemptImplementationAbandonedEvent,
   AttemptStoppageIntendedEvent,
@@ -182,6 +185,7 @@ const recordExecutorEntry = (
       PlannedAttemptExecutorCommandIntended: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorCommandIntended",
         command: value.command,
+        ...(value.recoveryAuthorization === undefined ? {} : { recoveryAuthorization: value.recoveryAuthorization }),
         initiatedBy: value.initiatedBy,
         occurrenceClassification: value.occurrenceClassification,
         ordinal: value.ordinal,
@@ -794,11 +798,11 @@ const isExecutorEvent = (event: WorkflowJournalEvent): event is ExecutorEvent =>
 
 type ContinuationAuthorizationEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "PlannedAttemptContinuationAuthorized" }
+  { readonly _tag: "PlannedAttemptContinuationAuthorized" | "ResultRecoveryContinueAuthorized" }
 >
 
 const isContinuationAuthorizationEvent = (event: WorkflowJournalEvent): event is ContinuationAuthorizationEvent =>
-  event._tag === "PlannedAttemptContinuationAuthorized"
+  event._tag === "PlannedAttemptContinuationAuthorized" || event._tag === "ResultRecoveryContinueAuthorized"
 
 const isAttemptRestartAuthorityReadFailedEvent = (
   event: WorkflowJournalEvent
@@ -837,15 +841,31 @@ const recordTaskBoundaryEntry = (event: TaskBoundaryEvent): RecordedCassetteEntr
 
 type OperatorDirectionEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+  {
+    readonly _tag:
+      | "AttemptChoiceApplied"
+      | "ResultRecoveryDirected"
+      | "ControlDirectionApplied"
+      | "TaskClaimReacquisitionDirected"
+  }
 >
 
 const isOperatorDirectionEvent = (event: WorkflowJournalEvent): event is OperatorDirectionEvent =>
   event._tag === "AttemptChoiceApplied" ||
+  event._tag === "ResultRecoveryDirected" ||
   event._tag === "ControlDirectionApplied" ||
   event._tag === "TaskClaimReacquisitionDirected"
 
 const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): RecordedCassetteEntry => {
+  if (event._tag === "ResultRecoveryDirected")
+    return {
+      _tag: event._tag,
+      direction: event.direction,
+      requestId: event.requestId,
+      subject: event.subject,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification
+    }
   if (event._tag === "AttemptChoiceApplied") {
     return {
       _tag: "AttemptChoiceApplied",
@@ -1176,11 +1196,22 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
     Match.when(isGitObservationEvent, recordGitObservationEntry),
     Match.when(isTrackerEvent, recordTrackerEntry),
     Match.when(isExecutorEvent, recordExecutorEntry),
-    Match.when(isContinuationAuthorizationEvent, (value) => ({
+    Match.tag("ResultRecoveryAttemptReplaced", (value) => ({
       _tag: value._tag,
-      plannedAttempt: value.plannedAttempt,
-      witness: value.witness
+      requestId: value.requestId,
+      subject: value.subject,
+      integrationTarget: value.integrationTarget,
+      witness: value.witness,
+      ...(value.writerCustody === undefined ? {} : { writerCustody: value.writerCustody }),
+      successorPlan: value.successorPlan,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification
     })),
+    Match.when(isContinuationAuthorizationEvent, (value) =>
+      value._tag === "ResultRecoveryContinueAuthorized"
+        ? { _tag: value._tag, requestId: value.requestId, plannedAttempt: value.plannedAttempt, witness: value.witness }
+        : { _tag: value._tag, plannedAttempt: value.plannedAttempt, witness: value.witness }
+    ),
     Match.when(isTaskBoundaryEvent, recordTaskBoundaryEntry),
     Match.exhaustive
   )
@@ -1309,6 +1340,7 @@ const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEve
     PlannedAttemptExecutorCommandIntended: (value) =>
       PlannedAttemptExecutorCommandIntendedEvent.make({
         command: value.command,
+        ...(value.recoveryAuthorization === undefined ? {} : { recoveryAuthorization: value.recoveryAuthorization }),
         initiatedBy: value.initiatedBy,
         occurrenceClassification: value.occurrenceClassification,
         ordinal: value.ordinal,
@@ -1553,11 +1585,18 @@ const eventForRemoteBaselineEntry = (entry: RecordedRemoteBaselineEntry): Workfl
 
 type RecordedOperatorDirectionEntry = Extract<
   RecordedCassetteEntry,
-  { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
+  {
+    readonly _tag:
+      | "AttemptChoiceApplied"
+      | "ResultRecoveryDirected"
+      | "ControlDirectionApplied"
+      | "TaskClaimReacquisitionDirected"
+  }
 >
 
 const isRecordedOperatorDirectionEntry = (entry: RecordedCassetteEntry): entry is RecordedOperatorDirectionEntry =>
   entry._tag === "AttemptChoiceApplied" ||
+  entry._tag === "ResultRecoveryDirected" ||
   entry._tag === "ControlDirectionApplied" ||
   entry._tag === "TaskClaimReacquisitionDirected"
 
@@ -1565,6 +1604,8 @@ const eventForRecordedOperatorDirectionEntry = (
   entry: RecordedOperatorDirectionEntry,
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent => {
+  if (entry._tag === "ResultRecoveryDirected")
+    return ResultRecoveryDirectedEvent.make({ ...entry, version: workflowJournalEventVersion })
   if (entry._tag === "AttemptChoiceApplied") {
     return AttemptChoiceAppliedEvent.make({
       choice: entry.choice,
@@ -1816,15 +1857,17 @@ const eventForIntegrationPreparationEntry = (entry: RecordedIntegrationPreparati
 
 type RecordedContinuationAuthorizationEntry = Extract<
   RecordedCassetteEntry,
-  { readonly _tag: "PlannedAttemptContinuationAuthorized" }
+  { readonly _tag: "PlannedAttemptContinuationAuthorized" | "ResultRecoveryContinueAuthorized" }
 >
 
 const eventForContinuationAuthorizationEntry = (entry: RecordedContinuationAuthorizationEntry): WorkflowJournalEvent =>
-  PlannedAttemptContinuationAuthorizedEvent.make({
-    plannedAttempt: entry.plannedAttempt,
-    version: workflowJournalEventVersion,
-    witness: entry.witness
-  })
+  entry._tag === "ResultRecoveryContinueAuthorized"
+    ? ResultRecoveryContinueAuthorizedEvent.make({ ...entry, version: workflowJournalEventVersion })
+    : PlannedAttemptContinuationAuthorizedEvent.make({
+        plannedAttempt: entry.plannedAttempt,
+        version: workflowJournalEventVersion,
+        witness: entry.witness
+      })
 
 const isRecordedAttemptRestartAuthorityReadFailedEntry = (
   entry: RecordedCassetteEntry
@@ -1842,6 +1885,9 @@ const eventForOtherRecordedEntry = (
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent =>
   Match.value(entry).pipe(
+    Match.tag("ResultRecoveryAttemptReplaced", (value) =>
+      ResultRecoveryAttemptReplacedEvent.make({ ...value, version: workflowJournalEventVersion })
+    ),
     Match.when(isRecordedCleanupEntry, eventForCleanupEntry),
     Match.when(isRecordedRunEntry, eventForRunEntry),
     Match.when(isRecordedOperatorDirectionEntry, (value) => eventForRecordedOperatorDirectionEntry(value, runId)),
@@ -1866,9 +1912,11 @@ const eventForRecordedEntry = (
   index: number,
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent =>
-  entry._tag === "PlannedAttemptContinuationAuthorized"
-    ? eventForContinuationAuthorizationEntry(entry)
-    : eventForOtherRecordedEntry(entry, entries, index, runId)
+  entry._tag === "ResultRecoveryAttemptReplaced"
+    ? ResultRecoveryAttemptReplacedEvent.make({ ...entry, version: workflowJournalEventVersion })
+    : entry._tag === "PlannedAttemptContinuationAuthorized" || entry._tag === "ResultRecoveryContinueAuthorized"
+      ? eventForContinuationAuthorizationEntry(entry)
+      : eventForOtherRecordedEntry(entry, entries, index, runId)
 
 const recordsFor = (cassette: RecordedCassetteType): ReadonlyArray<JournalRecord> =>
   cassette.entries.map((entry, index) => {
@@ -2265,6 +2313,8 @@ const lyricForTaskBoundaryEntry = (entry: RecordedTaskBoundaryEntry): string => 
 }
 
 const lyricForRecordedOperatorDirectionEntry = (entry: RecordedOperatorDirectionEntry): string => {
+  if (entry._tag === "ResultRecoveryDirected")
+    return `Operator directed ${entry.direction} for retained attempt ${entry.subject.plannedAttempt.attemptId}.`
   if (entry._tag === "AttemptChoiceApplied") {
     return `Operator chose ${entry.choice} for attempt ${entry.subject.plannedAttempt.attemptId} after observing task revision ${entry.subject.observedTaskRevision}.`
   }
@@ -2303,6 +2353,11 @@ type RecordedPresentationResidualEntry = Exclude<
 
 const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string =>
   Match.value(entry).pipe(
+    Match.tag(
+      "ResultRecoveryAttemptReplaced",
+      (value) =>
+        `Dalph recorded successor ${value.successorPlan.plannedAttempt.attemptId} for retained result ${value.subject.plannedAttempt.attemptId}.`
+    ),
     Match.when(isRecordedGitObservationCassetteEntry, lyricForGitObservationEntry),
     Match.when(isRecordedExecutorEntry, lyricForExecutorEntry),
     Match.when(isRecordedTrackerEntry, lyricForTrackerEntry),
@@ -2329,9 +2384,13 @@ const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
 }
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string =>
-  entry._tag === "PlannedAttemptContinuationAuthorized"
-    ? `Dalph authorized resumption of planned attempt ${entry.plannedAttempt.attemptId} after five current observations.`
-    : lyricForOtherRecordedEntry(entry)
+  entry._tag === "ResultRecoveryAttemptReplaced"
+    ? `Dalph recorded successor ${entry.successorPlan.plannedAttempt.attemptId} for retained result ${entry.subject.plannedAttempt.attemptId}.`
+    : entry._tag === "ResultRecoveryContinueAuthorized"
+      ? `Dalph authorized a new result correction cycle for retained attempt ${entry.plannedAttempt.attemptId} after five current observations.`
+      : entry._tag === "PlannedAttemptContinuationAuthorized"
+        ? `Dalph authorized resumption of planned attempt ${entry.plannedAttempt.attemptId} after five current observations.`
+        : lyricForOtherRecordedEntry(entry)
 
 /** Human-readable prose derived from structured entries, never parsed as a contract. */
 export const renderRecordedCassetteLyrics = (cassette: RecordedCassetteType): string =>

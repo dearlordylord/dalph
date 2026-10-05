@@ -51,7 +51,7 @@ const exactAttemptCommand = (
   record: JournalRecord,
   plannedAttempt: PlannedTaskAttempt,
   commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
-  command: "Begin" | "Resume"
+  command: "Begin" | "Resume" | "ContinueRejectedResult"
 ): boolean => {
   const event = record.event
   return (
@@ -142,7 +142,7 @@ const exactCommandSettledWith = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   after: JournalPosition | undefined,
-  command: "Begin" | "Resume",
+  command: "Begin" | "Resume" | "ContinueRejectedResult",
   observed: PlannedAttemptExecutorReport
 ): boolean => {
   const settlement = latestExactCommandSettlement(records, plannedAttempt, after, observed)
@@ -222,6 +222,24 @@ const distinctAcceptedLifecycleReportError = (
   | undefined => {
   if (latest.event.report._tag === "ExecutorWorkTerminal") {
     return new PlannedAttemptExecutorTerminalReportContradiction({ accepted: latest.event.report, observed })
+  }
+  if (latest.event.report._tag === "ExecutorWorkResultRejected") {
+    const retained = latest.event.report
+    // A settled explicit Continue owns re-entry into execution, including
+    // an immediate terminal command response. Passive reads only strengthen custody.
+    const provesStoppedCustody =
+      observed._tag === "ExecutorWorkResultRejected" &&
+      retained.reason === observed.reason &&
+      retained.recoveryCause === observed.recoveryCause &&
+      retained.responseCount === observed.responseCount &&
+      retained.custody._tag === "Unresolved" &&
+      observed.custody._tag === "Stopped"
+    const explicitlyContinued =
+      retained.custody._tag === "Stopped" &&
+      (observed._tag === "ExecutorWorkExecuting" || observed._tag === "ExecutorWorkTerminal") &&
+      exactCommandSettledWith(records, plannedAttempt, latest.position, "ContinueRejectedResult", observed)
+    if (!provesStoppedCustody && !explicitlyContinued)
+      return new PlannedAttemptExecutorLifecycleTransitionContradiction({ accepted: retained, observed })
   }
   const lacksCausalCommand =
     (latest.event.report._tag === "ExecutorWorkExecuting" &&

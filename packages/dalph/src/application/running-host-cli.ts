@@ -1,3 +1,4 @@
+import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This command owns only client stdout/stderr completion. */
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, FileSystem, Layer, Schema, Stream } from "effect"
@@ -249,8 +250,88 @@ export const makeRunningHostCommands = <E, R>(
         Effect.provide(outputLayer)
       )
   )
+  const resultRecovery = (mode: "apply" | "read") =>
+    Command.make(
+      `recovery-${mode}`,
+      {
+        host: Flag.string("host"),
+        run: Flag.string("run"),
+        json: Flag.boolean("json"),
+        requestFile: Flag.string("request-file")
+      },
+      ({ host, json, requestFile, run }) =>
+        Effect.gen(function* () {
+          if (!json)
+            return yield* Effect.fail<RunningHostError>({
+              _tag: "InvalidRequest",
+              fieldPath: "/json",
+              code: "JsonRequired"
+            })
+          const decoded = yield* decodeClient(host, run)
+          if (decoded.runId === null)
+            return yield* Effect.fail<RunningHostError>({
+              _tag: "InvalidRequest",
+              fieldPath: "/run",
+              code: "RunRequired"
+            })
+          const fs = yield* FileSystem.FileSystem
+          const input = yield* fs
+            .readFileString(requestFile)
+            .pipe(
+              Effect.mapError(
+                (): RunningHostError => ({
+                  _tag: "InvalidRequest",
+                  fieldPath: "/request-file",
+                  code: "RecoveryRequestFileUnreadable"
+                })
+              )
+            )
+          const operation =
+            mode === "apply"
+              ? {
+                  _tag: "ApplyResultRecoveryDirection" as const,
+                  recovery: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ApplyResultRecoveryRequest))(
+                    input,
+                    { onExcessProperty: "error" }
+                  ).pipe(
+                    Effect.mapError(
+                      (): RunningHostError => ({
+                        _tag: "InvalidRequest",
+                        fieldPath: "/request-file",
+                        code: "RecoveryRequestInvalid"
+                      })
+                    )
+                  )
+                }
+              : {
+                  _tag: "ReadResultRecoveryDirection" as const,
+                  recoveryRequestId: yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ResultRecoveryRequestId))(
+                    input,
+                    { onExcessProperty: "error" }
+                  ).pipe(
+                    Effect.mapError(
+                      (): RunningHostError => ({
+                        _tag: "InvalidRequest",
+                        fieldPath: "/request-file",
+                        code: "RecoveryRequestInvalid"
+                      })
+                    )
+                  )
+                }
+          yield* presentEnvelope(yield* callRunningHost(decoded.address, decoded.runId, operation))
+        }).pipe(
+          Effect.catch((error) =>
+            error instanceof DalphCommandExit
+              ? Effect.fail(error)
+              : presentEnvelope(runningHostFailureEnvelope(null, error))
+          ),
+          Effect.provide(outputLayer)
+        )
+    )
   const attach = Command.make("attach").pipe(
     Command.withSubcommands([
+      resultRecovery("apply"),
+      resultRecovery("read"),
       Command.make(
         "watch",
         { host: Flag.string("host"), run: Flag.string("run"), json: Flag.boolean("json") },

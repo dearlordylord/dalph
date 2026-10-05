@@ -5,6 +5,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutorResult,
+  PlannedAttemptRejectedResultReport,
   RunId,
   TaskExecutorLocator,
   WorktreeLocator
@@ -17,7 +18,14 @@ import {
   openPrivateLeaseDescriptor,
   validatePrivateDescriptor
 } from "./codex-attempt-store.js"
+import { KimiResultCycle, kimiResultCycleTransitionProblem } from "./kimi-result-cycle.js"
+import { KimiPromptRequestHistory, kimiPromptHistoryTransitionProblem } from "./kimi-prompt-history.js"
 import { KimiAcpSessionId } from "./kimi-acp.js"
+import {
+  ProviderResultCycle,
+  ProviderResultRequestToken,
+  providerResultCycleTransitionProblem
+} from "./provider-result-correction.js"
 
 /** The provider-private phase retained for one Kimi session association. */
 export const KimiAttemptPrivatePhase = Schema.Literals([
@@ -27,7 +35,9 @@ export const KimiAttemptPrivatePhase = Schema.Literals([
   "Executing",
   "Suspended",
   "Terminal",
-  "Unavailable"
+  "Unavailable",
+  "ResultStopIntended",
+  "ResultRejected"
 ])
 export type KimiAttemptPrivatePhase = typeof KimiAttemptPrivatePhase.Type
 
@@ -47,9 +57,43 @@ export const KimiAttemptPrivateRecord = Schema.Struct({
   worktree: WorktreeLocator,
   /** Sealed terminal result retained so recovery never needs a live provider session. */
   terminal: Schema.optionalKey(PlannedAttemptExecutorResult),
+  /** Exact private response intents; omission preserves legacy records without inventing a budget. */
+  resultCycle: Schema.optionalKey(ProviderResultCycle),
+  /** Application-owned ACP intents and acknowledged responses, never synthetic provider turns. */
+  promptRequests: Schema.optionalKey(KimiPromptRequestHistory),
+  /** Response budget bound to ACP prompt acknowledgement, without a fabricated turn identity. */
+  kimiResultCycle: Schema.optionalKey(KimiResultCycle),
+  /** Durable recoverable rejection; it never becomes a semantic terminal seal. */
+  resultRejection: Schema.optionalKey(PlannedAttemptRejectedResultReport),
   /** Set only after the terminal ACP session-close boundary is acknowledged. */
   sessionClosed: Schema.Boolean
-})
+}).check(
+  Schema.makeFilter((record) => {
+    if (record.resultRejection !== undefined) {
+      if (record.terminal !== undefined || (record.phase !== "ResultStopIntended" && record.phase !== "ResultRejected"))
+        return "recoverable rejection cannot acquire a terminal seal or ordinary executor phase"
+      if (
+        record.resultRejection.correlation.runId !== record.runId ||
+        record.resultRejection.correlation.attemptId !== record.attemptId ||
+        record.resultRejection.responseCount !== record.kimiResultCycle?.responses.length
+      )
+        return "recoverable rejection requires the exact retained attempt response cycle"
+    }
+    const cycle = record.kimiResultCycle
+    if (cycle === undefined) return undefined
+    if (cycle.plannedBaseSha !== record.baseSha) return "ACP response cycle must retain the exact attempt Base"
+    for (const response of cycle.responses) {
+      const prompt = record.promptRequests?.find(
+        (entry) => ProviderResultRequestToken.make(entry.token) === response.intent.token
+      )
+      if (prompt === undefined || prompt.intendedAt !== response.intent.intendedAt)
+        return "ACP result response requires its exact durable prompt intent"
+      if ((response._tag === "RequestIntended") !== (prompt.response === "Pending"))
+        return "ACP response ownership and prompt acknowledgement must agree"
+    }
+    return undefined
+  })
+)
 export type KimiAttemptPrivateRecord = typeof KimiAttemptPrivateRecord.Type
 
 const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${attemptId}`
@@ -108,6 +152,72 @@ const recordFor = (
   return found === undefined ? Option.none() : Option.some(found)
 }
 
+const validateResultCycleTransition = (
+  previous: Option.Option<KimiAttemptPrivateRecord>,
+  next: KimiAttemptPrivateRecord
+): Effect.Effect<void, KimiAttemptStoreFailure> => {
+  const prior = Option.getOrUndefined(previous)
+  if (
+    prior !== undefined &&
+    (prior.baseSha !== next.baseSha ||
+      prior.executor !== next.executor ||
+      prior.worktree !== next.worktree ||
+      prior.sessionId !== next.sessionId)
+  )
+    return Effect.fail(
+      new KimiAttemptStoreFailure({ operation: "write", detail: "retained Kimi attempt ownership cannot change" })
+    )
+  if (
+    prior?.terminal !== undefined &&
+    (next.phase !== "Terminal" || JSON.stringify(prior.terminal) !== JSON.stringify(next.terminal))
+  )
+    return Effect.fail(
+      new KimiAttemptStoreFailure({ operation: "write", detail: "retained Kimi terminal seal cannot change" })
+    )
+  if (
+    prior?.resultRejection !== undefined &&
+    (next.resultRejection === undefined ||
+      JSON.stringify(prior.resultRejection) !== JSON.stringify(next.resultRejection))
+  )
+    return Effect.fail(
+      new KimiAttemptStoreFailure({
+        operation: "write",
+        detail: "retained rejection requires explicit recovery authorization"
+      })
+    )
+
+  const kimiCycleProblem =
+    prior?.kimiResultCycle !== undefined && next.kimiResultCycle === undefined
+      ? "retained ACP result budget cannot be removed"
+      : next.kimiResultCycle === undefined
+        ? undefined
+        : prior?.terminal !== undefined && prior.kimiResultCycle === undefined
+          ? "historical terminal seal cannot acquire an ACP correction cycle"
+          : kimiResultCycleTransitionProblem(prior?.kimiResultCycle, next.kimiResultCycle)
+  if (kimiCycleProblem !== undefined)
+    return Effect.fail(new KimiAttemptStoreFailure({ operation: "write", detail: kimiCycleProblem }))
+
+  const promptProblem =
+    prior?.terminal !== undefined && prior.promptRequests === undefined && next.promptRequests !== undefined
+      ? "historical terminal seal cannot acquire prompt history"
+      : kimiPromptHistoryTransitionProblem(prior?.promptRequests, next.promptRequests)
+  if (promptProblem !== undefined)
+    return Effect.fail(new KimiAttemptStoreFailure({ operation: "write", detail: promptProblem }))
+  const before = Option.isSome(previous) ? previous.value.resultCycle : undefined
+  const after = next.resultCycle
+  const problem =
+    before !== undefined && after === undefined
+      ? "retained result cycle cannot be removed"
+      : after === undefined
+        ? undefined
+        : Option.isSome(previous) && previous.value.terminal !== undefined && before === undefined
+          ? "historical terminal seal cannot acquire a result correction cycle"
+          : providerResultCycleTransitionProblem(before, after)
+  return problem === undefined
+    ? Effect.void
+    : Effect.fail(new KimiAttemptStoreFailure({ operation: "write", detail: problem }))
+}
+
 /** Controlled provider-private store used by restart/reconnect tests. */
 export const memoryKimiAttemptPrivateStoreLayer = (
   initial: ReadonlyArray<KimiAttemptPrivateRecord> = [],
@@ -127,6 +237,7 @@ export const memoryKimiAttemptPrivateStoreLayer = (
           mutex.withPermit(
             Effect.gen(function* () {
               const current = yield* Ref.get(records)
+              yield* validateResultCycleTransition(recordFor(current, record.runId, record.attemptId), record)
               const next = [
                 record,
                 ...current.filter((item) => keyOf(item.runId, item.attemptId) !== keyOf(record.runId, record.attemptId))
@@ -285,6 +396,7 @@ export const kimiAttemptPrivateStoreLayer = (
           mutex.withPermit(
             Effect.gen(function* () {
               const current = yield* Ref.get(records)
+              yield* validateResultCycleTransition(recordFor(current, record.runId, record.attemptId), record)
               const next = [
                 record,
                 ...current.filter((item) => keyOf(item.runId, item.attemptId) !== keyOf(record.runId, record.attemptId))

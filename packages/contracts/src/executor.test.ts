@@ -8,6 +8,7 @@ import {
   PlannedAttemptExecutorBeginDelivery,
   PlannedAttemptExecutorResult,
   PlannedAttemptExecutorReport,
+  PlannedAttemptRejectedResultReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   samePlannedAttemptExecutorReport
@@ -30,6 +31,37 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/attempt-A")
 })
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+
+it("keeps rejected-result custody separate from terminal failure and bounds its response history", () => {
+  const decode = Schema.decodeUnknownSync(PlannedAttemptRejectedResultReport, { onExcessProperty: "error" })
+  for (const custody of [{ _tag: "Stopped" }, { _tag: "Unresolved" }]) {
+    const report = decode({
+      _tag: "ExecutorWorkResultRejected",
+      correlation,
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "WriterCustodyUnresolved",
+      responseCount: 3,
+      custody
+    })
+    expect(Schema.encodeUnknownSync(PlannedAttemptRejectedResultReport)(report)).toEqual(report)
+    expect(samePlannedAttemptExecutorReport(report, { ...report, recoveryCause: "Deadline" })).toBe(false)
+    expect(() => Schema.decodeUnknownSync(PlannedAttemptExecutorResult)(report)).toThrow()
+    for (const changed of [
+      { responseCount: 0 },
+      { responseCount: 4 },
+      { recoveryCause: "Deadline", responseCount: 1 },
+      { recoveryCause: "CorrectionExhausted", responseCount: 2 },
+      { reason: "ProviderFailed" },
+      { custody: { _tag: "Unknown" } },
+      { result: { _tag: "Failed" } }
+    ]) {
+      expect(() => decode({ ...report, ...changed })).toThrow()
+      expect(() =>
+        Schema.decodeUnknownSync(PlannedAttemptExecutorReport, { onExcessProperty: "error" })({ ...report, ...changed })
+      ).toThrow()
+    }
+  }
+})
 
 it("requires one explicit Begin delivery classification and exact recovery proof identity", () => {
   for (const delivery of [

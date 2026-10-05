@@ -1,3 +1,8 @@
+import { ResultRecoveryAttemptReplacedEvent } from "../protocols/result-recovery/replacement-events.js"
+import {
+  ResultRecoveryDirectedEvent,
+  ResultRecoveryContinueAuthorizedEvent
+} from "../protocols/result-recovery/events.js"
 import { Schema } from "effect"
 import { PlannedTaskAttempt, RemotePublicationTarget } from "@dalph/contracts"
 import { ControlDirectionAppliedEvent } from "../protocols/control-direction-application/events.js"
@@ -207,6 +212,9 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskWorkCapacityChangedEvent,
   ControlDirectionAppliedEvent,
   AttemptChoiceAppliedEvent,
+  ResultRecoveryDirectedEvent,
+  ResultRecoveryContinueAuthorizedEvent,
+  ResultRecoveryAttemptReplacedEvent,
   AttemptRestartAuthorityReadFailedEvent,
   PlannedAttemptReplacedEvent,
   AttemptStoppageIntendedEvent,

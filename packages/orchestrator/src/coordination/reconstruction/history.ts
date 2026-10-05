@@ -1,3 +1,9 @@
+import { resultRecoveryReplacementProblem } from "../../workflow/protocols/result-recovery/replacement.js"
+import {
+  resultRecoveryContinueAuthorizationProblem,
+  resultRecoveryContinueCommandProblem
+} from "../../workflow/protocols/result-recovery/authorization.js"
+import { resultRecoveryDirectionProblem } from "../../workflow/protocols/result-recovery/protocol.js"
 /* eslint-disable functional/immutable-data, max-lines -- The chronological validator owns its local indexes and cross-event invariants. */
 import { type AttemptId, type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -168,7 +174,9 @@ const unfinishedAttemptAffectedBy = (event: WorkflowJournalEvent): AttemptId | u
     ? event.plannedAttempt.attemptId
     : event._tag === "PlannedAttemptExecutorWorkReported"
       ? event.report.correlation.attemptId
-      : event._tag === "AttemptImplementationAbandoned" || event._tag === "PlannedAttemptReplaced"
+      : event._tag === "AttemptImplementationAbandoned" ||
+          event._tag === "PlannedAttemptReplaced" ||
+          event._tag === "ResultRecoveryAttemptReplaced"
         ? event.subject.plannedAttempt.attemptId
         : undefined
 
@@ -885,6 +893,44 @@ const validateRecord = (
   let next = envelope.indexes
   const descriptor = describeJournalEvent(record.event)
   next = validateControlDirection(record, runId, next, issues)
+  if (record.event._tag === "ResultRecoveryDirected") {
+    const prior = isJournalRecordEvidence(records)
+      ? journalEvidenceBefore(records, record.position)
+      : records.filter(({ position }) => position < record.position)
+    const problem = resultRecoveryDirectionProblem(record.event, runId, prior)
+    if (problem !== undefined) semanticIssue(issues, runId, record.position, problem)
+  }
+  if (record.event._tag === "ResultRecoveryAttemptReplaced") {
+    const prior = isJournalRecordEvidence(records)
+      ? journalEvidenceBefore(records, record.position)
+      : records.filter(({ position }) => position < record.position)
+    const problem = resultRecoveryReplacementProblem(prior, record.event)
+    if (problem !== undefined) semanticIssue(issues, runId, record.position, problem)
+    next = {
+      ...next,
+      supersededExecutorAttempts: HashSet.add(
+        next.supersededExecutorAttempts,
+        record.event.subject.plannedAttempt.attemptId
+      )
+    }
+  }
+  if (record.event._tag === "ResultRecoveryContinueAuthorized") {
+    const prior = isJournalRecordEvidence(records)
+      ? journalEvidenceBefore(records, record.position)
+      : records.filter(({ position }) => position < record.position)
+    const problem = resultRecoveryContinueAuthorizationProblem(prior, record.event)
+    if (problem !== undefined) semanticIssue(issues, runId, record.position, problem)
+  }
+  if (
+    record.event._tag === "PlannedAttemptExecutorCommandIntended" &&
+    record.event.command === "ContinueRejectedResult"
+  ) {
+    const prior = isJournalRecordEvidence(records)
+      ? journalEvidenceBefore(records, record.position)
+      : records.filter(({ position }) => position < record.position)
+    const problem = resultRecoveryContinueCommandProblem(prior, record.event)
+    if (problem !== undefined) semanticIssue(issues, runId, record.position, problem)
+  }
   next = validateAttemptChoice(record, runId, records, next, issues)
   next = validateAttemptStop(record, runId, records, next, issues)
   validateCancelledAttemptHistory(record, runId, records, (detail) =>

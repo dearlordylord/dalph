@@ -2,6 +2,7 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorWriterCustody,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedAttemptExecutorCorrelation,
@@ -17,6 +18,8 @@ interface AttemptOwner {
   readonly context: Context.Context<AttemptServices>
   readonly close: Effect.Effect<void>
   readonly terminal: Ref.Ref<boolean>
+  readonly rejectedStopped: Ref.Ref<boolean>
+  readonly recoveryNonce: Ref.Ref<string | undefined>
   readonly users: Ref.Ref<number>
 }
 
@@ -25,7 +28,10 @@ export const isolatedPlannedAttemptExecutorLayer = <E>(
   acquire: (
     correlation: PlannedAttemptExecutorCorrelation
   ) => Effect.Effect<Context.Context<AttemptServices>, E, Scope.Scope>,
-  failureDetail: (failure: E) => string
+  failureDetail: (failure: E) => string,
+  acquireRetiredWriterCustody?: (
+    plannedAttempt: Parameters<NonNullable<PlannedAttemptExecutor["Service"]["observeWriterCustody"]>>[0]
+  ) => Effect.Effect<PlannedAttemptExecutorWriterCustody, E, Scope.Scope>
 ): Layer.Layer<AttemptServices | CodexProviderWorkUnitReplacement> =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -33,7 +39,8 @@ export const isolatedPlannedAttemptExecutorLayer = <E>(
       const acquisition = yield* Semaphore.make(1)
       const owners = yield* Ref.make<ReadonlyMap<string, AttemptOwner>>(new Map())
       const ownerFor = Effect.fn("IsolatedPlannedAttemptExecutor.ownerFor")(function* (
-        correlation: PlannedAttemptExecutorCorrelation
+        correlation: PlannedAttemptExecutorCorrelation,
+        recoveryNonce?: string
       ) {
         return yield* acquisition.withPermit(
           Effect.gen(function* () {
@@ -41,8 +48,19 @@ export const isolatedPlannedAttemptExecutorLayer = <E>(
             const current = yield* Ref.get(owners)
             const retained = current.get(key)
             if (retained !== undefined) {
-              yield* Ref.update(retained.users, (users) => users + 1)
-              return retained
+              const renew =
+                recoveryNonce !== undefined &&
+                recoveryNonce !== (yield* Ref.get(retained.recoveryNonce)) &&
+                (yield* Ref.get(retained.rejectedStopped)) &&
+                (yield* Ref.get(retained.users)) === 0
+              if (!renew) {
+                yield* Ref.update(retained.users, (users) => users + 1)
+                return retained
+              }
+              // A new explicit permission may acquire a new incarnation only after
+              // exact stopped custody and all old calls/attachments have left.
+              yield* retained.close
+              yield* Ref.set(owners, new Map([...current].filter(([entry]) => entry !== key)))
             }
             const scope = yield* Scope.fork(hostScope)
             const context = yield* acquire(correlation).pipe(
@@ -53,9 +71,11 @@ export const isolatedPlannedAttemptExecutorLayer = <E>(
               context,
               close: yield* Effect.cached(Scope.close(scope, Exit.void)),
               terminal: yield* Ref.make(false),
+              rejectedStopped: yield* Ref.make(false),
+              recoveryNonce: yield* Ref.make(recoveryNonce),
               users: yield* Ref.make(1)
             }
-            yield* Ref.set(owners, new Map(current).set(key, owner))
+            yield* Ref.update(owners, (entries) => new Map(entries).set(key, owner))
             return owner
           })
         )
@@ -66,7 +86,16 @@ export const isolatedPlannedAttemptExecutorLayer = <E>(
       // Suspended owners remain available for Resume. Only an authoritative terminal
       // report permits retirement, after every attachment and in-flight call has left.
       const noteReport = (owner: AttemptOwner, report: PlannedAttemptExecutorReport) =>
-        Ref.set(owner.terminal, report._tag === "ExecutorWorkTerminal")
+        Effect.all(
+          [
+            Ref.set(owner.terminal, report._tag === "ExecutorWorkTerminal"),
+            Ref.set(
+              owner.rejectedStopped,
+              report._tag === "ExecutorWorkResultRejected" && report.custody._tag === "Stopped"
+            )
+          ],
+          { discard: true }
+        )
       const noteProjection = (owner: AttemptOwner, projection: PlannedAttemptExecutorProjection) =>
         projection._tag === "Exact" ? noteReport(owner, projection.report) : Effect.void
       const release = (correlation: PlannedAttemptExecutorCorrelation, owner: AttemptOwner) =>
@@ -86,9 +115,94 @@ export const isolatedPlannedAttemptExecutorLayer = <E>(
         )
       const withOwner = <A, E2, R>(
         correlation: PlannedAttemptExecutorCorrelation,
-        use: (owner: AttemptOwner) => Effect.Effect<A, E2, R>
-      ) => Effect.acquireUseRelease(ownerFor(correlation), use, (owner) => release(correlation, owner))
+        use: (owner: AttemptOwner) => Effect.Effect<A, E2, R>,
+        recoveryNonce?: string
+      ) => Effect.acquireUseRelease(ownerFor(correlation, recoveryNonce), use, (owner) => release(correlation, owner))
       const executor = PlannedAttemptExecutor.of({
+        observeWriterCustody: (plannedAttempt) => {
+          const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+          return withOwner(correlation, (owner) =>
+            Effect.gen(function* () {
+              if ((yield* Ref.get(owner.terminal)) && acquireRetiredWriterCustody !== undefined) {
+                // Explicit recovery obtains fresh substrate evidence in a separate
+                // scope. Passive lifecycle reads retain their original routing owner.
+                return yield* acquisition.withPermit(
+                  Effect.gen(function* () {
+                    if ((yield* Ref.get(owner.users)) !== 1)
+                      return PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                        plannedAttempt,
+                        detail: "terminal attempt still has active calls or lifecycle attachments"
+                      })
+                    yield* owner.close
+                    return yield* Effect.scoped(acquireRetiredWriterCustody(plannedAttempt))
+                  })
+                )
+              }
+              const observe = Context.get(owner.context, PlannedAttemptExecutor).observeWriterCustody
+              return yield* observe === undefined
+                ? Effect.succeed(
+                    PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                      plannedAttempt,
+                      detail: "isolated attempt owner does not expose writer custody observation"
+                    })
+                  )
+                : observe(plannedAttempt)
+            })
+          ).pipe(
+            Effect.catch((failure) =>
+              Effect.succeed(
+                PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                  plannedAttempt,
+                  detail: failureDetail(failure)
+                })
+              )
+            )
+          )
+        },
+        continueRejectedResult: (request, authorization) => {
+          const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
+          if (
+            authorization.correlation.runId !== correlation.runId ||
+            authorization.correlation.attemptId !== correlation.attemptId
+          )
+            return Effect.fail(
+              preserveCommandFailure(
+                "ContinueRejectedResult",
+                correlation,
+                new CodexAppServerFailure({
+                  detail: "result recovery authorization names another attempt",
+                  kind: "Ownership",
+                  operation: "initialize"
+                })
+              )
+            )
+          return withOwner(
+            correlation,
+            (owner) =>
+              Effect.gen(function* () {
+                if (
+                  (yield* Ref.get(owner.rejectedStopped)) &&
+                  (yield* Ref.get(owner.recoveryNonce)) !== authorization.nonce
+                )
+                  return yield* new CodexAppServerFailure({
+                    detail: "stopped attempt owner still has active calls or lifecycle attachments",
+                    kind: "Ownership",
+                    operation: "initialize"
+                  })
+                const continueResult = Context.get(owner.context, PlannedAttemptExecutor).continueRejectedResult
+                return yield* continueResult === undefined
+                  ? Effect.fail(
+                      new CodexAppServerFailure({
+                        detail: "isolated attempt owner does not expose result recovery",
+                        kind: "Protocol",
+                        operation: "initialize"
+                      })
+                    )
+                  : continueResult(request, authorization).pipe(Effect.tap((report) => noteReport(owner, report)))
+              }),
+            authorization.nonce
+          ).pipe(Effect.mapError((failure) => preserveCommandFailure("ContinueRejectedResult", correlation, failure)))
+        },
         observe: (correlation, purpose) =>
           withOwner(correlation, (owner) =>
             Context.get(owner.context, PlannedAttemptExecutor)

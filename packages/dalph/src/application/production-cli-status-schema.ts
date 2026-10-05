@@ -1,14 +1,5 @@
 import {
-  AttemptId,
-  IntegrationTarget,
-  PlannedAttemptExecutorCorrelation,
-  PlannedTaskAttempt,
-  PlannedAttemptExecutorFailureCode,
-  RunId,
-  TaskId
-} from "@dalph/contracts"
-import type { CurrentDeliveryStatus } from "@dalph/orchestrator"
-import {
+  ResultRecoverySubject,
   DeliveryDiagnostics,
   BoundedTicketRank,
   DeliveryProposalOrdinal,
@@ -24,6 +15,18 @@ import {
   TaskClaimReacquisitionRequestId,
   TrackerRevision
 } from "@dalph/orchestrator"
+import {
+  AttemptId,
+  plannedTaskAttemptEquivalence,
+  IntegrationTarget,
+  PlannedAttemptExecutorCorrelation,
+  PlannedTaskAttempt,
+  PlannedAttemptExecutorFailureCode,
+  PlannedAttemptRejectedResultReport,
+  RunId,
+  TaskId
+} from "@dalph/contracts"
+import type { CurrentDeliveryStatus } from "@dalph/orchestrator"
 import { Match, Schema } from "effect"
 import { ObligationReference, PublicTrackerWakeCondition } from "./production-cli-status-identity-schema.js"
 import { publicDeliveryStatusEntryOf } from "./production-cli-status-projection.js"
@@ -83,6 +86,14 @@ const entryBase = {
 }
 
 const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
+  ExecutorResultRejected: {
+    ...entryBase,
+    classification: Schema.Literal("Blocked"),
+    plannedAttempt: PlannedTaskAttempt,
+    obligationReference: ObligationReference,
+    rejection: PlannedAttemptRejectedResultReport,
+    recoverySubject: ResultRecoverySubject.cases.RejectedResult
+  },
   ExecutorFailure: {
     ...entryBase,
     classification: Schema.Literal("Blocked"),
@@ -90,7 +101,10 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
     obligationReference: ObligationReference,
     boundary: Schema.Literal("PlannedAttemptExecutor"),
     reason: Schema.TaggedUnion({ Unavailable: {}, Known: { code: PlannedAttemptExecutorFailureCode } }),
-    recovery: Schema.TaggedStruct("Unavailable", { reason: Schema.Literal("ExecutorFailureRecoveryNotImplemented") })
+    recovery: Schema.TaggedUnion({
+      Unavailable: { reason: Schema.Literal("ExecutorFailureRecoveryNotImplemented") },
+      RestartOnly: { subject: ResultRecoverySubject.cases.HistoricalUnknownFailure }
+    })
   },
   DependencyWait: {
     ...entryBase,
@@ -230,9 +244,18 @@ const trackerFactRelationshipIsValid = (entry: PublicTrackerFactWait): boolean =
 
 const entryRelationshipCheck = Match.type<typeof PublicDeliveryStatusEntryShape.Type>().pipe(
   Match.tagsExhaustive({
+    ExecutorResultRejected: (entry) =>
+      entry.plannedAttempt.runId === entry.subject.runId &&
+      taskMatchesSubject(entry.plannedAttempt.taskId, entry.subject) &&
+      entry.rejection.correlation.runId === entry.plannedAttempt.runId &&
+      entry.rejection.correlation.attemptId === entry.plannedAttempt.attemptId &&
+      plannedTaskAttemptEquivalence(entry.recoverySubject.plannedAttempt, entry.plannedAttempt),
     ExecutorFailure: (entry) =>
       entry.plannedAttempt.runId === entry.subject.runId &&
-      taskMatchesSubject(entry.plannedAttempt.taskId, entry.subject),
+      taskMatchesSubject(entry.plannedAttempt.taskId, entry.subject) &&
+      (entry.recovery._tag !== "RestartOnly" ||
+        (entry.reason._tag === "Unavailable" &&
+          plannedTaskAttemptEquivalence(entry.plannedAttempt, entry.recovery.subject.plannedAttempt))),
     LiveDeliveryAction: (entry) => {
       const materialized =
         entry.lifecycle === "MaterializedDeliveryAction" || entry.lifecycle === "SettledMaterializedDeliveryAction"
@@ -332,7 +355,22 @@ const publicSnapshotOf = (status: DeliveryStatusSnapshot): PublicSnapshot => {
     case "TaskAbsentFromCurrentGraph":
       return status
     case "DeliveryStatusAvailable":
-      return { ...status, entries: status.entries.map(publicDeliveryStatusEntryOf) }
+      return {
+        ...status,
+        entries: status.entries.map((entry) => {
+          const projected = publicDeliveryStatusEntryOf(entry)
+          if (projected._tag !== "ExecutorFailure" || projected.reason._tag !== "Unavailable") return projected
+          const diagnostic = status.diagnostics?.tasks.find(
+            (task) =>
+              task.phase === "Failed" &&
+              task.recovery._tag === "RestartOnly" &&
+              plannedTaskAttemptEquivalence(task.recovery.subject.plannedAttempt, projected.plannedAttempt)
+          )
+          return diagnostic?.recovery._tag === "RestartOnly"
+            ? { ...projected, recovery: diagnostic.recovery }
+            : projected
+        })
+      }
   }
 }
 export const publicDeliveryStatusOf = (status: CurrentDeliveryStatus): ProductionCliCurrentDeliveryStatus => {

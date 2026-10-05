@@ -1,3 +1,6 @@
+import { transitionTaskWorkPosition } from "./transition-task-work.js"
+import { deliveryTransitionPolicy } from "../delivery/delivery-transition-policy.js"
+import { ResultRecoverySubject, ResultRecoveryRequestId } from "../../workflow/protocols/result-recovery/events.js"
 import { expect, it } from "vitest"
 import { Result, Schema } from "effect"
 import {
@@ -11,6 +14,7 @@ import {
   TaskRevision,
   WorktreeLocator,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   PlannedAttemptExecutorResult,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
@@ -718,5 +722,86 @@ it("explains each task-authority constraint without changing the planned attempt
         responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }]
       })
     ).toEqual({ explanations: [explanation], transitions: [] })
+  }
+})
+
+it("retains result rejection without automatic Resume, replacement, or Run termination", () => {
+  for (const custody of [{ _tag: "Stopped" }, { _tag: "Unresolved" }] as const) {
+    const responsibility = executionResponsibilityFor(taskA)
+    const report = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+      correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "Deadline",
+      responseCount: PlannedAttemptResultResponseCount.make(2),
+      custody
+    })
+    const recoverySubject = ResultRecoverySubject.cases.RejectedResult.make({
+      plannedAttempt: responsibility.plannedAttempt,
+      reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+    })
+    const state = WorkflowResponsibilityState.make({ entries: [responsibility] })
+    const frontier = deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: state,
+      responsibilityFacts: [
+        {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: ResponsibilityDisposition.PlannedAttemptExecutorResultRejected({ report, recoverySubject }),
+          responsibility
+        }
+      ]
+    })
+    expect(frontier).toEqual({
+      explanations: [{ _tag: "PlannedAttemptExecutorResultRejected", report, recoverySubject, taskId: taskA }],
+      transitions: []
+    })
+    expect(deriveRunFinalityDecision(frontier, state, true)).toEqual({
+      _tag: "RunMustRemainActive",
+      reason: "UnsettledResponsibility"
+    })
+  }
+})
+
+it("offers explicit retained-result Continue through ordinary position admission only after stopped custody", () => {
+  for (const custody of [{ _tag: "Stopped" }, { _tag: "Unresolved" }] as const) {
+    const responsibility = executionResponsibilityFor(taskA)
+    const plannedAttempt = responsibility.plannedAttempt
+    const requestId = ResultRecoveryRequestId.make({ nonce: "authorized-continue", runId: plannedAttempt.runId })
+    const report = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+      correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "Deadline",
+      responseCount: PlannedAttemptResultResponseCount.make(2),
+      custody
+    })
+    const frontier = deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: WorkflowResponsibilityState.make({ entries: [responsibility] }),
+      responsibilityFacts: [
+        {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          responsibility,
+          disposition: ResponsibilityDisposition.PlannedAttemptExecutorResultRejected({
+            report,
+            continueRequestId: requestId,
+            recoverySubject: ResultRecoverySubject.cases.RejectedResult.make({
+              plannedAttempt,
+              reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
+            })
+          })
+        }
+      ]
+    })
+    if (custody._tag === "Unresolved") expect(frontier.transitions).toEqual([])
+    else {
+      expect(frontier.transitions).toEqual([{ _tag: "ContinueRejectedResult", plannedAttempt, requestId }])
+      expect(transitionTaskWorkPosition({ _tag: "ContinueRejectedResult", plannedAttempt, requestId })).toBe(
+        "ReserveOrReuse"
+      )
+      expect(deliveryTransitionPolicy.ContinueRejectedResult).toEqual({
+        route: "IdentityFree",
+        plannedAttemptProtocol: "PlannedAttempt"
+      })
+    }
   }
 })

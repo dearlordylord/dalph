@@ -237,10 +237,23 @@ type PreservableCassetteValue<Value> = true extends ContainsGeneratedOrUnclassif
 type CompleteFields<Value> = { readonly [Key in keyof Value]-?: Value[Key] }
 
 const completeFields = <Value>(value: CompleteFields<Value>): Value => value
+function completeFieldsWithOptionalRecovery<Value extends { readonly recoveryAuthorization?: unknown }>(
+  value: Omit<CompleteFields<Value>, "recoveryAuthorization"> & Pick<Value, "recoveryAuthorization">
+): Value
+function completeFieldsWithOptionalRecovery(value: unknown): unknown {
+  return value
+}
+
 function completeFieldsWithOptionalRoot<Value extends { readonly rootTaskId?: TaskId }>(
   value: CompleteFields<Omit<Value, "rootTaskId">> & Pick<Value, "rootTaskId">
 ): Value
 function completeFieldsWithOptionalRoot(value: unknown): unknown {
+  return value
+}
+function completeFieldsWithOptionalWriterCustody<Value extends { readonly writerCustody?: unknown }>(
+  value: CompleteFields<Omit<Value, "writerCustody">> & Pick<Value, "writerCustody">
+): Value
+function completeFieldsWithOptionalWriterCustody(value: unknown): unknown {
   return value
 }
 const preserveCassetteValue = <Value>(value: PreservableCassetteValue<Value>): Value => value
@@ -280,6 +293,15 @@ const renameExecutorReport = (
   return Match.value(report).pipe(
     Match.tagsExhaustive({
       ExecutorWorkExecuting: (value) => completeFields<typeof value>({ _tag: "ExecutorWorkExecuting", correlation }),
+      ExecutorWorkResultRejected: (value) =>
+        completeFields<typeof value>({
+          _tag: "ExecutorWorkResultRejected",
+          correlation,
+          reason: value.reason,
+          recoveryCause: value.recoveryCause,
+          responseCount: value.responseCount,
+          custody: preserveCassetteValue(value.custody)
+        }),
       ExecutorWorkSafelySuspended: (value) =>
         completeFields<typeof value>({ _tag: "ExecutorWorkSafelySuspended", correlation }),
       ExecutorWorkTerminal: (value) =>
@@ -2075,6 +2097,15 @@ const renameRecordedCassetteEntry = (
           operationId: renamed(entry.operationId, maps.operationIds),
           request: renameCompletionTaskRequest(entry.request, maps)
         }),
+      ResultRecoveryDirected: (entry) =>
+        completeFields<typeof entry>({
+          _tag: entry._tag,
+          direction: preserveCassetteValue(entry.direction),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          requestId: { ...entry.requestId, runId: renamed(entry.requestId.runId, maps.runIds) },
+          subject: { ...entry.subject, plannedAttempt: renamePlannedAttempt(entry.subject.plannedAttempt, maps) }
+        }),
       AttemptChoiceApplied: (choiceEntry) =>
         completeFields<typeof choiceEntry>({
           _tag: "AttemptChoiceApplied",
@@ -2245,9 +2276,20 @@ const renameRecordedCassetteEntry = (
           report: renameExecutorReport(reportEntry.report, maps)
         }),
       PlannedAttemptExecutorCommandIntended: (intentEntry) =>
-        completeFields<typeof intentEntry>({
+        completeFieldsWithOptionalRecovery<typeof intentEntry>({
           _tag: "PlannedAttemptExecutorCommandIntended",
           command: preserveCassetteValue(intentEntry.command),
+          ...(intentEntry.recoveryAuthorization === undefined
+            ? {}
+            : {
+                recoveryAuthorization: {
+                  ...intentEntry.recoveryAuthorization,
+                  correlation: {
+                    runId: renamed(intentEntry.recoveryAuthorization.correlation.runId, maps.runIds),
+                    attemptId: renamed(intentEntry.recoveryAuthorization.correlation.attemptId, maps.attemptIds)
+                  }
+                }
+              }),
           initiatedBy: preserveCassetteValue(intentEntry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(intentEntry.occurrenceClassification),
           ordinal: preserveCassetteValue(intentEntry.ordinal),
@@ -2306,6 +2348,39 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(responsibilityEntry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(responsibilityEntry.occurrenceClassification),
           plannedAttempt: renamePlannedAttempt(responsibilityEntry.plannedAttempt, maps)
+        }),
+      ResultRecoveryAttemptReplaced: (entry) =>
+        completeFieldsWithOptionalWriterCustody<typeof entry>({
+          _tag: entry._tag,
+          requestId: { ...entry.requestId, runId: renamed(entry.requestId.runId, maps.runIds) },
+          subject: { ...entry.subject, plannedAttempt: renamePlannedAttempt(entry.subject.plannedAttempt, maps) },
+          integrationTarget: preserveCassetteValue(entry.integrationTarget),
+          witness: renameContinuationWitness(entry.witness, maps),
+          ...(entry.writerCustody === undefined
+            ? {}
+            : {
+                writerCustody: {
+                  _tag: "Stopped",
+                  plannedAttempt: renamePlannedAttempt(entry.writerCustody.plannedAttempt, maps)
+                }
+              }),
+          successorPlan: {
+            _tag: "RecordTaskAttemptPlan",
+            operationId: renamed(entry.successorPlan.operationId, maps.operationIds),
+            plannedAttempt: renamePlannedAttempt(entry.successorPlan.plannedAttempt, maps),
+            predecessorOperationIds: entry.successorPlan.predecessorOperationIds.map((id) =>
+              renamed(id, maps.operationIds)
+            )
+          },
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      ResultRecoveryContinueAuthorized: (entry) =>
+        completeFields<typeof entry>({
+          _tag: entry._tag,
+          requestId: { ...entry.requestId, runId: renamed(entry.requestId.runId, maps.runIds) },
+          plannedAttempt: renamePlannedAttempt(entry.plannedAttempt, maps),
+          witness: renameContinuationWitness(entry.witness, maps)
         }),
       PlannedAttemptContinuationAuthorized: (authorizationEntry) =>
         completeFields<typeof authorizationEntry>({

@@ -797,3 +797,61 @@ export const directPublicationBatchGrantObligations = Object.freeze({
     "settledReached"
   ])
 })
+
+/** #428 private response-cycle obligations, shared by checking and mutation analysis. */
+export const providerResultCorrectionObligations = Object.freeze({
+  invariants: Object.freeze([
+    "responseBudgetBounded",
+    "everyProviderCallHasIntent",
+    "eachOwnedRequestCrossesAtMostOnce",
+    "initialResponseHasNoCorrectionDeadline",
+    "correctionDeadlineIsOriginal",
+    "noCorrectionCallAfterDeadline",
+    "recoveryPreservesOriginalBudget"
+  ]),
+  witnesses: Object.freeze([
+    "initialIntentReached",
+    "ownedRequestSentReached",
+    "ownedTurnObservedReached",
+    "rejectedResponseReached",
+    "secondResponseReached",
+    "thirdResponseReached",
+    "exhaustedReached",
+    "correctionTimeAdvancedReached",
+    "expiredCorrectionReached",
+    "crashReached",
+    "recoveredBeforeCallReached",
+    "recoveredAfterCallReached"
+  ])
+})
+
+/** #428 public direction admission, distinct from private response-cycle state. */
+export const resultRecoveryDirectionObligations = Object.freeze({
+  invariants: Object.freeze([
+    "directionIdentityIsExact",
+    "firstDirectionWinsSelectedReport",
+    "eachRecordedDirectionAppliedOnce",
+    "historicalFailureIsRestartOnly",
+    "acceptedTerminalSealIsAbsorbing",
+    "staleDirectionCannotAuthorize",
+    "admissionClaimsNoExecution",
+    "typeOk"
+  ]),
+  witnesses: Object.freeze([
+    "rejectionObservedReached",
+    "historicalFailureObservedReached",
+    "knownFailureObservedReached",
+    "continueRecordedReached",
+    "restartRecordedReached",
+    "exactRedeliveryReached",
+    "conflictingReuseReached",
+    "unavailableSelectionReached",
+    "currentDirectionAuthorizedReached",
+    "lateTerminalReached",
+    "freshLaterDirectionReached",
+    "integrationCutoffReached",
+    "replacementCutoffReached",
+    "crashReached",
+    "recoveredReached"
+  ])
+})

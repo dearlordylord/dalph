@@ -1,9 +1,11 @@
+import type { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
 import type { DeliveryDiagnostics } from "./delivery-diagnostics.js"
 import {
   RunId,
   TaskId,
   type IntegrationTarget,
   type PlannedAttemptExecutorCorrelation,
+  type PlannedAttemptExecutorReport,
   type PlannedAttemptExecutorFailureCode
 } from "@dalph/contracts"
 import { Schema } from "effect"
@@ -213,6 +215,18 @@ export interface DeliveryStatusGraphSource {
 
 /** One Run-wide or task-local status entry. Every variant keeps its exact supporting fact. */
 export type DeliveryStatusEntry =
+  | {
+      /** A pre-seal rejection retains its work and never settles delivery. */
+      readonly _tag: "ExecutorResultRejected"
+      readonly recoverySubject: Extract<ResultRecoverySubject, { readonly _tag: "RejectedResult" }>
+      readonly classification: "Blocked"
+      readonly subject: Extract<DeliveryStatusSubject, { readonly _tag: "Task" }>
+      readonly responsibility: Extract<
+        WorkflowResponsibilityEntry,
+        { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
+      >
+      readonly rejection: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkResultRejected" }>
+    }
   | {
       /** An executor failure is retained evidence, never a successful delivery settlement. */
       readonly _tag: "ExecutorFailure"

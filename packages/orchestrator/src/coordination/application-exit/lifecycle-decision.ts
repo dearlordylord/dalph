@@ -130,8 +130,12 @@ export const decideInterruptibleOwnerRelease = (
 }
 
 export type ExecutorPositionDecision = Data.TaggedEnum<{
-  ReleasePosition: { readonly evidence: "ExecutorWorkSafelySuspended" | "ExecutorWorkTerminal" }
-  RetainPosition: { readonly reason: "ForeignCorrelation" | "NoEvidence" | "ExecutingIsUnsafe" }
+  ReleasePosition: {
+    readonly evidence: "ExecutorWorkSafelySuspended" | "ExecutorWorkTerminal" | "RejectedResultWritersStopped"
+  }
+  RetainPosition: {
+    readonly reason: "ForeignCorrelation" | "NoEvidence" | "ExecutingIsUnsafe" | "RejectedResultCustodyUnresolved"
+  }
 }>
 
 export const ExecutorPositionDecision = Data.taggedEnum<ExecutorPositionDecision>()
@@ -147,6 +151,10 @@ export const decideExecutorPosition = (
   }
   return Match.valueTags(report, {
     ExecutorWorkExecuting: () => ExecutorPositionDecision.RetainPosition({ reason: "ExecutingIsUnsafe" }),
+    ExecutorWorkResultRejected: (rejection) =>
+      rejection.custody._tag === "Stopped"
+        ? ExecutorPositionDecision.ReleasePosition({ evidence: "RejectedResultWritersStopped" })
+        : ExecutorPositionDecision.RetainPosition({ reason: "RejectedResultCustodyUnresolved" }),
     ExecutorWorkSafelySuspended: () =>
       ExecutorPositionDecision.ReleasePosition({ evidence: "ExecutorWorkSafelySuspended" }),
     ExecutorWorkTerminal: () => ExecutorPositionDecision.ReleasePosition({ evidence: "ExecutorWorkTerminal" })

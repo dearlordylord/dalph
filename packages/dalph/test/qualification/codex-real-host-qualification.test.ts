@@ -101,6 +101,7 @@ const assistantMessage = (text: string): Record<string, unknown> => ({
 
 type ModelMode =
   | "accepted"
+  | "rejected-result"
   | "accepted-race"
   | "failed"
   | "failed-race"
@@ -225,6 +226,7 @@ class ResponsesFixture {
       return
     }
     if (this.calls.length === 1) {
+      if (this.mode === "rejected-result") await this.terminalRelease
       response.write(
         sse(
           this.mode === "child" || this.mode === "escaped-child" || this.mode === "stuck-child"
@@ -241,7 +243,13 @@ class ResponsesFixture {
         this.mode === "foreign"
           ? { commit, correlation: { runId: "foreign-run", attemptId: "foreign-attempt" } }
           : { version: 1, outcome: "Accepted", commit }
-      response.write(sse(assistantMessage(JSON.stringify(candidate))))
+      response.write(
+        sse(
+          assistantMessage(
+            this.mode === "rejected-result" && this.calls.length <= 4 ? "{invalid}" : JSON.stringify(candidate)
+          )
+        )
+      )
     }
     response.write(sse(completed(responseId)))
     response.end()
@@ -261,6 +269,7 @@ type HostAction =
   | "pre-thread-cut"
   | "create"
   | "resume"
+  | "continue-result"
   | "project"
   | "suspend"
   | "settle"
@@ -783,6 +792,55 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       }
     },
     45_000
+  )
+
+  qualificationTest(
+    "a fresh native process Continues a stopped exhausted result once and retains its predecessor cycle",
+    async () => {
+      const fixture = await makeFixture("rejected-result")
+      const hosts: Array<BuiltHost> = []
+      try {
+        const first = await spawnHost(fixture, "settle")
+        hosts.push(first)
+        await first.waitForReport(1)
+        const beforeLaunch = (await latestPrivateSnapshot(fixture)).serverLaunch
+        if (beforeLaunch === null) throw new Error("expected exact prior process launch")
+        fixture.model.releaseTerminal()
+        expect(requireEvent(await first.waitForReport(2), "report").report).toMatchObject({
+          _tag: "ExecutorWorkResultRejected",
+          responseCount: 3,
+          custody: { _tag: "Stopped" }
+        })
+        expect(await first.waitForExit()).toEqual({ code: 0, signal: null })
+        const before = await attemptRecord(fixture)
+        if (before._tag !== "ResultRejected") throw new Error("expected retained rejection")
+        await waitForOwnedServerAbsence(beforeLaunch)
+        expect(fixture.model.calls).toHaveLength(4)
+        const continued = await spawnHost(fixture, "continue-result")
+        hosts.push(continued)
+        expect(requireEvent(await continued.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
+        const accepted = await continued.waitForReport(2)
+        expect(terminalReport(accepted).result._tag).toBe("Accepted")
+        await acceptedEvidenceFor(fixture, accepted)
+        expect(await continued.waitForExit()).toEqual({ code: 0, signal: null })
+        const after = await attemptRecord(fixture)
+        if (after._tag !== "Terminal") throw new Error("expected accepted terminal seal")
+        expect(threadIdOf(after)).toBe(threadIdOf(before))
+        expect(after.resultRecoveryHistory?.[0]?.predecessor).toEqual(before.resultCycle)
+        expect(after.resultCycle?.responses).toHaveLength(1)
+        expect(after.resultCycle?.cycleId).not.toBe(before.resultCycle.cycleId)
+        expect(after.turnStartIncarnation).toBeDefined()
+        expect(after.turnStartIncarnation).not.toBe(before.turnStartIncarnation)
+        const redelivered = await spawnHost(fixture, "continue-result")
+        hosts.push(redelivered)
+        expect(terminalReport(await redelivered.waitForReport(1)).result._tag).toBe("Accepted")
+        expect(await redelivered.waitForExit()).toEqual({ code: 0, signal: null })
+        expect(fixture.model.calls).toHaveLength(5)
+      } finally {
+        await dispose(fixture, hosts)
+      }
+    },
+    60_000
   )
 
   qualificationTest(

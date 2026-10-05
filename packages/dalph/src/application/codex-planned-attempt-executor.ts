@@ -1,5 +1,13 @@
+import { ProviderResultRecoveryRecord } from "./provider-result-recovery.js"
 /* eslint-disable max-lines -- The bounded executor chronology stays co-located for auditability. */
-import { decodeOwnedSemanticCandidate, semanticCandidateInstructions } from "./provider-semantic-result.js"
+import {
+  decodeOwnedSemanticCandidate,
+  publishProviderResultEvidence,
+  validateOwnedSemanticCandidate,
+  providerResultGitBoundary,
+  ProviderResultAuthorityUnavailable,
+  semanticCandidateInstructions
+} from "./provider-semantic-result.js"
 import {
   AcceptedResultEvidenceManifest,
   EvidenceDigest,
@@ -7,11 +15,14 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorCommandFailure,
+  PlannedAttemptResultRecoveryAuthorization,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorBeginProofId,
   type PlannedAttemptExecutorBeginDelivery,
   type PlannedAttemptExecutorObservationPurpose,
   PlannedAttemptExecutorReport,
+  PlannedAttemptExecutorWriterCustody,
+  PlannedAttemptResultResponseCount,
   PlannedAttemptExecutorResult,
   type PlannedAttemptExecutorFailureCode,
   PlannedAttemptExecutorCorrelation,
@@ -30,13 +41,7 @@ import {
   TaskWorkSpecification,
   WorktreeLocator
 } from "@dalph/contracts"
-import {
-  ActiveTaskClaim,
-  EvidenceStore,
-  GitCommand,
-  isExactTaskClaim,
-  type EvidenceStoreService
-} from "@dalph/orchestrator"
+import { ActiveTaskClaim, EvidenceStore, GitCommand, isExactTaskClaim } from "@dalph/orchestrator"
 import {
   Context,
   Data,
@@ -55,6 +60,20 @@ import {
   Stream
 } from "effect"
 import * as Scope from "effect/Scope"
+import {
+  ProviderResultCycle,
+  ProviderResultRequestToken,
+  ProviderResultTurnId,
+  ProviderResultInstantMilliseconds,
+  ProviderResultResponseIntent,
+  providerResultResponseExpired,
+  observeProviderResultTurn,
+  prepareProviderResultCorrection,
+  prepareProviderResultContinuation,
+  providerResultResponseOwnership,
+  withinProviderResultDeadline,
+  rejectProviderResultResponse
+} from "./provider-result-correction.js"
 import { logCodexCompletionTrace } from "./codex-completion-trace.js"
 import {
   CodexAppServer,
@@ -124,14 +143,14 @@ const commandFailureDetail = (error: unknown): string => {
 }
 
 export const commandFailure = (
-  command: "Begin" | "Resume" | "Suspend",
+  command: "Begin" | "Resume" | "Suspend" | "ContinueRejectedResult",
   correlation: PlannedAttemptExecutorCorrelation,
   error: unknown
 ): PlannedAttemptExecutorCommandFailure =>
   new PlannedAttemptExecutorCommandFailure({ command, correlation, detail: commandFailureDetail(error) })
 
 export const preserveCommandFailure = (
-  command: "Begin" | "Resume" | "Suspend",
+  command: "Begin" | "Resume" | "Suspend" | "ContinueRejectedResult",
   correlation: PlannedAttemptExecutorCorrelation,
   error: unknown
 ): PlannedAttemptExecutorCommandFailure =>
@@ -238,7 +257,8 @@ const intentRecordFor = (
   priorObservedTurnId: CodexTurnId | null,
   turnStartedAtMilliseconds: number,
   turnStartIncarnation: CodexServerIncarnation,
-  toolEffectPolicy: CodexToolEffectPolicy
+  toolEffectPolicy: CodexToolEffectPolicy,
+  resultCycle?: ProviderResultCycle
 ): CodexIntentRecord =>
   CodexAttemptRecord.cases.TurnIntentRecorded.make({
     attemptId: attempt.attemptId,
@@ -248,6 +268,7 @@ const intentRecordFor = (
     turnStartedAtMilliseconds,
     turnStartIncarnation,
     toolEffectPolicy,
+    ...(resultCycle === undefined ? {} : { resultCycle }),
     priorObservedTurnId,
     threadId,
     worktree: attempt.worktree
@@ -261,20 +282,37 @@ const observedRecordFor = (
   priorObservedTurnId: CodexTurnId | null,
   turnStartedAtMilliseconds?: number,
   turnStartIncarnation?: CodexServerIncarnation,
-  toolEffectPolicy?: CodexToolEffectPolicy
-): CodexObservedRecord =>
-  CodexAttemptRecord.cases.TurnObserved.make({
-    attemptId: attempt.attemptId,
-    correlationAttemptId: attempt.attemptId,
-    correlationRunId: attempt.runId,
-    currentToken,
-    ...(turnStartedAtMilliseconds === undefined ? {} : { turnStartedAtMilliseconds }),
-    ...(turnStartIncarnation === undefined ? {} : { turnStartIncarnation }),
-    ...(toolEffectPolicy === undefined ? {} : { toolEffectPolicy }),
-    observedTurnId,
-    priorObservedTurnId,
-    threadId,
-    worktree: attempt.worktree
+  toolEffectPolicy?: CodexToolEffectPolicy,
+  resultCycle?: ProviderResultCycle
+) =>
+  Effect.gen(function* () {
+    const response = resultCycle?.responses.at(lastElementOffset)
+    const observedCycle =
+      resultCycle !== undefined &&
+      response !== undefined &&
+      (response._tag === "RequestIntended" ||
+        providerResultResponseOwnership(resultCycle)?.token === ProviderResultRequestToken.make(currentToken))
+        ? yield* observeProviderResultTurn(
+            resultCycle,
+            ProviderResultRequestToken.make(currentToken),
+            ProviderResultTurnId.make(observedTurnId),
+            ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+          ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+        : resultCycle
+    return CodexAttemptRecord.cases.TurnObserved.make({
+      attemptId: attempt.attemptId,
+      correlationAttemptId: attempt.attemptId,
+      correlationRunId: attempt.runId,
+      currentToken,
+      ...(turnStartedAtMilliseconds === undefined ? {} : { turnStartedAtMilliseconds }),
+      ...(turnStartIncarnation === undefined ? {} : { turnStartIncarnation }),
+      ...(toolEffectPolicy === undefined ? {} : { toolEffectPolicy }),
+      ...(observedCycle === undefined ? {} : { resultCycle: observedCycle }),
+      observedTurnId,
+      priorObservedTurnId,
+      threadId,
+      worktree: attempt.worktree
+    })
   })
 
 const runningRecordFor = (
@@ -291,6 +329,7 @@ const runningRecordFor = (
       : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
     ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
     ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
+    ...(record.resultCycle === undefined ? {} : { resultCycle: record.resultCycle }),
     observedTurnId: record.observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
     threadId: record.threadId,
@@ -311,6 +350,7 @@ const safelySuspendedRecordFor = (
       : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
     ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
     ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
+    ...(record.resultCycle === undefined ? {} : { resultCycle: record.resultCycle }),
     observedTurnId: record.observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
     threadId: record.threadId,
@@ -331,6 +371,7 @@ const suspensionStopIntendedRecordFor = (
       : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
     ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
     ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
+    ...(record.resultCycle === undefined ? {} : { resultCycle: record.resultCycle }),
     observedTurnId: record.observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
     threadId: record.threadId,
@@ -354,6 +395,7 @@ const terminalRecordFor = (
       : { turnStartedAtMilliseconds: record.turnStartedAtMilliseconds }),
     ...(record.turnStartIncarnation === undefined ? {} : { turnStartIncarnation: record.turnStartIncarnation }),
     ...(record.toolEffectPolicy === undefined ? {} : { toolEffectPolicy: record.toolEffectPolicy }),
+    ...(record.resultCycle === undefined ? {} : { resultCycle: record.resultCycle }),
     evidenceManifest,
     observedTurnId,
     priorObservedTurnId: record.priorObservedTurnId,
@@ -379,6 +421,9 @@ type OwnedTurnRecord = Extract<
       | "SuspensionStopIntended"
       | "SafelySuspended"
       | "Terminal"
+      | "ResultRejected"
+      | "ResultCorrectionPending"
+      | "ResultCorrectionStopIntended"
   }
 >
 
@@ -412,6 +457,9 @@ export const ownedRecordPersistenceDisposition = (
     case "EmptyPreTurn":
     case "AssociatedPreTurn":
     case "Terminal":
+    case "ResultRejected":
+    case "ResultCorrectionPending":
+    case "ResultCorrectionStopIntended":
       return "Reject"
   }
 }
@@ -946,8 +994,10 @@ const makeCodexPlannedAttemptExecutorContext = (
       readonly threadIdleHints: Stream.Stream<CodexThreadIdleHint>
       readonly toolEffects: Stream.Stream<CodexToolEffectNotification>
       readonly expectTurnId: (turnId: CodexTurnId) => Effect.Effect<void>
+      readonly expectNextTurn?: () => Effect.Effect<void>
     }
     const turnCompletionSubscriptions = yield* Ref.make<ReadonlyMap<string, TurnCompletionSubscription>>(new Map())
+    const activeCompletionSubscriptions = yield* Ref.make<ReadonlyMap<string, TurnCompletionSubscription>>(new Map())
     // A proof is an activation-local capability, not copied provider authority.
     // New proof replaces old proof; every attempt mutation consumes or invalidates it.
     const beginProofs = yield* Ref.make<
@@ -970,6 +1020,13 @@ const makeCodexPlannedAttemptExecutorContext = (
     const completionSubscriptionForTurnStart = Effect.fn(
       "CodexPlannedAttemptExecutor.completionSubscriptionForTurnStart"
     )(function* (correlation: PlannedAttemptExecutorCorrelation, threadId: CodexThreadId) {
+      const active = (yield* Ref.get(activeCompletionSubscriptions)).get(
+        plannedAttemptExecutorCorrelationKey(correlation)
+      )
+      if (active !== undefined) {
+        if (active.expectNextTurn === undefined) return yield* new CodexTurnBoundaryUnknown({})
+        return yield* active.expectNextTurn()
+      }
       const subscriptionScope = yield* Scope.make()
       const attached =
         app.attachExactTurnCompletedHints === undefined
@@ -990,7 +1047,8 @@ const makeCodexPlannedAttemptExecutorContext = (
         stream: attached?.hints ?? Stream.fromIterable<CodexTurnCompletedHint>([]),
         toolEffects,
         threadIdleHints,
-        expectTurnId: attached?.expectTurnId ?? (() => Effect.void)
+        expectTurnId: attached?.expectTurnId ?? (() => Effect.void),
+        ...(attached?.expectNextTurn === undefined ? {} : { expectNextTurn: attached.expectNextTurn })
       }
       const key = plannedAttemptExecutorCorrelationKey(correlation)
       const previous = yield* Ref.modify(turnCompletionSubscriptions, (current) => {
@@ -1000,12 +1058,12 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (previous !== undefined) yield* previous.close
     })
     const bindTurnCompletionIdentity = (correlation: PlannedAttemptExecutorCorrelation, turnId: CodexTurnId) =>
-      Ref.get(turnCompletionSubscriptions).pipe(
-        Effect.flatMap(
-          (subscriptions) =>
-            subscriptions.get(plannedAttemptExecutorCorrelationKey(correlation))?.expectTurnId(turnId) ?? Effect.void
-        )
-      )
+      Effect.gen(function* () {
+        const key = plannedAttemptExecutorCorrelationKey(correlation)
+        const active = (yield* Ref.get(activeCompletionSubscriptions)).get(key)
+        const pending = (yield* Ref.get(turnCompletionSubscriptions)).get(key)
+        yield* (active ?? pending)?.expectTurnId(turnId) ?? Effect.void
+      })
     const takeTurnCompletionSubscription = (
       correlation: PlannedAttemptExecutorCorrelation,
       threadId: CodexThreadId,
@@ -1039,7 +1097,8 @@ const makeCodexPlannedAttemptExecutorContext = (
                 stream: attached?.hints ?? Stream.fromIterable<CodexTurnCompletedHint>([]),
                 toolEffects,
                 threadIdleHints,
-                expectTurnId: attached?.expectTurnId ?? (() => Effect.void)
+                expectTurnId: attached?.expectTurnId ?? (() => Effect.void),
+                ...(attached?.expectNextTurn === undefined ? {} : { expectNextTurn: attached.expectNextTurn })
               }
             })
           }
@@ -1047,7 +1106,22 @@ const makeCodexPlannedAttemptExecutorContext = (
             Effect.andThen(Effect.addFinalizer(() => present.close)),
             Effect.as(present)
           )
-        })
+        }),
+        Effect.tap((subscription) =>
+          Effect.gen(function* () {
+            const key = plannedAttemptExecutorCorrelationKey(correlation)
+            yield* Ref.update(activeCompletionSubscriptions, (current) => new Map(current).set(key, subscription))
+            yield* Effect.addFinalizer(() =>
+              Ref.update(activeCompletionSubscriptions, (current) => {
+                if (current.get(key) !== subscription) return current
+                const next = new Map(current)
+                next.delete(key)
+                return next
+              })
+            )
+          })
+        ),
+        Effect.provideService(Scope.Scope, attachmentScope)
       )
     const referenceMatchesBytes = Effect.fn("CodexPlannedAttemptExecutor.referenceMatchesBytes")(function* (
       reference: EvidenceReference,
@@ -1313,75 +1387,6 @@ const makeCodexPlannedAttemptExecutorContext = (
       }
     })
 
-    const acceptedCommit = Effect.fn("CodexPlannedAttemptExecutor.acceptedCommit")(function* (
-      attempt: CodexAttemptContext,
-      correlation: PlannedAttemptExecutorCorrelation,
-      record: OwnedTurnRecord,
-      turn: CodexTurnSnapshot,
-      thread: CodexThreadSnapshot,
-      terminalReadAuthorized = false
-    ) {
-      const commit = commitFromTurn(turn, correlation)
-      const head = yield* readHead(attempt)
-      if (commit === undefined) {
-        return {
-          _tag: "Report" as const,
-          outcome: yield* failed(
-            attempt,
-            correlation,
-            record,
-            turn.id,
-            thread,
-            "ResultEnvelopeInvalid",
-            head,
-            terminalReadAuthorized
-          )
-        }
-      }
-      if (head === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
-      if (commit !== head) {
-        return {
-          _tag: "Report" as const,
-          outcome: yield* failed(
-            attempt,
-            correlation,
-            record,
-            turn.id,
-            thread,
-            "CandidateHeadMismatch",
-            head,
-            terminalReadAuthorized
-          )
-        }
-      }
-      return { _tag: "Commit" as const, commit }
-    })
-
-    const publishAcceptedEvidence = Effect.fn("CodexPlannedAttemptExecutor.publishAcceptedEvidence")(function* (
-      evidence: EvidenceStoreService,
-      commit: GitCommitSha,
-      correlation: PlannedAttemptExecutorCorrelation
-    ) {
-      const manifest = AcceptedResultEvidenceManifest.make({
-        commit,
-        correlation,
-        formatVersion: 1,
-        outcome: "Accepted",
-        predecessor: null
-      })
-      const bytes = new TextEncoder().encode(JSON.stringify(manifest))
-      const reference = yield* evidence.put(bytes)
-      const reread = yield* evidence.read(reference)
-      if (!(yield* referenceMatchesBytes(reference, reread))) {
-        return yield* Effect.fail(new CodexEvidenceInvalid({}))
-      }
-      const decoded = decodeAcceptedManifest(reread)
-      if (decoded === undefined || !sameAcceptedManifest(decoded, manifest)) {
-        return yield* Effect.fail(new CodexEvidenceInvalid({}))
-      }
-      return { manifest, reference }
-    })
-
     const accepted = Effect.fn("CodexPlannedAttemptExecutor.accepted")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
@@ -1390,14 +1395,70 @@ const makeCodexPlannedAttemptExecutorContext = (
       thread: CodexThreadSnapshot,
       terminalReadAuthorized = false
     ) {
-      const commitResult = yield* acceptedCommit(attempt, correlation, record, turn, thread, terminalReadAuthorized)
-      if (commitResult._tag === "Report") return commitResult.outcome
-      const commit = commitResult.commit
-      if (Option.isNone(evidenceStore)) return yield* Effect.fail(new CodexEvidenceUnavailable({}))
-      const { reference } = yield* publishAcceptedEvidence(evidenceStore.value, commit, correlation)
-      const rereadHead = yield* readHead(attempt)
-      if (rereadHead === undefined) return yield* Effect.fail(new CodexGitObservationUnknown({}))
-      if (rereadHead !== commit) return yield* Effect.fail(new CodexGitObservationUnknown({}))
+      let commit: GitCommitSha
+      let reference: EvidenceReference
+      if (record.resultCycle?.plannedBaseSha !== undefined) {
+        const ownership = ownedTurnForRecord(thread, record)
+        const finalMessage =
+          turn.items
+            .filter(isJsonRecord)
+            .filter((item) => item["type"] === "agentMessage")
+            .map(collectText)
+            .at(lastElementOffset) ?? ""
+        const validateResponse = validateOwnedSemanticCandidate(finalMessage, correlation, {
+          ...providerResultGitBoundary(git, attempt.worktree, record.resultCycle.plannedBaseSha),
+          proveOwnership:
+            ownership._tag === "Found" && ownership.turn.id === turn.id
+              ? Effect.void
+              : Effect.fail(
+                  new ProviderResultAuthorityUnavailable({
+                    boundary: "Ownership",
+                    detail: "exact owned turn is unproved"
+                  })
+                ),
+          publishAndVerifyEvidence: (candidate, boundCorrelation) =>
+            Option.isSome(evidenceStore)
+              ? publishProviderResultEvidence(evidenceStore.value, crypto, candidate, boundCorrelation)
+              : Effect.fail(
+                  new ProviderResultAuthorityUnavailable({
+                    boundary: "Evidence",
+                    detail: "evidence store is unavailable"
+                  })
+                )
+        })
+        const request = yield* Schema.decodeUnknownEffect(ProviderResultResponseIntent)(
+          record.resultCycle.responses.at(lastElementOffset)?.intent
+        ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+        const validation = yield* withinProviderResultDeadline(request, validateResponse).pipe(Effect.result)
+        if (validation._tag === "Failure") {
+          const error = validation.failure
+          if (error._tag === "ProviderResultDeadlineElapsed") {
+            if (record._tag === "TurnIntentRecorded") return yield* new CodexTurnBoundaryUnknown({})
+            return { continueLifecycleObservation: false, report: yield* expireResultCorrection(correlation, record) }
+          }
+          if (error._tag === "ProviderResultRejected")
+            return yield* failed(
+              attempt,
+              correlation,
+              record,
+              turn.id,
+              thread,
+              error.reason === "CandidateLineageInvalid" ? "LineageUnproven" : error.reason,
+              error.observedHead,
+              terminalReadAuthorized
+            )
+          if (error.boundary === "Ownership") return yield* new CodexTurnBoundaryUnknown({})
+          if (error.boundary === "Evidence") return yield* new CodexEvidenceInvalid({})
+          return yield* new CodexGitObservationUnknown({})
+        }
+        commit = validation.success.commit
+        reference = validation.success.evidenceManifest
+      } else {
+        // A pre-cycle record has no retained original Git Base. Never invent
+        // lineage from the current master or accept it through weaker checks.
+        return yield* new CodexGitObservationUnknown({})
+      }
+
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
         return {
@@ -1462,6 +1523,76 @@ const makeCodexPlannedAttemptExecutorContext = (
       }
     })
 
+    const rejectedResultReport = Effect.fn("CodexPlannedAttemptExecutor.rejectedResultReport")(function* (
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: Extract<CodexAttemptRecord, { readonly _tag: "ResultRejected" }>
+    ) {
+      return PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+        correlation,
+        reason: record.reason,
+        recoveryCause: record.recoveryCause,
+        custody: record.custody,
+        responseCount: yield* Schema.decodeUnknownEffect(PlannedAttemptResultResponseCount)(
+          record.resultCycle.responses.length
+        ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+      })
+    })
+
+    const finishResultCorrectionStop = Effect.fn("CodexPlannedAttemptExecutor.finishResultCorrectionStop")(function* (
+      correlation: PlannedAttemptExecutorCorrelation,
+      stop: Extract<CodexAttemptRecord, { readonly _tag: "ResultCorrectionStopIntended" }>,
+      firstDelivery: boolean
+    ) {
+      const attempt: CodexAttemptContext = {
+        attemptId: correlation.attemptId,
+        runId: correlation.runId,
+        worktree: stop.worktree
+      }
+      const stopped = yield* Effect.gen(function* () {
+        const thread = yield* app.readThread(stop.threadId)
+        yield* enforceThreadIdentity(attempt, correlation, stop.threadId, thread)
+        const owned = ownedTurnForRecord(thread, stop)
+        if (owned._tag !== "Found") return yield* new CodexTurnBoundaryUnknown({})
+        if (owned.turn.status === "inProgress") {
+          if (!firstDelivery) return false
+          // An uncertain acknowledgement is reconciled below; never resend it.
+          yield* app.interruptTurn(stop.threadId, stop.observedTurnId).pipe(Effect.result)
+          const reread = yield* app.readThread(stop.threadId)
+          yield* enforceThreadIdentity(attempt, correlation, stop.threadId, reread)
+          const reconciled = ownedTurnForRecord(reread, stop)
+          if (reconciled._tag !== "Found" || reconciled.turn.status === "inProgress") return false
+        }
+        yield* quiesceOwnedActivity(stop.threadId)
+        return (yield* observeOwnedActivityByThreadId(stop.threadId, correlation))._tag === "Absent"
+      }).pipe(Effect.result)
+      const retained = CodexAttemptRecord.cases.ResultRejected.make({
+        ...stop,
+        _tag: "ResultRejected",
+        recoveryCause: "Deadline",
+        custody: stopped._tag === "Success" && stopped.success ? { _tag: "Stopped" } : { _tag: "Unresolved" }
+      })
+      yield* save(retained)
+      return yield* rejectedResultReport(correlation, retained)
+    })
+
+    const expireResultCorrection = Effect.fn("CodexPlannedAttemptExecutor.expireResultCorrection")(function* (
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: Exclude<OwnedTurnRecord, CodexIntentRecord>
+    ) {
+      const resultCycle = record.resultCycle
+      const rejected = resultCycle?.responses.findLast((response) => response._tag === "ResponseRejected")
+      if (resultCycle === undefined || rejected?._tag !== "ResponseRejected")
+        return yield* new CodexTurnBoundaryUnknown({})
+      const stop = CodexAttemptRecord.cases.ResultCorrectionStopIntended.make({
+        ...record,
+        _tag: "ResultCorrectionStopIntended",
+        resultCycle,
+        reason: rejected.reason
+      })
+      yield* save(stop)
+      return yield* finishResultCorrectionStop(correlation, stop, true)
+    })
+
     const failed = Effect.fn("CodexPlannedAttemptExecutor.failed")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
@@ -1472,6 +1603,69 @@ const makeCodexPlannedAttemptExecutorContext = (
       observedHead?: GitCommitSha,
       terminalReadAuthorized = false
     ) {
+      if (record._tag === "ResultRejected") {
+        const census = yield* observeOwnedActivityByThreadId(thread.id, correlation)
+        if (record.custody._tag === "Stopped" && census._tag !== "Absent")
+          return yield* new CodexActivityCensusUnknown({ detail: "retained rejection custody is not freshly proved" })
+        const retained = CodexAttemptRecord.cases.ResultRejected.make({
+          ...record,
+          custody: census._tag === "Absent" ? { _tag: "Stopped" } : { _tag: "Unresolved" }
+        })
+        yield* save(retained)
+        return { continueLifecycleObservation: false, report: yield* rejectedResultReport(correlation, retained) }
+      }
+      if (
+        (failureCode === "ResultEnvelopeInvalid" ||
+          failureCode === "CandidateHeadMismatch" ||
+          failureCode === "LineageUnproven") &&
+        record.resultCycle !== undefined
+      ) {
+        const reason = failureCode === "LineageUnproven" ? "CandidateLineageInvalid" : failureCode
+        const previousResponse = record.resultCycle.responses.at(lastElementOffset)
+        const responseObservedAt =
+          previousResponse?._tag === "ResponseRejected"
+            ? previousResponse.responseObservedAt
+            : ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+        const resultCycle = yield* rejectProviderResultResponse(
+          record.resultCycle,
+          ProviderResultRequestToken.make(record.currentToken),
+          ProviderResultTurnId.make(observedTurnId),
+          responseObservedAt,
+          reason
+        ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+        const pending = CodexAttemptRecord.cases.ResultCorrectionPending.make({
+          ...record,
+          _tag: "ResultCorrectionPending",
+          observedTurnId,
+          reason,
+          resultCycle
+        })
+        yield* save(pending)
+        const census = yield* observeOwnedActivityByThreadId(thread.id, correlation)
+        if (census._tag === "Absent") {
+          const correction = yield* sendResultCorrection(attempt, correlation, pending)
+          if (correction !== undefined) return { continueLifecycleObservation: false, report: correction }
+        }
+        const retained = CodexAttemptRecord.cases.ResultRejected.make({
+          ...pending,
+          _tag: "ResultRejected",
+          recoveryCause: census._tag === "Absent" ? "CorrectionExhausted" : "WriterCustodyUnresolved",
+          custody: census._tag === "Absent" ? { _tag: "Stopped" } : { _tag: "Unresolved" }
+        })
+        yield* save(retained)
+        return {
+          continueLifecycleObservation: false,
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+            correlation,
+            reason: retained.reason,
+            recoveryCause: retained.recoveryCause,
+            responseCount: yield* Schema.decodeUnknownEffect(PlannedAttemptResultResponseCount)(
+              retained.resultCycle.responses.length
+            ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({}))),
+            custody: retained.custody
+          })
+        }
+      }
       const finalCensus = yield* observeOwnedActivityByThreadId(thread.id, correlation)
       if (finalCensus._tag !== "Absent") {
         return {
@@ -1492,7 +1686,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
     ) {
       if (record._tag === "TurnIntentRecorded") {
-        const observed = observedRecordFor(
+        const observed = yield* observedRecordFor(
           attempt,
           record.threadId,
           record.currentToken,
@@ -1500,7 +1694,8 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.priorObservedTurnId,
           record.turnStartedAtMilliseconds,
           record.turnStartIncarnation,
-          record.toolEffectPolicy
+          record.toolEffectPolicy,
+          record.resultCycle
         )
         yield* save(observed)
         return observed
@@ -1532,6 +1727,23 @@ const makeCodexPlannedAttemptExecutorContext = (
       reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>,
       terminalReadAuthorized = false
     ) {
+      if (observedRecord._tag === "ResultCorrectionStopIntended")
+        return {
+          continueLifecycleObservation: false,
+          report: yield* finishResultCorrectionStop(correlation, observedRecord, false)
+        }
+      if (observedRecord._tag === "ResultRejected" || observedRecord._tag === "ResultCorrectionPending") {
+        return yield* failed(
+          attempt,
+          correlation,
+          observedRecord,
+          observedRecord.observedTurnId,
+          reconciliation.thread,
+          observedRecord.reason === "CandidateLineageInvalid" ? "LineageUnproven" : observedRecord.reason,
+          undefined,
+          terminalReadAuthorized
+        )
+      }
       const turn = reconciliation.turn
       if (observedRecord._tag === "Terminal") {
         if (observedRecord.terminal._tag === "Failed") {
@@ -1576,7 +1788,11 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (exactCompletionHintRequired && hasUnsealedOwnedTurn && !completionHintAuthorized) {
         return { continueLifecycleObservation: false, report: running(correlation) }
       }
-      const terminalReadAuthorized = record._tag === "Terminal" || completionHintAuthorized
+      const terminalReadAuthorized =
+        record._tag === "Terminal" ||
+        record._tag === "ResultRejected" ||
+        record._tag === "ResultCorrectionPending" ||
+        completionHintAuthorized
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
       const toolEffects = yield* listToolEffects(correlation)
       const census = yield* observeOwnedActivity(
@@ -1602,7 +1818,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     })
 
     const reconcileAfterTurnBoundary = Effect.fn("CodexPlannedAttemptExecutor.reconcileAfterTurnBoundary")(function* (
-      attempt: PlannedTaskAttempt,
+      attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexIntentRecord
     ) {
@@ -1612,7 +1828,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       const reconciliation = yield* readAfterTurnBoundary(attempt, correlation, record)
       if (reconciliation._tag === "Running") {
         const turn = yield* requiredReconciliationTurn(reconciliation)
-        const observed = observedRecordFor(
+        const observed = yield* observedRecordFor(
           attempt,
           record.threadId,
           record.currentToken,
@@ -1620,7 +1836,8 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.priorObservedTurnId,
           record.turnStartedAtMilliseconds,
           record.turnStartIncarnation,
-          record.toolEffectPolicy
+          record.toolEffectPolicy,
+          record.resultCycle
         )
         yield* save(observed)
         yield* save(runningRecordFor(attempt, observed))
@@ -1648,39 +1865,33 @@ const makeCodexPlannedAttemptExecutorContext = (
     })
 
     const startTurnAcrossBoundary = Effect.fn("CodexPlannedAttemptExecutor.startTurnAcrossBoundary")(function* (
-      attempt: PlannedTaskAttempt,
-      specification: TaskWorkSpecification,
+      attempt: CodexAttemptContext,
+      text: string,
       correlation: PlannedAttemptExecutorCorrelation,
       intent: CodexIntentRecord
     ) {
-      return yield* app
-        .startTurn(
-          intent.threadId,
-          attempt.worktree,
-          taskTurnText(attempt, specification, taskInstructions),
-          intent.currentToken
-        )
-        .pipe(
-          Effect.map((turn): StartedTurnResult => ({ _tag: "Turn", turn })),
-          Effect.catch((error) =>
-            reconcileAfterTurnBoundary(attempt, correlation, intent).pipe(
-              Effect.map((report): StartedTurnResult => ({ _tag: "Report", report })),
-              Effect.catch(() => app.close.pipe(Effect.andThen(Effect.fail(error))))
-            )
+      return yield* app.startTurn(intent.threadId, attempt.worktree, text, intent.currentToken).pipe(
+        Effect.map((turn): StartedTurnResult => ({ _tag: "Turn", turn })),
+        Effect.catch((error) =>
+          reconcileAfterTurnBoundary(attempt, correlation, intent).pipe(
+            Effect.map((report): StartedTurnResult => ({ _tag: "Report", report })),
+            Effect.catch(() => app.close.pipe(Effect.andThen(Effect.fail(error))))
           )
         )
+      )
     })
 
     const finishStartedTurn = Effect.fn("CodexPlannedAttemptExecutor.finishStartedTurn")(function* (
-      attempt: PlannedTaskAttempt,
+      attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexSendableRecord,
+      record: CodexSendableRecord | CodexIntentRecord,
       priorObservedTurnId: CodexTurnId | null,
       currentToken: CodexOwnedTurnToken,
       turnStartedAtMilliseconds: number,
       turnStartIncarnation: CodexServerIncarnation,
       retainedToolEffectPolicy: CodexToolEffectPolicy,
-      result: StartedTurnResult
+      result: StartedTurnResult,
+      resultCycle?: ProviderResultCycle
     ) {
       if (result._tag === "Report") return result.report
       const turn =
@@ -1693,7 +1904,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         turns: [turn],
         ...(turn.correlation === undefined ? {} : { correlation: turn.correlation })
       })
-      const observed = observedRecordFor(
+      const observed = yield* observedRecordFor(
         attempt,
         record.threadId,
         currentToken,
@@ -1701,7 +1912,8 @@ const makeCodexPlannedAttemptExecutorContext = (
         priorObservedTurnId,
         turnStartedAtMilliseconds,
         turnStartIncarnation,
-        retainedToolEffectPolicy
+        retainedToolEffectPolicy,
+        resultCycle ?? ("resultCycle" in record ? record.resultCycle : undefined)
       )
       yield* save(observed)
       // Even a terminal status in the turn/start response is only an initial
@@ -1712,12 +1924,115 @@ const makeCodexPlannedAttemptExecutorContext = (
       return running(correlation)
     })
 
+    /** A missing turn/start acknowledgement cannot supply an owned turn id or stopped-writer proof. */
+    const expiredUnobservedCorrectionReport = Effect.fn("CodexPlannedAttemptExecutor.expiredUnobservedCorrection")(
+      function* (
+        correlation: PlannedAttemptExecutorCorrelation,
+        record: Extract<CodexAttemptRecord, { readonly _tag: "TurnIntentRecorded" }>
+      ) {
+        const cycle = record.resultCycle
+        const response = cycle?.responses.at(lastElementOffset)
+        const now = ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+        if (
+          cycle === undefined ||
+          response?.intent._tag !== "Correction" ||
+          !providerResultResponseExpired(response.intent, now)
+        )
+          return undefined
+        const rejected = cycle.responses.findLast((entry) => entry._tag === "ResponseRejected")
+        if (rejected?._tag !== "ResponseRejected") return yield* new CodexTurnBoundaryUnknown({})
+        return PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+          correlation,
+          reason: rejected.reason,
+          recoveryCause: "Deadline",
+          custody: { _tag: "Unresolved" },
+          responseCount: yield* Schema.decodeUnknownEffect(PlannedAttemptResultResponseCount)(
+            cycle.responses.length
+          ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+        })
+      }
+    )
+
+    const sendResultCorrection = Effect.fn("CodexPlannedAttemptExecutor.sendResultCorrection")(function* (
+      attempt: CodexAttemptContext,
+      correlation: PlannedAttemptExecutorCorrelation,
+      pending: Extract<CodexAttemptRecord, { readonly _tag: "ResultCorrectionPending" }>
+    ): Effect.fn.Return<
+      PlannedAttemptExecutorReportType | undefined,
+      | CodexAppServerFailure
+      | CodexAttemptStoreFailure
+      | CodexTurnBoundaryUnknown
+      | CodexThreadMismatch
+      | ForeignAttemptRecord
+      | CodexTurnCensusPending
+      | CodexActivityCensusUnknown
+      | CodexGitObservationUnknown
+      | CodexEvidenceUnavailable
+      | CodexEvidenceInvalid
+    > {
+      const currentToken = yield* freshOwnedTurnToken
+      const now = ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+      const decision = yield* prepareProviderResultCorrection(
+        pending.resultCycle,
+        ProviderResultRequestToken.make(currentToken),
+        now
+      ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+      if (decision._tag === "OperatorRequired") return undefined
+      if (decision._tag !== "CorrectionIntentPrepared") return yield* new CodexTurnBoundaryUnknown({})
+      const policy = pending.toolEffectPolicy ?? bindCodexToolEffectPolicy(toolEffectPolicy, attempt.worktree)
+      const intent = intentRecordFor(
+        attempt,
+        pending.threadId,
+        currentToken,
+        pending.observedTurnId,
+        now,
+        app.incarnation,
+        policy,
+        decision.cycle
+      )
+      yield* save(intent)
+      yield* completionSubscriptionForTurnStart(correlation, pending.threadId)
+      const text = [
+        `Dalph rejected the previous response: ${pending.reason}.`,
+        "Freshly verify the current worktree, repair any required code or verification defects, and return a new complete response.",
+        semanticCandidateInstructions
+      ].join("\n")
+      const result = yield* withinProviderResultDeadline(
+        decision.request,
+        startTurnAcrossBoundary(attempt, text, correlation, intent)
+      ).pipe(
+        Effect.catchTag("ProviderResultDeadlineElapsed", () =>
+          expiredUnobservedCorrectionReport(correlation, intent).pipe(
+            Effect.flatMap((report) =>
+              report === undefined
+                ? Effect.fail(new CodexTurnBoundaryUnknown({}))
+                : Effect.succeed({ _tag: "Report" as const, report })
+            )
+          )
+        ),
+        Effect.mapError(() => new CodexTurnBoundaryUnknown({}))
+      )
+      return yield* finishStartedTurn(
+        attempt,
+        correlation,
+        pending,
+        pending.observedTurnId,
+        currentToken,
+        now,
+        app.incarnation,
+        policy,
+        result,
+        decision.cycle
+      )
+    })
+
     const sendTurn = Effect.fn("CodexPlannedAttemptExecutor.sendTurn")(function* (
       attempt: PlannedTaskAttempt,
       specification: TaskWorkSpecification,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord
     ) {
+      if (record._tag === "ResultRejected") return yield* new CodexTurnBoundaryUnknown({})
       /* v8 ignore next -- @preserve sendTurn is called only after allocation has persisted an associated thread. */
       if (record._tag === "EmptyPreTurn") return yield* Effect.fail(new CodexThreadMismatch({}))
       /* v8 ignore next -- @preserve A durable turn intent is reconciled before another turn can be sent. */
@@ -1725,6 +2040,28 @@ const makeCodexPlannedAttemptExecutorContext = (
       const priorObservedTurnId = record._tag === "AssociatedPreTurn" ? null : record.observedTurnId
       const currentToken = yield* freshOwnedTurnToken
       const turnStartedAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      // A fresh association starts one response cycle before turn/start. Resume
+      // of an existing owned turn preserves its history and never creates a
+      // replacement budget merely because another transport request is sent.
+      const resultCycle =
+        record._tag === "AssociatedPreTurn"
+          ? yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+              cycleId: currentToken,
+              plannedBaseSha: attempt.baseSha,
+              responses: [
+                {
+                  _tag: "RequestIntended",
+                  intent: { _tag: "Initial", ordinal: 1, token: currentToken, intendedAt: turnStartedAtMilliseconds }
+                }
+              ]
+            }).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+          : record.resultCycle !== undefined
+            ? yield* prepareProviderResultContinuation(
+                record.resultCycle,
+                ProviderResultRequestToken.make(currentToken),
+                ProviderResultInstantMilliseconds.make(turnStartedAtMilliseconds)
+              ).pipe(Effect.mapError(() => new CodexTurnBoundaryUnknown({})))
+            : undefined
       const retainedToolEffectPolicy = hasOwnedTurnRecord(record)
         ? (record.toolEffectPolicy ?? toolEffectPolicy)
         : bindCodexToolEffectPolicy(toolEffectPolicy, attempt.worktree)
@@ -1737,13 +2074,35 @@ const makeCodexPlannedAttemptExecutorContext = (
         priorObservedTurnId,
         turnStartedAtMilliseconds,
         app.incarnation,
-        retainedToolEffectPolicy
+        retainedToolEffectPolicy,
+        resultCycle
       )
       yield* save(intent)
       // The provider may complete the new turn before its turn/start response
       // arrives, so install the exact-ID notification subscription first.
       yield* completionSubscriptionForTurnStart(correlation, record.threadId)
-      return yield* startTurnAcrossBoundary(attempt, specification, correlation, intent).pipe(
+      return yield* startTurnAcrossBoundary(
+        attempt,
+        taskTurnText(attempt, specification, taskInstructions),
+        correlation,
+        intent
+      ).pipe(
+        (effect) => {
+          const response = resultCycle?.responses.at(lastElementOffset)
+          return response === undefined
+            ? effect
+            : withinProviderResultDeadline(response.intent, effect).pipe(
+                Effect.catchTag("ProviderResultDeadlineElapsed", () =>
+                  expiredUnobservedCorrectionReport(correlation, intent).pipe(
+                    Effect.flatMap((report) =>
+                      report === undefined
+                        ? Effect.fail(new CodexTurnBoundaryUnknown({}))
+                        : Effect.succeed({ _tag: "Report" as const, report })
+                    )
+                  )
+                )
+              )
+        },
         Effect.flatMap((result) =>
           finishStartedTurn(
             attempt,
@@ -1754,7 +2113,8 @@ const makeCodexPlannedAttemptExecutorContext = (
             turnStartedAtMilliseconds,
             app.incarnation,
             retainedToolEffectPolicy,
-            result
+            result,
+            intent.resultCycle
           )
         ),
         Effect.onExit((exit) =>
@@ -1834,7 +2194,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       /* v8 ignore next -- @preserve Resume admits only SafelySuspended records before this reconciliation helper, never TurnIntentRecorded. */
       if (disposition === "Intent" && record._tag === "TurnIntentRecorded") {
         const turn = yield* requiredReconciliationTurn(reconciliation)
-        const observed = observedRecordFor(
+        const observed = yield* observedRecordFor(
           attempt,
           record.threadId,
           record.currentToken,
@@ -1842,7 +2202,8 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.priorObservedTurnId,
           record.turnStartedAtMilliseconds,
           record.turnStartIncarnation,
-          record.toolEffectPolicy
+          record.toolEffectPolicy,
+          record.resultCycle
         )
         yield* save(observed)
         yield* save(runningRecordFor(attempt, observed))
@@ -1954,13 +2315,20 @@ const makeCodexPlannedAttemptExecutorContext = (
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       const record = yield* readSuspensionRecord(correlation)
       if (record._tag !== "SafelySuspended") return yield* new CodexTurnBoundaryUnknown({})
+      const response = record.resultCycle?.responses.at(lastElementOffset)
+      const now = ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+      if (response !== undefined && providerResultResponseExpired(response.intent, now))
+        return yield* expireResultCorrection(correlation, record)
       const existingReport = yield* reconcileExistingResume(attempt, correlation, record)
       if (existingReport !== undefined) return existingReport
       return yield* sendTurn(attempt, request.specification, correlation, record)
     })
 
     const canSuspendIdleRecord = (record: CodexAttemptRecord): record is OwnedTurnRecord =>
-      hasOwnedTurnRecord(record) && record._tag !== "Terminal"
+      hasOwnedTurnRecord(record) &&
+      record._tag !== "Terminal" &&
+      record._tag !== "ResultRejected" &&
+      record._tag !== "ResultCorrectionStopIntended"
 
     const saveSuspendedRecord = Effect.fn("CodexPlannedAttemptExecutor.saveSuspendedRecord")(function* (
       attempt: CodexAttemptContext,
@@ -1971,7 +2339,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (disposition === "Intent" && record._tag === "TurnIntentRecorded") {
         /* v8 ignore next -- @preserve Intent disposition is selected only from reconciliation carrying the observed turn. */
         if (turn === undefined) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-        const observed = observedRecordFor(
+        const observed = yield* observedRecordFor(
           attempt,
           record.threadId,
           record.currentToken,
@@ -1979,7 +2347,8 @@ const makeCodexPlannedAttemptExecutorContext = (
           record.priorObservedTurnId,
           record.turnStartedAtMilliseconds,
           record.turnStartIncarnation,
-          record.toolEffectPolicy
+          record.toolEffectPolicy,
+          record.resultCycle
         )
         yield* save(observed)
         yield* save(safelySuspendedRecordFor(attempt, observed))
@@ -2043,7 +2412,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       // Exactly one interrupt is issued. The post-boundary read decides both
       // the lost-response and terminal-during-suspension races.
       if (!hasOwnedTurnRecord(record)) return yield* new CodexTurnBoundaryUnknown({})
-      const observed = observedRecordFor(
+      const observed = yield* observedRecordFor(
         attempt,
         record.threadId,
         record.currentToken,
@@ -2051,7 +2420,8 @@ const makeCodexPlannedAttemptExecutorContext = (
         record.priorObservedTurnId,
         record.turnStartedAtMilliseconds,
         record.turnStartIncarnation,
-        record.toolEffectPolicy
+        record.toolEffectPolicy,
+        record.resultCycle
       )
       const intent = CodexAttemptRecord.cases.SuspensionInterruptIntended.make({
         ...observed,
@@ -2239,7 +2609,10 @@ const makeCodexPlannedAttemptExecutorContext = (
         // Only its exact retained association permits paced terminal reconciliation.
         return projectionOutcome(
           exact(running(correlation)),
-          record._tag === "Terminal" || completionHintAuthorized,
+          record._tag === "Terminal" ||
+            record._tag === "ResultRejected" ||
+            record._tag === "ResultCorrectionPending" ||
+            completionHintAuthorized,
           reconciliation.thread.id,
           reconciliation.turn.id
         )
@@ -2252,6 +2625,17 @@ const makeCodexPlannedAttemptExecutorContext = (
           reconciliation,
           completionHintAuthorized
         )
+        let projectedTurnId = reconciliation.turn.id
+        if (outcome.report._tag === "ExecutorWorkExecuting") {
+          const latest = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+          if (
+            Option.isSome(latest) &&
+            latest.value._tag === "Running" &&
+            recordMatchesCorrelation(latest.value, correlation) &&
+            latest.value.threadId === reconciliation.thread.id
+          )
+            projectedTurnId = latest.value.observedTurnId
+        }
         if (reconciliation.turn.status === "interrupted" && outcome.report._tag === "ExecutorWorkExecuting") {
           return projectionOutcome(
             unreadable(correlation, "Codex owned turn interrupted; writer custody remains unresolved"),
@@ -2266,7 +2650,7 @@ const makeCodexPlannedAttemptExecutorContext = (
           exact(isBeginReconciliation(purpose) ? running(correlation) : outcome.report),
           outcome.continueLifecycleObservation,
           reconciliation.thread.id,
-          reconciliation.turn.id
+          projectedTurnId
         )
       }
       if (reconciliation._tag === "Unresolved")
@@ -2312,6 +2696,52 @@ const makeCodexPlannedAttemptExecutorContext = (
         attemptId: correlation.attemptId,
         runId: correlation.runId,
         worktree: record.worktree
+      }
+      if (record._tag === "TurnIntentRecorded") {
+        const expired = yield* expiredUnobservedCorrectionReport(correlation, record)
+        if (expired !== undefined) {
+          const reconciled = yield* Effect.gen(function* () {
+            const thread = yield* refreshThreadTurnLedger(yield* app.readThread(record.threadId))
+            yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
+            const owned = ownedTurnForRecord(thread, record)
+            if (owned._tag !== "Found" || record.resultCycle === undefined) return expired
+            const stop = CodexAttemptRecord.cases.ResultCorrectionStopIntended.make({
+              ...record,
+              _tag: "ResultCorrectionStopIntended",
+              observedTurnId: owned.turn.id,
+              resultCycle: record.resultCycle,
+              reason: expired.reason
+            })
+            // This observes ownership only; the expired response is never validated or sealed.
+            yield* save(stop)
+            return yield* finishResultCorrectionStop(correlation, stop, true)
+          }).pipe(Effect.catch(() => Effect.succeed(expired)))
+          return projectionOutcome(exact(reconciled))
+        }
+      }
+      if (record._tag === "Running" || record._tag === "TurnObserved") {
+        const response = record.resultCycle?.responses.at(lastElementOffset)
+        const now = ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+        if (response !== undefined && providerResultResponseExpired(response.intent, now)) {
+          const report = yield* expireResultCorrection(correlation, record)
+          return projectionOutcome(exact(isBeginReconciliation(purpose) ? running(correlation) : report))
+        }
+      }
+      if (record._tag === "ResultCorrectionStopIntended") {
+        const report = yield* finishResultCorrectionStop(correlation, record, false)
+        return projectionOutcome(exact(isBeginReconciliation(purpose) ? running(correlation) : report))
+      }
+      if (record._tag === "ResultRejected") {
+        const census = yield* observeOwnedActivityByThreadId(record.threadId, correlation)
+        if (record.custody._tag === "Stopped" && census._tag !== "Absent")
+          return yield* new CodexActivityCensusUnknown({ detail: "retained rejection custody is not freshly proved" })
+        const retained = CodexAttemptRecord.cases.ResultRejected.make({
+          ...record,
+          custody: census._tag === "Absent" ? { _tag: "Stopped" } : { _tag: "Unresolved" }
+        })
+        yield* save(retained)
+        const report = yield* rejectedResultReport(correlation, retained)
+        return projectionOutcome(exact(isBeginReconciliation(purpose) ? running(correlation) : report))
       }
       if (isPreTurnBeginRecord(record, purpose)) {
         // An empty allocation intent proves no task turn was authorized, even
@@ -2594,6 +3024,9 @@ const makeCodexPlannedAttemptExecutorContext = (
         case "TurnIntentRecorded":
         case "SuspensionInterruptIntended":
         case "SuspensionStopIntended":
+        case "ResultRejected":
+        case "ResultCorrectionPending":
+        case "ResultCorrectionStopIntended":
           return undefined
       }
     }
@@ -2933,7 +3366,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         Option.isSome(prior) && hasOwnedTurnRecord(prior.value)
           ? (prior.value.toolEffectPolicy ?? toolEffectPolicy)
           : toolEffectPolicy
-      const observed = observedRecordFor(
+      const observed = yield* observedRecordFor(
         request.plannedAttempt,
         predecessor.threadId,
         replacementToken,
@@ -2941,7 +3374,15 @@ const makeCodexPlannedAttemptExecutorContext = (
         null,
         undefined,
         undefined,
-        admittedPolicy
+        admittedPolicy,
+        Option.isSome(prior) && hasOwnedTurnRecord(prior.value) ? prior.value.resultCycle : undefined
+      ).pipe(
+        Effect.mapError(
+          () =>
+            new CodexReplacementLedgerFailure({
+              detail: "replacement turn does not match retained result-cycle ownership"
+            })
+        )
       )
       yield* save(observed)
       const sealedLedger = replacementLedgerHasPhase(observedLedger, "Sealed")
@@ -3223,7 +3664,143 @@ const makeCodexPlannedAttemptExecutorContext = (
       return yield* continueReplacement(request, prepared, phase.phase, phase.ledger, phase.replacementToken)
     })
 
+    const continueRejectedResult = Effect.fn("CodexPlannedAttemptExecutor.continueRejectedResult")(function* (
+      request: PlannedAttemptExecutorRequest,
+      input: PlannedAttemptResultRecoveryAuthorization
+    ) {
+      const authorization = yield* Schema.decodeUnknownEffect(PlannedAttemptResultRecoveryAuthorization, {
+        onExcessProperty: "error"
+      })(input)
+      const attempt = request.plannedAttempt
+      const correlation = plannedAttemptExecutorCorrelation(attempt)
+      if (!sameCorrelation(authorization.correlation, correlation)) return yield* new CodexTurnBoundaryUnknown({})
+      const record = yield* readSuspensionRecord(correlation)
+      if (record.worktree !== attempt.worktree) return yield* new CodexThreadMismatch({})
+      const history = "resultRecoveryHistory" in record ? (record.resultRecoveryHistory ?? []) : []
+      const retained = history.find(({ authorizationId }) => authorizationId.nonce === authorization.nonce)
+      if (retained !== undefined) {
+        if (
+          retained.authorizationId.runId !== correlation.runId ||
+          retained.authorizationId.attemptId !== correlation.attemptId
+        )
+          return yield* new CodexTurnBoundaryUnknown({})
+        // An ambiguous turn/start is observed under its exact retained token. Never resend it.
+        if (record._tag === "TurnIntentRecorded") return yield* reconcileAfterTurnBoundary(attempt, correlation, record)
+        if (record._tag === "ResultRejected") return yield* rejectedResultReport(correlation, record)
+        const current = yield* reconcile(attempt, correlation, record)
+        if (current._tag === "Terminal") return yield* terminalOrRunning(attempt, correlation, record, current)
+        if (current._tag === "Running") return running(correlation)
+        return yield* new CodexTurnBoundaryUnknown({})
+      }
+      if (
+        record._tag !== "ResultRejected" ||
+        record.custody._tag !== "Stopped" ||
+        record.resultCycle.plannedBaseSha !== attempt.baseSha ||
+        store.writeResultRecovery === undefined
+      )
+        return yield* new CodexTurnBoundaryUnknown({})
+      const current = yield* reconcile(attempt, correlation, record)
+      if (current._tag !== "Terminal" && current._tag !== "Idle") return yield* new CodexTurnBoundaryUnknown({})
+      if ((yield* observeOwnedActivityByThreadId(record.threadId, correlation))._tag !== "Absent")
+        return yield* new CodexActivityCensusUnknown({
+          detail: "retained result recovery requires freshly stopped exact writers"
+        })
+      const token = yield* freshOwnedTurnToken
+      const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      const cycle = yield* Schema.decodeUnknownEffect(ProviderResultCycle)({
+        cycleId: token,
+        plannedBaseSha: attempt.baseSha,
+        responses: [{ _tag: "RequestIntended", intent: { _tag: "Initial", ordinal: 1, token, intendedAt: now } }]
+      })
+      const recovery = yield* Schema.decodeUnknownEffect(ProviderResultRecoveryRecord)({
+        authorizationId: { nonce: authorization.nonce, runId: correlation.runId, attemptId: correlation.attemptId },
+        predecessor: record.resultCycle,
+        successorInitial: cycle
+      })
+      const policy = record.toolEffectPolicy ?? bindCodexToolEffectPolicy(toolEffectPolicy, attempt.worktree)
+      const intent = CodexAttemptRecord.cases.TurnIntentRecorded.make({
+        ...intentRecordFor(attempt, record.threadId, token, record.observedTurnId, now, app.incarnation, policy, cycle),
+        resultRecoveryHistory: [...history, recovery]
+      })
+      yield* store.writeResultRecovery(intent, recovery)
+      yield* completionSubscriptionForTurnStart(correlation, record.threadId)
+      const started = yield* startTurnAcrossBoundary(
+        attempt,
+        taskTurnText(attempt, request.specification, taskInstructions),
+        correlation,
+        intent
+      )
+      return yield* finishStartedTurn(
+        attempt,
+        correlation,
+        intent,
+        record.observedTurnId,
+        token,
+        now,
+        app.incarnation,
+        policy,
+        started,
+        cycle
+      )
+    })
+
     const executor: PlannedAttemptExecutorService = {
+      observeWriterCustody: (plannedAttempt) => {
+        const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+        return gateFor(correlation).pipe(
+          Effect.flatMap((gate) =>
+            gate.withPermit(
+              Effect.gen(function* () {
+                const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+                if (Option.isNone(found))
+                  return PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                    plannedAttempt,
+                    detail: "retained executor record is unavailable"
+                  })
+                const record = found.value
+                if (
+                  record._tag !== "Terminal" ||
+                  record.worktree !== plannedAttempt.worktree ||
+                  record.correlationRunId !== correlation.runId ||
+                  record.correlationAttemptId !== correlation.attemptId
+                )
+                  return PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                    plannedAttempt,
+                    detail: "exact retained terminal ownership is unproved"
+                  })
+                const thread = yield* app.readThread(record.threadId)
+                yield* enforceThreadIdentity(
+                  { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree },
+                  correlation,
+                  record.threadId,
+                  thread
+                )
+                const owned = ownedTurnForRecord(yield* refreshThreadTurnLedger(thread), record)
+                if (owned._tag !== "Found" || owned.turn.status === "inProgress")
+                  return PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                    plannedAttempt,
+                    detail: "retained terminal turn is unavailable or executing"
+                  })
+                const census = yield* observeOwnedActivityByThreadId(record.threadId, correlation)
+                return census._tag === "Absent"
+                  ? PlannedAttemptExecutorWriterCustody.cases.Stopped.make({ plannedAttempt })
+                  : PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                      plannedAttempt,
+                      detail: "retained executor writers are live or unproved"
+                    })
+              })
+            )
+          ),
+          Effect.catch(() =>
+            Effect.succeed(
+              PlannedAttemptExecutorWriterCustody.cases.Unresolved.make({
+                plannedAttempt,
+                detail: "execution-substrate custody observation is unavailable"
+              })
+            )
+          )
+        )
+      },
       observe: (correlation, purpose) =>
         (isBeginReconciliation(purpose)
           ? gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(project(correlation, purpose))))
@@ -3255,6 +3832,13 @@ const makeCodexPlannedAttemptExecutorContext = (
             error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
           ),
           Effect.mapError((error) => preserveCommandFailure("Suspend", correlation, error))
+        )
+      },
+      continueRejectedResult: (request, authorization) => {
+        const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
+        return gateFor(correlation).pipe(
+          Effect.flatMap((gate) => gate.withPermit(continueRejectedResult(request, authorization))),
+          Effect.mapError((error) => preserveCommandFailure("ContinueRejectedResult", correlation, error))
         )
       },
       resume: (request) => {
@@ -3455,6 +4039,23 @@ const makeCodexPlannedAttemptExecutorContext = (
               return undefined
             })
           const checkToolEffectDeadline = Effect.gen(function* () {
+            const correction = yield* attemptGate.withPermit(
+              Effect.gen(function* () {
+                const current = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+                if (Option.isNone(current) || !recordMatchesCorrelation(current.value, correlation)) return undefined
+                const owned = current.value
+                if (owned._tag === "ResultCorrectionStopIntended")
+                  return yield* finishResultCorrectionStop(correlation, owned, false)
+                if (owned._tag !== "Running" && owned._tag !== "TurnObserved") return undefined
+                const response = owned.resultCycle?.responses.at(lastElementOffset)
+                const now = ProviderResultInstantMilliseconds.make(
+                  yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+                )
+                if (response === undefined || !providerResultResponseExpired(response.intent, now)) return undefined
+                return yield* expireResultCorrection(correlation, owned)
+              })
+            )
+            if (correction !== undefined) return projectionOutcome(exact(correction))
             const retained = yield* listToolEffects(correlation)
             const pending = retained.find(
               (record): record is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }> =>
@@ -3595,7 +4196,13 @@ const makeCodexPlannedAttemptExecutorContext = (
                     )
                     .pipe(
                       Effect.tap((outcome) =>
-                        Ref.set(latestLifecycleOutcome, outcome).pipe(
+                        Ref.get(latestLifecycleOutcome).pipe(
+                          Effect.flatMap((previous) =>
+                            previous?.turnId !== undefined && previous.turnId !== outcome.turnId
+                              ? Ref.set(matchingCompletionHintObserved, false)
+                              : Effect.void
+                          ),
+                          Effect.andThen(Ref.set(latestLifecycleOutcome, outcome)),
                           Effect.andThen(
                             outcome.projection._tag === "Exact" &&
                               outcome.projection.report._tag === "ExecutorWorkExecuting"
@@ -3700,7 +4307,9 @@ const makeCodexPlannedAttemptExecutorContext = (
                             (record._tag === "Running" ||
                               record._tag === "SuspensionInterruptIntended" ||
                               record._tag === "SafelySuspended" ||
-                              record._tag === "Terminal") &&
+                              record._tag === "Terminal" ||
+                              record._tag === "ResultRejected" ||
+                              record._tag === "ResultCorrectionPending") &&
                             record.threadId === hint.threadId &&
                             record.observedTurnId === hint.turnId
                           if (!exactAssociation) {

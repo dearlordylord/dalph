@@ -1,16 +1,22 @@
 /* eslint-disable max-lines -- Kimi lifecycle, reconciliation, and private-state transitions stay co-located. */
 
-import { decodeOwnedSemanticCandidate, semanticCandidateInstructions } from "./provider-semantic-result.js"
 import {
-  AcceptedResultEvidenceManifest,
-  EvidenceDigest,
-  EvidenceReference,
+  decodeOwnedSemanticCandidate,
+  publishProviderResultEvidence,
+  providerResultGitBoundary,
+  validateOwnedSemanticCandidate,
+  ProviderResultAuthorityUnavailable,
+  ProviderResultRejectionReason,
+  semanticCandidateInstructions
+} from "./provider-semantic-result.js"
+import {
   GitCommitSha,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  PlannedAttemptRejectedResultReport,
   PlannedAttemptExecutorResult,
   PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorRequest,
@@ -21,23 +27,49 @@ import {
   samePlannedAttemptExecutorProjection
 } from "@dalph/contracts"
 import { EvidenceStore, GitCommand } from "@dalph/orchestrator"
-import { Context, Crypto, Data, Effect, Layer, Option, Ref, Stream } from "effect"
-import { KimiAcpClient, KimiAcpFailure, type KimiAcpSessionId, type KimiAcpSessionObservation } from "./kimi-acp.js"
+import { Context, Crypto, Data, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
+import {
+  KimiAcpClient,
+  KimiAcpFailure,
+  KimiAcpPromptToken,
+  type KimiAcpSessionId,
+  type KimiAcpSessionObservation
+} from "./kimi-acp.js"
 import type { KimiAttemptPrivatePhase, KimiAttemptStoreFailure } from "./kimi-attempt-store.js"
 import { KimiAttemptPrivateRecord, KimiAttemptPrivateStore } from "./kimi-attempt-store.js"
 
+import { KimiResultCycle, prepareKimiResultCorrection } from "./kimi-result-cycle.js"
+import { KimiPromptRequestHistory } from "./kimi-prompt-history.js"
+import {
+  ProviderResultRequestToken,
+  ProviderResultInstantMilliseconds,
+  providerResultResponseExpired,
+  withinProviderResultDeadline,
+  type ProviderResultCycle
+} from "./provider-result-correction.js"
+
 type AttemptContext = Pick<PlannedTaskAttempt, "attemptId" | "baseSha" | "executor" | "runId" | "worktree">
+const sameAttemptContext = (left: AttemptContext, right: AttemptContext): boolean =>
+  left.attemptId === right.attemptId &&
+  left.baseSha === right.baseSha &&
+  left.executor === right.executor &&
+  left.runId === right.runId &&
+  left.worktree === right.worktree
+
 type AttemptState = {
   readonly attempt: AttemptContext
   readonly sessionId: KimiAcpSessionId
   readonly status: "executing" | "suspended" | "terminal" | "unavailable"
   readonly phase: KimiAttemptPrivatePhase
   readonly terminal?: PlannedAttemptExecutorResult
+  readonly resultCycle?: ProviderResultCycle
+  readonly promptRequests?: KimiPromptRequestHistory
+  readonly kimiResultCycle?: KimiResultCycle
+  readonly resultRejection?: PlannedAttemptRejectedResultReport
   readonly sessionClosed: boolean
 }
 
-const hexRadix = 16
-const hexByteWidth = 2
+const lastPromptOffset = -1
 const maximumSuspensionObservations = 4
 const suspensionObservationInterval = "100 millis"
 
@@ -97,9 +129,6 @@ const commitFromMessage = (
   }
 }
 
-const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
-  left.byteLength === right.byteLength && left.every((value, index) => value === right[index])
-
 const readHead = Effect.fn("KimiPlannedAttemptExecutor.readHead")(function* (
   git: GitCommand["Service"],
   attempt: Pick<PlannedTaskAttempt, "worktree">
@@ -113,45 +142,13 @@ const readHead = Effect.fn("KimiPlannedAttemptExecutor.readHead")(function* (
   }
 })
 
-const publishEvidence = Effect.fn("KimiPlannedAttemptExecutor.publishEvidence")(function* (
-  crypto: Crypto.Crypto,
-  evidence: EvidenceStore["Service"],
-  commit: GitCommitSha,
-  correlation: PlannedAttemptExecutorCorrelation
-) {
-  const manifest = AcceptedResultEvidenceManifest.make({
-    commit,
-    correlation,
-    formatVersion: 1,
-    outcome: "Accepted",
-    predecessor: null
-  })
-  const bytes = new TextEncoder().encode(JSON.stringify(manifest))
-  const reference = yield* evidence.put(bytes)
-  const reread = yield* evidence.read(reference)
-  const digestBytes = yield* crypto.digest("SHA-256", reread)
-  const digest = EvidenceDigest.make(
-    Array.from(digestBytes, (value) => value.toString(hexRadix).padStart(hexByteWidth, "0")).join("")
-  )
-  if (!sameBytes(bytes, reread) || digest !== reference.digest) {
-    return yield* Effect.fail(
-      new KimiAcpFailure({
-        detail: "Kimi accepted-result evidence could not be verified",
-        kind: "Protocol",
-        operation: "session/prompt"
-      })
-    )
-  }
-  return EvidenceReference.make({ byteLength: bytes.byteLength, digest })
-})
-
 const resultForTerminal = Effect.fn("KimiPlannedAttemptExecutor.resultForTerminal")(function* (
   state: AttemptState,
   observation: KimiAcpSessionObservation,
   git: Option.Option<GitCommand["Service"]>,
   evidence: Option.Option<EvidenceStore["Service"]>,
   crypto: Option.Option<Crypto.Crypto>
-): Effect.fn.Return<PlannedAttemptExecutorResult, unknown, never> {
+) {
   const correlation = correlationForContext(state.attempt)
   const candidate = commitFromMessage(textFrom(observation), correlation)
   if (candidate._tag === "InvalidCandidate")
@@ -159,9 +156,17 @@ const resultForTerminal = Effect.fn("KimiPlannedAttemptExecutor.resultForTermina
   if (Option.isNone(git) || Option.isNone(evidence) || Option.isNone(crypto)) {
     return PlannedAttemptExecutorResult.cases.Completed.make({})
   }
-  const head = yield* readHead(git.value, state.attempt)
-  if (Option.isNone(head)) return PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "GitUnavailable" })
   if (candidate._tag === "NoCandidate") {
+    const head = yield* readHead(git.value, state.attempt)
+    if (Option.isNone(head)) {
+      if (state.kimiResultCycle !== undefined)
+        return yield* new KimiAcpFailure({
+          kind: "Unavailable",
+          operation: "session/prompt",
+          detail: "Kimi result authority unavailable at Head"
+        })
+      return PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "GitUnavailable" })
+    }
     return head.value === state.attempt.baseSha
       ? PlannedAttemptExecutorResult.cases.Completed.make({})
       : PlannedAttemptExecutorResult.cases.Failed.make({
@@ -169,24 +174,44 @@ const resultForTerminal = Effect.fn("KimiPlannedAttemptExecutor.resultForTermina
           observedHead: head.value
         })
   }
-  const acceptedCommit = candidate.commit
-  if (head.value !== acceptedCommit)
-    return PlannedAttemptExecutorResult.cases.Failed.make({
-      failureCode: "CandidateHeadMismatch",
-      observedHead: head.value
-    })
-  const lineage = yield* git.value.runInWorktree(state.attempt.worktree, [
-    "merge-base",
-    "--is-ancestor",
-    state.attempt.baseSha,
-    acceptedCommit
-  ])
-  if (lineage.exitCode !== 0)
-    return PlannedAttemptExecutorResult.cases.Failed.make({ failureCode: "LineageUnproven", observedHead: head.value })
-  const reference = yield* publishEvidence(crypto.value, evidence.value, acceptedCommit, correlation)
-  return PlannedAttemptExecutorResult.cases.Accepted.make({
-    acceptedResult: { commit: acceptedCommit, evidenceManifest: reference }
-  })
+  const acceptedResult = yield* validateOwnedSemanticCandidate(textFrom(observation) ?? "", correlation, {
+    proveOwnership:
+      observation.sessionId === state.sessionId &&
+      observation.cwd === state.attempt.worktree &&
+      observation.status === "terminal"
+        ? Effect.void
+        : Effect.fail(
+            new ProviderResultAuthorityUnavailable({
+              boundary: "Ownership",
+              detail: "Kimi terminal session ownership is unproven"
+            })
+          ),
+    ...providerResultGitBoundary(git.value, state.attempt.worktree, state.attempt.baseSha),
+    publishAndVerifyEvidence: (commit, ownedCorrelation) =>
+      publishProviderResultEvidence(evidence.value, crypto.value, commit, ownedCorrelation)
+  }).pipe(
+    Effect.map((acceptedResult) => PlannedAttemptExecutorResult.cases.Accepted.make({ acceptedResult })),
+    Effect.catchTag("ProviderResultRejected", (rejection) =>
+      Effect.succeed(
+        PlannedAttemptExecutorResult.cases.Failed.make({
+          failureCode: rejection.reason === "CandidateLineageInvalid" ? "LineageUnproven" : rejection.reason,
+          ...(rejection.observedHead === undefined ? {} : { observedHead: rejection.observedHead })
+        })
+      )
+    ),
+    Effect.mapError(
+      (error) =>
+        new KimiAcpFailure({
+          kind: "Protocol",
+          operation: "session/prompt",
+          detail:
+            error.boundary === "Evidence"
+              ? "Kimi accepted-result evidence could not be verified"
+              : `Kimi result authority unavailable at ${error.boundary}`
+        })
+    )
+  )
+  return acceptedResult
 })
 
 /** Kimi ACP implementation of the provider-neutral planned-attempt boundary. */
@@ -217,6 +242,10 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
         sessionId: state.sessionId,
         worktree: state.attempt.worktree,
         sessionClosed: state.sessionClosed,
+        ...(state.resultCycle === undefined ? {} : { resultCycle: state.resultCycle }),
+        ...(state.promptRequests === undefined ? {} : { promptRequests: state.promptRequests }),
+        ...(state.kimiResultCycle === undefined ? {} : { kimiResultCycle: state.kimiResultCycle }),
+        ...(state.resultRejection === undefined ? {} : { resultRejection: state.resultRejection }),
         ...(state.terminal === undefined ? {} : { terminal: state.terminal })
       })
 
@@ -241,6 +270,126 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       yield* persist(state)
     })
 
+    const acknowledgePromptCycle = Effect.fn("KimiPlannedAttemptExecutor.acknowledgePromptCycle")(function* (
+      cycle: KimiResultCycle | undefined,
+      token: KimiAcpPromptToken | undefined
+    ) {
+      if (cycle === undefined) return undefined
+      const current = cycle.responses.at(lastPromptOffset)
+      if (current?._tag !== "RequestIntended") return cycle
+      if (token === undefined || current.intent.token !== ProviderResultRequestToken.make(token))
+        return yield* new KimiAcpFailure({
+          kind: "Protocol",
+          operation: "session/prompt",
+          detail: "Kimi acknowledgement names another result response"
+        })
+      return yield* Schema.decodeUnknownEffect(KimiResultCycle)({
+        ...cycle,
+        responses: [
+          ...cycle.responses.slice(0, lastPromptOffset),
+          { _tag: "PromptAcknowledged", intent: current.intent }
+        ]
+      })
+    })
+
+    const sendPrompt = Effect.fn("KimiPlannedAttemptExecutor.sendPrompt")(function* (
+      state: AttemptState,
+      body: string,
+      command: "Begin" | "Resume",
+      correlation: PlannedAttemptExecutorCorrelation,
+      prepared?: { readonly token: KimiAcpPromptToken; readonly cycle: KimiResultCycle }
+    ) {
+      // Legacy controlled services without Crypto retain their original lifecycle contract.
+      const token =
+        prepared?.token ??
+        (Option.isSome(crypto) ? KimiAcpPromptToken.make(yield* crypto.value.randomUUIDv4) : undefined)
+      const intendedAt =
+        prepared?.cycle.responses.at(lastPromptOffset)?.intent.intendedAt ??
+        (yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+      const promptRequests =
+        token === undefined
+          ? state.promptRequests
+          : yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)([
+              ...(state.promptRequests ?? []),
+              { token, intendedAt, response: "Pending" }
+            ])
+      const kimiResultCycle =
+        prepared?.cycle ??
+        state.kimiResultCycle ??
+        (token !== undefined && Option.isSome(privateStore) && state.phase === "SessionCreated"
+          ? yield* Schema.decodeUnknownEffect(KimiResultCycle)({
+              cycleId: token,
+              plannedBaseSha: state.attempt.baseSha,
+              responses: [{ _tag: "RequestIntended", intent: { _tag: "Initial", ordinal: 1, token, intendedAt } }]
+            })
+          : undefined)
+      const intent: AttemptState = {
+        ...state,
+        ...(kimiResultCycle === undefined ? {} : { kimiResultCycle }),
+        phase: "PromptIntentRecorded",
+        status: "executing",
+        ...(promptRequests === undefined ? {} : { promptRequests })
+      }
+      yield* putAndPersist(intent)
+      const prompt = client
+        .prompt(state.sessionId, semanticTaskText(body), token)
+        .pipe(Effect.mapError((error) => commandFailure(command, correlation, error)))
+      const allowance = kimiResultCycle?.responses.at(lastPromptOffset)?.intent
+      yield* allowance === undefined ? prompt : withinProviderResultDeadline(allowance, prompt)
+      const acknowledged =
+        token === undefined || promptRequests === undefined
+          ? promptRequests
+          : yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)(
+              promptRequests.map((entry) => (entry.token === token ? { ...entry, response: "Observed" } : entry))
+            )
+      const acknowledgedCycle = yield* acknowledgePromptCycle(kimiResultCycle, token)
+      yield* putAndPersist({
+        ...intent,
+        phase: "Executing",
+        ...(acknowledged === undefined ? {} : { promptRequests: acknowledged }),
+        ...(acknowledgedCycle === undefined ? {} : { kimiResultCycle: acknowledgedCycle })
+      })
+      return executing(correlation)
+    })
+
+    const rejectAndStop = Effect.fn("KimiPlannedAttemptExecutor.rejectAndStop")(function* (
+      state: AttemptState,
+      reason: PlannedAttemptRejectedResultReport["reason"],
+      recoveryCause: PlannedAttemptRejectedResultReport["recoveryCause"]
+    ) {
+      const report = yield* Schema.decodeUnknownEffect(PlannedAttemptRejectedResultReport)({
+        _tag: "ExecutorWorkResultRejected",
+        correlation: correlationForContext(state.attempt),
+        reason,
+        recoveryCause,
+        responseCount: state.kimiResultCycle?.responses.length,
+        custody: { _tag: "Unresolved" }
+      })
+      const intended: AttemptState = {
+        ...state,
+        phase: "ResultStopIntended",
+        status: "unavailable",
+        resultRejection: report
+      }
+      yield* putAndPersist(intended)
+      yield* client.cancel(state.sessionId).pipe(Effect.result)
+      yield* client.closeSession(state.sessionId).pipe(Effect.result)
+      // ACP session closure is not native stopped-writer proof. Never release custody from its acknowledgement.
+      yield* putAndPersist({ ...intended, phase: "ResultRejected" })
+      return PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+    })
+
+    const expireCycle = Effect.fn("KimiPlannedAttemptExecutor.expireCycle")(function* (state: AttemptState) {
+      const rejected = state.kimiResultCycle?.responses.findLast((entry) => entry._tag === "ResponseRejected")
+      if (rejected?._tag !== "ResponseRejected")
+        return yield* new KimiAcpFailure({
+          kind: "Protocol",
+          operation: "session/prompt",
+          detail: "expired correction lacks its predecessor rejection"
+        })
+      return yield* rejectAndStop(state, rejected.reason, "Deadline")
+    })
+
     const statusForPhase = (phase: KimiAttemptPrivatePhase): AttemptState["status"] => {
       switch (phase) {
         case "Suspended":
@@ -248,6 +397,8 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
         case "Terminal":
           return "terminal"
         case "Unavailable":
+        case "ResultStopIntended":
+        case "ResultRejected":
           return "unavailable"
         case "SessionCreated":
         case "PromptIntentRecorded":
@@ -270,12 +421,7 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       attempt?: AttemptContext
     ) {
       const context = attempt ?? contextForRecord(record)
-      if (
-        context.attemptId !== record.attemptId ||
-        context.runId !== record.runId ||
-        context.worktree !== record.worktree ||
-        context.executor !== record.executor
-      ) {
+      if (!sameAttemptContext(context, contextForRecord(record))) {
         return yield* Effect.fail(
           new KimiAcpFailure({
             detail: "Kimi private session is bound to a different attempt",
@@ -286,7 +432,12 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       }
       // An unavailable record is a typed stop from a prior process. Do not
       // manufacture a new ACP session while merely observing it.
-      if (record.phase !== "Unavailable" && !(record.phase === "Terminal" && record.sessionClosed === true)) {
+      if (
+        record.phase !== "Unavailable" &&
+        record.phase !== "ResultStopIntended" &&
+        record.phase !== "ResultRejected" &&
+        !(record.phase === "Terminal" && record.sessionClosed === true)
+      ) {
         const loaded = yield* client.loadSession(record.sessionId, record.worktree)
         if (loaded !== record.sessionId) {
           return yield* Effect.fail(
@@ -304,6 +455,10 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
         sessionId: record.sessionId,
         status: statusForPhase(record.phase),
         ...(record.terminal === undefined ? {} : { terminal: record.terminal }),
+        ...(record.resultCycle === undefined ? {} : { resultCycle: record.resultCycle }),
+        ...(record.promptRequests === undefined ? {} : { promptRequests: record.promptRequests }),
+        ...(record.kimiResultCycle === undefined ? {} : { kimiResultCycle: record.kimiResultCycle }),
+        ...(record.resultRejection === undefined ? {} : { resultRejection: record.resultRejection }),
         sessionClosed: record.sessionClosed
       }
       yield* put(state)
@@ -351,12 +506,64 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
     })
     const projection = Effect.fn("KimiPlannedAttemptExecutor.project")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
-      state: AttemptState
+      initialState: AttemptState
     ): Effect.fn.Return<PlannedAttemptExecutorProjection, unknown, never> {
+      let state = initialState
+      if (state.resultRejection !== undefined)
+        return PlannedAttemptExecutorProjection.cases.Exact.make({ report: state.resultRejection })
+      const activeResponse = state.kimiResultCycle?.responses.at(lastPromptOffset)
+      if (
+        activeResponse !== undefined &&
+        providerResultResponseExpired(
+          activeResponse.intent,
+          ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
+        )
+      ) {
+        const previous = state.kimiResultCycle?.responses.findLast((entry) => entry._tag === "ResponseRejected")
+        if (previous?._tag !== "ResponseRejected")
+          return yield* new KimiAcpFailure({
+            kind: "Protocol",
+            operation: "session/prompt",
+            detail: "expired correction lacks its predecessor rejection"
+          })
+        return yield* rejectAndStop(state, previous.reason, "Deadline")
+      }
+
       if (state.phase === "Terminal" && state.terminal !== undefined && state.sessionClosed) {
         return PlannedAttemptExecutorProjection.cases.Exact.make({ report: terminal(correlation, state.terminal) })
       }
-      const observed = yield* observeClient(state)
+      const observationRead = observeClient(state)
+      const observedWithinAllowance = yield* activeResponse === undefined
+        ? observationRead.pipe(Effect.map(Option.some))
+        : withinProviderResultDeadline(activeResponse.intent, observationRead).pipe(
+            Effect.map(Option.some),
+            Effect.catchTag("ProviderResultDeadlineElapsed", () =>
+              Effect.succeed(Option.none<KimiAcpSessionObservation>())
+            )
+          )
+      if (Option.isNone(observedWithinAllowance)) return yield* expireCycle(state)
+      const observed = observedWithinAllowance.value
+      const pending = state.promptRequests?.at(lastPromptOffset)
+      if (pending?.response === "Pending") {
+        if (observed.promptRequest?.token !== pending.token || observed.promptRequest.response !== "Observed")
+          return PlannedAttemptExecutorProjection.cases.Unreadable.make({
+            correlation,
+            detail: "Kimi prompt acknowledgement is unproven; retained request cannot be resent"
+          })
+        const acknowledged = yield* Schema.decodeUnknownEffect(KimiPromptRequestHistory)(
+          state.promptRequests?.map((entry) =>
+            entry.token === pending.token ? { ...entry, response: "Observed" } : entry
+          )
+        )
+        const acknowledgedCycle = yield* acknowledgePromptCycle(state.kimiResultCycle, pending.token)
+        state = {
+          ...state,
+          promptRequests: acknowledged,
+          ...(acknowledgedCycle === undefined ? {} : { kimiResultCycle: acknowledgedCycle })
+        }
+
+        yield* putAndPersist(state)
+      }
       if (observed.status === "unavailable") {
         yield* putAndPersist({ ...state, phase: "Unavailable", status: "unavailable" })
         return PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
@@ -384,7 +591,82 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
         })
       }
       if (observed.status === "terminal") {
-        const result = state.terminal ?? (yield* resultForTerminal(state, observed, git, evidence, crypto))
+        const validation =
+          state.terminal === undefined
+            ? resultForTerminal(state, observed, git, evidence, crypto)
+            : Effect.succeed(state.terminal)
+        const validatedWithinAllowance = yield* activeResponse === undefined
+          ? validation.pipe(Effect.map(Option.some))
+          : withinProviderResultDeadline(activeResponse.intent, validation).pipe(
+              Effect.map(Option.some),
+              Effect.catchTag("ProviderResultDeadlineElapsed", () =>
+                Effect.succeed(Option.none<PlannedAttemptExecutorResult>())
+              )
+            )
+        if (Option.isNone(validatedWithinAllowance)) return yield* expireCycle(state)
+        const result = validatedWithinAllowance.value
+        if (
+          state.kimiResultCycle !== undefined &&
+          result._tag === "Failed" &&
+          (result.failureCode === "ResultEnvelopeInvalid" ||
+            result.failureCode === "CandidateHeadMismatch" ||
+            result.failureCode === "LineageUnproven")
+        ) {
+          const cycle = state.kimiResultCycle
+          const current = cycle.responses.at(lastPromptOffset)
+          if (current?._tag !== "PromptAcknowledged")
+            return yield* new KimiAcpFailure({
+              kind: "Protocol",
+              operation: "session/prompt",
+              detail: "invalid answer lacks exact prompt acknowledgement"
+            })
+          const reason = yield* Schema.decodeUnknownEffect(ProviderResultRejectionReason)(
+            result.failureCode === "LineageUnproven" ? "CandidateLineageInvalid" : result.failureCode
+          )
+          const now = ProviderResultInstantMilliseconds.make(
+            yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+          )
+          const rejectedCycle = yield* Schema.decodeUnknownEffect(KimiResultCycle)({
+            ...cycle,
+            responses: [
+              ...cycle.responses.slice(0, lastPromptOffset),
+              { _tag: "ResponseRejected", intent: current.intent, reason, responseObservedAt: now }
+            ]
+          })
+          state = { ...state, kimiResultCycle: rejectedCycle }
+          yield* putAndPersist(state)
+          if (Option.isNone(crypto))
+            return yield* new KimiAcpFailure({
+              kind: "Unavailable",
+              operation: "session/prompt",
+              detail: "result correction identity allocator is unavailable"
+            })
+          const token = KimiAcpPromptToken.make(yield* crypto.value.randomUUIDv4)
+          const decision = yield* prepareKimiResultCorrection(rejectedCycle, token, now)
+          if (decision._tag === "Exhausted") return yield* rejectAndStop(state, reason, "CorrectionExhausted")
+          if (decision._tag !== "CorrectionPrepared")
+            return yield* new KimiAcpFailure({
+              kind: "Protocol",
+              operation: "session/prompt",
+              detail: "rejected response did not authorize a correction"
+            })
+          const started = yield* sendPrompt(
+            state,
+            `The final result was rejected: ${reason}. Verify the current worktree and applicable checks again; return a fresh final JSON answer. You retain full access.`,
+            "Begin",
+            correlation,
+            { token, cycle: decision.cycle }
+          ).pipe(
+            Effect.map((report) => PlannedAttemptExecutorProjection.cases.Exact.make({ report })),
+            Effect.catchTag("ProviderResultDeadlineElapsed", () =>
+              Effect.gen(function* () {
+                const retained = yield* stateFor(correlation)
+                return yield* rejectAndStop(retained ?? state, reason, "Deadline")
+              })
+            )
+          )
+          return started
+        }
         const terminalState = { ...state, phase: "Terminal" as const, status: "terminal" as const, terminal: result }
         yield* putAndPersist(terminalState)
         if (!terminalState.sessionClosed) {
@@ -409,14 +691,18 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       const existingInMemory = yield* stateFor(correlation)
       const existing = existingInMemory ?? Option.getOrUndefined(yield* recoverForAttempt(context))
       if (existing !== undefined) {
+        if (!sameAttemptContext(context, existing.attempt))
+          return yield* commandFailure(
+            "Begin",
+            correlation,
+            new KimiAcpFailure({
+              detail: "Kimi private session is bound to a different attempt",
+              kind: "Protocol",
+              operation: "session/load"
+            })
+          )
         if (existing.phase === "SessionCreated") {
-          const intent = { ...existing, phase: "PromptIntentRecorded" as const, status: "executing" as const }
-          yield* putAndPersist(intent)
-          yield* client
-            .prompt(existing.sessionId, semanticTaskText(request.specification.body))
-            .pipe(Effect.mapError((error) => commandFailure("Begin", correlation, error)))
-          yield* putAndPersist({ ...intent, phase: "Executing" as const })
-          return executing(correlation)
+          return yield* sendPrompt(existing, request.specification.body, "Begin", correlation)
         }
         const result = yield* projection(correlation, existing)
         if (result._tag === "Exact") return result.report
@@ -441,13 +727,7 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       }
       // The session is retained in the adapter state before the prompt crosses ACP.
       yield* putAndPersist(fresh)
-      const intent = { ...fresh, phase: "PromptIntentRecorded" as const }
-      yield* putAndPersist(intent)
-      yield* client
-        .prompt(sessionId, semanticTaskText(request.specification.body))
-        .pipe(Effect.mapError((error) => commandFailure("Begin", correlation, error)))
-      yield* putAndPersist({ ...intent, phase: "Executing" as const })
-      return executing(correlation)
+      return yield* sendPrompt(fresh, request.specification.body, "Begin", correlation)
     })
 
     const suspend = Effect.fn("KimiPlannedAttemptExecutor.suspend")(function* (attempt: PlannedTaskAttempt) {
@@ -506,6 +786,10 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
         )
       if (existing === undefined)
         return yield* Effect.fail(commandFailure("Resume", correlation, "Kimi session is unknown"))
+      if (existing.resultRejection !== undefined)
+        return yield* Effect.fail(
+          commandFailure("Resume", correlation, "rejected results require explicit recovery authorization")
+        )
       if (existing.phase === "PromptIntentRecorded") {
         const reconciled = yield* projection(correlation, existing)
         if (reconciled._tag === "Exact") return reconciled.report
@@ -518,13 +802,7 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       yield* client
         .resumeSession(existing.sessionId, attempt.worktree)
         .pipe(Effect.mapError((error) => commandFailure("Resume", correlation, error)))
-      const promptIntent = { ...resumeIntent, phase: "PromptIntentRecorded" as const }
-      yield* putAndPersist(promptIntent)
-      yield* client
-        .prompt(existing.sessionId, semanticTaskText(request.specification.body))
-        .pipe(Effect.mapError((error) => commandFailure("Resume", correlation, error)))
-      yield* putAndPersist({ ...promptIntent, phase: "Executing" as const, status: "executing" as const })
-      return executing(correlation)
+      return yield* sendPrompt(resumeIntent, request.specification.body, "Resume", correlation)
     })
 
     const executor = PlannedAttemptExecutor.of({
