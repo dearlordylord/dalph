@@ -1161,7 +1161,10 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(resumedReport.command).toBe("Resume")
         expect(resumedReport.report._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
-        await fixture.model.waitForCalls(2)
+        await fixture.model.waitForCalls(2).catch((failure: unknown) => {
+          const observation = resumed.events.find((event) => event.event === "resume-observation")
+          throw new Error(`${String(failure)}; Resume observation=${JSON.stringify(observation ?? "Unavailable")}`)
+        })
         expect(fixture.model.calls).toHaveLength(2)
       } finally {
         await dispose(fixture, hosts)

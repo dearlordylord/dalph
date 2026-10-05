@@ -1796,10 +1796,16 @@ const makeCodexPlannedAttemptExecutorContext = (
         completionHintAuthorized
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
       const toolEffects = yield* listToolEffects(correlation)
-      const census = yield* observeOwnedActivity(
-        reconciliation.thread,
-        toolEffects.every((effect) => effect._tag === "Completed")
-      )
+      const freshIncarnation =
+        record._tag === "Terminal" &&
+        record.turnStartIncarnation !== undefined &&
+        record.turnStartIncarnation !== app.incarnation
+      const census = yield* freshIncarnation
+        ? observeRecoveryWriterCensus(observeOwnedActivityByThreadId(observedRecord.threadId, correlation))
+        : observeOwnedActivity(
+            reconciliation.thread,
+            toolEffects.every((effect) => effect._tag === "Completed")
+          )
       if (censusHasActivity(census)) {
         return {
           continueLifecycleObservation: canContinueActivityObservation(census, terminalReadAuthorized),

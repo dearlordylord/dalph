@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification reads bounded native process metadata, never provider payloads. */
 import { execFile } from "node:child_process"
 import type { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Option, Ref, Schema } from "effect"
 import {
   CodexAppServer,
   CodexOwnedActivityCensus,
@@ -75,4 +75,55 @@ export const readQualificationRetainedAttemptState = (
     Effect.catch(() => Effect.succeed("Unreadable")),
     Effect.timeoutOption("1 second"),
     Effect.map(Option.getOrElse(() => "Unavailable"))
+  )
+
+export const qualificationFailureDetail = (cause: unknown): string => {
+  const decoded = Schema.decodeUnknownOption(Schema.Struct({ detail: Schema.String }))(cause)
+  return Option.isSome(decoded) ? decoded.value.detail : String(cause)
+}
+
+/** Status-only observation distinguishes retained Resume from dispatch without exposing provider payloads. */
+export const qualificationResumeObservation = (
+  store: CodexAttemptStoreService,
+  app: CodexAppServer["Service"],
+  correlation: PlannedAttemptExecutorCorrelation
+) =>
+  Effect.gen(function* () {
+    const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+    if (Option.isNone(found) || !("threadId" in found.value))
+      return {
+        retainedState: Option.isNone(found) ? "Missing" : found.value._tag,
+        threadStatus: "Unavailable",
+        ownedTurnStatus: "Unavailable",
+        persistedTurnStatus: "Unavailable"
+      }
+    const record = found.value
+    const thread = yield* app.readThread(record.threadId)
+    const turnId = "observedTurnId" in record ? record.observedTurnId : undefined
+    const persisted = app.listThreadTurns === undefined ? thread.turns : yield* app.listThreadTurns(record.threadId)
+    return {
+      retainedState: record._tag,
+      threadStatus: thread.status,
+      ownedTurnStatus: thread.turns.find((turn) => turn.id === turnId)?.status ?? "Missing",
+      persistedTurnStatus: persisted.find((turn) => turn.id === turnId)?.status ?? "Missing"
+    }
+  }).pipe(
+    Effect.timeoutOption("1 second"),
+    Effect.map(
+      Option.getOrElse(() => ({
+        retainedState: "Unavailable",
+        threadStatus: "Unavailable",
+        ownedTurnStatus: "Unavailable",
+        persistedTurnStatus: "Unavailable"
+      }))
+    ),
+    Effect.catch(() =>
+      Effect.succeed({
+        retainedState: "Unreadable",
+        threadStatus: "Unreadable",
+        ownedTurnStatus: "Unreadable",
+        persistedTurnStatus: "Unreadable"
+      })
+    ),
+    Effect.map((observation) => ({ event: "resume-observation", ...observation }))
   )

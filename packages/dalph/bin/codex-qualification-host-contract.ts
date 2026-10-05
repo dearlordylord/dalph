@@ -61,6 +61,13 @@ export const CodexQualificationHostEvent = Schema.Union([
     command: Schema.Literals(["Begin", "Observe", "Resume", "Suspend", "ContinueRejectedResult"]),
     report: PlannedAttemptExecutorReport
   }),
+  Schema.Struct({
+    event: Schema.Literal("resume-observation"),
+    retainedState: Schema.String,
+    threadStatus: Schema.String,
+    ownedTurnStatus: Schema.String,
+    persistedTurnStatus: Schema.String
+  }),
   Schema.Struct({ event: Schema.Literal("projection"), projection: PlannedAttemptExecutorProjection }),
   Schema.Struct({ event: Schema.Literal("suspension-ready") }),
   Schema.Struct({ event: Schema.Literal("suspension-requested") }),

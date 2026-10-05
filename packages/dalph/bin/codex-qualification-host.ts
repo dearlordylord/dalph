@@ -52,6 +52,8 @@ import {
 } from "../src/application/codex-attempt-store.js"
 import { codexPlannedAttemptExecutorLayerWithOptions } from "../src/application/codex-planned-attempt-executor.js"
 import {
+  qualificationResumeObservation,
+  qualificationFailureDetail,
   makeQualificationCensusDiagnostic,
   readQualificationRetainedAttemptState
 } from "../src/qualification/codex-census-diagnostic.js"
@@ -326,6 +328,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
         } else if (configuration.action === "resume") {
           yield* writeEvent(reportEvent("Resume", yield* executor.resume(request)))
+          yield* writeEvent(yield* qualificationResumeObservation(store, app, correlation))
         } else if (configuration.action === "continue-result") {
           if (executor.continueRejectedResult === undefined)
             return yield* new QualificationConfigurationFailure({ detail: "executor does not expose result recovery" })
@@ -338,7 +341,7 @@ const configurationProgram = Effect.gen(function* () {
               Effect.gen(function* () {
                 const census = yield* Ref.get(lastCensus)
                 return yield* new QualificationConfigurationFailure({
-                  detail: `${detailOf(failure)}; last census=${census}`
+                  detail: `${qualificationFailureDetail(failure)}; last census=${census}`
                 })
               })
             )
@@ -428,11 +431,6 @@ const configurationProgram = Effect.gen(function* () {
   )
 })
 
-const detailOf = (cause: unknown): string => {
-  const decoded = Schema.decodeUnknownOption(Schema.Struct({ detail: Schema.String }))(cause)
-  return Option.isSome(decoded) ? decoded.value.detail : String(cause)
-}
-
 if (rawConfiguration.action === undefined) {
   nodeProcess.stderr.write(`${usage}\n`)
   nodeProcess.exitCode = 64
@@ -440,12 +438,12 @@ if (rawConfiguration.action === undefined) {
   void Effect.runPromiseExit(configurationProgram.pipe(Effect.provideService(Logger.LogToStderr, true)))
     .then((exit) => {
       if (Exit.isSuccess(exit)) return
-      const detail = detailOf(Cause.squash(exit.cause)) || Cause.pretty(exit.cause)
+      const detail = qualificationFailureDetail(Cause.squash(exit.cause)) || Cause.pretty(exit.cause)
       nodeProcess.stdout.write(`${JSON.stringify({ event: "failure", detail })}\n`)
       nodeProcess.exitCode = 70
     })
     .catch((cause: unknown) => {
-      nodeProcess.stdout.write(`${JSON.stringify({ event: "failure", detail: detailOf(cause) })}\n`)
+      nodeProcess.stdout.write(`${JSON.stringify({ event: "failure", detail: qualificationFailureDetail(cause) })}\n`)
       nodeProcess.exitCode = 70
     })
 }
