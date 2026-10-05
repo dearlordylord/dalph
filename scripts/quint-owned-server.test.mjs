@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { repositoryLocation, withoutInheritedCustody } from "./gate-custody-records.mjs"
-import { ownedQuintServerEnvironment } from "./quint-owned-server.mjs"
+import { ownedQuintServerEnvironment, quintSocketCanServeOwnedEndpoint } from "./quint-owned-server.mjs"
 
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const helper = new URL("./quint-owned-server.mjs", import.meta.url).href
@@ -61,20 +61,27 @@ import {runBoundedCommand} from ${JSON.stringify(boundedCommand)};
 import {inheritedCustody} from ${JSON.stringify(custodyModule)};
 const mode=${JSON.stringify(mode)};
 const ambient=createServer(socket=>socket.end('ambient'));
-await new Promise(resolve=>ambient.listen(0,'127.0.0.1',resolve));
+const ambientHost=mode==='success'?'127.0.0.2':'127.0.0.1';
+await new Promise(resolve=>ambient.listen(0,ambientHost,resolve));
 const ambientPort=ambient.address().port;
-const exchange=(port,message)=>new Promise((resolve,reject)=>{const socket=connect(port,'127.0.0.1');socket.once('error',reject);socket.once('data',data=>{if(message)socket.write(message);else socket.end();resolve(data.toString());});});
+const exchange=(port,message,host='127.0.0.1')=>new Promise((resolve,reject)=>{const socket=connect(port,host);socket.once('error',reject);socket.once('data',data=>{if(message)socket.write(message);else socket.end();resolve(data.toString());});});
 let checks=0;
 const controller=new AbortController();
+const began=Date.now();const phase=name=>console.error(JSON.stringify({phase:name,elapsedMilliseconds:Date.now()-began}));
+process.once('SIGTERM',()=>controller.abort(Error('fixture interrupted')));
 const boundaries={assertPrerequisites:()=>{if(mode==='prerequisite-failure')throw Error('missing patched owned-server readiness');},readiness:async({port})=>{if(mode==='readiness-timeout')await new Promise(()=>{});if(mode==='readiness-failure')throw Error('fixture reflection refused');if(await exchange(port)!=='owned')throw Error('wrong readiness responder');}};
-if(mode==='ownership-failure')boundaries.reservePort=async()=>ambientPort;
+if(mode==='ownership-failure'||mode==='success')boundaries.reservePort=async()=>ambientPort;
 if(mode==='shutdown-failure')boundaries.listeningSockets=()=>[{family:'tcp',address:'fixture',inode:'retained'}];
 let result,error,qualification,qualificationError;
 if(mode==='output-route-old')boundaries.runBoundedCommand=options=>runBoundedCommand({...options,args:options.args.filter(argument=>!argument.startsWith('--out-dir='))});
+phase('guard-start');
 const guard=mode.startsWith('output-route')?await startInputGuard({worktree:process.cwd(),effectiveEnvironment:process.env,generatedOutputRoots:[inheritedCustody().run.reportDirectory],logicalInvocation:{mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:process.env.DALPH_COVERAGE_BASE_SHA,stageManifest:[],toolExecutables:[]}}):undefined;
+phase('guard-ready');
 try{result=await withOwnedQuintServer({javaExecutable:process.execPath,javaArguments:[${JSON.stringify(server)},mode==='wrong-java-home'?'-Duser.home=/forged':${JSON.stringify("-Duser.home=" + root)}],javaUserHome:mode==='missing-java-home'?undefined:${JSON.stringify(root)},apalacheJar:'fixture-identified-jar',environment:{...process.env,DALPH_QUINT_OWNED_SERVER_ENDPOINT:'caller-forged:8822',DALPH_QUINT_JAVA_EXECUTABLE:'/caller-forged/java',DALPH_QUINT_JAVA_USER_HOME:'/caller-forged/home'},remainingExecutionMilliseconds:()=>mode==='readiness-timeout'?400:5000,terminationGraceMilliseconds:50,processGroupAbsenceTimeoutMilliseconds:1000,boundaries,signal:controller.signal,runProfile:async({serverEndpoint,environment,signal})=>{checks++;if(mode==='interruption'){await new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>reject(Error('profile interrupted')),{once:true});controller.abort(Error('fixture interrupted'));});}if(environment.DALPH_QUINT_OWNED_SERVER_ENDPOINT!==serverEndpoint||environment.DALPH_QUINT_JAVA_EXECUTABLE!==process.execPath||environment.DALPH_QUINT_JAVA_USER_HOME!==${JSON.stringify(root)})throw Error('caller transport retained');if(mode==='early-death'){await exchange(Number(serverEndpoint.split(':')[1]),'die');await new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>reject(Error('profile cancelled on server death')),{once:true});});}return {obligations:1};}});}catch(e){error=e.message;}
+phase('server-finished');
 try{if(guard)qualification=await guard.finish();}catch(e){qualificationError=e.message;}finally{await guard?.close();}
-const ambientReply=await exchange(ambientPort);
+phase('guard-finished');
+const ambientReply=await exchange(ambientPort,undefined,ambientHost);
 await new Promise(resolve=>ambient.close(resolve));
 writeFileSync(${JSON.stringify(join(root, ".scratch", "result.json"))},JSON.stringify({result,error,checks,ambientReply,qualification,qualificationError,cwd:process.cwd()}));
 if((mode==='success'||mode.startsWith('output-route'))&&!result)throw Error(error);
@@ -104,6 +111,7 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
     encoding: "utf8",
     timeout: 15000
   })
+  if (process.env.DALPH_QUINT_FIXTURE_PHASE_DIAGNOSTIC === "1") console.error(mode, processResult.stderr)
   assert.equal(processResult.status, mode === "output-route-old" ? 1 : 0, processResult.stdout + processResult.stderr)
   const result = JSON.parse(readFileSync(join(root, ".scratch", "result.json")))
   const location = repositoryLocation(root)
@@ -114,6 +122,15 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
   )
   return { root, result, receipts, runDirectory, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
+
+void test("owned endpoint socket selection excludes only proven unrelated IPv4 addresses", () => {
+  for (const address of ["0100007F:813B", "00000000:813B", "unknown", "0100007F:invalid"])
+    assert.equal(quintSocketCanServeOwnedEndpoint({ family: "tcp", address }), true, address)
+  for (const address of ["0200007F:813B", "0100000A:813B"])
+    assert.equal(quintSocketCanServeOwnedEndpoint({ family: "tcp", address }), false, address)
+  for (const family of ["tcp6", "unknown"])
+    assert.equal(quintSocketCanServeOwnedEndpoint({ family, address: "0200007F:813B" }), true, family)
+})
 
 void test("replaces caller authored owned-server transport metadata", () => {
   assert.deepEqual(
@@ -136,7 +153,7 @@ void test("replaces caller authored owned-server transport metadata", () => {
   )
 })
 
-void test("uses and terminates only the identified owned server", () => {
+void test("uses and terminates only the identified owned server with a foreign same-port IPv4 listener", () => {
   const f = fixture("success")
   try {
     assert.equal(f.result.checks, 1)

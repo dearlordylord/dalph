@@ -50,6 +50,8 @@ export declare const ownedQuintServerEnvironment: (
   serverEndpoint: string,
   java: { readonly javaExecutable: string; readonly javaUserHome: string }
 ) => NodeJS.ProcessEnv
+/** Excludes proven non-endpoint IPv4 addresses; uncertain rows retain ownership checks. */
+export declare const quintSocketCanServeOwnedEndpoint: (socket: Pick<OwnedQuintSocket, "family" | "address">) => boolean
 export declare const ownedQuintListeningSockets: (port: number) => Array<OwnedQuintSocket>
 export declare const withOwnedQuintServer: <Result>(options: {
   readonly javaExecutable: string
