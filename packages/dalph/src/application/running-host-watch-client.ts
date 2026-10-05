@@ -95,9 +95,10 @@ const decodeFrames = (source: Stream.Stream<Uint8Array, RunningHostError>, reque
   })
 
 /** Both watch adapters connect to one explicit host; reconnect is a new attachment. */
-export const watchRunningHost = (
+const watchRunningHostOperation = (
   address: LocalHostAddress,
-  runId: RunId
+  runId: RunId,
+  operation: "WatchSnapshots" | "WatchInspection"
 ): Stream.Stream<RunningHostWatchFrame, RunningHostError> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -113,7 +114,7 @@ export const watchRunningHost = (
         hostInstanceId: descriptor.hostInstanceId,
         requestId: RequestId.make(yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie)),
         runId,
-        operation: { _tag: "WatchSnapshots" }
+        operation: { _tag: operation }
       }
       const http = yield* HttpClientRequest.bodyJson(HttpClientRequest.post(`${address}/dalph/v1/watch`), request).pipe(
         Effect.mapError(() => failed("WatchRequestInvalid"))
@@ -140,3 +141,10 @@ export const watchRunningHost = (
       )
     })
   ).pipe(Stream.provide(NodeHttpClient.layerUndici), Stream.provide(NodeCrypto.layer))
+
+export const watchRunningHost = (address: LocalHostAddress, runId: RunId) =>
+  watchRunningHostOperation(address, runId, "WatchSnapshots")
+
+/** Inspection shares the same bounded decoder and starts from current state. */
+export const watchRunningHostInspection = (address: LocalHostAddress, runId: RunId) =>
+  watchRunningHostOperation(address, runId, "WatchInspection")

@@ -1,4 +1,5 @@
 import { PlannedAttemptExecutorCorrelation, PlannedTaskAttempt, RunId, TaskId, TaskRevision } from "@dalph/contracts"
+import { RunningHostInspection } from "./running-host-inspection.js"
 import {
   ApplyResultRecoveryRequest,
   ResultRecoveryRequestId,
@@ -97,6 +98,9 @@ export const RefreshInterest = Schema.TaggedUnion({
 export type RefreshInterest = typeof RefreshInterest.Type
 const Operation = Schema.TaggedUnion({
   ReadSnapshot: {},
+  ReadInspectionSnapshot: {},
+  RefreshInspection: {},
+  WatchInspection: {},
   ReadRunControl: {},
   ReadResultRecoveryDirection: { recoveryRequestId: ResultRecoveryRequestId },
   ApplyResultRecoveryDirection: { recovery: ApplyResultRecoveryRequest },
@@ -234,13 +238,23 @@ export const RunningHostSnapshot = Schema.Union([
   )
 ])
 export type RunningHostSnapshot = typeof RunningHostSnapshot.Type
+/** Joins independently fresh observations for presentation, with no atomic-source claim. */
+export const RunningHostInspectionSnapshot = Schema.TaggedStruct("InspectionSnapshot", {
+  run: RunningHostSnapshot,
+  inspection: RunningHostInspection
+})
+export type RunningHostInspectionSnapshot = typeof RunningHostInspectionSnapshot.Type
 export const RunningHostWatchFrame = Schema.Struct({
   protocolVersion: Schema.Literal(1),
   requestId: RequestId,
   runId: RunId,
   subscriptionId: SubscriptionId,
   sequence: WatchSequence,
-  frame: Schema.TaggedUnion({ Snapshot: { value: RunningHostSnapshot }, Failure: { error: RunningHostError } })
+  frame: Schema.TaggedUnion({
+    Snapshot: { value: RunningHostSnapshot },
+    Inspection: { value: RunningHostInspectionSnapshot },
+    Failure: { error: RunningHostError }
+  })
 }).check(
   Schema.makeFilter((value) => coherentWire(value.frame, value.runId) || "watch publication belongs to another Run")
 )
@@ -289,6 +303,7 @@ export const RunningHostRunControl = Schema.TaggedUnion({
 export type RunningHostRunControl = typeof RunningHostRunControl.Type
 const Value = Schema.Union([
   RunningHostSnapshot,
+  RunningHostInspectionSnapshot,
   RunningHostRunControl,
   Schema.TaggedStruct("ResultRecoveryDirectionRecorded", {
     recovery: ApplyResultRecoveryRequest,

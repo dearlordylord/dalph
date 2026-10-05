@@ -5,6 +5,7 @@ import type { AuthoredDeliveryStatusRead } from "../../../packages/dalph/src/cas
 /** Presentation of one canonical entry retains its exact fact instead of inventing a dominant task status. */
 const entryLabels: Readonly<Record<DeliveryStatusEntry["_tag"], string>> = {
   ExecutorFailure: "Executor failed",
+  ExecutorResultRejected: "Executor result rejected",
   DependencyWait: "Waiting for prerequisites",
   TrackerFactWait: "Waiting for tracker facts",
   TaskWorkCapacityWait: "Waiting for task-work capacity",

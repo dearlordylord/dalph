@@ -2,22 +2,35 @@
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "exactOptionalPropertyTypes": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2023"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
-    "baseUrl": ".",
     "paths": {
-      "@dalph/contracts": ["../../packages/contracts/src/index.ts"],
-      "@dalph/orchestrator": ["../../packages/orchestrator/src/index.ts"],
-      "effect": ["../../node_modules/effect"],
-      "effect/*": ["../../node_modules/effect/*"]
+      "@dalph/contracts": [
+        "../../packages/contracts/src/index.ts"
+      ],
+      "@dalph/orchestrator": [
+        "../../packages/orchestrator/src/index.ts"
+      ],
+      "effect": [
+        "../../node_modules/effect"
+      ],
+      "effect/*": [
+        "../../node_modules/effect/*"
+      ]
     },
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2023",
-    "types": ["vite/client"]
+    "types": [
+      "vite/client"
+    ]
   },
   "include": [
     "src/cassette-lab.ts",

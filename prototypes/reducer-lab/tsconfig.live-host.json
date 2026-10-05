@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node", "vite/client"] },
+  "include": ["test/*.test.ts", "vite.live-host.config.ts", "vitest.live-host.config.ts", "../../packages/dalph/browser/*.ts"]
+}

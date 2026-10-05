@@ -20,6 +20,9 @@ const redirectStatusMinimum = 300
 const redirectStatusMaximum = 400
 const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], ReadonlyArray<string>>> = {
   ReadSnapshot: ["NotReady", "Ready", "Closed"],
+  ReadInspectionSnapshot: ["InspectionSnapshot"],
+  RefreshInspection: ["InspectionSnapshot"],
+  WatchInspection: [],
   ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
   ReadResultRecoveryDirection: ["ResultRecoveryDirectionRecorded", "ResultRecoveryDirectionNotRecorded"],
   ApplyResultRecoveryDirection: ["ResultRecoveryDirectionRecorded"],
@@ -28,17 +31,33 @@ const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], Read
   Unpause: ["UnpauseApplied"],
   WatchSnapshots: []
 }
+const inspectionOperations = ["ReadInspectionSnapshot", "RefreshInspection", "WatchInspection"] as const
 const compatibleFailures: Readonly<
   Record<RunningHostError["_tag"], ReadonlyArray<RunningHostRequest["operation"]["_tag"]>>
 > = {
-  SubscriptionLimitExceeded: ["WatchSnapshots"],
+  SubscriptionLimitExceeded: ["WatchSnapshots", "WatchInspection"],
   UnpausePartiallyApplied: ["Unpause"],
   RunClosed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
-  ReadFailed: ["ReadSnapshot", "ReadRunControl", "ReadResultRecoveryDirection"],
-  ProjectionFailed: ["ReadSnapshot", "ReadRunControl", "ReadResultRecoveryDirection"],
+  ReadFailed: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "ReadResultRecoveryDirection",
+    "ReadInspectionSnapshot",
+    "RefreshInspection",
+    "WatchInspection"
+  ],
+  ProjectionFailed: [
+    "ReadSnapshot",
+    "ReadRunControl",
+    "ReadResultRecoveryDirection",
+    "ReadInspectionSnapshot",
+    "RefreshInspection",
+    "WatchInspection"
+  ],
   CommandFailed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
   CommandOutcomeUnknown: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
   FrameTooLarge: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -48,6 +67,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   HostClosing: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -57,6 +77,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   HostInstanceMismatch: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -66,6 +87,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   HostUnavailable: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -75,6 +97,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   InvalidRequest: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -84,6 +107,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   ProtocolVersionUnsupported: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -93,6 +117,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   RunMismatch: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -102,6 +127,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   TransportFailed: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
@@ -111,6 +137,7 @@ const compatibleFailures: Readonly<
     "ReadResultRecoveryDirection"
   ],
   WriteTimedOut: [
+    ...inspectionOperations,
     "ReadSnapshot",
     "ReadRunControl",
     "StartWork",
