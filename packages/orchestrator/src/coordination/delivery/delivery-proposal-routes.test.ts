@@ -587,7 +587,10 @@ const provideLiveJournal = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   harness: LiveJournalHarness,
   journal: InRunJournal["Service"] = harness.journal,
-  coordinatedJournal: Journal["Service"] = harness.coordinatedJournal
+  coordinatedJournal: Journal["Service"] = harness.coordinatedJournal,
+  operationIds: OperationIdAllocator["Service"] = OperationIdAllocator.of({
+    allocate: () => Effect.die("this route must not allocate replacement identities")
+  })
 ) =>
   effect.pipe(
     Effect.provideService(AcceptedJournalReader, harness.accepted),
@@ -597,10 +600,7 @@ const provideLiveJournal = <A, E, R>(
       PlannedTaskAttemptPlanner,
       PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("this route must not allocate replacement task work") })
     ),
-    Effect.provideService(
-      OperationIdAllocator,
-      OperationIdAllocator.of({ allocate: () => Effect.die("this route must not allocate replacement identities") })
-    ),
+    Effect.provideService(OperationIdAllocator, operationIds),
     Effect.provide(unexpectedRemoteDeliveryLayer)
   )
 
@@ -4626,7 +4626,7 @@ describe("delivery proposal route matrix", () => {
           replacement,
           inertLease,
           integrationFinalityFixture.target
-        ).pipe((effect) => provideLiveJournal(effect, harness), Effect.flip)
+        ).pipe((effect) => provideLiveJournal(effect, harness, undefined, undefined, operationIds), Effect.flip)
       ).toEqual(new IntegrationFinalityRuntimeUnavailable())
       expect(
         yield* executeIntegrationAction(
@@ -4635,10 +4635,9 @@ describe("delivery proposal route matrix", () => {
           replacementLease,
           integrationFinalityFixture.target
         ).pipe(
-          (effect) => provideLiveJournal(effect, harness),
+          (effect) => provideLiveJournal(effect, harness, undefined, undefined, operationIds),
           Effect.provideService(CompletionClaimBoundary, boundary),
           Effect.provideService(WorkflowInterpreter, interpreter),
-          Effect.provideService(OperationIdAllocator, operationIds),
           Effect.provideService(
             WorkflowTrace,
             WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
@@ -4646,6 +4645,7 @@ describe("delivery proposal route matrix", () => {
         )
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: replacementProposal.id })
       expect(yield* Ref.get(readOrder)).toEqual(["graph", "specification", "claim", "replacement"])
+      expect(postPromotionOperation).toBe(3)
       expect(yield* Ref.get(traceTags)).toEqual(["OperationSelected", "OperationSelected", "OperationSelected"])
       expect(yield* Ref.get(replacementBoundaryEntries)).toBe(1)
       expect(acceptedFinalityHistory.plannedAttempt.taskRevision).toBe(finalitySpecification.fingerprint)
@@ -4741,10 +4741,9 @@ describe("delivery proposal route matrix", () => {
           replacementLease,
           integrationFinalityFixture.target
         ).pipe(
-          (effect) => provideLiveJournal(effect, waitingHarness),
+          (effect) => provideLiveJournal(effect, waitingHarness, undefined, undefined, operationIds),
           Effect.provideService(CompletionClaimBoundary, foreignBoundary),
           Effect.provideService(WorkflowInterpreter, interpreter),
-          Effect.provideService(OperationIdAllocator, operationIds),
           Effect.provideService(
             WorkflowTrace,
             WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
@@ -4773,10 +4772,9 @@ describe("delivery proposal route matrix", () => {
           replacementLease,
           integrationFinalityFixture.target
         ).pipe(
-          (effect) => provideLiveJournal(effect, waitingHarness),
+          (effect) => provideLiveJournal(effect, waitingHarness, undefined, undefined, operationIds),
           Effect.provideService(CompletionClaimBoundary, unreadableBoundary),
           Effect.provideService(WorkflowInterpreter, interpreter),
-          Effect.provideService(OperationIdAllocator, operationIds),
           Effect.provideService(
             WorkflowTrace,
             WorkflowTrace.of({ emit: (item) => Ref.update(traceTags, (current) => [...current, item._tag]) })
