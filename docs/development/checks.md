@@ -15,12 +15,20 @@ Choose checks by affected behavior, not by commit or handoff alone:
   `check:all` is an explicit maintainer/release diagnostic, not a prerequisite
   for each implementation attempt. Hosted CI retains its selected quality and
   formal cells. Model or conformance changes also require adequacy review and
-  a negative control. A required fresh live-provider scenario remains separate
+  a negative control. Before submitting model obligations or conformance import
+  changes, run `pnpm test:formal:controls`: it checks the independent command
+  profile and checked-in hosted source closure. Regenerate a stale closure with
+  `node scripts/generate-hosted-formal-input-manifest.mjs --write`; update a
+  command fingerprint only after inspecting its exact added/removed obligations.
+  A required fresh live-provider scenario remains separate
   from both local and hosted broad gates.
 - **Before hosted submission:** run `pnpm check:submit` once on the coherent
-  candidate when source or test code changed. It prepares production artifacts
-  before typecheck and the hosted full lint census, then runs the in-memory
-  cassette suite.
+  candidate when application source or application test code changed. It prepares
+  production artifacts, checks formal profile/source controls, runs typecheck and
+  the hosted full lint census, then runs the in-memory cassette suite. A subsequent
+  tooling-only repair uses its affected tool and consumer checks; it does not
+  restart unchanged application tests. A repair that changes gate custody or
+  evidence validity still follows the shared-qualification rule below.
   The lint and cassette checks address
   failures first discovered in hosted #309 runs; prior local measurements were
   about 33 seconds for `check:fast` plus the lint census and 45 seconds for the

@@ -73,7 +73,10 @@ const waitForOwnedSocket = async ({ port, processGroup, remainingExecutionMillis
         }
       })
       if (!sockets.every(({ inode }) => links.includes(`socket:[${inode}]`)))
-        throw new Error("Apalache endpoint belongs to another process; owned socket proof refused")
+        throw new Error(
+          "Apalache endpoint belongs to another process; owned socket proof refused; socketProof=" +
+            JSON.stringify({ port, processGroup, sockets, links })
+        )
       return sockets
     }
     await delay(Math.min(25, remainingExecutionMilliseconds("owned Apalache listening socket")), undefined, { signal })
