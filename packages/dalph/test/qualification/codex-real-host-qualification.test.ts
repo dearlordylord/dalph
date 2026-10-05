@@ -708,8 +708,10 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const host = await spawnHost(fixture, "exercise-guidance")
         hosts.push(host)
-        await fixture.model.waitForCalls(1, 5_000)
-        const active = requireEvent(await host.waitFor("guidance"), "guidance")
+        const activeObservation = host.waitFor("guidance").then((event) => requireEvent(event, "guidance"))
+        await Promise.race([fixture.model.waitForCalls(1, 5_000), activeObservation])
+        host.continue()
+        const active = await activeObservation
         expect(active).toMatchObject({ phase: "Active", sameOwner: true, disposition: { _tag: "Accepted" } })
         const before = await latestPrivateSnapshot(fixture)
         fixture.model.releaseTerminal()

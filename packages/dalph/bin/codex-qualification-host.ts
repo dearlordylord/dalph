@@ -365,7 +365,9 @@ const configurationProgram = Effect.gen(function* () {
             writeEvent,
             settleAttempt(lifecycle, correlation, store, lastCensus).pipe(
               Effect.flatMap((report) => writeEvent(reportEvent("Observe", report)))
-            )
+            ),
+            Ref.get(lastCensus),
+            waitForFixtureContinuation
           )
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))

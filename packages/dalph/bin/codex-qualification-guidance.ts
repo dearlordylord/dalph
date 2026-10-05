@@ -19,17 +19,29 @@ export const exerciseNativeGuidance = (
   attempt: PlannedTaskAttempt,
   store: CodexAttemptStoreService,
   writeEvent: (value: unknown) => Effect.Effect<void>,
-  settle: Effect.Effect<void, unknown>
+  settle: Effect.Effect<void, unknown>,
+  censusDiagnostic: Effect.Effect<string>,
+  fixtureReady: Effect.Effect<void>
 ): Effect.Effect<void, unknown> =>
   Effect.gen(function* () {
     const select = executor.selectGuidanceTarget
     const send = executor.sendGuidance
     if (select === undefined || send === undefined)
       return yield* new NativeGuidanceFailure({ detail: "native guidance capability unavailable" })
+    // Begin identifies T1 before its first model request necessarily arrives.
+    // The fixture releases this read-only exercise after observing that request.
+    yield* fixtureReady.pipe(
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () => new NativeGuidanceFailure({ detail: "guidance fixture readiness not released" })
+      })
+    )
     const launch = yield* store.readServerLaunch()
     const selected = yield* select(attempt)
     if (selected._tag !== "Selected")
-      return yield* new NativeGuidanceFailure({ detail: `native active guidance target refused: ${selected.reason}` })
+      return yield* new NativeGuidanceFailure({
+        detail: `native active guidance target refused: ${selected.reason}/census=${yield* censusDiagnostic}`
+      })
     yield* writeEvent({
       event: "guidance",
       phase: "Active",
