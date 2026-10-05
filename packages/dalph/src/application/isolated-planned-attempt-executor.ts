@@ -1,4 +1,6 @@
 import {
+  ExecutorGuidanceSelection,
+  ExecutorGuidanceTransmission,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
@@ -118,7 +120,46 @@ export const isolatedPlannedAttemptExecutorLayer = <E>(
         use: (owner: AttemptOwner) => Effect.Effect<A, E2, R>,
         recoveryNonce?: string
       ) => Effect.acquireUseRelease(ownerFor(correlation, recoveryNonce), use, (owner) => release(correlation, owner))
+      const withExistingOwner = <A>(
+        correlation: PlannedAttemptExecutorCorrelation,
+        unavailable: A,
+        use: (owner: AttemptOwner) => Effect.Effect<A>
+      ): Effect.Effect<A> =>
+        Effect.acquireUseRelease(
+          acquisition.withPermit(
+            Effect.gen(function* () {
+              const owner = (yield* Ref.get(owners)).get(plannedAttemptExecutorCorrelationKey(correlation))
+              if (owner === undefined || (yield* Ref.get(owner.terminal))) return Option.none<AttemptOwner>()
+              yield* Ref.update(owner.users, (users) => users + 1)
+              return Option.some(owner)
+            })
+          ),
+          (owner) => (Option.isNone(owner) ? Effect.succeed(unavailable) : use(owner.value)),
+          (owner) => (Option.isNone(owner) ? Effect.void : release(correlation, owner.value))
+        )
       const executor = PlannedAttemptExecutor.of({
+        selectGuidanceTarget: (plannedAttempt) =>
+          withExistingOwner<ExecutorGuidanceSelection>(
+            plannedAttemptExecutorCorrelation(plannedAttempt),
+            ExecutorGuidanceSelection.cases.Refused.make({ reason: "OwnerUnavailable" }),
+            (owner) => {
+              const select = Context.get(owner.context, PlannedAttemptExecutor).selectGuidanceTarget
+              return select === undefined
+                ? Effect.succeed(ExecutorGuidanceSelection.cases.Refused.make({ reason: "CapabilityUnavailable" }))
+                : select(plannedAttempt)
+            }
+          ),
+        sendGuidance: (target, requestId, text) =>
+          withExistingOwner<ExecutorGuidanceTransmission>(
+            plannedAttemptExecutorCorrelation(target.plannedAttempt),
+            ExecutorGuidanceTransmission.cases.Refused.make({ reason: "OwnerUnavailable" }),
+            (owner) => {
+              const send = Context.get(owner.context, PlannedAttemptExecutor).sendGuidance
+              return send === undefined
+                ? Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CapabilityUnavailable" }))
+                : send(target, requestId, text)
+            }
+          ),
         observeWriterCustody: (plannedAttempt) => {
           const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
           return withOwner(correlation, (owner) =>

@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs"
 import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
+  ExecutorGuidanceRequestId,
   AttemptId,
   AcceptedResultEvidenceManifest,
   EvidenceDigest,
@@ -8113,3 +8114,250 @@ it.effect("continues an exhausted result under one durable permission without du
     )
   )
 })
+
+it.effect("guidance selects the active owned turn and refuses completed or oversized input before steering", () => {
+  const harness = makeHarness()
+  const calls: Array<string> = []
+  const app = {
+    ...harness.app,
+    steerTurn: (threadId: CodexThreadId, turnId: CodexTurnId) =>
+      Effect.sync(() => {
+        calls.push(`${threadId}:${turnId}`)
+        return turnId
+      })
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    if (executor.selectGuidanceTarget === undefined || executor.sendGuidance === undefined)
+      return yield* Effect.die("missing guidance capability")
+    expect(yield* executor.selectGuidanceTarget(attempt)).toMatchObject({ _tag: "Refused", reason: "AttemptInactive" })
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    const selected = yield* executor.selectGuidanceTarget(attempt)
+    if (selected._tag !== "Selected") return yield* Effect.die("expected active turn selection")
+    const id = ExecutorGuidanceRequestId.make("guidance-1")
+    expect(yield* executor.sendGuidance(selected.target, id, "é".repeat(9000))).toMatchObject({
+      _tag: "Refused",
+      reason: "TextTooLarge"
+    })
+    expect(calls).toEqual([])
+    expect(yield* executor.sendGuidance(selected.target, id, "information")).toEqual({ _tag: "Accepted" })
+    expect(calls).toEqual([`${selected.target.session}:${selected.target.turn}`])
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.interruptCount()).toBe(0)
+    harness.complete(finalResponse(head))
+    expect(
+      yield* executor.sendGuidance(selected.target, ExecutorGuidanceRequestId.make("guidance-2"), "too late")
+    ).toMatchObject({ _tag: "Refused", reason: "AttemptInactive" })
+    expect(calls).toHaveLength(1)
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor({ ...harness, app })))
+})
+
+for (const fence of ["StopIntended", "LimitReached"] as const) {
+  it.effect(`guidance refuses a retained ${fence} item fence without stopping or steering`, () => {
+    const harness = makeHarness()
+    let calls = 0
+    const app = {
+      ...harness.app,
+      steerTurn: (_thread: CodexThreadId, turn: CodexTurnId) =>
+        Effect.sync(() => {
+          calls += 1
+          return turn
+        })
+    }
+    return Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      const select = executor.selectGuidanceTarget
+      const send = executor.sendGuidance
+      const write = harness.store.writeToolEffect
+      if (select === undefined || send === undefined || write === undefined)
+        return yield* Effect.die("guidance fixture capability absent")
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      const selected = yield* select(attempt)
+      if (selected._tag !== "Selected") return yield* Effect.die("active target required")
+      const fields = {
+        runId: correlation.runId,
+        attemptId: correlation.attemptId,
+        threadId: CodexThreadId.make("codex-thread-issue-58"),
+        turnId: CodexTurnId.make("codex-turn-1"),
+        itemId: CodexToolItemId.make("guidance-fence"),
+        incarnation: harness.app.incarnation,
+        worktree,
+        startedAtMilliseconds: 0,
+        deadlineMilliseconds: 60_000,
+        reason: "Elapsed" as const,
+        stopIntentAtMilliseconds: 60_000
+      }
+      yield* write(
+        fence === "StopIntended"
+          ? CodexToolEffectRecord.cases.StopIntended.make(fields)
+          : CodexToolEffectRecord.cases.LimitReached.make({ ...fields, stoppedAtMilliseconds: 60_001 })
+      )
+      expect(yield* select(attempt)).toEqual({ _tag: "Refused", reason: "CustodyUnproved" })
+      expect(yield* send(selected.target, ExecutorGuidanceRequestId.make("fenced"), "information")).toEqual({
+        _tag: "Refused",
+        reason: "CustodyUnproved"
+      })
+      expect(calls).toBe(0)
+      expect(harness.interruptCount()).toBe(0)
+      expect(harness.closeCount()).toBe(0)
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.toolEffectRecords()).toMatchObject([{ _tag: fence }])
+    }).pipe(Effect.provide(layerFor({ ...harness, app })))
+  })
+}
+
+it.effect("guidance refuses a stop fence recorded during its asynchronous thread read", () => {
+  const harness = makeHarness()
+  let inject = false
+  let calls = 0
+  const app = {
+    ...harness.app,
+    readThread: (id: CodexThreadId) =>
+      Effect.gen(function* () {
+        const thread = yield* harness.app.readThread(id)
+        if (inject) {
+          inject = false
+          if (harness.store.writeToolEffect === undefined) return yield* Effect.die("tool store missing")
+          yield* harness.store
+            .writeToolEffect(
+              CodexToolEffectRecord.cases.StopIntended.make({
+                runId: correlation.runId,
+                attemptId: correlation.attemptId,
+                threadId: id,
+                turnId: CodexTurnId.make("codex-turn-1"),
+                itemId: CodexToolItemId.make("racing-stop"),
+                incarnation: harness.app.incarnation,
+                worktree,
+                startedAtMilliseconds: 0,
+                deadlineMilliseconds: 60_000,
+                reason: "Elapsed",
+                stopIntentAtMilliseconds: 60_000
+              })
+            )
+            .pipe(Effect.orDie)
+        }
+        return thread
+      }),
+    steerTurn: (_thread: CodexThreadId, turn: CodexTurnId) =>
+      Effect.sync(() => {
+        calls += 1
+        return turn
+      })
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    if (executor.selectGuidanceTarget === undefined || executor.sendGuidance === undefined)
+      return yield* Effect.die("guidance capability missing")
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    const selected = yield* executor.selectGuidanceTarget(attempt)
+    if (selected._tag !== "Selected") return yield* Effect.die("active target missing")
+    inject = true
+    expect(
+      yield* executor.sendGuidance(selected.target, ExecutorGuidanceRequestId.make("racing-stop"), "information")
+    ).toEqual({ _tag: "Refused", reason: "CustodyUnproved" })
+    expect(calls).toBe(0)
+    expect(harness.interruptCount()).toBe(0)
+    expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "StopIntended" }])
+  }).pipe(Effect.provide(layerFor({ ...harness, app })))
+})
+
+for (const persistenceFails of [true, false]) {
+  it.effect(
+    persistenceFails
+      ? "guidance stays closed after item-stop intent persistence fails"
+      : "item stopping never waits for an already admitted guidance acknowledgement",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+          const submitted = yield* Deferred.make<void>()
+          const reply = yield* Deferred.make<void>()
+          const attemptedStop = yield* Deferred.make<void>()
+          const harness = makeHarness({
+            toolEffects: PubSub.subscribe(notifications).pipe(
+              Effect.map((subscription) =>
+                Stream.unfold(undefined, () =>
+                  PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+                )
+              )
+            )
+          })
+          let calls = 0
+          const app = {
+            ...harness.app,
+            steerTurn: (_thread: CodexThreadId, turn: CodexTurnId) =>
+              Effect.gen(function* () {
+                calls += 1
+                yield* Deferred.succeed(submitted, undefined)
+                yield* Deferred.await(reply)
+                return turn
+              })
+          }
+          const store = {
+            ...harness.store,
+            writeToolEffect: (record: CodexToolEffectRecord) =>
+              Effect.gen(function* () {
+                if (record._tag === "StopIntended") {
+                  yield* Deferred.succeed(attemptedStop, undefined)
+                  if (persistenceFails)
+                    return yield* new CodexAttemptStoreFailure({
+                      detail: "controlled failed intent",
+                      operation: "writeToolEffect"
+                    })
+                }
+                if (harness.store.writeToolEffect === undefined) return yield* Effect.die("tool store missing")
+                yield* harness.store.writeToolEffect(record)
+              })
+          }
+          yield* Effect.gen(function* () {
+            const executor = yield* PlannedAttemptExecutor
+            const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+            if (executor.selectGuidanceTarget === undefined || executor.sendGuidance === undefined)
+              return yield* Effect.die("guidance capability missing")
+            yield* executor.begin(request, { _tag: "InitialDelivery" })
+            const selected = yield* executor.selectGuidanceTarget(attempt)
+            if (selected._tag !== "Selected") return yield* Effect.die("active target missing")
+            const attachment = yield* lifecycle.attach(correlation)
+            const observing = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+            const sending = persistenceFails
+              ? undefined
+              : yield* executor
+                  .sendGuidance(selected.target, ExecutorGuidanceRequestId.make("pending-guidance"), "information")
+                  .pipe(Effect.forkChild)
+            if (sending !== undefined) yield* Deferred.await(submitted)
+            yield* PubSub.publish(notifications, {
+              phase: "Malformed",
+              threadId: CodexThreadId.make("codex-thread-issue-58"),
+              turnId: CodexTurnId.make("codex-turn-1"),
+              itemId: "stop-admission",
+              observedAtMilliseconds: 0
+            })
+            yield* Deferred.await(attemptedStop)
+            expect(yield* Fiber.join(observing)).toMatchObject({ _tag: "Some", value: { _tag: "Unreadable" } })
+            if (persistenceFails) {
+              expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "Started" }])
+              expect(
+                yield* executor.sendGuidance(
+                  selected.target,
+                  ExecutorGuidanceRequestId.make("after-failed-stop"),
+                  "information"
+                )
+              ).toEqual({ _tag: "Refused", reason: "CustodyUnproved" })
+              expect(calls).toBe(0)
+            } else {
+              // The stop finished while the provider ACK was still held.
+              expect(harness.closeCount()).toBe(1)
+              expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached" }])
+              expect(yield* Deferred.isDone(reply)).toBe(false)
+              yield* Deferred.succeed(reply, undefined)
+              if (sending === undefined) return yield* Effect.die("guidance fiber missing")
+              expect(yield* Fiber.join(sending)).toEqual({ _tag: "Accepted" })
+              expect(calls).toBe(1)
+            }
+            expect(harness.turnCount()).toBe(1)
+          }).pipe(Effect.provide(layerFor({ ...harness, app }, undefined, undefined, undefined, store)))
+        })
+      )
+  )
+}

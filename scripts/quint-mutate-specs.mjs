@@ -32,6 +32,7 @@ import {
   plannedAttemptExecutorObligations,
   providerResultCorrectionObligations,
   resultRecoveryDirectionObligations,
+  executorGuidanceObligations,
   runCancellationObligations,
   runActivationObligations,
   taskFactReconciliationObligations
@@ -50,6 +51,12 @@ if (pnpmEntryPoint === undefined) {
 }
 
 const SPECS = [
+  {
+    name: "executorGuidance",
+    file: "specs/executorGuidance.qnt",
+    invariants: executorGuidanceObligations.invariants,
+    witnesses: executorGuidanceObligations.witnesses
+  },
   {
     name: "providerResultCorrection",
     file: "specs/providerResultCorrection.qnt",

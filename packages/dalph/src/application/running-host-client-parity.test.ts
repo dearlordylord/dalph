@@ -694,3 +694,111 @@ it.live("submitted commands classify inconsistent response correlation and opera
     })
   )
 )
+
+it.live(
+  "public CLI and MCP retain generated guidance identity after response loss without replay",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const received: Array<string> = []
+        const server = createServer((request, response) => {
+          if (request.url === "/dalph/v1/descriptor") {
+            response.end(JSON.stringify(descriptor))
+            return
+          }
+          const chunks: Array<Buffer> = []
+          request.on("data", (chunk: Buffer) => {
+            chunks.push(chunk)
+          })
+          request.on("end", () => {
+            const decoded = Schema.decodeUnknownSync(RunningHostRequest)(
+              JSON.parse(Buffer.concat(chunks).toString("utf8"))
+            )
+            if (decoded.operation._tag !== "SendExecutorGuidance") {
+              response.statusCode = 400
+              response.end()
+              return
+            }
+            received.push(decoded.operation.guidanceRequestId)
+            response.destroy()
+          })
+        })
+        yield* Effect.addFinalizer(() =>
+          Effect.promise(
+            () =>
+              new Promise<void>((resolve) => {
+                server.close(() => resolve())
+                server.closeAllConnections()
+              })
+          )
+        )
+        const address = yield* Effect.tryPromise({
+          try: () =>
+            new Promise<LocalHostAddress>((resolve, reject) => {
+              server.once("error", reject)
+              server.listen(0, "127.0.0.1", () => {
+                const bound = server.address()
+                if (bound === null || typeof bound === "string") {
+                  reject(new Error("LocalPortUnavailable"))
+                  return
+                }
+                resolve(LocalHostAddress.make(`http://127.0.0.1:${bound.port}`))
+              })
+            }),
+          catch: (error) => new ParityFixtureError({ detail: String(error) })
+        })
+        const cli = yield* child([
+          "attach",
+          "guide",
+          "--host",
+          address,
+          "--run",
+          runId,
+          "--attempt",
+          "A",
+          "--message",
+          "ephemeral guidance",
+          "--json"
+        ])
+        expect(cli.status, cli.stderr).toBe(3)
+        const cliEnvelope = yield* Schema.decodeUnknownEffect(RunningHostEnvelope)(JSON.parse(cli.stdout))
+        expect(cliEnvelope.result).toMatchObject({
+          _tag: "Failure",
+          error: { _tag: "CommandOutcomeUnknown", operation: "SendExecutorGuidance", guidanceRequestId: received[0] }
+        })
+        const messages = [
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } }
+          },
+          { jsonrpc: "2.0", method: "notifications/initialized" },
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: {
+              name: "dalph_guide_executor",
+              arguments: { runId, attemptId: "A", message: "ephemeral guidance" }
+            }
+          }
+        ]
+        const mcp = yield* child(
+          ["mcp", "--host", address, "--run", runId],
+          messages.map((value) => JSON.stringify(value)).join("\n") + "\n"
+        )
+        expect(mcp.status, mcp.stderr).toBe(0)
+        const result = JSON.parse(mcp.stdout.trim().split("\n").at(-1) ?? "").result
+        const mcpEnvelope = yield* Schema.decodeUnknownEffect(RunningHostEnvelope)(result.structuredContent)
+        expect(mcpEnvelope.result).toMatchObject({
+          _tag: "Failure",
+          error: { _tag: "CommandOutcomeUnknown", operation: "SendExecutorGuidance", guidanceRequestId: received[1] }
+        })
+        expect(received).toHaveLength(2)
+        expect(received.every((identity) => /^[0-9a-f-]{36}$/.test(identity))).toBe(true)
+        expect(received[0]).not.toBe(received[1])
+      })
+    ),
+  15_000
+)

@@ -70,7 +70,13 @@ export const quintGateCommandManifest = Object.freeze([
   command("test", "publication exhaustion batch grant batch/finality projection negative mutation profile"),
   command("sampled-run", "publication exhaustion batch grant batch/finality projection sampled model"),
   ...exhaustiveModel("provider result correction"),
-  ...exhaustiveModel("result recovery direction")
+  ...exhaustiveModel("result recovery direction"),
+  command("typecheck", "executor guidance model typecheck"),
+  command("test", "executor guidance deterministic tests"),
+  command("test", "executor guidance negative mutation profile"),
+  command("sampled-run", "executor guidance sampled model"),
+  command("typecheck", "executor guidance proof projection typecheck"),
+  ...proof("executor guidance proof projection")
 ])
 
 const manifestKeys = quintGateCommandManifest.map(({ kind, name }) => `${kind}\u0000${name}`)

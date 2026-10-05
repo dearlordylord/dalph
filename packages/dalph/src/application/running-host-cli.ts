@@ -1,18 +1,17 @@
+import { makeRunningHostGuidanceCommand } from "./running-host-cli-guidance.js"
 import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This command owns only client stdout/stderr completion. */
-import { RunId } from "@dalph/contracts"
-import { Context, Effect, FileSystem, Layer, Schema, Stream } from "effect"
+import type { Layer } from "effect"
+import { Effect, FileSystem, Schema, Stream } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import type { ProductionRunningHostObservation } from "./production-host.js"
 import { decodeRunInvocation, loadProductionConfiguration } from "./production-cli.js"
 import { installApplicationExitSignalAdapter, type ApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import {
-  encodeRunningHostEnvelope,
   LocalHostAddress,
   RefreshInterest,
   type RunningHostError,
-  type RunningHostEnvelope,
   runningHostFailureEnvelope,
   encodeRunningHostWatchFrame,
   RequestId,
@@ -26,77 +25,22 @@ import { makeRunningHostWatchStage } from "./running-host-watch-stage.js"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { serveRunningHost } from "./running-host-http.js"
 import { runRunningHostMcp } from "./running-host-mcp.js"
-import { runningHostNodeOutput } from "./running-host-output.js"
 import { DalphCommandExit, requestFailureExitStatus, transportFailureExitStatus } from "./command-exit.js"
 
+import {
+  type RunningHostCliOutput,
+  runningHostCliStdioLayer,
+  writeLine,
+  exitFor,
+  presentEnvelope,
+  decodeClient
+} from "./running-host-cli-output.js"
 export type ProductionListeningHostRunner<E, R> = <EUse>(
   configuration: ProductionRepositoryHostConfiguration,
   use: (observation: ProductionRunningHostObservation<E>) => Effect.Effect<void, EUse>
 ) => Effect.Effect<void, E | EUse, R>
 
-/** The client owns these output streams; no workflow capability crosses this boundary. */
-export class RunningHostCliOutput extends Context.Service<
-  RunningHostCliOutput,
-  { readonly writeLine: (text: string, channel: "stdout" | "stderr") => Effect.Effect<void, DalphCommandExit> }
->()("@dalph/RunningHostCliOutput") {}
-
-export const runningHostCliStdioLayer = Layer.succeed(RunningHostCliOutput, {
-  writeLine: (text, channel) =>
-    Effect.try({
-      try: () => runningHostNodeOutput(channel),
-      catch: () => new DalphCommandExit({ status: transportFailureExitStatus })
-    }).pipe(
-      Effect.flatMap((destination) =>
-        Effect.callback<void, DalphCommandExit>((resume) => {
-          let pending = true
-          const failed = () => {
-            pending = false
-            destination.destroy()
-            resume(Effect.fail(new DalphCommandExit({ status: transportFailureExitStatus })))
-          }
-          destination.once("error", failed)
-          destination.write(`${text}\n`, (error) => {
-            pending = false
-            destination.removeListener("error", failed)
-            if (error) failed()
-            else resume(Effect.void)
-          })
-          return Effect.sync(() => {
-            destination.removeListener("error", failed)
-            if (pending) destination.destroy()
-          })
-        })
-      )
-    )
-})
-const writeLine = Effect.fn("RunningHostCli.write")(function* (text: string, channel: "stdout" | "stderr" = "stdout") {
-  const output = yield* RunningHostCliOutput
-  yield* output.writeLine(text, channel).pipe(
-    Effect.timeout("5 seconds"),
-    Effect.catchTag("TimeoutError", () => new DalphCommandExit({ status: transportFailureExitStatus }))
-  )
-})
-const exitFor = (error: RunningHostError): typeof requestFailureExitStatus | typeof transportFailureExitStatus =>
-  error._tag === "HostUnavailable" ||
-  error._tag === "TransportFailed" ||
-  error._tag === "WriteTimedOut" ||
-  error._tag === "CommandOutcomeUnknown"
-    ? transportFailureExitStatus
-    : requestFailureExitStatus
-const presentEnvelope = Effect.fn("RunningHostCli.present")(function* (envelope: RunningHostEnvelope) {
-  yield* encodeRunningHostEnvelope(envelope).pipe(Effect.flatMap((text) => writeLine(text)))
-  if (envelope.result._tag === "Failure") return yield* new DalphCommandExit({ status: exitFor(envelope.result.error) })
-})
-const decodeClient = Effect.fn("RunningHostCli.decode")((host: string, run?: string) =>
-  Schema.decodeUnknownEffect(Schema.Struct({ address: LocalHostAddress, runId: Schema.NullOr(RunId) }))({
-    address: host,
-    runId: run ?? null
-  }).pipe(
-    Effect.mapError(
-      (): RunningHostError => ({ _tag: "InvalidRequest", fieldPath: "", code: "ClientConfigurationInvalid" })
-    )
-  )
-)
+export { RunningHostCliOutput, runningHostCliStdioLayer } from "./running-host-cli-output.js"
 
 /** Attached reads and explicit wake/Unpause reuse the separately acquired host. */
 export const makeRunningHostCommands = <E, R>(
@@ -202,6 +146,7 @@ export const makeRunningHostCommands = <E, R>(
           Effect.provide(outputLayer)
         )
     )
+  const guide = makeRunningHostGuidanceCommand(outputLayer)
   const refresh = Command.make(
     "refresh",
     {
@@ -330,6 +275,7 @@ export const makeRunningHostCommands = <E, R>(
     )
   const attach = Command.make("attach").pipe(
     Command.withSubcommands([
+      guide,
       resultRecovery("apply"),
       resultRecovery("read"),
       Command.make(

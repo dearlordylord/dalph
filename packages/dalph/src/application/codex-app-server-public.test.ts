@@ -776,12 +776,16 @@ const makeTwoThreadActivityNative = () => {
   }
 }
 
-const makePlannedAttemptEscapedHelper = (threadIdentity: string | undefined) => {
+const makePlannedAttemptEscapedHelper = (
+  threadIdentity: string | undefined,
+  recheck: "Live" | "Absent" | "Reused" | "Unreadable" = "Live"
+) => {
   const token = CodexServerIncarnation.make("planned-attempt-incarnation")
   const appServerPid = 190
   const helperPid = 191
   const live = new Set([appServerPid, helperPid])
   const killed: Array<number> = []
+  const environmentRead = new Set<number>()
   const readFile = async (path: string): Promise<string> => {
     const match = /\/proc\/([0-9]+)\/(stat|cmdline|environ)$/.exec(path)
     if (match === null) {
@@ -796,14 +800,23 @@ const makePlannedAttemptEscapedHelper = (threadIdentity: string | undefined) => 
       throw error
     }
     if (match[2] === "stat") {
+      if (environmentRead.has(pid) && recheck === "Unreadable")
+        throw Object.assign(new Error("fresh stat unavailable"), { code: "EACCES" })
       return pid === appServerPid
         ? linuxProcessStat(pid, 0, appServerPid, `planned-server-${pid}`)
-        : linuxProcessStat(pid, appServerPid, helperPid, `planned-helper-${pid}`)
+        : linuxProcessStat(
+            pid,
+            appServerPid,
+            helperPid,
+            environmentRead.has(pid) && recheck === "Reused" ? "replacement-start" : `planned-helper-${pid}`
+          )
     }
     if (match[2] === "cmdline") {
       return pid === appServerPid ? "codex\u0000app-server\u0000" : "codex-code-mode-host\u0000"
     }
     if (pid === appServerPid) return `DALPH_CODEX_SERVER_INCARNATION=${token}\u0000`
+    environmentRead.add(pid)
+    if (recheck === "Absent") live.delete(pid)
     return [
       `DALPH_CODEX_SERVER_INCARNATION=${token}`,
       ...(threadIdentity === undefined ? [] : [`CODEX_THREAD_ID=${threadIdentity}`])
@@ -840,13 +853,27 @@ it.effect("planned-attempt census excludes foreign-thread helpers", () =>
   })
 )
 
-it.effect("planned-attempt census keeps missing-thread helpers unresolved", () =>
-  Effect.gen(function* () {
-    const fixture = makePlannedAttemptEscapedHelper(undefined)
-    expect(yield* fixture.census.observe(fixture.threadA, [], "PlannedAttempt")).toMatchObject({
-      _tag: "Unreadable",
-      detail: expect.stringContaining("thread identity")
+for (const recheck of ["Live", "Reused", "Unreadable"] as const)
+  it.effect(`planned-attempt census keeps missing-thread helpers unresolved (${recheck})`, () =>
+    Effect.gen(function* () {
+      const fixture = makePlannedAttemptEscapedHelper(undefined, recheck)
+      expect(yield* fixture.census.observe(fixture.threadA, [], "PlannedAttempt")).toMatchObject({
+        _tag: "Unreadable",
+        detail: expect.stringContaining("thread identity")
+      })
+      expect(fixture.killed).toEqual([])
     })
+  )
+
+it.effect("planned-attempt census excludes a missing-thread helper only after fresh process absence", () =>
+  Effect.gen(function* () {
+    const fixture = makePlannedAttemptEscapedHelper(undefined, "Absent")
+    const active = thread("active", [turn("active", "inProgress")], "thread-A")
+    expect(yield* fixture.census.observe(active, [], "PlannedAttempt")).toEqual({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("active") }]
+    })
+    expect(fixture.killed).toEqual([])
   })
 )
 

@@ -855,3 +855,27 @@ export const resultRecoveryDirectionObligations = Object.freeze({
     "recoveredReached"
   ])
 })
+
+/** #433 informational input identity, exact turn and crash ambiguity. */
+export const executorGuidanceObligations = Object.freeze({
+  invariants: Object.freeze([
+    "metadataDoesNotPersistText",
+    "guidanceGrantsNoAuthority",
+    "sendsAreBounded",
+    "exactTurnOnly",
+    "acceptedRequiresExactEffect",
+    "lostTextCannotProveNoTransmission",
+    "oversizedCannotTransmit"
+  ]),
+  witnesses: Object.freeze([
+    "admittedReached",
+    "acceptedReached",
+    "unknownReached",
+    "payloadLostReached",
+    "refusedReached",
+    "independentAttemptsReached",
+    "contradictionReached",
+    "closedAdmissionReached",
+    "oversizedRefusalReached"
+  ])
+})

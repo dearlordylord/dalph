@@ -1,4 +1,8 @@
-import { PlannedAttemptExecutorProjection, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import {
+  ExecutorGuidanceTransmission,
+  PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport
+} from "@dalph/contracts"
 import { ApplicationExitResult, PlannedAttemptExecutorCommandOrdinal } from "@dalph/orchestrator"
 import { Schema } from "effect"
 
@@ -21,6 +25,7 @@ export const CodexQualificationAction = Schema.Literals([
   "suspend",
   "interrupt",
   "settle",
+  "exercise-guidance",
   "exercise-suspension",
   "exercise-terminal-suspension",
   "exit",
@@ -69,6 +74,13 @@ export const CodexQualificationHostEvent = Schema.Union([
     persistedTurnStatus: Schema.String
   }),
   Schema.Struct({ event: Schema.Literal("projection"), projection: PlannedAttemptExecutorProjection }),
+  Schema.Struct({
+    event: Schema.Literal("guidance"),
+    phase: Schema.Literals(["Active", "Completed"]),
+    providerPreconditionRejected: Schema.optionalKey(Schema.Boolean),
+    sameOwner: Schema.Boolean,
+    disposition: ExecutorGuidanceTransmission
+  }),
   Schema.Struct({ event: Schema.Literal("suspension-ready") }),
   Schema.Struct({ event: Schema.Literal("suspension-requested") }),
   Schema.Struct({ event: Schema.Literal("suspension-unresolved"), detail: Schema.String }),

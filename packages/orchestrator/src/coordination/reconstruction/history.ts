@@ -1,3 +1,4 @@
+import { executorGuidanceEventProblem } from "../../workflow/protocols/executor-guidance/protocol.js"
 import { resultRecoveryReplacementProblem } from "../../workflow/protocols/result-recovery/replacement.js"
 import {
   resultRecoveryContinueAuthorizationProblem,
@@ -893,6 +894,17 @@ const validateRecord = (
   let next = envelope.indexes
   const descriptor = describeJournalEvent(record.event)
   next = validateControlDirection(record, runId, next, issues)
+  if (
+    record.event._tag === "ExecutorGuidanceAdmitted" ||
+    record.event._tag === "ExecutorGuidanceDispatchIntended" ||
+    record.event._tag === "ExecutorGuidanceObserved"
+  ) {
+    const prior = isJournalRecordEvidence(records)
+      ? journalEvidenceBefore(records, record.position)
+      : records.filter(({ position }) => position < record.position)
+    const problem = executorGuidanceEventProblem(prior, runId, record.event)
+    if (problem !== undefined) semanticIssue(issues, runId, record.position, problem)
+  }
   if (record.event._tag === "ResultRecoveryDirected") {
     const prior = isJournalRecordEvidence(records)
       ? journalEvidenceBefore(records, record.position)

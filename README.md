@@ -113,6 +113,33 @@ type. Graceful application Exit does not itself terminate the selected Run. If
 that Run was not independently and durably terminated, it remains available to
 the ordinary recovery path on the next invocation.
 
+## Guidance for an active executor
+
+An Operator can send informational input to an existing implementation attempt
+through its running host:
+
+```sh
+node packages/dalph/dist/bin/dalph.js attach guide --host http://127.0.0.1:4100 --run RUN_ID \
+  --attempt ATTEMPT_ID --message 'Please account for the existing compatibility requirement.' --json
+```
+
+The MCP equivalent is `dalph_guide_executor` with `runId`, `attemptId` and `message`.
+Both clients generate a guidance request ID unless CLI `--request-id` or MCP
+`guidanceRequestId` supplies one. Keep the returned ID, including on `Unknown`.
+The host selects its already owned active turn; the Operator supplies no
+provider session or turn identifiers. Unsupported providers, completed attempts,
+and unproved custody refuse guidance. Guidance never begins or interrupts a turn
+and does not authorize a workflow action or change the admitted task.
+
+Messages are limited to 16 KiB of original UTF-8. `Accepted` means the provider
+accepted input for the selected turn; it does not prove understanding or
+compliance. The acknowledgement deadline is ten seconds. A lost or ambiguous
+reply yields `Unknown`; do not resend automatically. Exact redelivery with the
+same request ID, attempt and text returns the retained disposition, while changed
+input contradicts that identity. The journal retains identity, digest, byte
+length, selected target and disposition, never the message body. After a crash,
+unsent text may be permanently lost; possible transmission remains uncertain.
+
 ## Development
 
 Use pnpm. Work is performed on `master`; implementation tickets declare their

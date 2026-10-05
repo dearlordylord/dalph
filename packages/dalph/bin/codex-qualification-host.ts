@@ -12,7 +12,6 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   type PlannedAttemptExecutorLifecycleObservationService,
-  type PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorReport,
   PlannedAttemptExecutorRequest,
   PlannedAttemptResultRecoveryAuthorization,
@@ -38,7 +37,7 @@ import {
   JournalDatabaseLocator,
   InRunJournal
 } from "@dalph/orchestrator"
-import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Ref, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import {
   CodexAppServer,
   codexAppServerNodeLayer,
@@ -59,7 +58,10 @@ import {
 } from "../src/qualification/codex-census-diagnostic.js"
 import { qualificationWorkflowJournalLayer } from "../src/application/qualification-journal.js"
 import { qualificationCutStore } from "./codex-qualification-startup-cut.js"
-import { CodexQualificationAction, CodexQualificationHostEvent } from "./codex-qualification-host-contract.js"
+import { exerciseNativeGuidance } from "./codex-qualification-guidance.js"
+import { CodexQualificationAction } from "./codex-qualification-host-contract.js"
+
+import { writeEvent, reportEvent, projectionEvent, runQualificationProgram } from "./codex-qualification-host-output.js"
 
 const QualificationConfiguration = Schema.Struct({
   action: CodexQualificationAction,
@@ -118,12 +120,6 @@ const decodeConfiguration = (): Effect.Effect<QualificationConfiguration, Qualif
     )
   )
 
-const writeEvent = (value: unknown): Effect.Effect<void, never> =>
-  Schema.decodeUnknownEffect(CodexQualificationHostEvent)(value).pipe(
-    Effect.flatMap((event) => Effect.sync(() => nodeProcess.stdout.write(`${JSON.stringify(event)}\n`))),
-    Effect.orDie
-  )
-
 const threadRecordFor = (configuration: QualificationConfiguration, threadId: CodexThreadSnapshot["id"]) =>
   CodexAttemptRecord.cases.AssociatedPreTurn.make({
     attemptId: configuration.attemptId,
@@ -132,13 +128,6 @@ const threadRecordFor = (configuration: QualificationConfiguration, threadId: Co
     threadId,
     worktree: WorktreeLocator.make(configuration.worktree)
   })
-
-const reportEvent = (
-  command: "Begin" | "Observe" | "Resume" | "Suspend" | "ContinueRejectedResult",
-  report: PlannedAttemptExecutorReport
-) => ({ event: "report" as const, command, report })
-
-const projectionEvent = (projection: PlannedAttemptExecutorProjection) => ({ event: "projection" as const, projection })
 
 const taskBody = "Execute the deterministic real-Codex qualification task and report the resulting commit."
 const terminalObservationAttempts = 600
@@ -366,6 +355,20 @@ const configurationProgram = Effect.gen(function* () {
             yield* Effect.sleep("100 millis")
             yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation, store, lastCensus)))
           }
+        } else if (configuration.action === "exercise-guidance") {
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
+          yield* exerciseNativeGuidance(
+            executor,
+            app,
+            attempt,
+            store,
+            writeEvent,
+            settleAttempt(lifecycle, correlation, store, lastCensus).pipe(
+              Effect.flatMap((report) => writeEvent(reportEvent("Observe", report)))
+            ),
+            Ref.get(lastCensus),
+            waitForFixtureContinuation
+          )
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
@@ -435,15 +438,5 @@ if (rawConfiguration.action === undefined) {
   nodeProcess.stderr.write(`${usage}\n`)
   nodeProcess.exitCode = 64
 } else {
-  void Effect.runPromiseExit(configurationProgram.pipe(Effect.provideService(Logger.LogToStderr, true)))
-    .then((exit) => {
-      if (Exit.isSuccess(exit)) return
-      const detail = qualificationFailureDetail(Cause.squash(exit.cause)) || Cause.pretty(exit.cause)
-      nodeProcess.stdout.write(`${JSON.stringify({ event: "failure", detail })}\n`)
-      nodeProcess.exitCode = 70
-    })
-    .catch((cause: unknown) => {
-      nodeProcess.stdout.write(`${JSON.stringify({ event: "failure", detail: qualificationFailureDetail(cause) })}\n`)
-      nodeProcess.exitCode = 70
-    })
+  runQualificationProgram(configurationProgram)
 }

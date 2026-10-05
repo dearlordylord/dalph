@@ -1,3 +1,4 @@
+import { executorGuidanceQuintGateCommandKeys } from "./quint-gate-executor-guidance-command-oracle.mjs"
 import { resultRecoveryDirectionQuintGateCommandKeys } from "./quint-gate-result-recovery-direction-command-oracle.mjs"
 import { providerResultCorrectionQuintGateCommandKeys } from "./quint-gate-provider-result-correction-command-oracle.mjs"
 import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
@@ -6,11 +7,11 @@ import { publicationBatchGrantQuintGateCommandKeys } from "./quint-gate-publicat
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
-  total: 137,
-  typecheck: 21,
-  test: 60,
-  "sampled-run": 30,
-  verify: 26
+  total: 146,
+  typecheck: 23,
+  test: 64,
+  "sampled-run": 32,
+  verify: 27
 })
 
 export const legacyQuintGateExpectedCommandCounts = Object.freeze({
@@ -52,7 +53,8 @@ const acceptedQuintGateCommandKeysWithPublicationGrant = Object.freeze([
   ...acceptedQuintGateCommandKeysWithAutomaticSuccessor,
   ...publicationBatchGrantQuintGateCommandKeys,
   ...providerResultCorrectionQuintGateCommandKeys,
-  ...resultRecoveryDirectionQuintGateCommandKeys
+  ...resultRecoveryDirectionQuintGateCommandKeys,
+  ...executorGuidanceQuintGateCommandKeys
 ])
 
 /** Compare the retained pre-#315 commands with the independently accepted order. */
@@ -65,7 +67,8 @@ export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
         !name.startsWith("accepted-result automatic successor counter proof") &&
         !name.startsWith("publication exhaustion batch grant") &&
         !name.startsWith("provider result correction") &&
-        !name.startsWith("result recovery direction")
+        !name.startsWith("result recovery direction") &&
+        !name.startsWith("executor guidance")
     )
     .map(commandKey)
   const mismatch = retained.findIndex((key, index) => key !== acceptedLegacyQuintGateCommandKeys[index])

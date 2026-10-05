@@ -1,3 +1,4 @@
+import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
@@ -15,6 +16,10 @@ import {
   resolveFormalQualificationJobs,
   runProductionLiveQualification
 } from "./run-production-live-qualification.mjs"
+
+// Custody fixtures follow the executable inventory. Independent command/range
+// oracles qualify that inventory in their own contract tests.
+const formalCommandCount = quintGateCommandManifest.length
 
 const candidateSha = "0123456789abcdef0123456789abcdef01234567"
 const reviewedBaseSha = "fedcba9876543210fedcba9876543210fedcba98"
@@ -91,7 +96,7 @@ const fixture = async () => {
 }
 
 const formalCommands = (custodyOffset) =>
-  Array.from({ length: 137 }, (_value, position) => ({
+  Array.from({ length: formalCommandCount }, (_value, position) => ({
     position,
     kind: "test",
     name: `formal command ${position}`,
@@ -138,7 +143,7 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
     reportDigest: String(jobStart + shard)
       .slice(-1)
       .repeat(64),
-    positions: Array.from({ length: 137 }, (_value, position) => position).filter((position) =>
+    positions: Array.from({ length: formalCommandCount }, (_value, position) => position).filter((position) =>
       shard === 0
         ? position <= 36 ||
           (position >= 42 && position <= 46) ||
@@ -150,7 +155,8 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
           (position >= 47 && position <= 59) ||
           (position >= 65 && position <= 85) ||
           (position >= 91 && position <= 109) ||
-          (position >= 115 && position <= 126)
+          (position >= 115 && position <= 126) ||
+          (position >= 137 && position <= 145)
     ),
     setupInstallSeconds: 12,
     formalSeconds: 105 - shard,

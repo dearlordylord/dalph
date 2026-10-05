@@ -1,3 +1,4 @@
+export * from "./executor-guidance.js"
 export * from "./executor.js"
 export * from "./evidence.js"
 export * from "./executor-locator.js"

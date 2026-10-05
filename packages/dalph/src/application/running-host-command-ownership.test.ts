@@ -1,4 +1,4 @@
-import { RunId, TaskId } from "@dalph/contracts"
+import { AttemptId, ExecutorGuidanceRequestId, RunId, TaskId } from "@dalph/contracts"
 import { makeApplicationExitLifecycle, makeProductionHostApplicationExitShell } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Ref } from "effect"
@@ -9,6 +9,12 @@ import { HostInstanceId, RequestId } from "./running-host-contract.js"
 
 for (const operation of [
   { _tag: "StartWork" },
+  {
+    _tag: "SendExecutorGuidance",
+    attemptId: AttemptId.make("A"),
+    guidanceRequestId: ExecutorGuidanceRequestId.make("G"),
+    textBase64: "aGk="
+  },
   { _tag: "Refresh", interest: { _tag: "WholeGraph" } },
   { _tag: "Refresh", interest: { _tag: "AdvisoryTasks", taskIds: [TaskId.make("C"), TaskId.make("E")] } }
 ] as const) {
@@ -32,7 +38,13 @@ for (const operation of [
                 Effect.as(
                   operation._tag === "Refresh"
                     ? { _tag: "RefreshSubmitted" as const, interest: operation.interest }
-                    : { _tag: "WakeSubmitted" as const }
+                    : operation._tag === "SendExecutorGuidance"
+                      ? {
+                          _tag: "ExecutorGuidanceResult" as const,
+                          guidanceRequestId: operation.guidanceRequestId,
+                          disposition: { _tag: "Accepted" as const }
+                        }
+                      : { _tag: "WakeSubmitted" as const }
                 )
               )
           )
@@ -68,7 +80,13 @@ for (const operation of [
                 Effect.as(
                   operation._tag === "Refresh"
                     ? { _tag: "RefreshSubmitted" as const, interest: operation.interest }
-                    : { _tag: "WakeSubmitted" as const }
+                    : operation._tag === "SendExecutorGuidance"
+                      ? {
+                          _tag: "ExecutorGuidanceResult" as const,
+                          guidanceRequestId: operation.guidanceRequestId,
+                          disposition: { _tag: "Accepted" as const }
+                        }
+                      : { _tag: "WakeSubmitted" as const }
                 )
               )
           )
