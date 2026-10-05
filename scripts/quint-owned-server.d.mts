@@ -65,3 +65,10 @@ export declare const withOwnedQuintServer: <Result>(options: {
   readonly terminationGraceMilliseconds?: number
   readonly processGroupAbsenceTimeoutMilliseconds?: number
 }) => Promise<{ readonly profileResult: Result; readonly serverEvidence: OwnedQuintServerEvidence }>
+
+/** Reject missing/foreign Java home before launch. */
+export declare const validateOwnedQuintJava: (options: {
+  readonly javaExecutable: string
+  readonly javaUserHome?: string
+  readonly javaArguments: ReadonlyArray<string>
+}) => void
