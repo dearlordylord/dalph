@@ -1466,7 +1466,11 @@ const makeRuntime = (
         .readRecords()
         .some(
           ({ event }) =>
-            event._tag === "TargetPromotionReconciliationDeferred" && event.afterAttemptOrdinal === latestAttemptOrdinal
+            (event._tag === "TargetPromotionReconciliationDeferred" &&
+              event.afterAttemptOrdinal === latestAttemptOrdinal) ||
+            (event._tag === "TargetPromotionSafetyRefused" &&
+              event.basis._tag === "AfterAttempt" &&
+              event.basis.attemptOrdinal === latestAttemptOrdinal)
         )
     if (model.promotionCompareAndSetRequested !== (latestAttemptWasSent && !latestAttemptWasDeferred)) {
       rejectImpossibleTransition("model/production promotion compare-and-set request mismatch")
@@ -5012,3 +5016,24 @@ for (const afterNumberedIntent of [false, true]) {
       })
   )
 }
+
+it.effect("retains previous CAS ambiguity when a reconciliation safety read is refused", () =>
+  Effect.gen(function* () {
+    const driver = yield* acceptedResultIntegrationDriver.create()
+    const getState = driver.getState
+    if (getState === undefined) return yield* Effect.die("driver lacks promotion alignment")
+    for (const name of [...promotionReadOnlyReconciliationActions, "recordPromotionSafetyRefusalOne"] as const) {
+      const action = driver.actions[name]
+      if (action === undefined) return yield* Effect.die(`missing action ${name}`)
+      yield* action.handler({})
+      yield* getState()
+    }
+    expect((yield* getState()).results.get(1n)).toMatchObject({
+      phase: "PromotionSafetyRefused",
+      promotionAttemptCount: 1n,
+      promotionResponseAmbiguous: true,
+      promotionCompareAndSetRequested: false,
+      publicationProofRecorded: true
+    })
+  })
+)
