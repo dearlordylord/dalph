@@ -27,7 +27,9 @@ Choose checks by affected behavior, not by commit or handoff alone:
   production artifacts, checks formal profile/source controls, runs typecheck and
   the hosted full lint census, then runs the in-memory cassette suite. A subsequent
   tooling-only repair uses its affected tool and consumer checks; it does not
-  restart unchanged application tests. A repair that changes gate custody or
+  restart unchanged application tests. Keep submission routing assertions in
+  the early controlled tooling tests: assert required boundary order rather than
+  copying an entire shell string into an expensive process fixture. A repair that changes gate custody or
   evidence validity still follows the shared-qualification rule below.
   The lint and cassette checks address
   failures first discovered in hosted #309 runs. Estimate its wall-clock budget
