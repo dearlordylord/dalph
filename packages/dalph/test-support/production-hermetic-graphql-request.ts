@@ -24,7 +24,7 @@ export const decodeHermeticGraphqlRequest = Effect.fn("HermeticProvider.decodeGr
               const index = match[1]
               const fields = match[2] ?? ""
               return {
-                _tag: fields.startsWith("state ")
+                _tag: /\bstateReason\(/u.test(fields)
                   ? "ReadIssue"
                   : fields.startsWith("blockedBy(")
                     ? "ReadBlockedBy"

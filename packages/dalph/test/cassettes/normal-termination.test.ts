@@ -11,13 +11,22 @@ type Fixture = Effect.Success<ReturnType<typeof makeNormalTermination>>
 const allNames = ["A", ...names]
 
 it.effect(
-  "proves seven tracker successes from Gfinal and seven exact claim absences",
+  "settles seven tasks, refreshes Gfinal after a crash, and recovers lost termination acknowledgement",
   () =>
     Effect.gen(function* () {
       const fixture = yield* makeNormalTermination()
+      yield* Ref.set(fixture.terminationCut, { _tag: "Armed", at: "FinalGraphObserved" })
       const process = yield* start(fixture)
       yield* deliver(fixture, process)
-      yield* process.event((event) => event._tag === "WorkflowRunTerminated")
+      expect(yield* Queue.take(fixture.reached)).toBe("FinalGraphObserved")
+      const readPrefix = yield* fixture.journal.read(fixture.runId)
+      expect(readPrefix.at(-1)?.event._tag).toBe("TaskTrackerFactsObserved")
+      expect(yield* Ref.get(fixture.terminationAttempts)).toEqual([])
+      yield* Fiber.interrupt(process.running)
+      yield* Ref.set(fixture.terminationCut, { _tag: "Armed", at: "TerminationAppended" })
+      const restarted = yield* start(fixture)
+      expect(yield* Queue.take(fixture.reached)).toBe("TerminationAppended")
+      yield* Fiber.interrupt(restarted.running)
       const records = yield* fixture.journal.read(fixture.runId)
       const reads = yield* Ref.get(fixture.graphReads)
       const finalReads = reads.filter(
@@ -27,9 +36,16 @@ it.effect(
           intent.event.operation._tag === "ReadTrackerGraph" &&
           intent.event.operation.cause._tag === "PostQuiescenceReconfirmation"
       )
-      expect(finalReads).toHaveLength(1)
-      const finalRead = finalReads[0]
+      expect(finalReads).toHaveLength(2)
+      const finalRead = finalReads[1]
       if (finalRead === undefined) return expect.fail("missing actual final tracker read")
+      expect(records.slice(0, readPrefix.length)).toEqual(readPrefix)
+      expect(finalReads[0]?.intent.position).toBeLessThanOrEqual(readPrefix.length)
+      expect(finalRead.intent.position).toBeGreaterThan(readPrefix.length)
+      const finalOperations = finalReads.flatMap(({ intent }) =>
+        intent.event._tag === "TaskTrackerReadIntentRecorded" ? [intent.event.operation.operationId] : []
+      )
+      expect(new Set(finalOperations).size).toBe(2)
       expect(records.filter(({ event }) => event._tag === "IntegrationFinalitySettled")).toHaveLength(7)
       expect(records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
       expect(yield* Ref.get(fixture.processEndRequests)).toBe(0)
@@ -169,6 +185,16 @@ it.effect(
           })
         }
       }
+      const before = yield* boundaryCounts(fixture)
+      expect(before.terminationAttempts).toHaveLength(1)
+      expect(before.runtimeEntries).toBeGreaterThan(0)
+      yield* Ref.set(fixture.terminationCut, { _tag: "Disabled" })
+      const reentry = yield* Effect.exit(fixture.activate)
+      expect(Exit.isFailure(reentry)).toBe(true)
+      if (Exit.isFailure(reentry)) expect(Cause.pretty(reentry.cause)).toContain("WorkflowRunAlreadyTerminated")
+      expect(yield* fixture.journal.read(fixture.runId)).toEqual(records)
+      expect(yield* boundaryCounts(fixture)).toEqual(before)
+      expect(yield* Ref.get(fixture.processEndRequests)).toBe(0)
     }).pipe(Effect.provide(NodeCrypto.layer)),
   30_000
 )
@@ -188,71 +214,3 @@ const boundaryCounts = (fixture: Fixture) =>
     runtimeObservations: Ref.get(fixture.runtimeObservations),
     runtimeEntries: Ref.get(fixture.runtimeEntries)
   })
-
-it.effect(
-  "obtains a distinct later Gfinal after a crash before termination",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeNormalTermination()
-      yield* Ref.set(fixture.terminationCut, { _tag: "Armed", at: "FinalGraphObserved" })
-      const process = yield* start(fixture)
-      yield* deliver(fixture, process)
-      expect(yield* Queue.take(fixture.reached)).toBe("FinalGraphObserved")
-      const prefix = yield* fixture.journal.read(fixture.runId)
-      expect(prefix.at(-1)?.event._tag).toBe("TaskTrackerFactsObserved")
-      expect(yield* Ref.get(fixture.terminationAttempts)).toEqual([])
-      yield* Fiber.interrupt(process.running)
-      yield* Ref.set(fixture.terminationCut, { _tag: "Disabled" })
-      const restarted = yield* start(fixture)
-      yield* restarted.event((event) => event._tag === "WorkflowRunTerminated")
-      const records = yield* fixture.journal.read(fixture.runId)
-      expect(records.slice(0, prefix.length)).toEqual(prefix)
-      const reads = (yield* Ref.get(fixture.graphReads)).filter(
-        ({ intent, revision }) =>
-          revision.startsWith("Gfinal") &&
-          intent.event._tag === "TaskTrackerReadIntentRecorded" &&
-          intent.event.operation._tag === "ReadTrackerGraph" &&
-          intent.event.operation.cause._tag === "PostQuiescenceReconfirmation"
-      )
-      expect(reads).toHaveLength(2)
-      expect(reads[0]?.intent.position).toBeLessThanOrEqual(prefix.length)
-      expect(reads[1]?.intent.position).toBeGreaterThan(prefix.length)
-      const operations = reads.flatMap(({ intent }) =>
-        intent.event._tag === "TaskTrackerReadIntentRecorded" ? [intent.event.operation.operationId] : []
-      )
-      expect(new Set(operations).size).toBe(2)
-      expect(records.at(-1)?.event).toMatchObject({
-        _tag: "WorkflowRunTerminated",
-        disposition: "Completed",
-        evidence: { operationId: operations[1], contentIdentity: "Gfinal" }
-      })
-      expect(yield* Ref.get(fixture.terminationAttempts)).toHaveLength(1)
-    }).pipe(Effect.provide(NodeCrypto.layer)),
-  30_000
-)
-
-it.effect(
-  "reconstructs lost termination acknowledgement without another append attempt or boundary call",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeNormalTermination()
-      yield* Ref.set(fixture.terminationCut, { _tag: "Armed", at: "TerminationAppended" })
-      const process = yield* start(fixture)
-      yield* deliver(fixture, process)
-      expect(yield* Queue.take(fixture.reached)).toBe("TerminationAppended")
-      const prefix = yield* fixture.journal.read(fixture.runId)
-      expect(prefix.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
-      yield* Fiber.interrupt(process.running)
-      const before = yield* boundaryCounts(fixture)
-      expect(before.terminationAttempts).toHaveLength(1)
-      expect(before.runtimeEntries).toBeGreaterThan(0)
-      yield* Ref.set(fixture.terminationCut, { _tag: "Disabled" })
-      const reentry = yield* Effect.exit(fixture.activate)
-      expect(Exit.isFailure(reentry)).toBe(true)
-      if (Exit.isFailure(reentry)) expect(Cause.pretty(reentry.cause)).toContain("WorkflowRunAlreadyTerminated")
-      expect(yield* fixture.journal.read(fixture.runId)).toEqual(prefix)
-      expect(yield* boundaryCounts(fixture)).toEqual(before)
-      expect(yield* Ref.get(fixture.processEndRequests)).toBe(0)
-    }).pipe(Effect.provide(NodeCrypto.layer)),
-  30_000
-)
