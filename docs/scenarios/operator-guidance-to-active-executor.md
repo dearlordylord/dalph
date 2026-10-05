@@ -55,6 +55,15 @@ resuming a turn, queuing to T2, or clearing a fence. Oversized UTF-8 text refuse
 before the provider effect. A later deliberate request is a new request, not
 replay of this refusal. Crashes cannot turn absent local text into permission.
 
+During Linux process enumeration, a launch-token process may lack an exact
+thread identity and exit before that observation finishes. Dalph rereads that
+process's native stat before reporting this ambiguity. Proven absence (including
+an inert zombie) excludes only that stopped process; T1 remains independently
+live. A live, reused or unreadable process retains Unreadable custody and
+guidance refuses. This performs no signal, replacement, or provider retry.
+`application/codex-app-server-public.test.ts` must prove the disappearance race
+and retain the live missing-thread, exact-thread and foreign-thread controls.
+
 ## G3 — Several active attempts remain independent
 
 P1/T1 and P2/T2 are active under separate exact owners. Alice selects P1 and sends
