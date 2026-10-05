@@ -1429,20 +1429,20 @@ const makeRuntime = (
             ? "PromotionRetryReady"
             : promotionReadAuthorization !== undefined
               ? (promotionReadPhase ?? "PromotionReconciliation")
-              : durable._tag === "PromotionSafetyRefused"
-                ? "PromotionSafetyRefused"
-                : durable._tag === "PromotionSucceeded"
-                  ? "PromotionSucceeded"
-                  : durable._tag === "PromotionStale"
-                    ? "PromotionStale"
-                    : durable._tag === "PromotionNonConvergent"
-                      ? "PromotionExhausted"
-                      : durable._tag === "PromotionReconciliationDeferred"
-                        ? durable.deferral._tag === "RetryAuthorityRequired"
-                          ? "PromotionRetryAuthorityRequired"
-                          : "PromotionReadPending"
-                        : promotionReadPending
-                          ? "PromotionReadPending"
+              : promotionReadPending
+                ? "PromotionReadPending"
+                : durable._tag === "PromotionSafetyRefused"
+                  ? "PromotionSafetyRefused"
+                  : durable._tag === "PromotionSucceeded"
+                    ? "PromotionSucceeded"
+                    : durable._tag === "PromotionStale"
+                      ? "PromotionStale"
+                      : durable._tag === "PromotionNonConvergent"
+                        ? "PromotionExhausted"
+                        : durable._tag === "PromotionReconciliationDeferred"
+                          ? durable.deferral._tag === "RetryAuthorityRequired"
+                            ? "PromotionRetryAuthorityRequired"
+                            : "PromotionReadPending"
                           : promotionResponseLost || attempts.length > 0
                             ? "PromotionResponseLost"
                             : "PromotionIntent"
@@ -2545,8 +2545,11 @@ const acceptedResultIntegrationDriver = defineDriver(
         integratorResponseAmbiguous: true
       }))
       trackerFactsCurrent = false
-      targetFactsCurrent = false
-      targetHeadProof = 0n
+      const remainingHolder = [...modelResults.entries()].find(
+        ([otherId, result]) => otherId !== id && result.targetHeld
+      )?.[1]
+      targetFactsCurrent = remainingHolder !== undefined
+      targetHeadProof = remainingHolder?.expectedTargetHead ?? 0n
       targetReacquisitionRequired = true
     }
 
@@ -5001,6 +5004,11 @@ for (const afterNumberedIntent of [false, true]) {
           "observeTrackerFactsStep",
           "observeTargetFactsOne",
           "reconcilePromotionOne",
+          "observePromotionGitUnreadableOne",
+          "recoverCoordinatorStep",
+          "observeTrackerFactsStep",
+          "observeTargetFactsOne",
+          "reconcilePromotionOne",
           "observePromotionExactExpectedHeadOne",
           "recordPromotionAttemptIntentOne",
           "sendPromotionAttemptOne",
@@ -5035,5 +5043,37 @@ it.effect("retains previous CAS ambiguity when a reconciliation safety read is r
       promotionCompareAndSetRequested: false,
       publicationProofRecorded: true
     })
+  })
+)
+
+it.effect("preserves the independent held target after losing an Integrator response", () =>
+  Effect.gen(function* () {
+    const driver = yield* acceptedResultIntegrationDriver.create()
+    const getState = driver.getState
+    if (getState === undefined) return yield* Effect.die("driver lacks integration projection")
+    for (const name of [
+      "init",
+      "admitDestinationStep",
+      "acceptResultOne",
+      "acceptResultTwo",
+      "assignResultTwoIndependentTargetOne",
+      "queueAcceptedResultOne",
+      "startIntegrationOne",
+      "fixIntegratorSessionOne",
+      "invokeIntegratorOne",
+      "queueAcceptedResultTwo",
+      "startIntegrationTwo",
+      "fixIntegratorSessionTwo",
+      "loseIntegratorResponseOne"
+    ] as const) {
+      const action = driver.actions[name]
+      if (action === undefined) return yield* Effect.die(`missing action ${name}`)
+      yield* action.handler({})
+      yield* getState()
+    }
+    const state = yield* getState()
+    expect(state).toMatchObject({ targetFactsCurrent: true, targetHeadProof: 12n, trackerFactsCurrent: false })
+    expect(state.results.get(1n)).toMatchObject({ phase: "IntegratorResponseLost", targetHeld: false })
+    expect(state.results.get(2n)).toMatchObject({ phase: "IntegratorSessionFixed", targetHeld: true })
   })
 )
