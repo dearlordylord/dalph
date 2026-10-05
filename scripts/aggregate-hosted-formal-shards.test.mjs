@@ -1,3 +1,4 @@
+import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
@@ -8,6 +9,10 @@ import {
   createQuintHostedShard,
   quintHostedProfileDigest
 } from "./quint-hosted-shards.mjs"
+
+// Custody fixtures follow the executable inventory. Independent command/range
+// oracles qualify that inventory in their own contract tests.
+const formalCommandCount = quintGateCommandManifest.length
 
 const binding = Object.freeze({ runId: "run-1", runAttempt: "2", commitSha: "candidate", nodeVersion: "24.20.0" })
 
@@ -87,16 +92,16 @@ const fixture = (affectedFamilies) => {
     })
 }
 
-void test("accepts two out-of-order reports only as one exact 137-command profile", () => {
+void test("accepts two out-of-order reports only as one exact canonical command profile", () => {
   const envelopes = fixture().reverse()
   const aggregate = aggregateHostedFormalShards({ binding, envelopes })
   assert.equal(aggregate.version, 1)
   assert.deepEqual(aggregate.binding, binding)
   assert.equal(aggregate.profileDigest, envelopes[0].profileDigest)
-  assert.equal(aggregate.commands, 137)
+  assert.equal(aggregate.commands, formalCommandCount)
   assert.deepEqual(
     aggregate.commandEvidence.map(({ position }) => position),
-    Array.from({ length: 137 }, (_value, position) => position)
+    Array.from({ length: formalCommandCount }, (_value, position) => position)
   )
   const first = aggregate.commandEvidence[0]
   assert.deepEqual(first.args, envelopes[1].report.commands[0].args)

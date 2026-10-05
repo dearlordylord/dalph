@@ -1,3 +1,8 @@
+import {
+  ExecutorGuidanceAdmittedEvent,
+  ExecutorGuidanceDispatchIntendedEvent,
+  ExecutorGuidanceObservedEvent
+} from "../protocols/executor-guidance/events.js"
 import { ResultRecoveryAttemptReplacedEvent } from "../protocols/result-recovery/replacement-events.js"
 import {
   ResultRecoveryDirectedEvent,
@@ -212,6 +217,9 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskWorkCapacityChangedEvent,
   ControlDirectionAppliedEvent,
   AttemptChoiceAppliedEvent,
+  ExecutorGuidanceAdmittedEvent,
+  ExecutorGuidanceDispatchIntendedEvent,
+  ExecutorGuidanceObservedEvent,
   ResultRecoveryDirectedEvent,
   ResultRecoveryContinueAuthorizedEvent,
   ResultRecoveryAttemptReplacedEvent,

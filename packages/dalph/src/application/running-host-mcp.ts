@@ -17,7 +17,8 @@ import {
 } from "./running-host-contract.js"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { runningHostMcpStdioPorts as stdioPorts } from "./running-host-mcp-stdio.js"
-import { runningHostMcpTools as tools } from "./running-host-mcp-tools.js"
+import { makeRunningHostMcpOperation } from "./running-host-mcp-command.js"
+import { ExecutorGuidanceToolArguments, runningHostMcpTools as tools } from "./running-host-mcp-tools.js"
 import { makeRunningHostMcpWatches } from "./running-host-mcp-watch.js"
 
 const rpcParseError = -32700
@@ -176,15 +177,17 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
           if (call._tag === "Failure")
             return yield* reject(rpcInvalidParams, "Tool arguments must contain only the exact RunId.")
           const args = yield* Schema.decodeUnknownEffect(
-            call.success.name === "dalph_close_watch"
-              ? Schema.Struct({ runId: RunId, subscriptionId: SubscriptionId })
-              : call.success.name === "dalph_apply_result_recovery"
-                ? Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest })
-                : call.success.name === "dalph_read_result_recovery"
-                  ? Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId })
-                  : call.success.name === "dalph_refresh"
-                    ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
-                    : ToolArguments
+            call.success.name === "dalph_guide_executor"
+              ? ExecutorGuidanceToolArguments
+              : call.success.name === "dalph_close_watch"
+                ? Schema.Struct({ runId: RunId, subscriptionId: SubscriptionId })
+                : call.success.name === "dalph_apply_result_recovery"
+                  ? Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest })
+                  : call.success.name === "dalph_read_result_recovery"
+                    ? Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId })
+                    : call.success.name === "dalph_refresh"
+                      ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
+                      : ToolArguments
           )(call.success.arguments, { onExcessProperty: "error" }).pipe(Effect.result)
           if (args._tag === "Failure")
             return yield* reject(
@@ -239,43 +242,9 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
               isError: value._tag === "Failure"
             })
           }
-          const refreshInterest =
-            call.success.name === "dalph_refresh"
-              ? yield* Schema.decodeUnknownEffect(RefreshInterest)(
-                  "interest" in args.success ? args.success.interest : undefined
-                ).pipe(Effect.result)
-              : null
-          if (refreshInterest?._tag === "Failure") return yield* reject(rpcInvalidParams, "Invalid refresh interest")
-          const recovery =
-            call.success.name === "dalph_apply_result_recovery"
-              ? yield* Schema.decodeUnknownEffect(ApplyResultRecoveryRequest)(
-                  "recovery" in args.success ? args.success.recovery : undefined
-                ).pipe(Effect.result)
-              : null
-          const recoveryRequestId =
-            call.success.name === "dalph_read_result_recovery"
-              ? yield* Schema.decodeUnknownEffect(ResultRecoveryRequestId)(
-                  "recoveryRequestId" in args.success ? args.success.recoveryRequestId : undefined
-                ).pipe(Effect.result)
-              : null
-          if (recovery?._tag === "Failure" || recoveryRequestId?._tag === "Failure")
-            return yield* reject(rpcInvalidParams, "Invalid result recovery request")
-          const operation =
-            recovery?._tag === "Success"
-              ? { _tag: "ApplyResultRecoveryDirection" as const, recovery: recovery.success }
-              : recoveryRequestId?._tag === "Success"
-                ? { _tag: "ReadResultRecoveryDirection" as const, recoveryRequestId: recoveryRequestId.success }
-                : refreshInterest?._tag === "Success"
-                  ? { _tag: "Refresh" as const, interest: refreshInterest.success }
-                  : call.success.name === "dalph_read_snapshot"
-                    ? { _tag: "ReadSnapshot" as const }
-                    : call.success.name === "dalph_read_run_control"
-                      ? { _tag: "ReadRunControl" as const }
-                      : call.success.name === "dalph_start_work"
-                        ? { _tag: "StartWork" as const }
-                        : call.success.name === "dalph_unpause"
-                          ? { _tag: "Unpause" as const }
-                          : null
+          const prepared = yield* makeRunningHostMcpOperation(call.success.name, args.success).pipe(Effect.result)
+          if (prepared._tag === "Failure") return yield* reject(rpcInvalidParams, "Invalid command arguments")
+          const operation = prepared.success
           if (operation === null) return yield* reject(rpcInvalidParams, "Unknown tool")
           sequence += 1
           const execute = Effect.gen(function* () {
@@ -296,7 +265,8 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
             operation._tag === "StartWork" ||
             operation._tag === "Unpause" ||
             operation._tag === "Refresh" ||
-            operation._tag === "ApplyResultRecoveryDirection"
+            operation._tag === "ApplyResultRecoveryDirection" ||
+            operation._tag === "SendExecutorGuidance"
           ) {
             if (yield* FiberMap.has(commands, id))
               return yield* reject(rpcInvalidRequest, "Request ID is already pending")

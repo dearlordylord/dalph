@@ -7,7 +7,7 @@ import {
   TraceCursor
 } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
+import { Cause, Deferred, Effect, Encoding, Fiber, Layer, Option, Ref, Result, Stream, SubscriptionRef } from "effect"
 import { TestClock } from "effect/testing"
 import { Command } from "effect/unstable/cli"
 import { expect } from "vitest"
@@ -227,6 +227,60 @@ it.live("CLI emits a correlated Failure after initial current and abrupt host di
       expect(values[1]?.requestId).toBe(values[0]?.requestId)
       expect(values[1]?.subscriptionId).toBe(values[0]?.subscriptionId)
       expect(values[1]?.sequence).toBe(1)
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
+
+it.live("public guidance CLI routes one exact message through host command admission", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const address = yield* availableLocalHostAddress
+      const message = "Unicode: Привет\nexact guidance"
+      const calls: Array<string> = []
+      yield* serveRunningHost(address, {
+        ...probe.observation,
+        executeAttachedCommand: (request) =>
+          Effect.sync(() => {
+            expect(request.operation._tag).toBe("SendExecutorGuidance")
+            if (request.operation._tag !== "SendExecutorGuidance") throw new Error("Unexpected command")
+            calls.push(Result.getOrThrow(Encoding.decodeBase64String(request.operation.textBase64)))
+            expect(request.operation.attemptId).toBe("selected-attempt")
+            expect(request.operation.guidanceRequestId).toMatch(/^[0-9a-f-]{36}$/)
+            return {
+              _tag: "ExecutorGuidanceResult" as const,
+              guidanceRequestId: request.operation.guidanceRequestId,
+              disposition: { _tag: "Accepted" as const }
+            }
+          })
+      })
+      const lines: Array<string> = []
+      const run = application(
+        Layer.succeed(RunningHostCliOutput, {
+          writeLine: (text) =>
+            Effect.sync(() => {
+              lines.push(text)
+            })
+        })
+      )
+      yield* run([
+        "attach",
+        "guide",
+        "--host",
+        address,
+        "--run",
+        probe.runId,
+        "--attempt",
+        "selected-attempt",
+        "--message",
+        message,
+        "--json"
+      ])
+      expect(calls).toEqual([message])
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0] ?? "missing response")).toMatchObject({
+        result: { _tag: "Success", value: { _tag: "ExecutorGuidanceResult", disposition: { _tag: "Accepted" } } }
+      })
     })
   ).pipe(Effect.provide(NodeServices.layer))
 )

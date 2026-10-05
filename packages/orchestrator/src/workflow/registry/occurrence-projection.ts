@@ -880,6 +880,9 @@ type ProjectedJournalEvent = Extract<
 type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEvent>
 
 const nonProjectedJournalEventKinds = {
+  ExecutorGuidanceAdmitted: true,
+  ExecutorGuidanceDispatchIntended: true,
+  ExecutorGuidanceObserved: true,
   AttemptImplementationAbandoned: true,
   AttemptStoppageIntended: true,
   LocalTargetCatchUpIntended: true,

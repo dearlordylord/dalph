@@ -1,5 +1,10 @@
 import { it } from "@effect/vitest"
 import {
+  ExecutorGuidanceRequestId,
+  ExecutorGuidanceSelection,
+  ExecutorGuidanceTransmission,
+  ExecutorGuidanceSessionLocator,
+  ExecutorGuidanceTurnLocator,
   AttemptId,
   GitCommitSha,
   PlannedTaskAttempt,
@@ -510,6 +515,78 @@ it.effect("scopes fresh recovery custody separately from a retired terminal rout
         yield* executor.observe(subject, passiveLifecycleObservationPurpose)
         expect(yield* Ref.get(acquired)).toBe(1)
         expect(yield* Ref.get(custodyAcquired)).toBe(1)
+      }).pipe(Effect.provide(layer))
+    })
+  )
+)
+
+it.effect("guidance refuses absent owners and routes only through the selected existing owner", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const specification = makeTaskWorkSpecification({ body: "work", title: "work", taskId: TaskId.make("guidance") })
+      const planned = (id: string) =>
+        PlannedTaskAttempt.make({
+          ...correlation(id),
+          baseSha: GitCommitSha.make("a".repeat(40)),
+          branch: TaskBranchRef.make(`refs/heads/dalph/${id}`),
+          executor: TaskExecutorLocator.make("codex:production"),
+          taskId: specification.taskId,
+          taskRevision: specification.fingerprint,
+          worktree: WorktreeLocator.make(`/tmp/${id}`)
+        })
+      const first = planned("guidance-first")
+      const second = planned("guidance-second")
+      const acquired = yield* Ref.make<ReadonlyArray<string>>([])
+      const sent = yield* Ref.make<ReadonlyArray<string>>([])
+      const layer = isolatedPlannedAttemptExecutorLayer(
+        (subject) =>
+          Effect.gen(function* () {
+            yield* Ref.update(acquired, (entries) => [...entries, subject.attemptId])
+            const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: subject })
+            return Context.make(PlannedAttemptExecutor, {
+              observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report })),
+              begin: () => Effect.succeed(report),
+              requestSuspension: () => Effect.succeed(report),
+              resume: () => Effect.succeed(report),
+              selectGuidanceTarget: (plannedAttempt) =>
+                Effect.succeed(
+                  ExecutorGuidanceSelection.cases.Selected.make({
+                    target: {
+                      plannedAttempt,
+                      session: ExecutorGuidanceSessionLocator.make(subject.attemptId),
+                      turn: ExecutorGuidanceTurnLocator.make(`${subject.attemptId}-turn`)
+                    }
+                  })
+                ),
+              sendGuidance: (target) =>
+                Ref.update(sent, (entries) => [...entries, target.plannedAttempt.attemptId]).pipe(
+                  Effect.as(ExecutorGuidanceTransmission.cases.Accepted.make({}))
+                )
+            }).pipe(
+              Context.add(PlannedAttemptExecutorLifecycleObservation, { attach: () => Effect.die("unused attachment") })
+            )
+          }),
+        () => "acquisition failed"
+      )
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        if (executor.selectGuidanceTarget === undefined || executor.sendGuidance === undefined)
+          return yield* Effect.die("missing guidance capability")
+        expect(yield* executor.selectGuidanceTarget(first)).toEqual({ _tag: "Refused", reason: "OwnerUnavailable" })
+        expect(yield* Ref.get(acquired)).toEqual([])
+        yield* executor.begin(PlannedAttemptExecutorRequest.make({ plannedAttempt: first, specification }), {
+          _tag: "InitialDelivery"
+        })
+        yield* executor.begin(PlannedAttemptExecutorRequest.make({ plannedAttempt: second, specification }), {
+          _tag: "InitialDelivery"
+        })
+        const selected = yield* executor.selectGuidanceTarget(first)
+        if (selected._tag !== "Selected") return yield* Effect.die("active selection refused")
+        expect(
+          yield* executor.sendGuidance(selected.target, ExecutorGuidanceRequestId.make("guidance-1"), "information")
+        ).toEqual({ _tag: "Accepted" })
+        expect(yield* Ref.get(acquired)).toEqual([first.attemptId, second.attemptId])
+        expect(yield* Ref.get(sent)).toEqual([first.attemptId])
       }).pipe(Effect.provide(layer))
     })
   )

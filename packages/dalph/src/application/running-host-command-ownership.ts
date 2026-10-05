@@ -34,7 +34,10 @@ export const makeRunningHostCommandOwnership = Effect.fn("RunningHostCommand.mak
                 operation: request.operation._tag,
                 requestId: request.requestId,
                 phase: "AdmittedCompletionUnconfirmed",
-                acceptedAt: null
+                acceptedAt: null,
+                ...(request.operation._tag === "SendExecutorGuidance"
+                  ? { guidanceRequestId: request.operation.guidanceRequestId }
+                  : {})
               })
             )
           )

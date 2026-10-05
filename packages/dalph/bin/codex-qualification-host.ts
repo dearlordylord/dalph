@@ -12,7 +12,6 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   type PlannedAttemptExecutorLifecycleObservationService,
-  type PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorReport,
   PlannedAttemptExecutorRequest,
   PlannedAttemptResultRecoveryAuthorization,
@@ -57,7 +56,13 @@ import {
 } from "../src/qualification/codex-census-diagnostic.js"
 import { qualificationWorkflowJournalLayer } from "../src/application/qualification-journal.js"
 import { qualificationCutStore } from "./codex-qualification-startup-cut.js"
-import { CodexQualificationAction, CodexQualificationHostEvent } from "./codex-qualification-host-contract.js"
+import { exerciseNativeGuidance } from "./codex-qualification-guidance.js"
+import {
+  CodexQualificationAction,
+  qualificationFailureDetail as detailOf
+} from "./codex-qualification-host-contract.js"
+
+import { writeEvent, reportEvent, projectionEvent } from "./codex-qualification-host-output.js"
 
 const QualificationConfiguration = Schema.Struct({
   action: CodexQualificationAction,
@@ -116,12 +121,6 @@ const decodeConfiguration = (): Effect.Effect<QualificationConfiguration, Qualif
     )
   )
 
-const writeEvent = (value: unknown): Effect.Effect<void, never> =>
-  Schema.decodeUnknownEffect(CodexQualificationHostEvent)(value).pipe(
-    Effect.flatMap((event) => Effect.sync(() => nodeProcess.stdout.write(`${JSON.stringify(event)}\n`))),
-    Effect.orDie
-  )
-
 const threadRecordFor = (configuration: QualificationConfiguration, threadId: CodexThreadSnapshot["id"]) =>
   CodexAttemptRecord.cases.AssociatedPreTurn.make({
     attemptId: configuration.attemptId,
@@ -130,13 +129,6 @@ const threadRecordFor = (configuration: QualificationConfiguration, threadId: Co
     threadId,
     worktree: WorktreeLocator.make(configuration.worktree)
   })
-
-const reportEvent = (
-  command: "Begin" | "Observe" | "Resume" | "Suspend" | "ContinueRejectedResult",
-  report: PlannedAttemptExecutorReport
-) => ({ event: "report" as const, command, report })
-
-const projectionEvent = (projection: PlannedAttemptExecutorProjection) => ({ event: "projection" as const, projection })
 
 const taskBody = "Execute the deterministic real-Codex qualification task and report the resulting commit."
 const terminalObservationAttempts = 600
@@ -354,6 +346,18 @@ const configurationProgram = Effect.gen(function* () {
             yield* Effect.sleep("100 millis")
             yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation, store, lastCensus)))
           }
+        } else if (configuration.action === "exercise-guidance") {
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
+          yield* exerciseNativeGuidance(
+            executor,
+            app,
+            attempt,
+            store,
+            writeEvent,
+            settleAttempt(lifecycle, correlation, store, lastCensus).pipe(
+              Effect.flatMap((report) => writeEvent(reportEvent("Observe", report)))
+            )
+          )
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
@@ -418,11 +422,6 @@ const configurationProgram = Effect.gen(function* () {
     })
   )
 })
-
-const detailOf = (cause: unknown): string => {
-  const decoded = Schema.decodeUnknownOption(Schema.Struct({ detail: Schema.String }))(cause)
-  return Option.isSome(decoded) ? decoded.value.detail : String(cause)
-}
 
 if (rawConfiguration.action === undefined) {
   nodeProcess.stderr.write(`${usage}\n`)

@@ -117,15 +117,15 @@ The existing Codex executor resolves its current provider turn internally;
 the app-server boundary uses `expectedTurnId` to enforce that same selection.
 These are planned responsibilities, not claims that the command is available.
 
-## Planned verification owners
+## Verification owners
 
-| Chronology | Concrete assertion and owner to implement |
+| Chronology | Concrete assertion and owner |
 | --- | --- |
 | G1/G2/G3/G6 | `application/codex-app-server-protocol.test.ts`: exact steer parameters, matching/mismatching ACK, absent active turn and no new turn; `application/codex-planned-attempt-executor.test.ts` and `isolated-planned-attempt-executor.test.ts`: existing owner only, exact active turn, custody fences and neighbouring-owner independence. |
-| G1/G2/G4/G5 | A guidance protocol/control unit owner: UTF-8 limits, intent before effects, ten-second deadline under TestClock, retained request identity and contradiction, no blind resend, no durable text, no timeout-derived non-delivery. |
-| G1/G5/G6 | A running-host guidance composition owner using the production Run/HTTP routing and controlled provider: CLI/MCP reach the owned active turn, exact redelivery sends once, completion and Exit retain the actual disposition. Assertions distinguish real host routing from native process proof. |
-| G4/G5/G6/G7 | A subject-scoped guidance Quint family and production conformance adapter: exact request/turn identity, at most one transmission, crash ambiguity, no future-turn retargeting, admission cutoff and metadata-only persistence. Add directed negative controls and canonical obligation registration. |
-| G1/G2/G4/G6 | One bounded native Codex qualification using the installed binary and controlled model endpoint: existing process/turn receives steering, exact provider precondition refuses a completed turn, and guidance never starts another provider or interrupts the current one. |
+| G1/G2/G4/G5 | `coordination/run/journaled-run-bootstrap.test.ts` and `application/codex-app-server-protocol.test.ts`: UTF-8 limits, intent before effects, ten-second deadline under TestClock, retained request identity and contradiction, no blind resend, no durable text, no timeout-derived non-delivery. |
+| G1/G5/G6 | `application/running-host-cli.test.ts`, `running-host-mcp.test.ts`, `running-host-client-parity.test.ts` and `running-host-command-ownership.test.ts` using production HTTP routing and controlled provider: CLI/MCP reach the owned active turn, exact redelivery sends once, completion and Exit retain the actual disposition. Assertions distinguish real host routing from native process proof. |
+| G4/G5/G6/G7 | `specs/executorGuidance.qnt`, its per-request `executorGuidance_proof.qnt` projection, and `test/conformance/executor-guidance.mbt.test.ts`: exact request/turn identity, at most one transmission, crash ambiguity, no future-turn retargeting, admission cutoff and metadata-only persistence. Directed negative controls and the canonical obligation registry retain these proof boundaries; conformance covers journal chronology/redelivery, while bootstrap and transport own actual transmission and cutoff. |
+| G1/G2/G4/G6 | `test/qualification/codex-real-host-qualification.test.ts` native guidance scenario using the installed binary and controlled model endpoint: existing process/turn receives steering, exact provider precondition refuses a completed turn, and guidance never starts another provider or interrupts the current one. |
 
 The installed Codex 0.160.0 JSON schema requires `threadId`, `input` and
 `expectedTurnId`, returns `turnId`, and permits `clientUserMessageId`. That field
@@ -133,3 +133,14 @@ alone establishes no durable deduplication guarantee. The
 [official steering contract](https://learn.chatgpt.com/docs/app-server#steer-an-active-turn)
 describes active-turn input and its precondition; application metadata and
 negative tests must establish Dalph's stronger no-replay guarantees.
+
+`test/cassettes/scenario.test.ts` round-trips all guidance metadata events and
+rejects uncertainty without intent or lost-unsent classification after intent.
+
+Guidance dispatch admission linearizes at the final durable item-fence read and
+atomic process-local stop-admission check. Item stopping closes admission before
+clock or persistence IO and never reopens it after a failed intent write. A stop
+that wins before admission refuses guidance; a stop after admission proceeds
+without waiting for its ACK, and the admitted message may acknowledge or become
+Unknown. This boundary does not claim that RPC bytes precede a concurrent later
+stop intent. Native expected-turn preconditions protect the completed-turn race.

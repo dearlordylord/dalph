@@ -273,6 +273,7 @@ type HostAction =
   | "project"
   | "suspend"
   | "settle"
+  | "exercise-guidance"
   | "exercise-suspension"
   | "exercise-terminal-suspension"
   | "exit"
@@ -699,6 +700,37 @@ const terminalReport = (event: HostEvent) => {
 }
 
 describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
+  qualificationTest(
+    "native guidance reaches the existing active turn and refuses its completed target",
+    async () => {
+      const fixture = await makeFixture("accepted-race")
+      const hosts: Array<BuiltHost> = []
+      try {
+        const host = await spawnHost(fixture, "exercise-guidance")
+        hosts.push(host)
+        await fixture.model.waitForCalls(1, 5_000)
+        const active = requireEvent(await host.waitFor("guidance"), "guidance")
+        expect(active).toMatchObject({ phase: "Active", sameOwner: true, disposition: { _tag: "Accepted" } })
+        const before = await latestPrivateSnapshot(fixture)
+        fixture.model.releaseTerminal()
+        terminalReport(await host.waitForReport(2))
+        expect(await host.waitForExit()).toEqual({ code: 0, signal: null })
+        const completedGuidance = host.events.find((event) => event.event === "guidance" && event.phase === "Completed")
+        if (completedGuidance === undefined) throw new Error("completed guidance observation missing")
+        const completedObservation = requireEvent(completedGuidance, "guidance")
+        expect(completedObservation.disposition).toMatchObject({ _tag: "Refused", reason: "AttemptInactive" })
+        const after = await latestPrivateSnapshot(fixture)
+        expect(completedObservation.sameOwner).toBe(true)
+        expect(completedObservation.providerPreconditionRejected).toBe(true)
+        expect(after.serverLaunch).toBeNull()
+        if (before.serverLaunch !== null) await waitForOwnedServerAbsence(before.serverLaunch)
+        expect(after.attempts).toMatchObject([{ _tag: "Terminal" }])
+      } finally {
+        await dispose(fixture, hosts)
+      }
+    },
+    30_000
+  )
   qualificationTest.each(["initialize-response-cut", "initialize-observed-cut"] as const)(
     "%s recovers exact admission custody without repeating an unobserved startup budget",
     async (action) => {

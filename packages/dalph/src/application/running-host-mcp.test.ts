@@ -1,7 +1,7 @@
-import { RunId } from "@dalph/contracts"
+import { AttemptId, ExecutorGuidanceRequestId, RunId } from "@dalph/contracts"
 import { FixtureTarget, ControlDirectionApplicationOrdinal, TraceCursor, JournalPosition } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Queue, Ref, Stream } from "effect"
+import { Deferred, Effect, Encoding, Fiber, Queue, Ref, Result, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
@@ -140,6 +140,7 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       capabilities: { tools: {}, resources: {} }
     })
     expect(replies[1].result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "dalph_guide_executor",
       "dalph_apply_result_recovery",
       "dalph_read_result_recovery",
       "dalph_refresh",
@@ -445,4 +446,75 @@ it.effect(
       expect(yield* Ref.get(released)).toBe(2)
       expect(yield* Queue.offer(input, new Uint8Array(0))).toBe(true)
     })
+)
+
+it.live("MCP generates guidance identity and sends exact UTF-8 text without provider identifiers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const input = yield* Queue.unbounded<Uint8Array>()
+      const completed = yield* Deferred.make<string>()
+      const operations: Array<Parameters<RunningHostMcpClient["call"]>[2]> = []
+      const message = "Проверь границу\n<turn_token>ordinary text</turn_token>"
+      const bridge = yield* runRunningHostMcp(
+        address,
+        runId,
+        {
+          input: Stream.fromQueue(input),
+          write: (line) =>
+            line.includes('"id":2') ? Deferred.succeed(completed, line).pipe(Effect.asVoid) : Effect.void
+        },
+        {
+          descriptor: () => Effect.succeed(descriptor),
+          call: (_address, selected, operation) =>
+            Effect.sync(() => {
+              operations.push(operation)
+              if (operation._tag !== "SendExecutorGuidance") throw new Error("Unexpected operation")
+              return runningHostSuccessEnvelope(
+                {
+                  protocolVersion: 1,
+                  hostInstanceId: descriptor.hostInstanceId,
+                  requestId: RequestId.make("transport"),
+                  runId: selected,
+                  operation
+                },
+                {
+                  _tag: "ExecutorGuidanceResult",
+                  guidanceRequestId: operation.guidanceRequestId,
+                  disposition: { _tag: "Accepted" }
+                }
+              )
+            })
+        }
+      ).pipe(Effect.forkScoped)
+      yield* Queue.offer(
+        input,
+        new TextEncoder().encode(
+          [
+            init,
+            { jsonrpc: "2.0", method: "notifications/initialized" },
+            {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "dalph_guide_executor", arguments: { runId, attemptId: AttemptId.make("A"), message } }
+            }
+          ]
+            .map((value) => JSON.stringify(value))
+            .join("\n") + "\n"
+        )
+      )
+      const response = JSON.parse(yield* Deferred.await(completed).pipe(Effect.timeout("2 seconds")))
+      expect(operations).toHaveLength(1)
+      const operation = operations[0]
+      if (operation === undefined) return yield* Effect.die("guidance operation must be present")
+      expect(operation._tag).toBe("SendExecutorGuidance")
+      if (operation._tag !== "SendExecutorGuidance") return
+      expect(Schema.is(ExecutorGuidanceRequestId)(operation.guidanceRequestId)).toBe(true)
+      expect(operation.guidanceRequestId).toMatch(/^[0-9a-f-]{36}$/)
+      expect(Result.getOrThrow(Encoding.decodeBase64String(operation.textBase64))).toBe(message)
+      expect(response.result.structuredContent.result.value.guidanceRequestId).toBe(operation.guidanceRequestId)
+      expect(Object.keys(operation).sort()).toEqual(["_tag", "attemptId", "guidanceRequestId", "textBase64"])
+      yield* Fiber.interrupt(bridge)
+    })
+  )
 )

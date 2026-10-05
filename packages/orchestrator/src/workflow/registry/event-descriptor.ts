@@ -1,4 +1,7 @@
 import {
+  executorGuidanceAdmittedRecordKey,
+  executorGuidanceDispatchIntendedRecordKey,
+  executorGuidanceObservedRecordKey,
   resultRecoveryAttemptReplacedRecordKey,
   resultRecoveryDirectedRecordKey,
   resultRecoveryContinueAuthorizedRecordKey,
@@ -275,6 +278,18 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       expectedKey: controlDirectionAppliedRecordKey(event.ordinal),
       ordinal: event.ordinal,
       runId: event.subject.runId
+    }),
+    ExecutorGuidanceAdmitted: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: executorGuidanceAdmittedRecordKey(event.metadata.requestId)
+    }),
+    ExecutorGuidanceDispatchIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: executorGuidanceDispatchIntendedRecordKey(event.requestId)
+    }),
+    ExecutorGuidanceObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: executorGuidanceObservedRecordKey(event.requestId)
     }),
     ResultRecoveryContinueAuthorized: (event) => ({
       _tag: "GenericEventDescriptor",

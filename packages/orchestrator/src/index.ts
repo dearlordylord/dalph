@@ -1131,3 +1131,6 @@ export {
 } from "./workflow/protocols/result-recovery/control.js"
 
 export { ResultRecoveryAttemptReplacedEvent } from "./workflow/protocols/result-recovery/replacement-events.js"
+
+export * from "./workflow/protocols/executor-guidance/events.js"
+export * from "./workflow/protocols/executor-guidance/control.js"

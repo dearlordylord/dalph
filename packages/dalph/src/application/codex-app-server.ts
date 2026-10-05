@@ -77,6 +77,10 @@ type CodexThreadStatus = typeof CodexThreadStatus.Type
 export const CodexThreadWorkingDirectory = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadWorkingDirectory"))
 export type CodexThreadWorkingDirectory = typeof CodexThreadWorkingDirectory.Type
 
+/** Provider input correlation only; Codex does not promise durable deduplication. */
+export const CodexClientUserMessageId = Schema.NonEmptyString.pipe(Schema.brand("CodexClientUserMessageId"))
+export type CodexClientUserMessageId = typeof CodexClientUserMessageId.Type
+
 /** Opaque continuation identity returned by the Codex thread-list boundary. */
 const CodexThreadListCursor = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadListCursor"))
 type CodexThreadListCursor = typeof CodexThreadListCursor.Type
@@ -333,6 +337,7 @@ const CodexAppServerOperation = Schema.Literals([
   "thread/turns/list",
   "thread/resume",
   "turn/start",
+  "turn/steer",
   "turn/interrupt",
   "thread/backgroundTerminals/list",
   "thread/backgroundTerminals/terminate",
@@ -570,6 +575,13 @@ export interface CodexAppServerService {
     ownedTurnToken?: CodexOwnedTurnToken
   ) => Effect.Effect<CodexTurnSnapshot, CodexAppServerFailure>
   readonly interruptTurn: (threadId: CodexThreadId, turnId: CodexTurnId) => Effect.Effect<void, CodexAppServerFailure>
+  /** Adds input to exactly this active turn; timeout never closes or interrupts its owner. */
+  readonly steerTurn?: (
+    threadId: CodexThreadId,
+    expectedTurnId: CodexTurnId,
+    text: string,
+    messageId: CodexClientUserMessageId
+  ) => Effect.Effect<CodexTurnId, CodexAppServerFailure>
   readonly listBackgroundTerminals: (
     threadId: CodexThreadId
   ) => Effect.Effect<ReadonlyArray<CodexBackgroundTerminal>, CodexAppServerFailure>
@@ -4151,6 +4163,41 @@ export const codexAppServerLayer = (
         }
         return { ...turn, ownedTurnToken }
       })
+      const steerTurn = Effect.fn("CodexAppServer.steerTurn")(function* (
+        threadId: CodexThreadId,
+        expectedTurnId: CodexTurnId,
+        text: string,
+        messageId: CodexClientUserMessageId
+      ) {
+        // JSON preserves the original text while escaping ownership-marker delimiters.
+        const guidance = JSON.stringify({ guidance: text }).replaceAll("<", "\\u003c")
+        const response = yield* rpc
+          .request("turn/steer", "turn/steer", {
+            threadId,
+            expectedTurnId,
+            clientUserMessageId: messageId,
+            input: [{ type: "text", text: guidance, text_elements: [] }]
+          })
+          .pipe(
+            Effect.timeoutOrElse({
+              duration: "10 seconds",
+              orElse: () =>
+                Effect.fail(
+                  operationFailure("turn/steer", "ResponseDeadline", "guidance acknowledgement deadline exceeded")
+                )
+            })
+          )
+        const acknowledgement = yield* Schema.decodeUnknownEffect(Schema.Struct({ turnId: CodexTurnId }))(
+          response
+        ).pipe(Effect.mapError(() => operationFailure("turn/steer", "Malformed", "invalid guidance acknowledgement")))
+        if (acknowledgement.turnId !== expectedTurnId)
+          return yield* operationFailure(
+            "turn/steer",
+            "CorrelationContradiction",
+            "guidance acknowledgement names another turn"
+          )
+        return acknowledgement.turnId
+      })
       const interruptTurn = Effect.fn("CodexAppServer.interruptTurn")(function* (
         threadId: CodexThreadId,
         turnId: CodexTurnId
@@ -4208,6 +4255,7 @@ export const codexAppServerLayer = (
         resumeThread,
         listThreadTurns,
         startTurn,
+        steerTurn,
         interruptTurn,
         listBackgroundTerminals,
         terminateBackgroundTerminal,

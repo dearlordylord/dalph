@@ -1,6 +1,6 @@
 import type { ResultRecoveryRequestId } from "../workflow/protocols/result-recovery/events.js"
 /* eslint-disable max-lines -- Durable workflow record keys stay in one complete, searchable vocabulary. */
-import { type AttemptId } from "@dalph/contracts"
+import { type AttemptId, type ExecutorGuidanceRequestId } from "@dalph/contracts"
 import type { RemoteBaselineId } from "../workflow/protocols/direct-publication/baseline-events.js"
 import { type OperationId } from "../workflow/identity.js"
 import { type JournalPosition, JournalRecordKey } from "./identity.js"
@@ -592,3 +592,10 @@ export const resultRecoveryContinueAuthorizedRecordKey = (requestId: ResultRecov
 /** One retained predecessor can acknowledge only one explicit result-recovery successor. */
 export const resultRecoveryAttemptReplacedRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`result-recovery-replacement:${attemptId}`)
+
+export const executorGuidanceAdmittedRecordKey = (requestId: ExecutorGuidanceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`executor-guidance:${requestId}:admitted`)
+export const executorGuidanceDispatchIntendedRecordKey = (requestId: ExecutorGuidanceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`executor-guidance:${requestId}:dispatch-intended`)
+export const executorGuidanceObservedRecordKey = (requestId: ExecutorGuidanceRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`executor-guidance:${requestId}:observed`)

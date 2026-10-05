@@ -1,4 +1,7 @@
 import {
+  ExecutorGuidanceRequestId,
+  ExecutorGuidanceTarget,
+  ExecutorGuidanceTransmission,
   PlannedAttemptExecutorWriterCustody,
   AcceptedResult,
   AttemptId,
@@ -14,6 +17,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import {
+  ExecutorGuidanceMetadata,
   ResultRecoveryDirection,
   ResultRecoveryRequestId,
   ResultRecoverySubject,
@@ -311,6 +315,9 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     plannedAttempt: PlannedTaskAttempt,
     witness: PlannedAttemptContinuationWitness
   },
+  ExecutorGuidanceAdmitted: { metadata: ExecutorGuidanceMetadata },
+  ExecutorGuidanceDispatchIntended: { requestId: ExecutorGuidanceRequestId, target: ExecutorGuidanceTarget },
+  ExecutorGuidanceObserved: { requestId: ExecutorGuidanceRequestId, disposition: ExecutorGuidanceTransmission },
   ResultRecoveryDirected: {
     direction: ResultRecoveryDirection,
     requestId: ResultRecoveryRequestId,

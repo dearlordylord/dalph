@@ -2,6 +2,9 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Match, Schema, SchemaParser } from "effect"
 import {
+  ExecutorGuidanceAdmittedEvent,
+  ExecutorGuidanceDispatchIntendedEvent,
+  ExecutorGuidanceObservedEvent,
   AttemptChoiceAppliedEvent,
   ResultRecoveryDirectedEvent,
   ResultRecoveryAttemptReplacedEvent,
@@ -1195,6 +1198,17 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
     Match.when(isIntegrationPreparationEvent, recordIntegrationPreparationEntry),
     Match.when(isGitObservationEvent, recordGitObservationEntry),
     Match.when(isTrackerEvent, recordTrackerEntry),
+    Match.tag("ExecutorGuidanceAdmitted", (value) => ({ _tag: value._tag, metadata: value.metadata })),
+    Match.tag("ExecutorGuidanceDispatchIntended", (value) => ({
+      _tag: value._tag,
+      requestId: value.requestId,
+      target: value.target
+    })),
+    Match.tag("ExecutorGuidanceObserved", (value) => ({
+      _tag: value._tag,
+      requestId: value.requestId,
+      disposition: value.disposition
+    })),
     Match.when(isExecutorEvent, recordExecutorEntry),
     Match.tag("ResultRecoveryAttemptReplaced", (value) => ({
       _tag: value._tag,
@@ -1885,6 +1899,15 @@ const eventForOtherRecordedEntry = (
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent =>
   Match.value(entry).pipe(
+    Match.tag("ExecutorGuidanceAdmitted", (value) =>
+      ExecutorGuidanceAdmittedEvent.make({ ...value, version: workflowJournalEventVersion })
+    ),
+    Match.tag("ExecutorGuidanceDispatchIntended", (value) =>
+      ExecutorGuidanceDispatchIntendedEvent.make({ ...value, version: workflowJournalEventVersion })
+    ),
+    Match.tag("ExecutorGuidanceObserved", (value) =>
+      ExecutorGuidanceObservedEvent.make({ ...value, version: workflowJournalEventVersion })
+    ),
     Match.tag("ResultRecoveryAttemptReplaced", (value) =>
       ResultRecoveryAttemptReplacedEvent.make({ ...value, version: workflowJournalEventVersion })
     ),
@@ -2353,6 +2376,9 @@ type RecordedPresentationResidualEntry = Exclude<
 
 const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string =>
   Match.value(entry).pipe(
+    Match.tag("ExecutorGuidanceAdmitted", () => "Dalph admitted one informational request without retaining its text."),
+    Match.tag("ExecutorGuidanceDispatchIntended", () => "Dalph recorded one selected-turn guidance intent."),
+    Match.tag("ExecutorGuidanceObserved", (value) => `Dalph recorded guidance disposition ${value.disposition._tag}.`),
     Match.tag(
       "ResultRecoveryAttemptReplaced",
       (value) =>

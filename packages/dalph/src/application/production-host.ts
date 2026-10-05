@@ -89,6 +89,8 @@ import {
 import {
   Context,
   Crypto,
+  Encoding,
+  Result,
   Deferred,
   Effect,
   Layer,
@@ -497,6 +499,7 @@ const guardedCodexAppServerLayer = <E, R>(
       const appServer = yield* CodexAppServer
       const listThreads = appServer.listThreads
       const listThreadTurns = appServer.listThreadTurns
+      const steerTurn = appServer.steerTurn
       return CodexAppServer.of({
         ...appServer,
         startThread: (cwd, ownedThreadToken) =>
@@ -511,6 +514,12 @@ const guardedCodexAppServerLayer = <E, R>(
           : { listThreadTurns: (threadId) => requestBoundary.run("thread/turns/list", listThreadTurns(threadId)) }),
         startTurn: (threadId, cwd, text, ownedTurnToken) =>
           requestBoundary.run("turn/start", appServer.startTurn(threadId, cwd, text, ownedTurnToken)),
+        ...(steerTurn === undefined
+          ? {}
+          : {
+              steerTurn: (threadId, turnId, text, messageId) =>
+                requestBoundary.run("turn/steer", steerTurn(threadId, turnId, text, messageId))
+            }),
         interruptTurn: (threadId, turnId) =>
           requestBoundary.run("turn/interrupt", appServer.interruptTurn(threadId, turnId)),
         listBackgroundTerminals: (threadId) =>
@@ -1363,6 +1372,66 @@ export const withDecodedProductionRepositoryHost = <
         registerObservationDrain: applicationExit.registerProcessLocalDrain,
         executeAttachedCommand: Effect.fn("ProductionHost.executeAttachedCommand")(function* (request) {
           const owner = Context.getOption(run, RunReactivationOwner)
+          if (request.operation._tag === "SendExecutorGuidance") {
+            const guidanceRequestId = request.operation.guidanceRequestId
+            const send = Option.isSome(bootstrap) ? bootstrap.value.operatorControl.sendExecutorGuidance : undefined
+            if (send === undefined)
+              return yield* Effect.fail<RunningHostError>({
+                _tag: "CommandFailed",
+                operation: "SendExecutorGuidance",
+                stage: "BeforeApplication",
+                causeTag: "RunOwnerUnavailable",
+                detail: "The guidance Run owner is unavailable."
+              })
+            const decoded = Encoding.decodeBase64(request.operation.textBase64)
+            if (Result.isFailure(decoded))
+              return yield* Effect.fail<RunningHostError>({
+                _tag: "InvalidRequest",
+                fieldPath: "/operation/text",
+                code: "GuidanceTextInvalid"
+              })
+            const text = yield* Effect.try({
+              try: () => new TextDecoder("utf-8", { fatal: true }).decode(decoded.success),
+              catch: (): RunningHostError => ({
+                _tag: "InvalidRequest",
+                fieldPath: "/operation/text",
+                code: "GuidanceTextInvalid"
+              })
+            })
+            const disposition = yield* send({
+              attemptId: request.operation.attemptId,
+              requestId: request.operation.guidanceRequestId,
+              text
+            }).pipe(
+              Effect.mapError(
+                (failure): RunningHostError =>
+                  failure._tag === "SchemaError" ||
+                  failure._tag === "ExecutorGuidanceIdentityContradiction" ||
+                  failure._tag === "JournaledRunNotActive" ||
+                  failure._tag === "ApplicationExiting"
+                    ? {
+                        _tag: "CommandFailed",
+                        operation: "SendExecutorGuidance",
+                        stage: "BeforeApplication",
+                        causeTag: failure._tag,
+                        detail: "The exact guidance request was refused."
+                      }
+                    : {
+                        _tag: "CommandOutcomeUnknown",
+                        operation: "SendExecutorGuidance",
+                        requestId: request.requestId,
+                        guidanceRequestId,
+                        phase: "AdmittedCompletionUnconfirmed",
+                        acceptedAt: null
+                      }
+              )
+            )
+            return {
+              _tag: "ExecutorGuidanceResult" as const,
+              guidanceRequestId: request.operation.guidanceRequestId,
+              disposition
+            }
+          }
           if (request.operation._tag === "ApplyResultRecoveryDirection") {
             if (Option.isNone(bootstrap) || Option.isNone(owner))
               return yield* Effect.fail<RunningHostError>({

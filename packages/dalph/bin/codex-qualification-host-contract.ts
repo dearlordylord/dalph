@@ -1,6 +1,10 @@
-import { PlannedAttemptExecutorProjection, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import {
+  ExecutorGuidanceTransmission,
+  PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport
+} from "@dalph/contracts"
 import { ApplicationExitResult, PlannedAttemptExecutorCommandOrdinal } from "@dalph/orchestrator"
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 
 /** Commands accepted by the disposable built host used to qualify issue #75. */
 export const CodexQualificationAction = Schema.Literals([
@@ -21,6 +25,7 @@ export const CodexQualificationAction = Schema.Literals([
   "suspend",
   "interrupt",
   "settle",
+  "exercise-guidance",
   "exercise-suspension",
   "exercise-terminal-suspension",
   "exit",
@@ -62,6 +67,13 @@ export const CodexQualificationHostEvent = Schema.Union([
     report: PlannedAttemptExecutorReport
   }),
   Schema.Struct({ event: Schema.Literal("projection"), projection: PlannedAttemptExecutorProjection }),
+  Schema.Struct({
+    event: Schema.Literal("guidance"),
+    phase: Schema.Literals(["Active", "Completed"]),
+    providerPreconditionRejected: Schema.optionalKey(Schema.Boolean),
+    sameOwner: Schema.Boolean,
+    disposition: ExecutorGuidanceTransmission
+  }),
   Schema.Struct({ event: Schema.Literal("suspension-ready") }),
   Schema.Struct({ event: Schema.Literal("suspension-requested") }),
   Schema.Struct({ event: Schema.Literal("suspension-unresolved"), detail: Schema.String }),
@@ -71,3 +83,9 @@ export const CodexQualificationHostEvent = Schema.Union([
   Schema.Struct({ event: Schema.Literal("failure"), detail: Schema.String })
 ]).annotate({ parseOptions: { onExcessProperty: "error" } })
 export type CodexQualificationHostEvent = typeof CodexQualificationHostEvent.Type
+
+/** Stable detail extraction shared by native host failure records. */
+export const qualificationFailureDetail = (cause: unknown): string => {
+  const decoded = Schema.decodeUnknownOption(Schema.Struct({ detail: Schema.String }))(cause)
+  return Option.isSome(decoded) ? decoded.value.detail : String(cause)
+}

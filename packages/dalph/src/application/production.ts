@@ -597,7 +597,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           applicationExit,
           defaultJournalMaintenanceObservation,
           undefined,
-          runtimeBoundaries.remotePublicationTarget
+          runtimeBoundaries.remotePublicationTarget,
+          true,
+          { crypto, executor }
         ).pipe(Layer.provide(journalLayer)),
         Layer.mergeAll(
           Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary),

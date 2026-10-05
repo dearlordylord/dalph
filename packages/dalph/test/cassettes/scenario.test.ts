@@ -1,9 +1,19 @@
+import {
+  ExecutorGuidanceAdmittedEvent,
+  ExecutorGuidanceDispatchIntendedEvent,
+  ExecutorGuidanceObservedEvent,
+  ExecutorGuidancePayloadDigest,
+  ExecutorGuidancePayloadBytes
+} from "../../../orchestrator/src/workflow/protocols/executor-guidance/events.js"
 import { it } from "@effect/vitest"
 import { completeSingletonDeliveryCassette } from "../../test-support/complete-singleton-delivery.js"
 import { NodeCrypto } from "@effect/platform-node"
 import { Cause, Crypto, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Result, Schema } from "effect"
 import { expect } from "vitest"
 import {
+  ExecutorGuidanceRequestId,
+  ExecutorGuidanceSessionLocator,
+  ExecutorGuidanceTurnLocator,
   AcceptedResult,
   AttemptId,
   GitCommitSha,
@@ -7256,6 +7266,9 @@ it.effect(
         TaskWorkCapacityChanged: true,
         WorkflowRunBegan: true,
         WorkflowRunTerminated: true,
+        ExecutorGuidanceAdmitted: true,
+        ExecutorGuidanceDispatchIntended: true,
+        ExecutorGuidanceObserved: true,
         ResultRecoveryDirected: true,
         ResultRecoveryContinueAuthorized: true,
         ResultRecoveryAttemptReplaced: true,
@@ -8651,5 +8664,75 @@ it.effect("does not terminate an empty frontier while completion settlement is p
     expect(run.sawEmptyFrontierWhilePending).toBe(true)
     expect(run.failureTag).toBe("IntegrationFinality.CompletionClaimDidNotConverge")
     expect(run.journalTags).not.toContain("WorkflowRunTerminated")
+  })
+)
+
+it.effect("round-trips guidance metadata and refuses uncertainty without intent", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(runningAttemptRunCancellationAuthoredCassette)
+    const executingAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkExecuting"
+    )
+    expect(executingAt).toBeGreaterThan(0)
+    const records = run.records.slice(0, executingAt + 1)
+    const planned = records.find(({ event }) => event._tag === "TaskAttemptPlanned")?.event
+    if (planned?._tag !== "TaskAttemptPlanned") return yield* Effect.die("fixture needs its accepted immutable plan")
+    const plannedAttempt = planned.operation.plannedAttempt
+    const requestId = ExecutorGuidanceRequestId.make("cassette-guidance")
+    const guidance = [
+      ExecutorGuidanceAdmittedEvent.make({
+        metadata: {
+          requestId,
+          plannedAttempt,
+          payloadDigest: ExecutorGuidancePayloadDigest.make("a".repeat(64)),
+          payloadBytes: ExecutorGuidancePayloadBytes.make(11)
+        },
+        version: workflowJournalEventVersion
+      }),
+      ExecutorGuidanceDispatchIntendedEvent.make({
+        requestId,
+        target: {
+          plannedAttempt,
+          session: ExecutorGuidanceSessionLocator.make("cassette-session"),
+          turn: ExecutorGuidanceTurnLocator.make("cassette-turn")
+        },
+        version: workflowJournalEventVersion
+      }),
+      ExecutorGuidanceObservedEvent.make({
+        requestId,
+        disposition: { _tag: "Unknown" },
+        version: workflowJournalEventVersion
+      })
+    ]
+    const withEvents = (events: ReadonlyArray<JournalRecord["event"]>) => [
+      ...records,
+      ...events.map((event, ordinal) => ({
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        runId: run.runId,
+        position: JournalPosition.make(records.length + ordinal + 1)
+      }))
+    ]
+    const journal = withEvents(guidance)
+    const recorded = yield* projectRecordedCassette(journal)
+    expectRecordedRoundTrip(journal, recorded)
+    expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(recorded.entries.slice(-3).map((entry) => entry._tag)).toEqual(guidance.map((event) => event._tag))
+    const withoutIntent = withEvents(guidance.filter((event) => event._tag !== "ExecutorGuidanceDispatchIntended"))
+    expect(reduceWorkflowJournalHistory(run.runId, withoutIntent)._tag).toBe("InvalidWorkflowJournalHistory")
+    const admitted = guidance[0]
+    const intended = guidance[1]
+    if (admitted === undefined || intended === undefined) return yield* Effect.die("guidance metadata fixture missing")
+    const downgrade = withEvents([
+      admitted,
+      intended,
+      ExecutorGuidanceObservedEvent.make({
+        requestId,
+        disposition: { _tag: "Refused", reason: "PayloadLost" },
+        version: workflowJournalEventVersion
+      })
+    ])
+    expect(reduceWorkflowJournalHistory(run.runId, downgrade)._tag).toBe("InvalidWorkflowJournalHistory")
   })
 )

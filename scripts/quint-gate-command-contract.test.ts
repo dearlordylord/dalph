@@ -26,14 +26,14 @@ const freshTaskBlockStart = 47
 const freshTaskBlockEnd = 60
 
 describe("Quint gate command contract", () => {
-  it("accepts the independent 127-command contract", () => {
+  it("accepts the independent 146-command contract", () => {
     assertQuintGateCommandContract({ manifest: quintGateCommandManifest, executed: quintGateExpectedCommandCounts })
     expect(quintGateExpectedCommandCounts).toEqual({
-      total: 127,
-      typecheck: 19,
-      test: 56,
-      "sampled-run": 28,
-      verify: 24
+      total: 146,
+      typecheck: 23,
+      test: 64,
+      "sampled-run": 32,
+      verify: 27
     })
   })
 
@@ -117,9 +117,12 @@ describe("Quint gate command contract", () => {
       "test\u0000publication exhaustion batch grant batch/finality projection negative mutation profile",
       "sampled-run\u0000publication exhaustion batch grant batch/finality projection sampled model"
     ])
-    expect(quintGateCommandManifest.slice(-12).map(({ kind, name }) => `${kind}\u0000${name}`)).toEqual(
-      publicationBatchGrantQuintGateCommandKeys
+    const blockStart = quintGateCommandManifest.findIndex(
+      ({ name }) => name === "publication exhaustion batch grant model typecheck"
     )
+    expect(
+      quintGateCommandManifest.slice(blockStart, blockStart + 12).map(({ kind, name }) => `${kind}\u0000${name}`)
+    ).toEqual(publicationBatchGrantQuintGateCommandKeys)
     expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
   })
 
