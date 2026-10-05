@@ -171,6 +171,15 @@ const realBoundaries = {
   listeningSockets: ownedQuintListeningSockets
 }
 
+/** Pure launch prerequisites; validation cannot spawn or register a child. */
+export const validateOwnedQuintJava = ({ javaArguments, javaExecutable, javaUserHome }) => {
+  if (!isAbsolute(javaExecutable) || !isAbsolute(javaUserHome ?? ""))
+    throw new Error("Owned Apalache requires identified absolute Java executable and user.home")
+  const homeArguments = javaArguments.filter((argument) => argument.startsWith("-Duser.home="))
+  if (homeArguments.length !== 1 || homeArguments[0] !== `-Duser.home=${javaUserHome}`)
+    throw new Error("Owned Apalache Java arguments do not enforce the identified user.home")
+}
+
 /** Start only the identified server, then preserve its planned cancellation as
  * distinct evidence after checking; it is never a passed checker obligation. */
 export const withOwnedQuintServer = async ({
@@ -190,11 +199,7 @@ export const withOwnedQuintServer = async ({
   const context = inheritedCustody()
   if (context === undefined) throw new Error("Owned Apalache requires inherited exact-worktree admission and custody")
   signal?.throwIfAborted()
-  if (!isAbsolute(javaExecutable) || !isAbsolute(javaUserHome ?? ""))
-    throw new Error("Owned Apalache requires identified absolute Java executable and user.home")
-  const homeArguments = javaArguments.filter((argument) => argument.startsWith("-Duser.home="))
-  if (homeArguments.length !== 1 || homeArguments[0] !== `-Duser.home=${javaUserHome}`)
-    throw new Error("Owned Apalache Java arguments do not enforce the identified user.home")
+  validateOwnedQuintJava({ javaArguments, javaExecutable, javaUserHome })
   const boundaries = { ...realBoundaries, ...overrides }
   boundaries.assertPrerequisites()
   remainingExecutionMilliseconds("owned Apalache endpoint allocation")

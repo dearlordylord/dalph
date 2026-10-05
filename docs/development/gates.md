@@ -274,3 +274,33 @@ inputs of an application qualification command that does not execute them.
 This selection changes verification tooling only; Dalph runtime behavior and
 its accepted operational scenarios are unchanged. Formal input policy owns its
 separate model/toolchain scope.
+
+### Owned-server fixture timeout custody
+
+The [owned-server fixture](../../scripts/quint-owned-server.test.mjs) uses the existing bounded runner around the admitted
+wrapper. Its gate deadline bounds execution; the outer limit separately allows
+the gate's five-second termination grace and two-second absence observation.
+This changes test tooling only; it cannot change Dalph execution or deadlines.
+
+Starting with an admitted gate and one registered detached server, an enclosing runner cancellation
+signals the admitted owner through the same SIGTERM boundary used by timeout. If its event loop is temporarily busy, the
+owner has its existing shutdown grace to relay cancellation when responsive.
+The server must settle with its exact registered group absent, the ambient
+listener must remain usable, and interrupted checking must never qualify.
+`quint-owned-server.test.mjs` exercises this chronology in
+`delayed fixture event loop still settles cancellation and exact server absence`.
+
+The [fixture disposal owner](../../scripts/owned-server-fixture.mjs) checks custody.
+If an assertion, enclosing runner, or permanently unresponsive owner exits before
+absence proof, disposal rereads every run in the disposable repository. Existing
+custody reconciliation must prove all registered writers stopped before any
+removal. A live, unreadable, or unobserved writer refuses disposal and retains the
+repository, registration and fences at the reported path; use `gate:reconcile`
+after exact owned-writer recovery. Disposal never signals an ambient process or
+retries the qualification. Controlled disposal tests cover complete inventory and
+all three refusals without spawning processes. Existing output-route positive
+and changed-input negative tests retain their native input-guard obligations.
+
+Java executable/home validation is exercised directly without gate or server
+startup in `Java launch prerequisites reject missing, foreign and duplicate home
+without a process`; native launch success remains covered by the socket fixture.
