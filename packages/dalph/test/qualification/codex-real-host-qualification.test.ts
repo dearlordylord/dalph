@@ -1161,7 +1161,8 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(resumedReport.command).toBe("Resume")
         expect(resumedReport.report._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
-        expect(fixture.model.calls).toHaveLength(1)
+        await fixture.model.waitForCalls(2)
+        expect(fixture.model.calls).toHaveLength(2)
       } finally {
         await dispose(fixture, hosts)
       }

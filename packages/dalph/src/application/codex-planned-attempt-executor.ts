@@ -3701,9 +3701,10 @@ const makeCodexPlannedAttemptExecutorContext = (
         return yield* new CodexTurnBoundaryUnknown({})
       const current = yield* reconcile(attempt, correlation, record)
       if (current._tag !== "Terminal" && current._tag !== "Idle") return yield* new CodexTurnBoundaryUnknown({})
-      if ((yield* observeOwnedActivityByThreadId(record.threadId, correlation))._tag !== "Absent")
+      const recoveryCensus = yield* observeOwnedActivityByThreadId(record.threadId, correlation)
+      if (recoveryCensus._tag !== "Absent")
         return yield* new CodexActivityCensusUnknown({
-          detail: "retained result recovery requires freshly stopped exact writers"
+          detail: `retained result recovery requires freshly stopped exact writers: ${recoveryCensus._tag === "ExactLive" ? recoveryCensus.activities.map((activity) => activity._tag).join(", ") : recoveryCensus.detail}`
         })
       const token = yield* freshOwnedTurnToken
       const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
