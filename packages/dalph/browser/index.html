@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dalph task graph</title><link rel="stylesheet" href="/dalph/page/graph.css"></head>
+<body><header><div><p class="eyebrow">Dalph</p><h1>Task graph</h1><p id="connection" role="status">Connecting to the running host…</p></div><button id="refresh" disabled>Refresh graph</button></header>
+<main><section class="graph-panel"><p id="freshness" role="status">Waiting for a complete tracker observation.</p><dalph-delivery-graph id="graph"></dalph-delivery-graph><p id="legend"></p></section>
+<aside><h2>Task facts</h2><p>Select a task in the graph.</p><pre id="task"></pre><h2>Run</h2><p id="run"></p><h2>Tracker</h2><p id="tracker"></p></aside></main>
+<script type="module" src="/dalph/page/graph.js"></script></body></html>

@@ -1,0 +1,5 @@
+{
+  "extends": "../../../prototypes/reducer-lab/tsconfig.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["*.ts"]
+}

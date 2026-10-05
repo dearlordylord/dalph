@@ -15,6 +15,7 @@
     "vitest.config.ts"
   ],
   "exclude": [
+    "packages/dalph/browser/**",
     "**/node_modules/**",
     "**/dist/**",
     "**/coverage/**",

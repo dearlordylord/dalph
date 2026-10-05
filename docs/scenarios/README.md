@@ -18,6 +18,7 @@ Git history.
 - [Terminate one globally settled Run](terminate-settled-run.md)
 - [Alice's changing graph settles as Blocked](changing-graph-finality.md)
 - [CLI and MCP clients reach one separately started Dalph host](running-host-clients.md)
+- [Alice inspects the running host's complete task graph](live-task-graph-page.md)
 - [Alice sends information to one exact active implementation turn](operator-guidance-to-active-executor.md)
 - [Keep failures visible with actionable diagnostics](actionable-failure-diagnostics.md)
 - [Attach to an explicit Docker IPv4 address](running-host-docker-ip.md)

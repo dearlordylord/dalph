@@ -91,7 +91,9 @@ publication commands keep their existing meanings.
 `LocalHostAddress` is an explicitly provided HTTP origin with a canonical literal IPv4 address, nonzero TCP port, and no credentials/path/query/fragment. The host
 binds only the requested literal IPv4 address. There is no default port, discovery,
 redirect following, hostname resolution, proxy routing, or automatic startup.
-Reject browser Origin headers and nonmatching Host authorities; this is an explicitly selected
+Reject nonmatching Host authorities and foreign Origin headers. Browser-origin
+control requests remain refused; exact same-origin observation is permitted by
+[the live graph page](live-task-graph-page.md). This is an explicitly selected
 trusted-network boundary, not remote authentication. An occupied port fails startup
 without attaching to its occupant. Advertise only after exact Run establishment
 and successful bind. Host stdout emits one JSON `HostReady` descriptor, then

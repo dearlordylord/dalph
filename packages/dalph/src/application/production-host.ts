@@ -105,6 +105,7 @@ import {
 // eslint-disable-next-line import/no-nodejs-modules -- The production host selects its own Node executable for task preparation.
 import nodeProcess from "node:process"
 import { isolatedPlannedAttemptExecutorLayer } from "./isolated-planned-attempt-executor.js"
+import { runningHostInspectionFromServices, type RunningHostInspectionService } from "./running-host-inspection.js"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -205,6 +206,8 @@ export class ProductionPassiveControlUnavailable extends Schema.TaggedError<Prod
 
 /** Listener ownership survives delivery settlement and typed activation failure. */
 export interface ProductionRunningHostObservation<E> extends ProductionHostObservation {
+  /** Acquires one listener-scoped inspection owner from the existing reader. */
+  readonly inspection?: Effect.Effect<RunningHostInspectionService, never, Scope.Scope>
   readonly target: ProductionRepositoryHostConfiguration["target"]
   readonly readRunControl: Effect.Effect<ProductionPassiveRunControl, ProductionPassiveControlUnavailable>
   readonly activationFailure: Effect.Effect<Option.Option<E>>
@@ -1203,7 +1206,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
               : { workflowGitCommandObserver: adapters.workflowGitCommandObserver })
           }
         ).pipe(
-          Layer.provide(Layer.succeed(TrackerGraphReader, trackerReader)),
+          Layer.provideMerge(Layer.succeed(TrackerGraphReader, trackerReader)),
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
           Layer.provide(planningLayer),
           Layer.provide(NodeCrypto.layer),
@@ -1356,7 +1359,9 @@ export const withDecodedProductionRepositoryHost = <
           Stream.takeUntil((state) => state._tag === "Closed")
         )
       )
+      const inspection = runningHostInspectionFromServices(run, configuration.target)
       const observation = {
+        ...(Option.isSome(inspection) ? { inspection: inspection.value } : {}),
         acceptedHistory: source.acceptedHistory,
         current: diagnosticCurrent,
         runTermination: source.runTermination,
