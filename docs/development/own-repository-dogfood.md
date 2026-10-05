@@ -241,6 +241,106 @@ If remote publication is retained, select its exact subject and use the
 [public publication controls](walkthrough.md#resume-a-retained-remote-publication)
 after repairing the cause; a receipt does not by itself prove delivery.
 
+## Attach CLI and MCP to a separately started host
+
+The Operator starts one foreground host from the pinned executable; attached
+clients use that host's selected Run and do not start another coordinator.
+Apply the same pins, dedicated stores, actual prerequisite graph and stop time
+above. For a grouped root, preserve its native sub-issue and prerequisite edges
+and wait for actual prerequisite success. The
+[running-host contract](../scenarios/running-host-clients.md) governs attachment,
+refresh, watch and termination.
+
+In the host terminal, retain stdout, stderr and the actual process status using
+the same conditional wrapper as the previous invocation, replacing its command
+with:
+
+```bash
+export DALPH_HOST=http://127.0.0.1:43127
+mise exec -- node "${DALPH_EXECUTABLE}" host \
+  --production --config "${DALPH_CONFIG}" --listen "${DALPH_HOST}" \
+  "github:dearlordylord/dalph#${DALPH_ISSUE}"
+```
+
+Choose an unused explicit literal IPv4 address and port. Host stdout emits
+`HostReady` only after Run establishment and successful bind. Keep the host
+terminal open; normal Run termination leaves the host available for inspection.
+
+In a separate client terminal, restore the pinned executable and the same
+`DALPH_HOST`. Read the descriptor, verify `selectedRun.target`, and copy its exact
+`selectedRun.runId` into `DALPH_RUN`; do not infer it from an issue number:
+
+```bash
+mise exec -- node "${DALPH_EXECUTABLE}" attach descriptor --host "${DALPH_HOST}" --json
+export DALPH_RUN=REPLACE_WITH_EXACT_SELECTED_RUN_ID
+mise exec -- node "${DALPH_EXECUTABLE}" attach snapshot --host "${DALPH_HOST}" --run "${DALPH_RUN}" --json
+mise exec -- node "${DALPH_EXECUTABLE}" attach refresh --host "${DALPH_HOST}" --run "${DALPH_RUN}" --whole-graph --json
+mise exec -- node "${DALPH_EXECUTABLE}" attach watch --host "${DALPH_HOST}" --run "${DALPH_RUN}" --json
+```
+
+Retain the descriptor, snapshot, refresh envelope and watch frames as separate
+observations. `RefreshSubmitted` means the owner hint returned; it proves no
+completed tracker read or later graph publication. Refresh preserves Pause.
+Inspect a later snapshot's `graph` and retain independent tracker observations
+to establish the fresh graph; no refresh receipt correlates the two. Snapshot
+and watch reads are passive and do not poll the tracker.
+
+Configure an MCP client's stdio server to execute the same pinned binary with
+these arguments (expand the variables to absolute values in client configuration):
+
+```bash
+mise exec -- node "${DALPH_EXECUTABLE}" mcp --host "${DALPH_HOST}" --run "${DALPH_RUN}"
+```
+
+After MCP initialization, read `dalph://host/descriptor` with `resources/read`
+and verify the same selected Run. Call these tools with the exact RunId:
+
+| Tool | Arguments |
+| --- | --- |
+| `dalph_read_snapshot` | `{"runId":"RUN"}` |
+| `dalph_refresh` | `{"runId":"RUN","interest":{"_tag":"WholeGraph"}}` |
+| `dalph_watch_snapshots` | `{"runId":"RUN"}` |
+| `dalph_read_run_control` | `{"runId":"RUN"}` |
+
+Replace `RUN` with the descriptor's value. Tools return the shared envelope in
+`structuredContent` and a JSON text copy. For `WatchOpened`, retain the returned
+`subscriptionId` and `uri`, call `resources/subscribe` on that URI, then
+`resources/read` for the pinned initial frame. On each
+`notifications/resources/updated`, read the URI again for the latest complete
+pending frame. Notifications carry a URI, not an inline snapshot. Slow readers
+can miss intermediate publications; watch is not Journal replay. Consume pending
+frames within the descriptor's limits. Release the watch with
+`dalph_close_watch {"runId":"RUN","subscriptionId":"RETURNED_ID"}` or
+`resources/unsubscribe`.
+
+Closing the CLI watch or MCP session releases only client resources; delivery
+continues in the host. Reattach through a fresh descriptor handshake after
+connection loss. A watch `Closed` frame proves source closure; bare EOF proves
+no successful watch completion. Neither source closure nor a graph showing
+closed issues proves accepted Run termination. Read it separately:
+
+```bash
+mise exec -- node "${DALPH_EXECUTABLE}" attach control --host "${DALPH_HOST}" --run "${DALPH_RUN}" --json
+```
+
+Require `RunTerminated` with `terminationEvidence._tag: "Accepted"` and
+`disposition: "Completed"` for normal completion, plus the exact publication,
+tracker completion and settled-resource evidence below. `Pending` and
+`FinalityFailed` remain incomplete. Then request graceful Exit with Ctrl-C in
+the host terminal and retain its stderr `applicationExit` result and actual
+process status separately. At the recorded stop time request Exit even if the
+Run is incomplete and preserve all artifacts. An uncertain command outcome
+requires owning-boundary reconciliation before retry.
+
+These spellings and MCP tools are source-checked against the shipped
+[CLI](../../packages/dalph/src/application/running-host-cli.ts),
+[MCP tools](../../packages/dalph/src/application/running-host-mcp-tools.ts),
+[bridge](../../packages/dalph/src/application/running-host-mcp.ts) and
+[watch resource owner](../../packages/dalph/src/application/running-host-mcp-watch.ts).
+Interfaces added after a host's source pin require a later separately pinned
+host; keep the live executable unchanged. This walkthrough adds no workflow or
+runtime behavior and is not evidence that a beta Run completed.
+
 ## Verify delivery and retain the exact evidence
 
 After termination, independently observe Git and GitHub:
