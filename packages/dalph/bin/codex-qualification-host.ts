@@ -333,7 +333,16 @@ const configurationProgram = Effect.gen(function* () {
             nonce: "native-explicit-continue",
             correlation
           })
-          const initial = yield* executor.continueRejectedResult(request, authorization)
+          const initial = yield* executor.continueRejectedResult(request, authorization).pipe(
+            Effect.catch((failure) =>
+              Effect.gen(function* () {
+                const census = yield* Ref.get(lastCensus)
+                return yield* new QualificationConfigurationFailure({
+                  detail: `${detailOf(failure)}; last census=${census}`
+                })
+              })
+            )
+          )
           yield* writeEvent(reportEvent("ContinueRejectedResult", initial))
           if (initial._tag === "ExecutorWorkExecuting")
             yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation, store, lastCensus)))
