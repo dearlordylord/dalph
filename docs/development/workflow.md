@@ -14,6 +14,18 @@
   Run the fresh `pnpm typecheck` at a coherent milestone or to distinguish a
   suspected stale diagnostic. Existing submission and qualification commands
   keep their fresh checks. The incremental cache supplies no qualification credit.
+- **Publish one coherent candidate.** Finish the intended target merge, scoped
+  checks and review before pushing the final task head. Read the remote branch
+  SHA back and compare it with the qualified local head before creating a PR.
+  Creating the PR and then pushing a pending merge triggers redundant CI events.
+  During CI, keep that candidate frozen and use another worktree for independent
+  repairs or documentation. Changes that repair a demonstrated failed boundary
+  form an explicitly new candidate after the focused repair passes.
+- **Observe the exact CI run.** Bind observations to workflow, head/candidate,
+  run ID and attempt. A PR rollup can temporarily show an older cancelled run's
+  aggregate while its replacement is executing. Inspect the named run and its
+  stage evidence to distinguish them; never credit the cancelled run's missing
+  stages or restart the live replacement merely because the rollup is red.
 - **Choose the next action before waiting.** When sending a candidate to CI,
   select independent work in another worktree or read-only planning for a blocked
   successor. Return to the job on completion, failure evidence, or its recorded
