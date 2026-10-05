@@ -1,3 +1,4 @@
+import { observeRecoveryWriterCensus } from "./codex-recovery-census.js"
 import { ProviderResultRecoveryRecord } from "./provider-result-recovery.js"
 /* eslint-disable max-lines -- The bounded executor chronology stays co-located for auditability. */
 import {
@@ -3701,7 +3702,9 @@ const makeCodexPlannedAttemptExecutorContext = (
         return yield* new CodexTurnBoundaryUnknown({})
       const current = yield* reconcile(attempt, correlation, record)
       if (current._tag !== "Terminal" && current._tag !== "Idle") return yield* new CodexTurnBoundaryUnknown({})
-      const recoveryCensus = yield* observeOwnedActivityByThreadId(record.threadId, correlation)
+      const recoveryCensus = yield* observeRecoveryWriterCensus(
+        observeOwnedActivityByThreadId(record.threadId, correlation)
+      )
       if (recoveryCensus._tag !== "Absent")
         return yield* new CodexActivityCensusUnknown({
           detail: `retained result recovery requires freshly stopped exact writers: ${recoveryCensus._tag === "ExactLive" ? recoveryCensus.activities.map((activity) => activity._tag).join(", ") : recoveryCensus.detail}`
