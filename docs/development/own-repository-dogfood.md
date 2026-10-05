@@ -154,8 +154,8 @@ const configuration = {
   codexToolEffectPolicy: {
     defaultLimitMilliseconds: 420000,
     longCommands: [
-      { command: "/bin/bash -lc 'pnpm check:lab'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 420000 },
-      { command: "/bin/bash -lc 'pnpm check:submit'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 900000 }
+      { command: "/bin/bash -lc 'mise exec -- pnpm check:lab'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 420000 },
+      { command: "/bin/bash -lc 'mise exec -- pnpm check:submit'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 900000 }
     ]
   }
 }
