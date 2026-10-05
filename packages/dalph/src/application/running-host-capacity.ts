@@ -2,14 +2,25 @@ import type { RunId } from "@dalph/contracts"
 import type { JournaledRunBootstrap } from "@dalph/orchestrator"
 import { Effect } from "effect"
 import type { ProductionRunningHostObservation, ProductionPassiveRunControl } from "./production-host.js"
-import type { RunningHostCommandRequest, RunningHostError } from "./running-host-contract.js"
+import type { RunningHostCommandRequest, RunningHostError, RunningHostValue } from "./running-host-contract.js"
+
+type CapacityCommandRequest = RunningHostCommandRequest & {
+  readonly operation: Extract<RunningHostCommandRequest["operation"], { readonly _tag: "SetCapacity" }>
+}
+/** The host borrows active controls; these effects never reconstruct an inactive policy. */
+export interface RunningHostCapacity {
+  readonly read: Effect.Effect<Extract<RunningHostValue, { readonly _tag: "CapacityRead" }>, RunningHostError>
+  readonly set: (
+    request: CapacityCommandRequest
+  ) => Effect.Effect<Extract<RunningHostValue, { readonly _tag: "CapacityApplied" }>, RunningHostError>
+}
 
 /** Capacity belongs to an active runtime lease. Accepted history only proves termination. */
 export const makeRunningHostCapacity = (
   runId: RunId,
   controls: Pick<JournaledRunBootstrap["Service"]["operatorControl"], "readTaskWorkCapacity" | "setTaskWorkCapacity">,
   readRunControl: Effect.Effect<ProductionPassiveRunControl, unknown>
-) => {
+): RunningHostCapacity => {
   const inactive = Effect.fn("RunningHostCapacity.inactive")(function* (operation: "ReadCapacity" | "SetCapacity") {
     const control = yield* readRunControl.pipe(
       Effect.mapError(
@@ -41,11 +52,7 @@ export const makeRunningHostCapacity = (
           : { _tag: "ReadFailed", causeTag: error._tag, detail: "The active capacity policy could not be read." }
     )
   )
-  const set = Effect.fn("RunningHostCapacity.set")(function* (
-    request: RunningHostCommandRequest & {
-      readonly operation: Extract<RunningHostCommandRequest["operation"], { readonly _tag: "SetCapacity" }>
-    }
-  ) {
+  const set = Effect.fn("RunningHostCapacity.set")(function* (request: CapacityCommandRequest) {
     return yield* controls
       .setTaskWorkCapacity({
         runId,
