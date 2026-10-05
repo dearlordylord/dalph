@@ -110,9 +110,18 @@ installed workspace dependencies, run
 `pnpm check:all --candidate=<exact Base SHA>` for the exact
 committed HEAD. This runs the preflight and delivery, recorded-catalog, and
 coverage commands selected from the same stage algebra as hosted quality CI.
-For a PR, read its current `baseRefOid` and `headRefOid` (for example with
-`gh pr view <number> --json baseRefOid,headRefOid`) immediately before the
-local run. Verify that the local HEAD equals `headRefOid`, pass `baseRefOid`
+For a PR, set `DALPH_PR_NUMBER` to its number and read its recorded Base and HEAD
+immediately before the local run:
+
+```bash
+gh api "repos/dearlordylord/dalph/pulls/${DALPH_PR_NUMBER}" \
+  --jq '{baseRefOid: .base.sha, headRefOid: .head.sha}'
+```
+
+These API values match `baseRefOid` and `headRefOid` even when the installed
+`gh pr view --json` does not expose those fields. The PR's recorded Base can
+lag the current `master` head; it is not a fresh Git-target observation.
+Verify that the local HEAD equals `headRefOid`, pass `baseRefOid`
 to `--candidate`, and set `DALPH_DIAGNOSTICS_BASE` to that same Base for earlier
 changed-file diagnostics. A local `origin/master` may lag the PR Base; do not
 infer the exact Base from it. If hosted CI checks a synthetic merge commit,
