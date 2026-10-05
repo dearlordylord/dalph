@@ -1,3 +1,4 @@
+import { observeRecoveryWriterCensus } from "./codex-recovery-census.js"
 import { ProviderResultRecoveryRecord } from "./provider-result-recovery.js"
 /* eslint-disable max-lines -- The bounded executor chronology stays co-located for auditability. */
 import {
@@ -1819,10 +1820,16 @@ const makeCodexPlannedAttemptExecutorContext = (
         completionHintAuthorized
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
       const toolEffects = yield* listToolEffects(correlation)
-      const census = yield* observeOwnedActivity(
-        reconciliation.thread,
-        toolEffects.every((effect) => effect._tag === "Completed")
-      )
+      const freshIncarnation =
+        record._tag === "Terminal" &&
+        record.turnStartIncarnation !== undefined &&
+        record.turnStartIncarnation !== app.incarnation
+      const census = yield* freshIncarnation
+        ? observeRecoveryWriterCensus(observeOwnedActivityByThreadId(observedRecord.threadId, correlation))
+        : observeOwnedActivity(
+            reconciliation.thread,
+            toolEffects.every((effect) => effect._tag === "Completed")
+          )
       if (censusHasActivity(census)) {
         return {
           continueLifecycleObservation: canContinueActivityObservation(census, terminalReadAuthorized),
@@ -3728,9 +3735,12 @@ const makeCodexPlannedAttemptExecutorContext = (
         return yield* new CodexTurnBoundaryUnknown({})
       const current = yield* reconcile(attempt, correlation, record)
       if (current._tag !== "Terminal" && current._tag !== "Idle") return yield* new CodexTurnBoundaryUnknown({})
-      if ((yield* observeOwnedActivityByThreadId(record.threadId, correlation))._tag !== "Absent")
+      const recoveryCensus = yield* observeRecoveryWriterCensus(
+        observeOwnedActivityByThreadId(record.threadId, correlation)
+      )
+      if (recoveryCensus._tag !== "Absent")
         return yield* new CodexActivityCensusUnknown({
-          detail: "retained result recovery requires freshly stopped exact writers"
+          detail: `retained result recovery requires freshly stopped exact writers: ${recoveryCensus._tag === "ExactLive" ? recoveryCensus.activities.map((activity) => activity._tag).join(", ") : recoveryCensus.detail}`
         })
       const token = yield* freshOwnedTurnToken
       const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)

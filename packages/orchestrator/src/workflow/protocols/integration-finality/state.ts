@@ -279,8 +279,10 @@ const exactOccurrencesFor = (
 
 const latest = <A>(values: ReadonlyArray<A>): A | undefined => values[values.length - 1]
 
+// Both sources represent immutable prefixes. Appending creates a new key;
+// repeated projection of an indexed prefix need not revalidate its occurrences.
 const finalityStateByPrefix = new WeakMap<
-  ReadonlyArray<IntegrationFinalityJournalOccurrence>,
+  IntegrationFinalityHistorySource,
   Map<string, IntegrationFinalityState | undefined>
 >()
 
@@ -399,11 +401,12 @@ export const deriveIntegrationFinalityStateFor = (
   records: IntegrationFinalityHistorySource,
   claim: CompletionTaskClaim
 ): IntegrationFinalityState | undefined => {
-  if (isJournalRecordEvidence(records)) return deriveIntegrationFinalityStateFromEvidence(records, claim)
   const claimKey = finalityClaimKey(claim)
   const cachedByClaim = finalityStateByPrefix.get(records)
   if (cachedByClaim?.has(claimKey) === true) return cachedByClaim.get(claimKey)
-  const state = deriveIntegrationFinalityState(records, claim)
+  const state = isJournalRecordEvidence(records)
+    ? deriveIntegrationFinalityStateFromEvidence(records, claim)
+    : deriveIntegrationFinalityState(records, claim)
   const cache = cachedByClaim ?? new Map<string, IntegrationFinalityState | undefined>()
   cache.set(claimKey, state)
   finalityStateByPrefix.set(records, cache)

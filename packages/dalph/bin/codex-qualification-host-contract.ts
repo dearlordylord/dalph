@@ -4,7 +4,7 @@ import {
   PlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import { ApplicationExitResult, PlannedAttemptExecutorCommandOrdinal } from "@dalph/orchestrator"
-import { Option, Schema } from "effect"
+import { Schema } from "effect"
 
 /** Commands accepted by the disposable built host used to qualify issue #75. */
 export const CodexQualificationAction = Schema.Literals([
@@ -66,6 +66,13 @@ export const CodexQualificationHostEvent = Schema.Union([
     command: Schema.Literals(["Begin", "Observe", "Resume", "Suspend", "ContinueRejectedResult"]),
     report: PlannedAttemptExecutorReport
   }),
+  Schema.Struct({
+    event: Schema.Literal("resume-observation"),
+    retainedState: Schema.String,
+    threadStatus: Schema.String,
+    ownedTurnStatus: Schema.String,
+    persistedTurnStatus: Schema.String
+  }),
   Schema.Struct({ event: Schema.Literal("projection"), projection: PlannedAttemptExecutorProjection }),
   Schema.Struct({
     event: Schema.Literal("guidance"),
@@ -83,9 +90,3 @@ export const CodexQualificationHostEvent = Schema.Union([
   Schema.Struct({ event: Schema.Literal("failure"), detail: Schema.String })
 ]).annotate({ parseOptions: { onExcessProperty: "error" } })
 export type CodexQualificationHostEvent = typeof CodexQualificationHostEvent.Type
-
-/** Stable detail extraction shared by native host failure records. */
-export const qualificationFailureDetail = (cause: unknown): string => {
-  const decoded = Schema.decodeUnknownOption(Schema.Struct({ detail: Schema.String }))(cause)
-  return Option.isSome(decoded) ? decoded.value.detail : String(cause)
-}

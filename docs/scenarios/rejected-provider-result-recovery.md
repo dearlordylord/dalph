@@ -28,6 +28,19 @@ The third answer is rejected, or an additional response's original 30-second dea
 
 Alice resolves the visible problem and sends a new exact Continue request for P1. Dalph verifies current task/revision/lifecycle/prerequisites/claim, W1/Git authority and old stopped writers, records distinct recovery authorization, then asks the agent to freshly verify W1 and return a new answer. This new cycle permits its initial response plus two full corrections. Alice sees the same P1/W1; the predecessor response is not silently reaccepted. Exact request redelivery returns recorded authorization/result and restart resumes its durable cycle without replenishing budget. Stale selection, changed authority or unproved custody refuses before provider effects. Acceptance seams: attempt-choice exact redelivery and claim tests extended to rejection recovery; fresh-verification/response and cycle-crash tests; public CLI/MCP recovery assertions.
 
+Fresh provider startup can expose an incarnation process before it has an exact
+thread identity. During S4 and S6, including rereading a retained terminal result through a fresh
+provider incarnation, Dalph keeps the custody fence and performs at most
+five read-only censuses, spaced by 100 ms and bounded by one second overall.
+Only a complete fresh `Absent` result permits the successor intent. A still
+unreadable census, a deadline, a live writer or contradictory identity refuses
+Continue; Dalph neither ignores the process nor signals it. A crash during these
+reads records no successor intent, so the original permission still reconciles
+through the same stopped-writer boundary. The controlled tests in
+`application/codex-recovery-census.test.ts` prove transient absence, persistent
+uncertainty, live/contradictory refusal and a stalled-read deadline. The existing
+native fresh-process Continue scenario proves composition with actual startup.
+
 ## S5 — Alice Restarts from fresh authority while keeping the predecessor
 
 Alice requests Restart of the retained rejection, or of a historical Failed with unknown reason. Dalph reconciles exact old custody, current tracker specification/lifecycle/dependencies/claim and current Git Base H2, records distinct replacement authorization and plans P2 with its exact new W2 from H2. W1/candidate remain reference material. Lost append/response reconciliation reuses the recorded P2 rather than allocating P3. Alice sees predecessor and successor and their distinct Base/worktree facts. Unknown historical Failed offers Restart only; no Continue or retrospective acceptance changes its seal. Forbidden: stale Base, lost reference, replacement before old writer proof, new authority inferred from old terminal-invalidated choice. Acceptance seams: existing fresh-F2/K1/W1/H2 restart and ambiguous replacement tests extended to rejection and legacy unknown reason, public action availability.

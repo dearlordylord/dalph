@@ -254,6 +254,16 @@ discard an isolated responsibility, or terminate the Run.
 
 ## Scenario-to-invariant mapping
 
+The finality projector memoizes one exact claim against one immutable journal
+prefix in process memory. Both the array view and the indexed evidence view use
+this memo; an appended prefix has a different identity. This changes repeated
+computation, never authority or durable workflow state. The controlled unit
+`projects each phase from exact stored evidence without rescanning authority
+state` in `integration-finality/history.test.ts` verifies every successive phase,
+repeated exact-claim reads, and refusal of a foreign planned revision. The
+distinct ordinary deliveries and crash cuts remain covered by the complete
+[six-task composition](distinct-ordinary-finality.md#scenario-to-test-mapping).
+
 | Forbidden result | Durable invariant |
 |---|---|
 | Replace or delete a claim before durable intent; retry before a read | D21 intent before ambiguity-crossing effects; D22 reconcile before retry |

@@ -37,7 +37,7 @@ import {
   JournalDatabaseLocator,
   InRunJournal
 } from "@dalph/orchestrator"
-import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Ref, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
 import {
   CodexAppServer,
   codexAppServerNodeLayer,
@@ -51,18 +51,17 @@ import {
 } from "../src/application/codex-attempt-store.js"
 import { codexPlannedAttemptExecutorLayerWithOptions } from "../src/application/codex-planned-attempt-executor.js"
 import {
+  qualificationResumeObservation,
+  qualificationFailureDetail,
   makeQualificationCensusDiagnostic,
   readQualificationRetainedAttemptState
 } from "../src/qualification/codex-census-diagnostic.js"
 import { qualificationWorkflowJournalLayer } from "../src/application/qualification-journal.js"
 import { qualificationCutStore } from "./codex-qualification-startup-cut.js"
 import { exerciseNativeGuidance } from "./codex-qualification-guidance.js"
-import {
-  CodexQualificationAction,
-  qualificationFailureDetail as detailOf
-} from "./codex-qualification-host-contract.js"
+import { CodexQualificationAction } from "./codex-qualification-host-contract.js"
 
-import { writeEvent, reportEvent, projectionEvent } from "./codex-qualification-host-output.js"
+import { writeEvent, reportEvent, projectionEvent, runQualificationProgram } from "./codex-qualification-host-output.js"
 
 const QualificationConfiguration = Schema.Struct({
   action: CodexQualificationAction,
@@ -318,6 +317,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
         } else if (configuration.action === "resume") {
           yield* writeEvent(reportEvent("Resume", yield* executor.resume(request)))
+          yield* writeEvent(yield* qualificationResumeObservation(store, app, correlation))
         } else if (configuration.action === "continue-result") {
           if (executor.continueRejectedResult === undefined)
             return yield* new QualificationConfigurationFailure({ detail: "executor does not expose result recovery" })
@@ -325,7 +325,16 @@ const configurationProgram = Effect.gen(function* () {
             nonce: "native-explicit-continue",
             correlation
           })
-          const initial = yield* executor.continueRejectedResult(request, authorization)
+          const initial = yield* executor.continueRejectedResult(request, authorization).pipe(
+            Effect.catch((failure) =>
+              Effect.gen(function* () {
+                const census = yield* Ref.get(lastCensus)
+                return yield* new QualificationConfigurationFailure({
+                  detail: `${qualificationFailureDetail(failure)}; last census=${census}`
+                })
+              })
+            )
+          )
           yield* writeEvent(reportEvent("ContinueRejectedResult", initial))
           if (initial._tag === "ExecutorWorkExecuting")
             yield* writeEvent(reportEvent("Observe", yield* settleAttempt(lifecycle, correlation, store, lastCensus)))
@@ -427,15 +436,5 @@ if (rawConfiguration.action === undefined) {
   nodeProcess.stderr.write(`${usage}\n`)
   nodeProcess.exitCode = 64
 } else {
-  void Effect.runPromiseExit(configurationProgram.pipe(Effect.provideService(Logger.LogToStderr, true)))
-    .then((exit) => {
-      if (Exit.isSuccess(exit)) return
-      const detail = detailOf(Cause.squash(exit.cause)) || Cause.pretty(exit.cause)
-      nodeProcess.stdout.write(`${JSON.stringify({ event: "failure", detail })}\n`)
-      nodeProcess.exitCode = 70
-    })
-    .catch((cause: unknown) => {
-      nodeProcess.stdout.write(`${JSON.stringify({ event: "failure", detail: detailOf(cause) })}\n`)
-      nodeProcess.exitCode = 70
-    })
+  runQualificationProgram(configurationProgram)
 }

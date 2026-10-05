@@ -1193,7 +1193,11 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(resumedReport.command).toBe("Resume")
         expect(resumedReport.report._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
-        expect(fixture.model.calls).toHaveLength(1)
+        await fixture.model.waitForCalls(2).catch((failure: unknown) => {
+          const observation = resumed.events.find((event) => event.event === "resume-observation")
+          throw new Error(`${String(failure)}; Resume observation=${JSON.stringify(observation ?? "Unavailable")}`)
+        })
+        expect(fixture.model.calls).toHaveLength(2)
       } finally {
         await dispose(fixture, hosts)
       }
@@ -1287,7 +1291,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
   )
 
   qualificationTest(
-    "a foreign final correlation cannot fabricate Accepted and projects as a non-completed terminal result",
+    "a foreign final correlation exhausts correction without fabricating Accepted",
     async () => {
       const fixture = await makeFixture("foreign")
       const hosts: Array<BuiltHost> = []
@@ -1295,10 +1299,15 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const started = await spawnHost(fixture, "settle")
         hosts.push(started)
         expect(requireEvent(await started.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
-        const terminal = terminalReport(await started.waitForReport(2))
-        expect(terminal.result._tag).toBe("Failed")
-        expect(terminal.result._tag).not.toBe("Completed")
-        expect(fixture.model.calls).toHaveLength(2)
+        const rejected = requireEvent(await started.waitForReport(2), "report").report
+        expect(rejected).toMatchObject({
+          _tag: "ExecutorWorkResultRejected",
+          reason: "ResultEnvelopeInvalid",
+          recoveryCause: "CorrectionExhausted",
+          responseCount: 3,
+          custody: { _tag: "Stopped" }
+        })
+        expect(fixture.model.calls).toHaveLength(4)
       } finally {
         await dispose(fixture, hosts)
       }
