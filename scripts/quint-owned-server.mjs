@@ -48,6 +48,14 @@ const reservePort = async () => {
   return address.port
 }
 
+/** The transport is fixed to 127.0.0.1. Exclude only a proven different IPv4
+ * address; wildcard, IPv6 and unknown rows still require exact fd ownership. */
+export const quintSocketCanServeOwnedEndpoint = ({ address, family }) => {
+  if (family !== "tcp") return true
+  const ipv4 = /^([0-9A-F]{8}):[0-9A-F]{4}$/iu.exec(address)?.[1]?.toUpperCase()
+  return ipv4 === undefined || ipv4 === "00000000" || ipv4 === "0100007F"
+}
+
 export const ownedQuintListeningSockets = (port) =>
   ["tcp", "tcp6"].flatMap((family) =>
     readFileSync(`/proc/net/${family}`, "utf8")
@@ -56,6 +64,7 @@ export const ownedQuintListeningSockets = (port) =>
       .map((line) => line.trim().split(/\s+/u))
       .filter((fields) => fields[3] === "0A" && Number.parseInt(fields[1]?.split(":")[1], 16) === port)
       .map((fields) => ({ family, address: fields[1], inode: fields[9] }))
+      .filter(quintSocketCanServeOwnedEndpoint)
   )
 
 const waitForOwnedSocket = async ({ port, processGroup, remainingExecutionMilliseconds, signal }) => {

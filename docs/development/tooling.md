@@ -31,3 +31,20 @@ independent while preventing unrelated custody tests from retaining stale totals
 The generated inventories and hosted input closure are refreshed with
 `node scripts/generate-formal-command-inventory.mjs --write` and
 `node scripts/generate-hosted-formal-input-manifest.mjs --write`.
+
+## Owned Apalache endpoint observations
+
+The formal verifier connects to `127.0.0.1:port`. Its Linux socket observer
+excludes a proven different IPv4 address at the same port before proving every
+remaining listener inode belongs to the exact owned process. Wildcard, IPv6 and
+unknown address observations remain conservative and require the same fd proof.
+An unrelated listener on `127.0.0.2:port` must neither refuse the owned endpoint
+nor be stopped during cleanup. The existing native positive fixture proves that
+composition and writer absence; controlled address cases cover selection, and
+the foreign-endpoint fixture retains refusal before profile execution. This is
+verification tooling and changes no Dalph runtime behavior.
+
+Issue #451 retains the historical socket-proof refusal. The original failure
+did not capture address/inode data, so the demonstrated same-port address defect
+does not establish its cause. Future mismatches retain those fields; a passing
+fixture alone cannot close that historical diagnosis.
