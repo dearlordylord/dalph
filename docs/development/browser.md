@@ -42,3 +42,18 @@ once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
 (x64, full history, gitleaks); `all` also requires the reviewed
 `coverage_base_sha`. It runs the same gate on a fresh worker. Diagnose stage
 failures before retrying; different hardware is not a calibrated baseline.
+
+### Running-host graph page
+
+The package build invokes [build-running-host-page.mjs](../../scripts/build-running-host-page.mjs), which uses the Lab’s pinned TypeScript browser checker and
+[Vite configuration](../../prototypes/reducer-lab/vite.live-host.config.ts).
+It emits only `packages/dalph/dist/browser/index.html`, `graph.js`, and
+`graph.css`; the host serves a fixed allowlist, independent of its working
+directory. The shared graph renderer has no cassette playback input in this page.
+
+After building artifacts, run `pnpm --dir prototypes/reducer-lab check:browser:live-host`
+for the real HTTP host, two Chromium pages, common renderer, stale graph and
+origin refusal. Its controlled tracker inputs do not claim live GitHub timing.
+Use the browser setup above first. Pure projection and refresh tests own
+additional graph, cadence, coalescing and failure cases. These checks are mapped
+in [the accepted graph-page scenarios](../scenarios/live-task-graph-page.md).

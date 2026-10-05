@@ -2,7 +2,7 @@ import { TraceCursor } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { NodeCrypto } from "@effect/platform-node"
-import { Crypto, Effect, FiberSet, Option, Schema } from "effect"
+import { Crypto, Effect, FiberSet, Option, Schema, Scope } from "effect"
 import { type ProductionRunningHostObservation } from "./production-host.js"
 import {
   decodeRunningHostRequest,
@@ -17,8 +17,20 @@ import {
   runningHostSuccessEnvelope
 } from "./running-host-contract.js"
 import { projectRunningHostRunControl, projectRunningHostSnapshot } from "./running-host-projection.js"
+import { readRunningHostPageAsset } from "./running-host-page-assets.js"
+
 import { makeRunningHostCommandOwnership } from "./running-host-command-ownership.js"
 import { makeRunningHostHttpWatch, type writeRunningHostWatchFrame } from "./running-host-http-watch.js"
+
+const browserReadOperations: ReadonlySet<string> = new Set([
+  "ReadSnapshot",
+  "ReadRunControl",
+  "ReadResultRecoveryDirection",
+  "ReadInspectionSnapshot",
+  "RefreshInspection",
+  "WatchSnapshots",
+  "WatchInspection"
+])
 
 const defaultHttpPort = 80
 const httpStatus = { success: 200, badRequest: 400, conflict: 409, tooLarge: 413, unavailable: 503 } as const
@@ -62,7 +74,13 @@ const body = Effect.fn("RunningHostHttp.readBody")((request: IncomingMessage) =>
 )
 
 const write = Effect.fn("RunningHostHttp.write")(
-  (response: ServerResponse, text: string, status = httpStatus.success, requestId: RequestId | null = null) =>
+  (
+    response: ServerResponse,
+    text: string | Uint8Array,
+    status = httpStatus.success,
+    requestId: RequestId | null = null,
+    contentType = "application/json"
+  ) =>
     Effect.tryPromise({
       try: () =>
         new Promise<void>((resolve, reject) => {
@@ -70,7 +88,11 @@ const write = Effect.fn("RunningHostHttp.write")(
           response.once("close", () => {
             if (!response.writableFinished) reject(new Error("ResponseClosed"))
           })
-          response.writeHead(status, { "content-type": "application/json", connection: "close" })
+          response.writeHead(status, {
+            "content-type": contentType,
+            connection: "close",
+            "x-content-type-options": "nosniff"
+          })
           response.end(text, () => resolve())
         }),
       catch: (): RunningHostError => ({ _tag: "TransportFailed", phase: "Write", reason: "ResponseClosed" })
@@ -120,7 +142,18 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
     observation.awaitExitResult,
     observation.executeAttachedCommand
   )
-  const watch = yield* makeRunningHostHttpWatch(observation, watchWriter)
+  const hostScope = yield* Scope.Scope
+  const inspection =
+    observation.inspection === undefined
+      ? undefined
+      : yield* Effect.cached(
+          observation.inspection.pipe(
+            Effect.tap((owner) => observation.registerObservationDrain({ closeProcessLocalResources: owner.stop })),
+            Effect.provideService(Scope.Scope, hostScope),
+            Effect.uninterruptible
+          )
+        )
+  const watch = yield* makeRunningHostHttpWatch(observation, watchWriter, inspection)
   const dispatch = Effect.fn("RunningHostHttp.dispatch")(function* (input: unknown, response: ServerResponse) {
     const request = yield* decodeRunningHostRequest(input, descriptor)
     if (yield* observation.closing)
@@ -129,6 +162,20 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         hostInstanceId: descriptor.hostInstanceId,
         cutoff: "AdmissionClosed"
       })
+    if (request.operation._tag === "ReadInspectionSnapshot" || request.operation._tag === "RefreshInspection") {
+      if (inspection === undefined)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "ReadFailed",
+          causeTag: "InspectionUnavailable",
+          detail: "The host inspection reader is unavailable."
+        })
+      const owner = yield* inspection
+      if (request.operation._tag === "RefreshInspection") yield* owner.refresh
+      const run = yield* observation.current.get.pipe(
+        Effect.flatMap((state) => projectRunningHostSnapshot(request.runId, state))
+      )
+      return runningHostSuccessEnvelope(request, { _tag: "InspectionSnapshot", run, inspection: yield* owner.current })
+    }
     if (
       request.operation._tag === "StartWork" ||
       request.operation._tag === "Unpause" ||
@@ -238,7 +285,10 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
   const handle = Effect.fn("RunningHostHttp.handle")(function* (request: IncomingMessage, response: ServerResponse) {
     let input: unknown = null
     const outcome = yield* Effect.gen(function* () {
-      if (request.headers.origin !== undefined || request.headers.host !== new URL(address).host) {
+      if (
+        (request.headers.origin !== undefined && request.headers.origin !== new URL(address).origin) ||
+        request.headers.host !== new URL(address).host
+      ) {
         return yield* Effect.fail(invalid("LocalOriginRequired"))
       }
       if (yield* observation.closing)
@@ -249,6 +299,10 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         })
       if (request.method === "GET" && request.url === "/dalph/v1/descriptor") {
         return { _tag: "Descriptor" as const, text: JSON.stringify(descriptor) }
+      }
+      if (request.method === "GET") {
+        const asset = yield* readRunningHostPageAsset(request.url ?? "")
+        if (asset !== null) return { _tag: "Page" as const, ...asset }
       }
       if (request.method !== "POST" || (request.url !== "/dalph/v1/request" && request.url !== "/dalph/v1/watch"))
         return yield* Effect.fail(invalid("RouteUnsupported"))
@@ -262,12 +316,22 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         )
       )
       const decoded = yield* decodeRunningHostRequest(input, descriptor)
+      if (request.headers.origin !== undefined && !browserReadOperations.has(decoded.operation._tag))
+        return yield* Effect.fail(invalid("BrowserControlForbidden"))
       if (request.url === "/dalph/v1/watch") {
-        if (decoded.operation._tag !== "WatchSnapshots") return yield* Effect.fail(invalid("WatchOperationRequired"))
+        if (decoded.operation._tag !== "WatchSnapshots" && decoded.operation._tag !== "WatchInspection")
+          return yield* Effect.fail(invalid("WatchOperationRequired"))
+        if (decoded.operation._tag === "WatchInspection" && inspection === undefined)
+          return yield* Effect.fail<RunningHostError>({
+            _tag: "ReadFailed",
+            causeTag: "InspectionUnavailable",
+            detail: "The host inspection reader is unavailable."
+          })
         yield* Effect.scoped(watch(decoded, response))
         return { _tag: "Watch" as const }
       }
-      if (decoded.operation._tag === "WatchSnapshots") return yield* Effect.fail(invalid("WatchRouteRequired"))
+      if (decoded.operation._tag === "WatchSnapshots" || decoded.operation._tag === "WatchInspection")
+        return yield* Effect.fail(invalid("WatchRouteRequired"))
       const envelope = yield* dispatch(input, response)
       return { _tag: "Envelope" as const, envelope, text: yield* encodeRunningHostEnvelope(envelope) }
     }).pipe(
@@ -279,6 +343,10 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       })
     )
     if (outcome._tag === "Watch") return
+    if (outcome._tag === "Page") {
+      yield* write(response, outcome.bytes, httpStatus.success, null, outcome.contentType)
+      return
+    }
     const error =
       outcome._tag === "Envelope" && outcome.envelope.result._tag === "Failure" ? outcome.envelope.result.error : null
     const status =

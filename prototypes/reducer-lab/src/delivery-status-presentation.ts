@@ -6,6 +6,7 @@ import type { AuthoredDeliveryStatusRead } from "../../../packages/dalph/src/cas
 const entryLabels: Readonly<Record<DeliveryStatusEntry["_tag"], string>> = {
   ExecutorFailure: "Executor failed",
   TargetPromotionSafetyRefused: "Integration target blocked",
+  ExecutorResultRejected: "Executor result rejected",
   DependencyWait: "Waiting for prerequisites",
   TrackerFactWait: "Waiting for tracker facts",
   TaskWorkCapacityWait: "Waiting for task-work capacity",

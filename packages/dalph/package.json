@@ -19,7 +19,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "node ../../scripts/clean-package-build-output.mjs . && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-import-extensions.mjs ."
+    "build": "node ../../scripts/clean-package-build-output.mjs . && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-import-extensions.mjs . && node ../../scripts/build-running-host-page.mjs"
   },
   "dependencies": {
     "@dalph/contracts": "workspace:*",

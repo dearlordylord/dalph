@@ -15,6 +15,7 @@ import {
 } from "./running-host-contract.js"
 import { projectRunningHostSnapshot } from "./running-host-projection.js"
 import { makeRunningHostWatchStage } from "./running-host-watch-stage.js"
+import type { RunningHostInspectionService } from "./running-host-inspection.js"
 
 const httpOk = 200
 
@@ -60,12 +61,15 @@ export const writeRunningHostWatchFrame = Effect.fn("RunningHostWatch.write")(fu
  * for admitted response fibers; its existing absolute budget interrupts them. */
 export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(function* <E>(
   observation: ProductionRunningHostObservation<E>,
-  write: typeof writeRunningHostWatchFrame = writeRunningHostWatchFrame
+  write: typeof writeRunningHostWatchFrame = writeRunningHostWatchFrame,
+  inspection?: Effect.Effect<RunningHostInspectionService>
 ) {
+  const inspectionClosing = yield* Deferred.make<void>()
   const count = yield* Ref.make(0)
   const writers = yield* Ref.make<ReadonlyMap<SubscriptionId, Deferred.Deferred<void>>>(new Map())
   yield* observation.registerObservationDrain({
     closeProcessLocalResources: Effect.gen(function* () {
+      yield* Deferred.succeed(inspectionClosing, undefined)
       yield* Effect.forEach([...(yield* Ref.get(writers)).values()], Deferred.await, {
         concurrency: "unbounded",
         discard: true
@@ -136,10 +140,28 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
             })
           )
         )
-        return Stream.concat(Stream.make(attachment.current), attachment.changes).pipe(
+        const states = Stream.concat(Stream.make(attachment.current), attachment.changes)
+        const inspect =
+          request.operation._tag === "WatchInspection" && inspection !== undefined ? yield* inspection : undefined
+        const source =
+          inspect === undefined
+            ? states
+            : Stream.merge(states, inspect.changes.pipe(Stream.mapEffect(() => observation.current.get)))
+        return source.pipe(
           Stream.mapEffect((state) =>
             projectRunningHostSnapshot(request.runId, state).pipe(
-              Effect.map((value) => frame({ _tag: "Snapshot", value })),
+              Effect.flatMap((value) =>
+                inspect === undefined
+                  ? Effect.succeed(frame({ _tag: "Snapshot", value }))
+                  : inspect.current.pipe(
+                      Effect.map((current) =>
+                        frame({
+                          _tag: "Inspection",
+                          value: { _tag: "InspectionSnapshot", run: value, inspection: current }
+                        })
+                      )
+                    )
+              ),
               Effect.tap(encodeRunningHostWatchFrame)
             )
           )
@@ -175,6 +197,19 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
       response.end()
     }).pipe(
       Effect.raceFirst(disconnected),
+      Effect.raceFirst(
+        request.operation._tag === "WatchInspection"
+          ? Deferred.await(inspectionClosing).pipe(
+              Effect.andThen(
+                Effect.fail<RunningHostError>({
+                  _tag: "HostClosing",
+                  hostInstanceId: request.hostInstanceId,
+                  cutoff: "AdmissionClosed"
+                })
+              )
+            )
+          : Effect.never
+      ),
       Effect.raceFirst(
         observation.awaitExitResult.pipe(
           Effect.andThen(

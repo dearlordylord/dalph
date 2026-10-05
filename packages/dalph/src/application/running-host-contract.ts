@@ -1,30 +1,18 @@
+import { coherentWire, RunningHostSnapshot, RunningHostInspectionSnapshot } from "./running-host-snapshot.js"
 import { LocalHostAddress } from "./running-host-address.js"
-import {
-  AttemptId,
-  ExecutorGuidanceRequestId,
-  ExecutorGuidanceTransmission,
-  PlannedAttemptExecutorCorrelation,
-  PlannedTaskAttempt,
-  RunId,
-  TaskId,
-  TaskRevision
-} from "@dalph/contracts"
+import { AttemptId, ExecutorGuidanceRequestId, ExecutorGuidanceTransmission, RunId, TaskId } from "@dalph/contracts"
 import {
   ApplyResultRecoveryRequest,
   ResultRecoveryRequestId,
-  BoundedTicketRank,
   ControlDirectionApplicationOrdinal,
-  RunControlPolicy,
   RunTerminationDisposition,
-  TaskDagWire,
   TraceCursor,
   TrackerTarget
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
-import { ObligationReference } from "./production-cli-status-identity-schema.js"
-import { ProductionCliCurrentDeliveryStatus } from "./production-cli-status-schema.js"
 
 export { LocalHostAddress } from "./running-host-address.js"
+export { RunningHostSnapshot, RunningHostInspectionSnapshot } from "./running-host-snapshot.js"
 
 const SafeInteger = Schema.Int.check(
   Schema.isBetween({ minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER })
@@ -91,6 +79,9 @@ export const RefreshInterest = Schema.TaggedUnion({
 export type RefreshInterest = typeof RefreshInterest.Type
 const Operation = Schema.TaggedUnion({
   ReadSnapshot: {},
+  ReadInspectionSnapshot: {},
+  RefreshInspection: {},
+  WatchInspection: {},
   ReadRunControl: {},
   ReadResultRecoveryDirection: { recoveryRequestId: ResultRecoveryRequestId },
   ApplyResultRecoveryDirection: { recovery: ApplyResultRecoveryRequest },
@@ -172,81 +163,17 @@ export const RunningHostError = Schema.TaggedUnion({
 })
 export type RunningHostError = typeof RunningHostError.Type
 
-const Reason = Schema.TaggedUnion({
-  PrerequisitesIncomplete: { prerequisiteTaskIds: Schema.Array(TaskId) },
-  SuccessfulCompletion: {},
-  TerminalWithoutSuccess: {}
-})
-const Standing = Schema.TaggedUnion({
-  Eligible: { taskId: TaskId, taskRevision: TaskRevision },
-  Excluded: { taskId: TaskId, reasons: Schema.NonEmptyArray(Reason) }
-})
-const Placement = Schema.TaggedUnion({
-  Selected: { rank: BoundedTicketRank },
-  EligibleOutsideBound: { rank: BoundedTicketRank },
-  GraphExcluded: { reasons: Schema.NonEmptyArray(Reason) }
-})
-const ReadySnapshotShape = Schema.TaggedStruct("Ready", {
-  runId: RunId,
-  acceptedAt: Schema.NullOr(TraceCursor),
-  graph: Schema.TaggedUnion({ GraphNotEstablished: {}, GraphEstablished: { snapshot: TaskDagWire } }),
-  frontier: Schema.Struct({
-    policy: RunControlPolicy,
-    standings: Schema.Array(Standing),
-    placements: Schema.Array(Schema.Struct({ taskId: TaskId, placement: Placement }))
-  }),
-  delivery: ProductionCliCurrentDeliveryStatus,
-  retained: Schema.Array(
-    Schema.Struct({
-      taskId: TaskId,
-      obligationReference: ObligationReference,
-      kind: Schema.Literals([
-        "WorkflowResponsibility",
-        "AcceptedAwaitingIntegration",
-        "QueuedIntegration",
-        "StartedIntegration"
-      ]),
-      plannedAttempt: Schema.NullOr(PlannedTaskAttempt)
-    })
-  ),
-  held: Schema.Array(Schema.Struct({ taskId: TaskId, correlation: PlannedAttemptExecutorCorrelation }))
-})
-/** Reject inconsistent identities or unsafe numeric encodings anywhere in a public value. */
-const coherentWire = (value: unknown, runId: RunId | null): boolean => {
-  if (typeof value === "number") return Number.isSafeInteger(value)
-  if (value === null || typeof value !== "object") return true
-  if (runId !== null && "runId" in value && value.runId !== runId) return false
-  return Object.values(value).every((nested) => coherentWire(nested, runId))
-}
-const ReadySnapshot = ReadySnapshotShape.check(
-  Schema.makeFilter(
-    (value) =>
-      (coherentWire(value, value.runId) &&
-        value.delivery._tag === "DeliveryStatusAvailable" &&
-        value.delivery.subject._tag === "Run" &&
-        value.delivery.acceptedAt === (value.acceptedAt?.position ?? null) &&
-        new Set(value.retained.map(({ obligationReference }) => obligationReference)).size === value.retained.length &&
-        value.retained.every(
-          ({ plannedAttempt, taskId }) => plannedAttempt === null || plannedAttempt.taskId === taskId
-        )) ||
-      "snapshot identities, accepted position and exact retained obligations must agree"
-  )
-)
-export const RunningHostSnapshot = Schema.Union([
-  Schema.TaggedStruct("NotReady", { runId: RunId }),
-  ReadySnapshot,
-  Schema.TaggedStruct("Closed", { runId: RunId, final: Schema.NullOr(ReadySnapshot) }).check(
-    Schema.makeFilter((value) => coherentWire(value, value.runId) || "closed publication belongs to another Run")
-  )
-])
-export type RunningHostSnapshot = typeof RunningHostSnapshot.Type
 export const RunningHostWatchFrame = Schema.Struct({
   protocolVersion: Schema.Literal(1),
   requestId: RequestId,
   runId: RunId,
   subscriptionId: SubscriptionId,
   sequence: WatchSequence,
-  frame: Schema.TaggedUnion({ Snapshot: { value: RunningHostSnapshot }, Failure: { error: RunningHostError } })
+  frame: Schema.TaggedUnion({
+    Snapshot: { value: RunningHostSnapshot },
+    Inspection: { value: RunningHostInspectionSnapshot },
+    Failure: { error: RunningHostError }
+  })
 }).check(
   Schema.makeFilter((value) => coherentWire(value.frame, value.runId) || "watch publication belongs to another Run")
 )
@@ -295,6 +222,7 @@ export const RunningHostRunControl = Schema.TaggedUnion({
 export type RunningHostRunControl = typeof RunningHostRunControl.Type
 const Value = Schema.Union([
   RunningHostSnapshot,
+  RunningHostInspectionSnapshot,
   RunningHostRunControl,
   Schema.TaggedStruct("ResultRecoveryDirectionRecorded", {
     recovery: ApplyResultRecoveryRequest,

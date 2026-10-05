@@ -24,6 +24,10 @@ export const execFile = unavailable
 export const promisify = (_function: unknown) => unavailable
 export const readdir = unavailable
 export const readFile = unavailable
+export const lstat = unavailable
+export const realpath = unavailable
+export const stat = unavailable
+export const userInfo = unavailable
 export const setTimeout = globalThis.setTimeout.bind(globalThis)
 
 export const Buffer = {

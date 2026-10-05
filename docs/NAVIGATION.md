@@ -12,6 +12,7 @@ integration facts. This map does not mirror issue status.
 | Who owns tracker graphs and claims? | [Tracker graph and claims](architecture/tracker-graph-and-claims.md) | The protocol and test links in that owner |
 | Who owns journal replay and reconstruction? | [Journal and reconstruction](architecture/journal-and-reconstruction.md) | The durable-event and reducer links in that owner |
 | Where do integration, publication, and finality meet? | [Attempt delivery and integration](architecture/attempt-delivery-and-integration.md) | [Direct-publication chronology](scenarios/direct-remote-publication.md) |
+| Where is the live host graph page built and tested? | [Browser owners](development/browser.md#running-host-graph-page) | [Accepted graph-page scenarios](scenarios/live-task-graph-page.md) |
 | Which verifier script should I inspect? | [Verification drivers and callers](development/tooling.md#verification-drivers-and-owners) | Start with the invoked driver, then its imported policy |
 | Which check should I run, and does it need a build? | [Choosing checks](development/checks.md#choosing-checks), then [command preparation](development/commands.md#focused-test-preparation) | `package.json` owns the actual command |
 | Where is failure evidence, and may I retry? | [Finite diagnosis](development/workflow.md#keeping-implementation-work-finite) and [gate custody](development/gates.md#heavy-gate-admission) | `pnpm gate:status <run-id>` and retained child logs |
