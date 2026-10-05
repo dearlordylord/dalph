@@ -9,6 +9,7 @@ import type { ProductionRunningHostObservation } from "./production-host.js"
 import { decodeRunInvocation, loadProductionConfiguration } from "./production-cli.js"
 import { installApplicationExitSignalAdapter, type ApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import {
+  RunningHostCapacityArguments,
   LocalHostAddress,
   RefreshInterest,
   type RunningHostError,
@@ -106,7 +107,7 @@ export const makeRunningHostCommands = <E, R>(
         Effect.provide(outputLayer)
       )
   )
-  const attached = (name: "snapshot" | "control" | "start" | "unpause" | "resume") =>
+  const attached = (name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume") =>
     Command.make(
       name,
       { host: Flag.string("host"), run: Flag.string("run"), json: Flag.boolean("json") },
@@ -132,9 +133,11 @@ export const makeRunningHostCommands = <E, R>(
                   ? "ReadSnapshot"
                   : name === "control"
                     ? "ReadRunControl"
-                    : name === "start"
-                      ? "StartWork"
-                      : "Unpause"
+                    : name === "capacity"
+                      ? "ReadCapacity"
+                      : name === "start"
+                        ? "StartWork"
+                        : "Unpause"
             })
           )
         }).pipe(
@@ -147,6 +150,50 @@ export const makeRunningHostCommands = <E, R>(
         )
     )
   const guide = makeRunningHostGuidanceCommand(outputLayer)
+  const setCapacity = Command.make(
+    "set-capacity",
+    {
+      host: Flag.string("host"),
+      run: Flag.string("run"),
+      json: Flag.boolean("json"),
+      capacity: Flag.string("capacity"),
+      expectedRevision: Flag.string("expected-revision")
+    },
+    ({ capacity, expectedRevision, host, json, run }) =>
+      Effect.gen(function* () {
+        if (!json)
+          return yield* Effect.fail<RunningHostError>({
+            _tag: "InvalidRequest",
+            fieldPath: "/json",
+            code: "JsonRequired"
+          })
+        const operation = yield* Schema.decodeUnknownEffect(RunningHostCapacityArguments)({
+          capacity: Number(capacity),
+          expectedRevision: Number(expectedRevision)
+        }).pipe(
+          Effect.mapError(
+            (): RunningHostError => ({ _tag: "InvalidRequest", fieldPath: "/operation", code: "RequestSchemaInvalid" })
+          )
+        )
+        const decoded = yield* decodeClient(host, run)
+        if (decoded.runId === null)
+          return yield* Effect.fail<RunningHostError>({
+            _tag: "InvalidRequest",
+            fieldPath: "/run",
+            code: "RunRequired"
+          })
+        yield* presentEnvelope(
+          yield* callRunningHost(decoded.address, decoded.runId, { _tag: "SetCapacity", ...operation })
+        )
+      }).pipe(
+        Effect.catch((error) =>
+          error instanceof DalphCommandExit
+            ? Effect.fail(error)
+            : presentEnvelope(runningHostFailureEnvelope(null, error))
+        ),
+        Effect.provide(outputLayer)
+      )
+  )
   const refresh = Command.make(
     "refresh",
     {
@@ -276,6 +323,7 @@ export const makeRunningHostCommands = <E, R>(
   const attach = Command.make("attach").pipe(
     Command.withSubcommands([
       guide,
+      setCapacity,
       resultRecovery("apply"),
       resultRecovery("read"),
       Command.make(
@@ -345,6 +393,7 @@ export const makeRunningHostCommands = <E, R>(
       refresh,
       attached("snapshot"),
       attached("control"),
+      attached("capacity"),
       attached("start"),
       attached("unpause"),
       attached("resume")

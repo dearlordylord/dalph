@@ -1,3 +1,4 @@
+import { runningHostProviderBody } from "./production-running-host-fixture-request.js"
 import {
   attachControlledResultCompletions,
   makeRetainedTaskResultSelector
@@ -5,6 +6,8 @@ import {
 import { isolatedCodexProcessNativeService } from "./isolated-codex-process-native.js"
 import {
   type ControlledProviderDiagnostics,
+  type PausedRunningHostFixture,
+  reactivationObserversFor,
   projectControlledThread,
   failControlledGraphRead,
   failControlledIntegrationRead,
@@ -48,36 +51,11 @@ import { ProductionRunReactivationInterval } from "../src/application/production
 import { productionRepositoryHostGraph } from "../src/application/production-host.js"
 import { controlDirectionAppliedRecordKey } from "../../orchestrator/src/workflow-journal/record-key.js"
 
-interface PausedRunningHostFixture {
-  readonly afterInsert?: () => Effect.Effect<void>
-  readonly afterCommit?: () => Effect.Effect<void, string>
-  readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
-  readonly onAcceptedRunControl?: (direction: "Pause" | "Unpause") => Effect.Effect<void>
-}
-
-const reactivationObserversFor = (paused: PausedRunningHostFixture | undefined) => ({
-  ...(paused?.onTimerStateChange === undefined ? {} : { onTimerStateChange: paused.onTimerStateChange }),
-  ...(paused?.onAcceptedRunControl === undefined ? {} : { onAcceptedRunControl: paused.onAcceptedRunControl })
-})
-
 export const runningHostFixtureLayer = nodeGitCommandLayer.pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.merge(NodeCrypto.layer)
 )
 const successfulHttpStatus = 200
-const providerBodyFor = (request: GithubGraphqlRequest) => {
-  if (request._tag === "ResolveIssue")
-    return {
-      query: "query ResolveIssue($fixture: String!) { fixture }",
-      variables: {
-        owner: request.target.owner,
-        repository: request.target.repository,
-        issueNumber: request.target.issueNumber
-      }
-    }
-  const { _tag, ...variables } = request
-  return { query: `query ${_tag}($fixture: String!) { fixture }`, variables }
-}
 
 /** One production composition keeps real Git/SQLite and substitutes only provider responses. */
 export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(function* (
@@ -86,6 +64,8 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   paused?: PausedRunningHostFixture,
   discovery?: {
     readonly startupIncludesE?: boolean
+    readonly independentB?: boolean
+    readonly onExecutorTurnStarted?: () => Effect.Effect<void>
     readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
     readonly onRootGraphRead?: () => Effect.Effect<void>
     readonly onActivationIdle?: () => Effect.Effect<void>
@@ -204,6 +184,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         ),
     startTurn: (...args) =>
       provider.codex.startTurn(...args).pipe(
+        Effect.tap(() => discovery?.onExecutorTurnStarted?.() ?? Effect.void),
         Effect.tap(() => Deferred.succeed(turnEntered, undefined)),
         Effect.flatMap((turn) =>
           Ref.get(turnTerminalVisible).pipe(
@@ -213,7 +194,10 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
       )
   })
   const rootNode = hermeticQualificationTrackerIdentity.issueNodeId
-  const childB = GithubIssueNodeId.make("running-host-B")
+  const childB =
+    discovery?.independentB === true
+      ? hermeticQualificationTrackerIdentity.dependantIssueNodeId
+      : GithubIssueNodeId.make("running-host-B")
   const childC = GithubIssueNodeId.make("running-host-C")
   const childE = GithubIssueNodeId.make("running-host-E")
   const includesE = yield* Ref.make(discovery?.startupIncludesE === true)
@@ -258,7 +242,12 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
               ? [rootNode]
               : []
         )
-      if (includeBlockedChildren && request._tag === "ReadIssue" && request.issueNodeId !== rootNode)
+      if (
+        includeBlockedChildren &&
+        request._tag === "ReadIssue" &&
+        request.issueNodeId !== rootNode &&
+        !(discovery?.independentB === true && request.issueNodeId === childB)
+      )
         return {
           body: {
             data: {
@@ -273,10 +262,15 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
             }
           }
         }
-      if (includeBlockedChildren && request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNode) {
+      if (
+        includeBlockedChildren &&
+        request._tag === "ReadTaskWorkSpecification" &&
+        request.issueNodeId !== rootNode &&
+        !(discovery?.independentB === true && request.issueNodeId === childB)
+      ) {
         return yield* Effect.die("blocked child must not reach a work-specification read")
       }
-      return yield* provider.github(providerBodyFor(request)).pipe(
+      return yield* provider.github(runningHostProviderBody(request)).pipe(
         Effect.orDie,
         Effect.flatMap((response) =>
           response.status === successfulHttpStatus

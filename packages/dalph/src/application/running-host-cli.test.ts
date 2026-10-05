@@ -4,7 +4,10 @@ import {
   type DeliveryRuntimeObservationState,
   ControlDirectionApplicationOrdinal,
   JournalPosition,
-  TraceCursor
+  TraceCursor,
+  RunControlPolicy,
+  RunPolicyRevision,
+  TaskWorkCapacity
 } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
 import { Cause, Deferred, Effect, Encoding, Fiber, Layer, Option, Ref, Result, Stream, SubscriptionRef } from "effect"
@@ -17,6 +20,48 @@ import { makeRunningHostCommands, RunningHostCliOutput } from "./running-host-cl
 import { writeRunningHostWatchFrame } from "./running-host-http-watch.js"
 import type { RunningHostWatchFrame } from "./running-host-contract.js"
 import { serveRunningHost } from "./running-host-http.js"
+
+it.live("the attached CLI reads capacity and sends the original expected revision exactly once", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const address = yield* availableLocalHostAddress
+      const policy = RunControlPolicy.make({
+        revision: RunPolicyRevision.make(7),
+        taskExecutionCapacity: TaskWorkCapacity.make(1)
+      })
+      const calls = yield* Ref.make<ReadonlyArray<unknown>>([])
+      yield* serveRunningHost(address, {
+        ...probe.observation,
+        readAttachedCapacity: Effect.succeed({ _tag: "CapacityRead", policy }),
+        executeAttachedCommand: (request) =>
+          Ref.update(calls, (all) => [...all, request.operation]).pipe(
+            Effect.andThen(
+              Effect.succeed({
+                _tag: "CapacityApplied" as const,
+                policy: RunControlPolicy.make({
+                  revision: RunPolicyRevision.make(8),
+                  taskExecutionCapacity: TaskWorkCapacity.make(2)
+                })
+              })
+            )
+          )
+      })
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const run = application(
+        Layer.succeed(RunningHostCliOutput, { writeLine: (text) => Ref.update(lines, (all) => [...all, text]) })
+      )
+      const flags = ["--host", address, "--run", probe.runId, "--json"]
+      yield* run(["attach", "capacity", ...flags])
+      yield* run(["attach", "set-capacity", ...flags, "--capacity", "2", "--expected-revision", "7"])
+      expect(yield* Ref.get(calls)).toEqual([{ _tag: "SetCapacity", capacity: 2, expectedRevision: 7 }])
+      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line).result)).toEqual([
+        { _tag: "Success", value: { _tag: "CapacityRead", policy: { revision: 7, taskExecutionCapacity: 1 } } },
+        { _tag: "Success", value: { _tag: "CapacityApplied", policy: { revision: 8, taskExecutionCapacity: 2 } } }
+      ])
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
 
 const noSignals = {
   addSignalListener: () => Effect.die("attached clients cannot install host signals"),

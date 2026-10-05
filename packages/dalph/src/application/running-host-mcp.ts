@@ -18,7 +18,11 @@ import {
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { runningHostMcpStdioPorts as stdioPorts } from "./running-host-mcp-stdio.js"
 import { makeRunningHostMcpOperation } from "./running-host-mcp-command.js"
-import { ExecutorGuidanceToolArguments, runningHostMcpTools as tools } from "./running-host-mcp-tools.js"
+import {
+  CapacityToolArguments,
+  ExecutorGuidanceToolArguments,
+  runningHostMcpTools as tools
+} from "./running-host-mcp-tools.js"
 import { makeRunningHostMcpWatches } from "./running-host-mcp-watch.js"
 
 const rpcParseError = -32700
@@ -179,15 +183,17 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
           const args = yield* Schema.decodeUnknownEffect(
             call.success.name === "dalph_guide_executor"
               ? ExecutorGuidanceToolArguments
-              : call.success.name === "dalph_close_watch"
-                ? Schema.Struct({ runId: RunId, subscriptionId: SubscriptionId })
-                : call.success.name === "dalph_apply_result_recovery"
-                  ? Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest })
-                  : call.success.name === "dalph_read_result_recovery"
-                    ? Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId })
-                    : call.success.name === "dalph_refresh"
-                      ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
-                      : ToolArguments
+              : call.success.name === "dalph_set_capacity"
+                ? CapacityToolArguments
+                : call.success.name === "dalph_close_watch"
+                  ? Schema.Struct({ runId: RunId, subscriptionId: SubscriptionId })
+                  : call.success.name === "dalph_apply_result_recovery"
+                    ? Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest })
+                    : call.success.name === "dalph_read_result_recovery"
+                      ? Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId })
+                      : call.success.name === "dalph_refresh"
+                        ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
+                        : ToolArguments
           )(call.success.arguments, { onExcessProperty: "error" }).pipe(Effect.result)
           if (args._tag === "Failure")
             return yield* reject(
@@ -262,6 +268,7 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
             })
           })
           if (
+            operation._tag === "SetCapacity" ||
             operation._tag === "StartWork" ||
             operation._tag === "Unpause" ||
             operation._tag === "Refresh" ||

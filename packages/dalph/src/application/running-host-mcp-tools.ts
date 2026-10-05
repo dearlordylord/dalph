@@ -1,7 +1,7 @@
 import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 import { Schema } from "effect"
 import { AttemptId, ExecutorGuidanceRequestId, RunId } from "@dalph/contracts"
-import { RefreshInterest, RunningHostEnvelope } from "./running-host-contract.js"
+import { RefreshInterest, RunningHostCapacityArguments, RunningHostEnvelope } from "./running-host-contract.js"
 const document = Schema.toJsonSchemaDocument(RunningHostEnvelope, { additionalProperties: false })
 const outputSchema = { ...document.schema, type: "object", $defs: document.definitions }
 const inputSchema = {
@@ -28,7 +28,22 @@ export const ExecutorGuidanceToolArguments = Schema.Struct({
   guidanceRequestId: Schema.optionalKey(ExecutorGuidanceRequestId)
 })
 const guidanceInput = Schema.toJsonSchemaDocument(ExecutorGuidanceToolArguments, { additionalProperties: false })
+export const CapacityToolArguments = Schema.Struct({ runId: RunId, ...RunningHostCapacityArguments.fields })
+const capacityInput = Schema.toJsonSchemaDocument(CapacityToolArguments, { additionalProperties: false })
 export const runningHostMcpTools = [
+  {
+    name: "dalph_read_capacity",
+    description: "Read the active Run capacity policy and revision; an inactive Run is not activated.",
+    inputSchema,
+    outputSchema
+  },
+  {
+    name: "dalph_set_capacity",
+    description:
+      "Change capacity using the original expected revision. Never automatically retry with a newer revision; running attempts remain held.",
+    inputSchema: { ...capacityInput.schema, $defs: capacityInput.definitions },
+    outputSchema
+  },
   {
     name: "dalph_guide_executor",
     description:

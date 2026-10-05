@@ -7,6 +7,9 @@ import {
   ControlDirectionApplicationOrdinal,
   RunTerminationDisposition,
   TraceCursor,
+  RunControlPolicy,
+  RunPolicyRevision,
+  TaskWorkCapacity,
   TrackerTarget
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
@@ -77,12 +80,19 @@ export const RefreshInterest = Schema.TaggedUnion({
   }
 })
 export type RefreshInterest = typeof RefreshInterest.Type
+/** The same decoded capacity and safe revision cross HTTP, CLI and MCP boundaries. */
+export const RunningHostCapacityArguments = Schema.Struct({
+  capacity: TaskWorkCapacity,
+  expectedRevision: RunPolicyRevision.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER))
+})
 const Operation = Schema.TaggedUnion({
   ReadSnapshot: {},
   ReadInspectionSnapshot: {},
   RefreshInspection: {},
   WatchInspection: {},
   ReadRunControl: {},
+  ReadCapacity: {},
+  SetCapacity: RunningHostCapacityArguments.fields,
   ReadResultRecoveryDirection: { recoveryRequestId: ResultRecoveryRequestId },
   ApplyResultRecoveryDirection: { recovery: ApplyResultRecoveryRequest },
   SendExecutorGuidance: {
@@ -96,6 +106,7 @@ const Operation = Schema.TaggedUnion({
   WatchSnapshots: {}
 })
 const CommandOperation = Schema.Literals([
+  "SetCapacity",
   "StartWork",
   "Unpause",
   "Refresh",
@@ -109,7 +120,15 @@ export type RunningHostRequest = typeof RunningHostRequest.Type
 export type RunningHostCommandRequest = Omit<RunningHostRequest, "operation"> & {
   readonly operation: Extract<
     RunningHostRequest["operation"],
-    { readonly _tag: "StartWork" | "Unpause" | "Refresh" | "ApplyResultRecoveryDirection" | "SendExecutorGuidance" }
+    {
+      readonly _tag:
+        | "StartWork"
+        | "Unpause"
+        | "Refresh"
+        | "ApplyResultRecoveryDirection"
+        | "SendExecutorGuidance"
+        | "SetCapacity"
+    }
   >
 }
 const VersionedRequest = Schema.Struct({ protocolVersion: SafeInteger, ...requestFields })
@@ -122,6 +141,8 @@ export const RunningHostError = Schema.TaggedUnion({
   ProtocolVersionUnsupported: { requestedVersion: SafeInteger, supportedVersions: Schema.Tuple([Schema.Literal(1)]) },
   HostClosing: { hostInstanceId: HostInstanceId, cutoff: Schema.Literal("AdmissionClosed") },
   RunClosed: { runId: RunId, disposition: RunTerminationDisposition, terminatedAt: TraceCursor },
+  RunInactive: { runId: RunId, operation: Schema.Literals(["ReadCapacity", "SetCapacity"]) },
+  PolicyRevisionConflict: { runId: RunId, expectedRevision: RunPolicyRevision, current: RunControlPolicy },
   CommandFailed: {
     operation: CommandOperation,
     causeTag: Schema.NonEmptyString,
@@ -221,6 +242,8 @@ export const RunningHostRunControl = Schema.TaggedUnion({
 })
 export type RunningHostRunControl = typeof RunningHostRunControl.Type
 const Value = Schema.Union([
+  Schema.TaggedStruct("CapacityRead", { policy: RunControlPolicy }),
+  Schema.TaggedStruct("CapacityApplied", { policy: RunControlPolicy }),
   RunningHostSnapshot,
   RunningHostInspectionSnapshot,
   RunningHostRunControl,
@@ -249,6 +272,7 @@ export type RunningHostCommandValue = Extract<
       | "RefreshSubmitted"
       | "ResultRecoveryDirectionRecorded"
       | "ExecutorGuidanceResult"
+      | "CapacityApplied"
   }
 >
 const RunningHostEnvelopeShape = Schema.Union([

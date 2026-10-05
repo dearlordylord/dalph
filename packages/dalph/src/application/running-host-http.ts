@@ -1,3 +1,4 @@
+import { readRunningHostCapacity } from "./running-host-capacity.js"
 import { integrationActivationReadFailure } from "./running-host-activation-failure.js"
 import { TraceCursor } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
@@ -178,6 +179,7 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       return runningHostSuccessEnvelope(request, { _tag: "InspectionSnapshot", run, inspection: yield* owner.current })
     }
     if (
+      request.operation._tag === "SetCapacity" ||
       request.operation._tag === "StartWork" ||
       request.operation._tag === "Unpause" ||
       request.operation._tag === "Refresh" ||
@@ -216,6 +218,8 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         })
       return runningHostSuccessEnvelope(request, yield* command({ ...request, operation: request.operation }))
     }
+    if (request.operation._tag === "ReadCapacity")
+      return runningHostSuccessEnvelope(request, yield* readRunningHostCapacity(observation))
     if (request.operation._tag === "ReadResultRecoveryDirection") {
       const recoveryRequestId = request.operation.recoveryRequestId
       if (observation.resultRecoveryControl === undefined)

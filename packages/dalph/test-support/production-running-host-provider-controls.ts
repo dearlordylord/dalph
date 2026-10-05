@@ -75,3 +75,15 @@ export interface ControlledProviderDiagnostics {
   readonly failClose?: boolean
   readonly integratorReadFailure?: "ResponseDeadline" | "Unavailable"
 }
+
+export interface PausedRunningHostFixture {
+  readonly afterInsert?: () => Effect.Effect<void>
+  readonly afterCommit?: () => Effect.Effect<void, string>
+  readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+  readonly onAcceptedRunControl?: (direction: "Pause" | "Unpause") => Effect.Effect<void>
+}
+
+export const reactivationObserversFor = (paused: PausedRunningHostFixture | undefined) => ({
+  ...(paused?.onTimerStateChange === undefined ? {} : { onTimerStateChange: paused.onTimerStateChange }),
+  ...(paused?.onAcceptedRunControl === undefined ? {} : { onAcceptedRunControl: paused.onAcceptedRunControl })
+})

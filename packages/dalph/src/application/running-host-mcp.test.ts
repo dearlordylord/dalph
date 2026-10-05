@@ -1,5 +1,13 @@
 import { AttemptId, ExecutorGuidanceRequestId, RunId } from "@dalph/contracts"
-import { FixtureTarget, ControlDirectionApplicationOrdinal, TraceCursor, JournalPosition } from "@dalph/orchestrator"
+import {
+  FixtureTarget,
+  ControlDirectionApplicationOrdinal,
+  TraceCursor,
+  JournalPosition,
+  RunControlPolicy,
+  RunPolicyRevision,
+  TaskWorkCapacity
+} from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Encoding, Fiber, Queue, Ref, Result, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
@@ -99,15 +107,23 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
               runId: selected,
               operation
             },
-            operation._tag === "StartWork"
-              ? { _tag: "WakeSubmitted" }
-              : operation._tag === "Unpause"
-                ? {
-                    _tag: "UnpauseApplied",
-                    ordinal: ControlDirectionApplicationOrdinal.make(2),
-                    acceptedAt: TraceCursor.make({ runId: selected, position: JournalPosition.make(3) })
-                  }
-                : { _tag: "NotReady", runId: selected }
+            operation._tag === "ReadCapacity" || operation._tag === "SetCapacity"
+              ? {
+                  _tag: operation._tag === "ReadCapacity" ? "CapacityRead" : "CapacityApplied",
+                  policy: RunControlPolicy.make({
+                    revision: RunPolicyRevision.make(operation._tag === "ReadCapacity" ? 1 : 2),
+                    taskExecutionCapacity: TaskWorkCapacity.make(operation._tag === "ReadCapacity" ? 1 : 2)
+                  })
+                }
+              : operation._tag === "StartWork"
+                ? { _tag: "WakeSubmitted" }
+                : operation._tag === "Unpause"
+                  ? {
+                      _tag: "UnpauseApplied",
+                      ordinal: ControlDirectionApplicationOrdinal.make(2),
+                      acceptedAt: TraceCursor.make({ runId: selected, position: JournalPosition.make(3) })
+                    }
+                  : { _tag: "NotReady", runId: selected }
           )
         })
     }
@@ -119,7 +135,14 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       { jsonrpc: "2.0", id: 4, method: "resources/read", params: { uri: "dalph://runs/R/snapshot" } },
       { jsonrpc: "2.0", id: 5, method: "resources/subscribe", params: { uri: "dalph://runs/R/snapshot" } },
       { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "dalph_start_work", arguments: { runId } } },
-      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "dalph_unpause", arguments: { runId } } }
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "dalph_unpause", arguments: { runId } } },
+      { jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "dalph_read_capacity", arguments: { runId } } },
+      {
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name: "dalph_set_capacity", arguments: { runId, capacity: 2, expectedRevision: 1 } }
+      }
     ]
     const encoded = new TextEncoder().encode(messages.map((message) => JSON.stringify(message)).join("\n") + "\n")
     yield* runRunningHostMcp(
@@ -140,6 +163,8 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       capabilities: { tools: {}, resources: {} }
     })
     expect(replies[1].result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "dalph_read_capacity",
+      "dalph_set_capacity",
       "dalph_guide_executor",
       "dalph_apply_result_recovery",
       "dalph_read_result_recovery",
@@ -161,7 +186,15 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       ordinal: 2,
       acceptedAt: { runId, position: 3 }
     })
-    expect(calls).toEqual(["ReadSnapshot", "ReadSnapshot", "StartWork", "Unpause"])
+    expect(replies.find(({ id }) => id === 8).result.structuredContent.result.value).toMatchObject({
+      _tag: "CapacityRead",
+      policy: { revision: 1, taskExecutionCapacity: 1 }
+    })
+    expect(replies.find(({ id }) => id === 9).result.structuredContent.result.value).toMatchObject({
+      _tag: "CapacityApplied",
+      policy: { revision: 2, taskExecutionCapacity: 2 }
+    })
+    expect(calls).toEqual(["ReadSnapshot", "ReadSnapshot", "StartWork", "Unpause", "ReadCapacity", "SetCapacity"])
   })
 )
 

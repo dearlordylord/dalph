@@ -30,6 +30,23 @@ const request = {
   operation: { _tag: "ReadSnapshot" }
 }
 
+it.effect("decodes revision-checked capacity requests and rejects malformed values before dispatch", () =>
+  Effect.gen(function* () {
+    for (const operation of [{ _tag: "ReadCapacity" }, { _tag: "SetCapacity", capacity: 2, expectedRevision: 1 }]) {
+      const input = { ...request, operation }
+      expect(yield* decodeRunningHostRequest(input, descriptor)).toEqual(input)
+    }
+    for (const field of ["capacity", "expectedRevision"]) {
+      for (const value of [0, -1, 1.5, "2", null, Number.MAX_SAFE_INTEGER + 1]) {
+        const operation = { _tag: "SetCapacity", capacity: 2, expectedRevision: 1, [field]: value }
+        expect(yield* decodeRunningHostRequest({ ...request, operation }, descriptor).pipe(Effect.flip)).toMatchObject({
+          _tag: "InvalidRequest"
+        })
+      }
+    }
+  })
+)
+
 it.effect("decodes selected-Run reads and explicit wake and Unpause before dispatch", () =>
   Effect.gen(function* () {
     expect(yield* decodeRunningHostRequest(request, descriptor)).toEqual(request)

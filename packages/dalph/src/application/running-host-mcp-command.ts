@@ -3,13 +3,17 @@ import { ExecutorGuidanceRequestId, RunId } from "@dalph/contracts"
 import { NodeCrypto } from "@effect/platform-node"
 import { Crypto, Effect, Encoding, Schema } from "effect"
 import { RefreshInterest, type RunningHostRequest } from "./running-host-contract.js"
-import { ExecutorGuidanceToolArguments } from "./running-host-mcp-tools.js"
+import { CapacityToolArguments, ExecutorGuidanceToolArguments } from "./running-host-mcp-tools.js"
 
 /** The client builds one deliberate command; provider identifiers stay inside the host. */
 export const makeRunningHostMcpOperation = Effect.fn("RunningHostMcp.operation")(function* (
   name: string,
   input: unknown
 ) {
+  if (name === "dalph_set_capacity") {
+    const args = yield* Schema.decodeUnknownEffect(CapacityToolArguments)(input, { onExcessProperty: "error" })
+    return { _tag: "SetCapacity" as const, capacity: args.capacity, expectedRevision: args.expectedRevision }
+  }
   if (name === "dalph_guide_executor") {
     const guidance = yield* Schema.decodeUnknownEffect(ExecutorGuidanceToolArguments)(input, {
       onExcessProperty: "error"
@@ -46,6 +50,7 @@ export const makeRunningHostMcpOperation = Effect.fn("RunningHostMcp.operation")
   const operations: Readonly<Record<string, RunningHostRequest["operation"]>> = {
     dalph_read_snapshot: { _tag: "ReadSnapshot" },
     dalph_read_run_control: { _tag: "ReadRunControl" },
+    dalph_read_capacity: { _tag: "ReadCapacity" },
     dalph_start_work: { _tag: "StartWork" },
     dalph_unpause: { _tag: "Unpause" }
   }

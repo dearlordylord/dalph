@@ -1,3 +1,4 @@
+import { compatibleRunningHostResponse } from "./running-host-response-compatibility.js"
 import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This client allocates process-local request correlation only. */
 import { NodeCrypto, NodeHttpClient } from "@effect/platform-node"
@@ -18,149 +19,6 @@ import {
 
 const redirectStatusMinimum = 300
 const redirectStatusMaximum = 400
-const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], ReadonlyArray<string>>> = {
-  ReadSnapshot: ["NotReady", "Ready", "Closed"],
-  ReadInspectionSnapshot: ["InspectionSnapshot"],
-  RefreshInspection: ["InspectionSnapshot"],
-  WatchInspection: [],
-  ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
-  ReadResultRecoveryDirection: ["ResultRecoveryDirectionRecorded", "ResultRecoveryDirectionNotRecorded"],
-  ApplyResultRecoveryDirection: ["ResultRecoveryDirectionRecorded"],
-  SendExecutorGuidance: ["ExecutorGuidanceResult"],
-  StartWork: ["WakeSubmitted"],
-  Refresh: ["RefreshSubmitted"],
-  Unpause: ["UnpauseApplied"],
-  WatchSnapshots: []
-}
-const inspectionOperations = ["ReadInspectionSnapshot", "RefreshInspection", "WatchInspection"] as const
-const compatibleFailures: Readonly<
-  Record<RunningHostError["_tag"], ReadonlyArray<RunningHostRequest["operation"]["_tag"]>>
-> = {
-  SubscriptionLimitExceeded: ["WatchSnapshots", "WatchInspection"],
-  UnpausePartiallyApplied: ["Unpause"],
-  RunClosed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection", "SendExecutorGuidance"],
-  ReadFailed: [
-    "ReadSnapshot",
-    "ReadRunControl",
-    "ReadResultRecoveryDirection",
-    "ReadInspectionSnapshot",
-    "RefreshInspection",
-    "WatchInspection"
-  ],
-  ProjectionFailed: [
-    "ReadSnapshot",
-    "ReadRunControl",
-    "ReadResultRecoveryDirection",
-    "ReadInspectionSnapshot",
-    "RefreshInspection",
-    "WatchInspection"
-  ],
-  CommandFailed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection", "SendExecutorGuidance"],
-  CommandOutcomeUnknown: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection", "SendExecutorGuidance"],
-  FrameTooLarge: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  HostClosing: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  HostInstanceMismatch: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  HostUnavailable: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  InvalidRequest: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  ProtocolVersionUnsupported: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  RunMismatch: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  TransportFailed: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ],
-  WriteTimedOut: [
-    ...inspectionOperations,
-    "ReadSnapshot",
-    "ReadRunControl",
-    "StartWork",
-    "Unpause",
-    "Refresh",
-    "ApplyResultRecoveryDirection",
-    "SendExecutorGuidance",
-    "ReadResultRecoveryDirection"
-  ]
-}
-const compatibleFailure = (request: RunningHostRequest, error: RunningHostError): boolean =>
-  (!("operation" in error) || error.operation === request.operation._tag) &&
-  compatibleFailures[error._tag].includes(request.operation._tag)
-
 const transportError = (error: unknown, phase: "Handshake" | "Response"): RunningHostError => {
   const known = Schema.decodeUnknownOption(RunningHostError)(error)
   return known._tag === "Some" ? known.value : { _tag: "TransportFailed", phase, reason: "ResponseUnavailable" }
@@ -312,10 +170,7 @@ const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (reques
         reason: "RecoveryResponseCorrelationMismatch"
       })
   }
-  const compatible =
-    envelope.result._tag === "Success"
-      ? successTags[request.operation._tag].includes(envelope.result.value._tag)
-      : compatibleFailure(request, envelope.result.error)
+  const compatible = compatibleRunningHostResponse(request, envelope)
   if (!compatible)
     return yield* Effect.fail<RunningHostError>({
       _tag: "TransportFailed",
@@ -349,7 +204,8 @@ const failureAfterSubmission = (
   runningHostFailureEnvelope(
     correlation,
     submitted &&
-      (operation._tag === "StartWork" ||
+      (operation._tag === "SetCapacity" ||
+        operation._tag === "StartWork" ||
         operation._tag === "Unpause" ||
         operation._tag === "Refresh" ||
         operation._tag === "ApplyResultRecoveryDirection" ||

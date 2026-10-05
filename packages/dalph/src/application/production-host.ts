@@ -168,6 +168,7 @@ import {
 } from "./production.js"
 
 import type { RunningHostCommandRequest, RunningHostCommandValue, RunningHostError } from "./running-host-contract.js"
+import { makeRunningHostCapacity } from "./running-host-capacity.js"
 
 /** Process-local signals and the host-owned lifecycle boundary exposed after one exact Run beginning is acknowledged. */
 export interface ProductionHostObservation {
@@ -209,6 +210,7 @@ export interface ProductionRunningHostObservation<E> extends ProductionHostObser
   readonly inspection?: Effect.Effect<RunningHostInspectionService, never, Scope.Scope>
   readonly target: ProductionRepositoryHostConfiguration["target"]
   readonly readRunControl: Effect.Effect<ProductionPassiveRunControl, ProductionPassiveControlUnavailable>
+  readonly readAttachedCapacity?: ReturnType<typeof makeRunningHostCapacity>["read"]
   readonly activationFailure: Effect.Effect<Option.Option<E>>
   /** Host-owned failure notification; subscribers do not poll or reactivate work. */
   readonly awaitActivationFailure?: Effect.Effect<never, E>
@@ -1365,7 +1367,11 @@ export const withDecodedProductionRepositoryHost = <
         )
       )
       const inspection = runningHostInspectionFromServices(run, configuration.target)
+      const capacity = Option.isSome(bootstrap)
+        ? makeRunningHostCapacity(selection.runId, bootstrap.value.operatorControl, readRunControl)
+        : undefined
       const observation = {
+        ...(capacity === undefined ? {} : { readAttachedCapacity: capacity.read }),
         ...(Option.isSome(inspection) ? { inspection: inspection.value } : {}),
         acceptedHistory: source.acceptedHistory,
         current: diagnosticCurrent,
@@ -1382,6 +1388,15 @@ export const withDecodedProductionRepositoryHost = <
         awaitExitResult: applicationExit.awaitExitResult.pipe(Effect.asVoid),
         registerObservationDrain: applicationExit.registerProcessLocalDrain,
         executeAttachedCommand: Effect.fn("ProductionHost.executeAttachedCommand")(function* (request) {
+          if (request.operation._tag === "SetCapacity") {
+            if (capacity === undefined)
+              return yield* Effect.fail<RunningHostError>({
+                _tag: "RunInactive",
+                runId: request.runId,
+                operation: "SetCapacity"
+              })
+            return yield* capacity.set({ ...request, operation: request.operation })
+          }
           const owner = Context.getOption(run, RunReactivationOwner)
           if (request.operation._tag === "SendExecutorGuidance") {
             const guidanceRequestId = request.operation.guidanceRequestId

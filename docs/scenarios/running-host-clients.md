@@ -774,7 +774,7 @@ below the existing Run-control and application-Exit model boundaries. No Quint
 state or action changes: the accepted direction and lifecycle cutoff remain their
 existing authorities. Full quality and fresh model gates qualify the candidate;
 callback completion is proved by the concrete tests, not inferred from a model.
-Capacity remains #370, paused Refresh #371, watch #372, abrupt killed-host
+Capacity is mapped below; paused Refresh #371, watch #372, abrupt killed-host
 reconstruction #374, and full changing-graph qualification #375.
 
 The accepted [Docker-IP attachment extension](running-host-docker-ip.md) supersedes the original loopback-only address restriction. Existing loopback commands remain valid.
@@ -800,3 +800,38 @@ The upstream subscription remains loss-free and may retain an unbounded queue
 when its pump is unscheduled or projection is delayed. These tests qualify
 independent draining and exact finalization, plus bounded adapter retention;
 they do not establish a global memory bound or durable observation history.
+
+## Maintained capacity implementation (#370)
+
+The CLI and MCP clients read or change the selected host's active Run policy.
+`attach capacity` / `dalph_read_capacity` returns `CapacityRead`; `attach
+set-capacity` / `dalph_set_capacity` submits the caller's original expected
+revision through the existing host-owned command lifetime. `CapacityApplied`
+contains the complete accepted policy. `PolicyRevisionConflict` retains the
+original expected revision and complete current policy. Clients never reread a
+revision and overwrite automatically. Capacity reads between runtime leases do
+not reconstruct a journal-backed policy or offer activation.
+
+The maintained recorded cassettes **runningHostCapacityAdmissionPrefix** and
+**runningHostCapacityResponseLossPrefix** are generated from the real Git/SQLite
+production fixture by the admission and response-loss tests below. Every
+checkpoint checks workflow history, operational state, pure selection and
+applied occurrence position equivalence. They stop before deliberate application
+Exit; Exit is fixture disposition, not a consequence of shrinking capacity or
+losing a client. The complete prerequisite-delivery suffix remains #375.
+
+| Owned scenario or boundary | Maintained assertion owner |
+| --- | --- |
+| S3 ordinary admission | `running-host-capacity-admission.acceptance.test.ts`: `the agent raises and lowers capacity, admits B through actual claim worktree and Begin, and retains both exact attempts`. A starts at one; raising to two admits B through claim intent/acquisition, post-claim graph intent/facts, exact plan, actual Git worktree and Begin intent/effect. C's complete graph retains both blockers and has no attempt. Contraction appends only the policy event, retains exact claims/plans/worktrees and calls no tracker/Git/executor suspension, cancellation or cleanup boundary. |
+| S3 ceiling on eligible work | `delivery-runtime-admission.test.ts`: `retains all holders across contraction and admits only after occupancy falls below the new capacity` exercises subsequent decisions with an independently eligible candidate while occupancy is above, at, and below the ceiling. `admits exactly the next two candidates after capacity expands from one to three` owns expansion without replacing existing positions. C's dependency blocking in the production prefix does not substitute for these admission decisions. |
+| S5 capacity response loss | `running-host-capacity.acceptance.test.ts`: separately for CLI/MCP and SQLite AfterInsert, AfterCommit, and AfterCompletion, kills the actual child, releases the cut, waits for host command completion, reads the accepted policy and retries the original revision. The retry returns a complete conflict; one capacity record and unchanged exact attempt plans remain. The client requests zero application Exits. |
+| S5 competing writers | The same acceptance file: `two attached writers at the same revision produce one applied policy and one complete conflict`. Concurrent requests retain their distinct chosen capacities and original revision; the loser receives the winner's complete policy and only one durable change exists. |
+| S11 native adapter refusals and success parity | `running-host-capacity-clients.test.ts`: native CLI/MCP success uses separate equivalent starting policies. Per-adapter malformed capacity/revision, wrong-Run and closing tests prove zero capacity effects; MCP closure occurs after actual initialization. Malformed MCP tool arguments retain JSON-RPC parser failures. `running-host-client-parity.test.ts` owns each applicable shared capacity failure row and correlation, including uncertain outcomes. |
+| S12 inactive and terminal production boundaries | `running-host-capacity-lifecycle.acceptance.test.ts`: holds the actual idle handoff after unfinished executor work, proves read/set RunInactive with unchanged journal/tracker/Git observations, then releases the owner deliberately. Its separate completed delivery proves RunClosed with the actual accepted position and no further append or authority call. |
+| S12 loss of lease during an operation | `running-host-capacity.test.ts`: inactive controls preserve the concrete RunInactive race; an established terminal recheck normalizes to exact RunClosed. A failed terminal recheck remains ReadFailed or CommandFailed before application, rather than invented inactive evidence. |
+| Decoded boundaries and tools | `running-host-contract.test.ts`, `running-host-cli.test.ts`, and `running-host-mcp.test.ts` own safe revision/capacity decoding, one original-revision submission, closed tool arguments and advertised capacity tools. HTTP, CLI and MCP share `RunningHostCapacityArguments`. |
+
+These adapters reuse the existing revisioned policy and admission controller;
+no scheduling action, workflow event or Quint model changes. Existing capacity
+and application-Exit laws retain ownership. Qualification results belong to the
+exact candidate's handoff, not this maintained test mapping.

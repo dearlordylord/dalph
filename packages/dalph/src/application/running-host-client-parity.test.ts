@@ -5,7 +5,14 @@ import process from "node:process"
 import { setTimeout, clearTimeout } from "node:timers"
 import { fileURLToPath } from "node:url"
 import { RunId } from "@dalph/contracts"
-import { FixtureTarget, ControlDirectionApplicationOrdinal, JournalPosition, TraceCursor } from "@dalph/orchestrator"
+import {
+  FixtureTarget,
+  ControlDirectionApplicationOrdinal,
+  JournalPosition,
+  TraceCursor,
+  RunPolicyRevision,
+  TaskWorkCapacity
+} from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
 import { Clock, Effect, Schema } from "effect"
 import { expect } from "vitest"
@@ -69,6 +76,14 @@ const normalize = (error: RunningHostError) =>
       : error
 
 const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError> => [
+  { _tag: "RunInactive", runId, operation: "ReadCapacity" },
+  { _tag: "RunInactive", runId, operation: "SetCapacity" },
+  {
+    _tag: "PolicyRevisionConflict",
+    runId,
+    expectedRevision: RunPolicyRevision.make(1),
+    current: { revision: RunPolicyRevision.make(2), taskExecutionCapacity: TaskWorkCapacity.make(3) }
+  },
   { _tag: "InvalidRequest", fieldPath: "operation", code: "Invalid" },
   { _tag: "RunMismatch", requestedRunId: RunId.make("other"), selectedRunId: runId },
   { _tag: "HostInstanceMismatch", requestedHostInstanceId: HostInstanceId.make("old"), actualHostInstanceId: instance },
@@ -95,7 +110,7 @@ const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError>
     disposition: "Completed",
     terminatedAt: TraceCursor.make({ runId, position: JournalPosition.make(4) })
   },
-  ...(["StartWork", "Unpause", "Refresh"] as const).flatMap(
+  ...(["StartWork", "Unpause", "Refresh", "SetCapacity"] as const).flatMap(
     (operation): ReadonlyArray<RunningHostError> => [
       { _tag: "CommandFailed", operation, stage: "PreAdmission", causeTag: "NoControl", detail: "unavailable" },
       { _tag: "CommandFailed", operation, stage: "BeforeApplication", causeTag: "Rejected", detail: "not applied" },
@@ -124,26 +139,39 @@ const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError>
   }
 ]
 
-const operationsFor = (
-  error: RunningHostError
-): ReadonlyArray<"snapshot" | "control" | "start" | "unpause" | "refresh"> =>
+type AttachedParityOperation = "snapshot" | "control" | "start" | "unpause" | "refresh" | "capacity" | "set-capacity"
+const operationsFor = (error: RunningHostError): ReadonlyArray<AttachedParityOperation> =>
   error._tag === "CommandFailed" || error._tag === "CommandOutcomeUnknown"
     ? [
-        error.operation === "StartWork"
-          ? ("start" as const)
-          : error.operation === "Refresh"
-            ? ("refresh" as const)
-            : ("unpause" as const)
+        error.operation === "SetCapacity"
+          ? ("set-capacity" as const)
+          : error.operation === "StartWork"
+            ? ("start" as const)
+            : error.operation === "Refresh"
+              ? ("refresh" as const)
+              : ("unpause" as const)
       ]
-    : error._tag === "UnpausePartiallyApplied"
-      ? ["unpause" as const]
-      : error._tag === "RunClosed"
-        ? (["start", "unpause", "refresh"] as const)
-        : error._tag === "ReadFailed" || error._tag === "ProjectionFailed"
-          ? (["snapshot", "control"] as const)
-          : (["snapshot", "control", "start", "unpause", "refresh"] as const)
+    : error._tag === "PolicyRevisionConflict"
+      ? ["set-capacity"]
+      : error._tag === "RunInactive"
+        ? [error.operation === "ReadCapacity" ? "capacity" : "set-capacity"]
+        : error._tag === "UnpausePartiallyApplied"
+          ? ["unpause" as const]
+          : error._tag === "RunClosed"
+            ? (["start", "unpause", "refresh", "capacity", "set-capacity"] as const)
+            : error._tag === "ReadFailed" || error._tag === "ProjectionFailed"
+              ? (["snapshot", "control", "capacity"] as const)
+              : (["snapshot", "control", "start", "unpause", "refresh", "capacity", "set-capacity"] as const)
 
-for (const selectedOperation of ["snapshot", "control", "start", "unpause", "refresh"] as const) {
+for (const selectedOperation of [
+  "snapshot",
+  "control",
+  "start",
+  "unpause",
+  "refresh",
+  "capacity",
+  "set-capacity"
+] as const) {
   for (const [errorIndex, error] of failuresFor(LocalHostAddress.make("http://127.0.0.1:43127")).entries()) {
     if (!operationsFor(error).includes(selectedOperation)) continue
     it.live(
@@ -212,18 +240,26 @@ for (const selectedOperation of ["snapshot", "control", "start", "unpause", "ref
                 const source = yield* callRunningHost(
                   address,
                   runId,
-                  operation === "refresh"
-                    ? { _tag: "Refresh", interest: { _tag: "WholeGraph" } }
-                    : {
-                        _tag:
-                          operation === "snapshot"
-                            ? "ReadSnapshot"
-                            : operation === "control"
-                              ? "ReadRunControl"
-                              : operation === "start"
-                                ? "StartWork"
-                                : "Unpause"
+                  operation === "set-capacity"
+                    ? {
+                        _tag: "SetCapacity",
+                        capacity: TaskWorkCapacity.make(2),
+                        expectedRevision: RunPolicyRevision.make(1)
                       }
+                    : operation === "refresh"
+                      ? { _tag: "Refresh", interest: { _tag: "WholeGraph" } }
+                      : {
+                          _tag:
+                            operation === "snapshot"
+                              ? "ReadSnapshot"
+                              : operation === "control"
+                                ? "ReadRunControl"
+                                : operation === "capacity"
+                                  ? "ReadCapacity"
+                                  : operation === "start"
+                                    ? "StartWork"
+                                    : "Unpause"
+                        }
                 )
                 if (source.result._tag !== "Failure") return expect.fail("source client must return the shared failure")
                 expect(normalize(source.result.error)).toEqual(normalize(error))
@@ -235,7 +271,8 @@ for (const selectedOperation of ["snapshot", "control", "start", "unpause", "ref
                   "--run",
                   runId,
                   "--json",
-                  ...(operation === "refresh" ? ["--whole-graph"] : [])
+                  ...(operation === "refresh" ? ["--whole-graph"] : []),
+                  ...(operation === "set-capacity" ? ["--capacity", "2", "--expected-revision", "1"] : [])
                 ])
                 const expectedStatus = [
                   "HostUnavailable",
@@ -269,16 +306,24 @@ for (const selectedOperation of ["snapshot", "control", "start", "unpause", "ref
                     method: "tools/call",
                     params: {
                       name:
-                        operation === "snapshot"
-                          ? "dalph_read_snapshot"
-                          : operation === "control"
-                            ? "dalph_read_run_control"
-                            : operation === "refresh"
-                              ? "dalph_refresh"
-                              : operation === "start"
-                                ? "dalph_start_work"
-                                : "dalph_unpause",
-                      arguments: { runId, ...(operation === "refresh" ? { interest: { _tag: "WholeGraph" } } : {}) }
+                        operation === "set-capacity"
+                          ? "dalph_set_capacity"
+                          : operation === "capacity"
+                            ? "dalph_read_capacity"
+                            : operation === "snapshot"
+                              ? "dalph_read_snapshot"
+                              : operation === "control"
+                                ? "dalph_read_run_control"
+                                : operation === "refresh"
+                                  ? "dalph_refresh"
+                                  : operation === "start"
+                                    ? "dalph_start_work"
+                                    : "dalph_unpause",
+                      arguments: {
+                        runId,
+                        ...(operation === "refresh" ? { interest: { _tag: "WholeGraph" } } : {}),
+                        ...(operation === "set-capacity" ? { capacity: 2, expectedRevision: 1 } : {})
+                      }
                     }
                   }
                 ]
