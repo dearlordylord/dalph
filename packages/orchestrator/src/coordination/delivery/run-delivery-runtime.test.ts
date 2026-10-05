@@ -1,3 +1,11 @@
+import {
+  TargetPromotionGit,
+  TargetPromotionSafetyFailure,
+  TargetPromotionGitReadObservation,
+  TargetPromotionCompareAndSetResult
+} from "../../workflow/protocols/target-promotion/events.js"
+import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
+import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { ResultRecoveryRequestId } from "../../workflow/protocols/result-recovery/events.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
@@ -7237,4 +7245,236 @@ it.effect("fails closed on a pre-G2 proposal ownership conflict", () =>
       expect(failure.proposalIds).toEqual([conflicted.id])
     }
   })
+)
+
+it.effect("retains an occupied promotion exclusion across unrelated progress until explicit reactivation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const source = integrationFinalityFixture
+      const specification = makeTaskWorkSpecification({
+        body: "Retain occupied promotion",
+        taskId: source.taskId,
+        title: "Promotion exclusion"
+      })
+      const accepted = makeAcceptedIntegrationHistory({
+        acceptedResult: source.qualifiedCandidate.run.session.acceptedResult,
+        activeClaim: source.activeClaim,
+        integrationTarget: source.integrationTarget,
+        plannedAttempt: { ...source.plannedAttempt, runId, taskRevision: specification.fingerprint },
+        taskSpecification: specification,
+        runId,
+        targetHeadSha: source.qualifiedCandidate.run.session.expectedTargetHead,
+        trackerTarget: target
+      })
+      const promoted = makePromotedIntegrationHistory({
+        candidateCommit: source.qualifiedCandidate.candidateCommit,
+        candidateText: source.qualifiedCandidate.candidateText,
+        originalClaim: accepted.activeClaim,
+        records: accepted.records,
+        session: integratorCorrelationFor(accepted)
+      })
+      const intentIndex = promoted.promotedRecords.findIndex(({ event }) => event._tag === "TargetPromotionIntended")
+      const records = promoted.promotedRecords.slice(0, intentIndex)
+      const publication = records.find(({ event }) => event._tag === "RemotePublicationSucceeded")?.event
+      if (intentIndex < 0 || publication?._tag !== "RemotePublicationSucceeded")
+        return yield* Effect.die("missing published candidate prefix")
+      const transition = RunnableFrontierTransition.RunTargetPromotion({
+        candidate: promoted.qualifiedCandidate,
+        publication,
+        responsibility: accepted.responsibility
+      })
+      const reconcile = RunnableFrontierTransition.ReconcileTargetPromotionAttempt({
+        candidate: promoted.qualifiedCandidate,
+        publication,
+        responsibility: accepted.responsibility
+      })
+      const proposalFor = (selected: typeof transition | typeof reconcile) => {
+        const proposals = deliveryProposalsOf({
+          acceptedOperationIds: HashSet.empty(),
+          fresh: [],
+          integrationResponsibilities: [accepted.responsibility],
+          responsibilities: [],
+          runId,
+          transitions: [selected]
+        })
+        return Option.getOrThrow(
+          Option.fromUndefinedOr([...proposals.ticketDelivery, ...proposals.deliverySettlement][0])
+        )
+      }
+      const proposal = proposalFor(transition)
+      const refreshed = proposalFor(reconcile)
+      const unrelated = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(records.length),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+      const base = yield* baseEvaluation
+      const initial = {
+        ...withProposals(base, [proposal, unrelated]),
+        acceptedAt: JournalPosition.make(records.length)
+      }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const journalContext = yield* Layer.build(liveJournalTestLayer({ records, runId, target }))
+      const journal = Context.get(journalContext, Journal)
+      const occupied = yield* Ref.make(true)
+      const reads = yield* Ref.make(0)
+      const writes = yield* Ref.make(0)
+      const acceptedThrough = yield* Ref.make(initial.acceptedAt)
+      const statusCurrent = yield* Ref.make(initial.current)
+      const refused = yield* Deferred.make<void>()
+      const git = TargetPromotionGit.of({
+        read: (request) =>
+          Effect.gen(function* () {
+            yield* Ref.update(reads, (count) => count + 1)
+            if (yield* Ref.get(occupied))
+              return yield* new TargetPromotionSafetyFailure({
+                candidateCommit: request.candidateCommit,
+                expectedHead: request.expectedTargetHead,
+                target: request.integrationTarget,
+                refusal: { _tag: "OccupiedWorktree", worktree: WorktreeLocator.make("/foreign/worktree") }
+              })
+            return TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+              currentHeadSha: request.expectedTargetHead
+            })
+          }),
+        compareAndSet: (request) =>
+          Ref.update(writes, (count) => count + 1).pipe(
+            Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: request.candidateCommit }))
+          )
+      })
+      const executor = DeliveryActionExecutor.of({
+        execute: (action, lease) =>
+          Effect.gen(function* () {
+            if (action.proposal.id === unrelated.id) {
+              yield* Deferred.await(refused)
+              const appended = yield* journal.append(
+                runId,
+                controlDirectionAppliedRecordKey(ControlDirectionApplicationOrdinal.make(1)),
+                ControlDirectionAppliedEvent.make({
+                  direction: "Unpause",
+                  initiatedBy: { _tag: "Operator" },
+                  occurrenceClassification: "InitiatedAction",
+                  ordinal: ControlDirectionApplicationOrdinal.make(1),
+                  subject: { _tag: "Task", runId, taskId: TaskId.make("unrelated-safety-task") },
+                  version: workflowJournalEventVersion
+                })
+              )
+              yield* Ref.set(acceptedThrough, appended.position)
+              // The marker must survive a missing proposal and a different recovery route.
+              yield* relation.publish({
+                ...withProposals(initial, []),
+                current: yield* Ref.get(statusCurrent),
+                acceptedAt: appended.position
+              })
+              yield* relation.publish({
+                ...withProposals(initial, [refreshed]),
+                current: yield* Ref.get(statusCurrent),
+                acceptedAt: appended.position
+              })
+              return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+            }
+            if (action._tag !== "IdentityFreeAction") return yield* Effect.die("promotion must be identity-free")
+            const selected = action.proposal.id === proposal.id ? transition : reconcile
+            const result = yield* executeIntegrationAction(action, selected, lease, target).pipe(
+              Effect.provideContext(journalContext),
+              Effect.provideService(TargetPromotionRuntime, { git }),
+              Effect.provideService(CoordinatorOwnership, { release: Effect.void, runMutation: (effect) => effect }),
+              Effect.provideService(RemoteBaselineGit, {
+                observe: () => Effect.die("promotion cannot reread baseline"),
+                catchUp: () => Effect.die("promotion cannot catch up baseline"),
+                reconcileCatchUp: () => Effect.die("promotion cannot reconcile baseline")
+              }),
+              Effect.provideService(RemotePublicationGit, {
+                admit: () => Effect.die("promotion cannot readmit publication"),
+                observe: () => Effect.die("promotion cannot reread remote"),
+                push: () => Effect.die("promotion cannot repeat push"),
+                prepareSenderCustody: () => Effect.die("promotion cannot prepare sender"),
+                reconcileSenderCustody: () => Effect.die("promotion cannot reconcile sender")
+              })
+            )
+            const current = yield* journal.read(runId)
+            const position = current[current.length - 1]?.position
+            if (position === undefined) return yield* Effect.die("missing promotion history")
+            yield* Ref.set(acceptedThrough, position)
+            if (result._tag === "ActionDeferred") {
+              const workflow = yield* journal.state.get
+              const graph = workflow.graph
+              const evidence = journaledIntegrationEvidenceOf(workflow.reconstructed.workflowHistory.evidence)
+              const tickets = ticketDeliveriesOf(
+                boundedParallelTicketsOf(frontierOf({ exactEvidence: evidence, graph, policy })),
+                evidence
+              )
+              const current = {
+                ...initial.current,
+                trackerGraph: graph,
+                ticketDeliveries: tickets,
+                settlements: deliverySettlementsOf(tickets)
+              }
+              yield* Ref.set(statusCurrent, current)
+              yield* relation.publish({
+                ...withProposals(initial, [proposal, unrelated]),
+                current,
+                acceptedAt: position
+              })
+              yield* Deferred.succeed(refused, undefined)
+            } else yield* relation.publish({ ...withProposals(initial, []), acceptedAt: position })
+            return result
+          })
+      })
+      const publicationBoundary = DeliveryAcceptedFactPublication.of({
+        awaitCurrent: Ref.get(acceptedThrough).pipe(
+          Effect.map((acceptedThrough) => ({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId }))
+        )
+      })
+      const resources = yield* Layer.build(testDeliveryRuntimeResourcesLayer)
+      const targets = Context.get(resources, DeliveryRuntimeResources).integrationTargets
+      yield* Effect.addFinalizer(() => targets.releaseAll)
+      const activate = Effect.gen(function* () {
+        yield* targets.acquire(accepted.responsibility)
+        yield* targets.publishAcceptedOwnership(accepted.responsibility)
+        return yield* runDeliveryRuntime(runId, relation).pipe(
+          Effect.provideContext(resources),
+          Effect.provide(identitySupportLayers),
+          Effect.provideService(DeliveryAcceptedFactPublication, publicationBoundary),
+          Effect.provideService(DeliveryActionExecutor, executor),
+          Effect.timeout(Duration.seconds(2))
+        )
+      })
+      const first = yield* activate
+      expect(first._tag).toBe("PassiveRuntimeQuiescence")
+      expect(
+        deliveryStatusOf(
+          { _tag: "Run", runId },
+          { _tag: "Ready", evaluation: { ...initial, current: first.current }, liveOwners: [] }
+        )
+      ).toMatchObject({
+        _tag: "DeliveryStatusAvailable",
+        entries: expect.arrayContaining([
+          {
+            _tag: "TargetPromotionSafetyRefused",
+            classification: "Blocked",
+            subject: expect.objectContaining({ taskId: accepted.plannedAttempt.taskId }),
+            standing: expect.objectContaining({
+              state: expect.objectContaining({ refusal: { _tag: "OccupiedWorktree", worktree: "/foreign/worktree" } })
+            })
+          }
+        ])
+      })
+      expect(yield* Ref.get(reads)).toBe(1)
+      expect(yield* Ref.get(writes)).toBe(0)
+      const blocked = yield* journal.read(runId)
+      expect(blocked.filter(({ event }) => event._tag === "TargetPromotionSafetyRefused")).toHaveLength(1)
+      expect(blocked.filter(({ event }) => event._tag === "ControlDirectionApplied")).toHaveLength(1)
+      expect(blocked.some(({ event }) => event._tag === "CompletionTaskIntended")).toBe(false)
+      yield* Ref.set(occupied, false)
+      yield* relation.publish({ ...withProposals(initial, [proposal]), acceptedAt: yield* Ref.get(acceptedThrough) })
+      expect((yield* activate)._tag).toBe("PassiveRuntimeQuiescence")
+      expect(yield* Ref.get(reads)).toBe(2)
+      expect(yield* Ref.get(writes)).toBe(1)
+      const final = yield* journal.read(runId)
+      expect(final.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(1)
+      expect(final.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+    })
+  )
 )

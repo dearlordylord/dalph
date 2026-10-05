@@ -1,3 +1,4 @@
+import { canonicalIdentity } from "./status-identity.js"
 /* eslint-disable functional/immutable-data -- local projection scratch state never escapes the read. */
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
 import { Match, Option, Schema } from "effect"
@@ -18,7 +19,7 @@ import { type DeliveryStatusEntry, type DeliveryStatusSubject } from "./delivery
 import { workflowResponsibilityKey, type WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 
-type IdentityPart = string | number
+export { canonicalIdentity } from "./status-identity.js"
 
 /** Non-negative position of a task in the accepted delivery order. */
 const DeliveryTaskPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
@@ -47,16 +48,6 @@ export const historicalProposalTaskOrder = (order: DeliveryProposalOrderEvidence
     TrackerGraphOrder: () => runWideTaskOrder,
     UnqueuedAcceptedResultOrder: ({ frontierOrdinal }) => taskOrderAt(deliveryTaskPositionAt(frontierOrdinal))
   })
-
-/** Injective identity encoding: every typed component carries its own length. */
-export const canonicalIdentity = (parts: ReadonlyArray<IdentityPart>): string =>
-  parts
-    .map((part) => {
-      // Domain callers provide finite branded ordinals/positions; numeric zero has one identity.
-      const value = typeof part === "number" ? String(part) : part
-      return `${typeof part === "number" ? "n" : "s"}${value.length}:${value}`
-    })
-    .join("")
 
 const canonicalValue = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonicalValue)
@@ -188,6 +179,8 @@ type NonActionStatusEntry = Exclude<
 >
 
 const statusEntryPosition = Match.typeTags<NonActionStatusEntry, StructuralOrderPosition>()({
+  TargetPromotionSafetyRefused: (entry) =>
+    orderPosition(entry.standing.state.correlation.qualifiedCandidate.qualifiedAt),
   ExecutorResultRejected: (entry) => orderPosition(entry.responsibility.beganAt),
   ExecutorFailure: (entry) => orderPosition(entry.responsibility.beganAt),
   DependencyWait: (entry) => dependencyEntryPosition(entry.standing),
@@ -222,6 +215,12 @@ const dependencyStandingIdentity = (
 }
 
 export const statusEntryIdentity = Match.typeTags<DeliveryStatusEntry, string>()({
+  TargetPromotionSafetyRefused: (entry) =>
+    canonicalIdentity([
+      statusEntryPrefix(entry),
+      entry.standing.state.correlation.requestId,
+      entry.standing.state.observationOrdinal
+    ]),
   ExecutorResultRejected: (entry) =>
     canonicalIdentity([statusEntryPrefix(entry), workflowResponsibilityKey(entry.responsibility)]),
   ExecutorFailure: (entry) =>
@@ -394,6 +393,7 @@ const settlementPhenomenonOrderValue = 10
 const relinquishmentPhenomenonOrderValue = 11
 const executorFailurePhenomenonOrderValue = 12
 const phenomenonOrder: Readonly<Record<DeliveryStatusEntry["_tag"], StatusComparisonRank>> = {
+  TargetPromotionSafetyRefused: comparisonRank(integrationTargetPhenomenonOrderValue),
   ExecutorResultRejected: comparisonRank(executorFailurePhenomenonOrderValue),
   ExecutorFailure: comparisonRank(executorFailurePhenomenonOrderValue),
   DependencyWait: comparisonRank(1),

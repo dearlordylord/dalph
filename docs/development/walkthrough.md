@@ -102,6 +102,7 @@ test "${DALPH_DEMO_INTEGRATION_REF}" = refs/heads/main
 export DALPH_DEMO_BASE_SHA
 DALPH_DEMO_BASE_SHA="$(git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" rev-parse "${DALPH_DEMO_INTEGRATION_REF}^{commit}")"
 git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" cat-file -e "${DALPH_DEMO_BASE_SHA}^{commit}"
+git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" switch --detach "${DALPH_DEMO_BASE_SHA}"
 export DALPH_DEMO_COMMON_DIRECTORY
 DALPH_DEMO_COMMON_DIRECTORY="$(git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" \
   rev-parse --path-format=absolute --git-common-dir)"
@@ -115,7 +116,13 @@ test "$(git --git-dir "${DALPH_DEMO_PUBLICATION_REPOSITORY}" rev-parse "${DALPH_
 configured `integrationRef` is the local `refs/heads/main`; Dalph updates that
 local ref and publishes the integrated commit to the distinct bare repository
 at `DALPH_DEMO_PUBLICATION_REPOSITORY`. The common directory is also the exact
-OS-backed coordinator-lock target. The Codex executable is the built workspace
+OS-backed coordinator-lock target. The disposable clone is detached before
+launch so no registered worktree checks out the integration ref. Dalph refuses
+local promotion when that ref is occupied, including a clean checkout. The
+status names the blocking worktree or unreadable Git boundary; publication and
+the qualified candidate remain retained. Inspect `git worktree list --porcelain`
+and resolve the named checkout outside Dalph, then activate the existing Run
+again. Dalph never resets, cleans, detaches or removes that checkout for you. The Codex executable is the built workspace
 dependency, not an inferred executable from a target repository.
 
 #### 3. Write the complete non-secret configuration

@@ -22,6 +22,16 @@ const commonOf = (entry: DeliveryStatusEntry) => ({
 /** Exhaustive one-way identity projection; executable payload and private authority never cross this boundary. */
 export const publicDeliveryStatusEntryOf = Match.type<DeliveryStatusEntry>().pipe(
   Match.tagsExhaustive({
+    TargetPromotionSafetyRefused: (entry): PublicDeliveryStatusEntry => ({
+      ...commonOf(entry),
+      _tag: entry._tag,
+      classification: entry.classification,
+      boundary: entry.standing.state.boundary,
+      taskId: entry.subject.taskId,
+      integrationTarget: entry.standing.state.correlation.qualifiedCandidate.run.session.integrationTarget,
+      candidateCommit: entry.standing.state.correlation.qualifiedCandidate.candidateCommit,
+      refusal: entry.standing.state.refusal
+    }),
     ExecutorResultRejected: (entry): PublicDeliveryStatusEntry => ({
       ...commonOf(entry),
       _tag: entry._tag,

@@ -1,6 +1,7 @@
 import { Effect, Layer, Schema } from "effect"
 import { GitCommitSha } from "@dalph/contracts"
 import { GitCommand, type GitCommandService } from "./command.js"
+import { provePromotionTargetDirect, provePromotionTargetUnoccupied } from "./target-promotion-safety.js"
 import {
   TargetPromotionCompareAndSetFailure,
   TargetPromotionCompareAndSetResult,
@@ -64,7 +65,9 @@ const compareAndSetFailure = (
 
 /**
  * Real Git target promotion: reads classify exact ancestry, and update-ref
- * receives the expected old object so stale work can never overwrite it.
+ * receives the expected old object so stale work can never overwrite it. Direct-ref
+ * identity and fresh complete occupancy are checked inside cooperative ownership.
+ * External Git users racing that final read are outside this ownership scope.
  */
 export const nodeGitTargetPromotionLayer = Layer.effect(
   TargetPromotionGit,
@@ -72,6 +75,7 @@ export const nodeGitTargetPromotionLayer = Layer.effect(
     const commands = yield* GitCommand
 
     const read = Effect.fn("TargetPromotionGit.Node.read")(function* (request: TargetPromotionGitRequest) {
+      yield* provePromotionTargetDirect(commands, request)
       const currentHeadSha = yield* readCurrentHead(commands, request)
       if (currentHeadSha === request.candidateCommit) {
         return TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha })
@@ -100,6 +104,9 @@ export const nodeGitTargetPromotionLayer = Layer.effect(
           target: request.integrationTarget
         })
       }
+      if (ancestry.exitCode === 1 && currentHeadSha === request.expectedTargetHead) {
+        yield* provePromotionTargetUnoccupied(commands, request)
+      }
       return ancestry.exitCode === 0
         ? TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha })
         : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha })
@@ -108,6 +115,8 @@ export const nodeGitTargetPromotionLayer = Layer.effect(
     const compareAndSet = Effect.fn("TargetPromotionGit.Node.compareAndSet")(function* (
       request: TargetPromotionGitRequest
     ) {
+      yield* provePromotionTargetDirect(commands, request)
+      yield* provePromotionTargetUnoccupied(commands, request)
       const result = yield* commands
         .run(request.integrationTarget.repository, [
           "update-ref",

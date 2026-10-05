@@ -32,6 +32,7 @@ import {
 } from "./events.js"
 import { TargetPromotionCorrelationContradiction, TargetPromotionHistoryContradiction } from "./errors.js"
 import {
+  targetPromotionSafetyRefusalIssueFor,
   deriveTargetPromotionState,
   targetPromotionCorrelationConflictFor,
   targetPromotionReconciliationDeferralIssueFor,
@@ -144,7 +145,9 @@ export const validateTargetPromotionState = Effect.fn("TargetPromotion.validateS
       requestId: correlation.requestId
     })
   }
-  const deferralIssue = targetPromotionReconciliationDeferralIssueFor(records, correlation)
+  const deferralIssue =
+    targetPromotionReconciliationDeferralIssueFor(records, correlation) ??
+    targetPromotionSafetyRefusalIssueFor(records, correlation)
   if (deferralIssue !== undefined) {
     return yield* new TargetPromotionHistoryContradiction({ detail: deferralIssue, requestId: correlation.requestId })
   }

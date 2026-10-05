@@ -73,6 +73,9 @@ import {
   TargetPromotionSuccessObservation,
   TargetPromotionStaleObservation,
   TargetPromotionNonConvergenceObservation,
+  TargetPromotionSafetyRefusedEvent,
+  TargetPromotionSafetyObservationOrdinal,
+  TargetPromotionSafetyRefusal,
   TargetPromotionReconciliationDeferral,
   TargetPromotionAttemptLimit,
   TargetPromotionTerminalBasis,
@@ -544,6 +547,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     correlation: TargetPromotionCorrelation,
     reason: TargetPromotionAttemptReason,
     ...initiatedByCoordinator
+  },
+  TargetPromotionSafetyRefused: {
+    boundary: TargetPromotionSafetyRefusedEvent.fields.boundary,
+    basis: TargetPromotionTerminalBasis,
+    correlation: TargetPromotionCorrelation,
+    observationOrdinal: TargetPromotionSafetyObservationOrdinal,
+    refusal: TargetPromotionSafetyRefusal,
+    ...nonActionOccurrence
   },
   TargetPromotionReconciliationDeferred: {
     afterAttemptOrdinal: TargetPromotionAttemptOrdinal,

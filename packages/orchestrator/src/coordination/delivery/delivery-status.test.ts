@@ -1,9 +1,5 @@
-import { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
-import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-/* eslint-disable import/no-nodejs-modules -- The capability guard reads this module's static imports only. */
-import { readFileSync } from "node:fs"
-import { fileURLToPath } from "node:url"
 import {
+  WorktreeLocator,
   AttemptId,
   makeTaskWorkSpecification,
   PlannedTaskAttempt,
@@ -14,6 +10,16 @@ import {
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey
 } from "@dalph/contracts"
+import { TargetPromotionState, TargetPromotionPendingRetry } from "../../workflow/protocols/target-promotion/state.js"
+import {
+  TargetPromotionSafetyObservationOrdinal,
+  targetPromotionCorrelationFor
+} from "../../workflow/protocols/target-promotion/events.js"
+import { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+/* eslint-disable import/no-nodejs-modules -- The capability guard reads this module's static imports only. */
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import type {
   // @ts-expect-error -- the package root exposes only the exhaustive delivery status unions.
   DeliveryStatusEvidenceConflictEntry as PublicDeliveryStatusEvidenceConflictEntry,
@@ -3643,4 +3649,28 @@ it("projects retained result rejection as blocked work with exact reason and cus
     })
     if (status._tag === "DeliveryStatusAvailable") expect(status.entries).toHaveLength(1)
   }
+})
+
+it("projects a retained promotion safety refusal as a blocked task status", () => {
+  const candidate = integrationFinalityFixture.qualifiedCandidate
+  const taskId = candidate.run.session.plannedAttempt.taskId
+  const state = TargetPromotionState.cases.PromotionSafetyRefused.make({
+    boundary: "ReconciliationRead",
+    correlation: targetPromotionCorrelationFor(candidate),
+    retry: TargetPromotionPendingRetry.cases.NeedInitialReconciliationRead.make({}),
+    refusal: { _tag: "OccupiedWorktree", worktree: WorktreeLocator.make("/foreign/worktree") },
+    observationOrdinal: TargetPromotionSafetyObservationOrdinal.make(1)
+  })
+  const observation = evaluationOf({
+    runtimeRunId: candidate.run.session.plannedAttempt.runId,
+    tasks: [{ id: taskId }],
+    evidence: [{ _tag: "TargetPromotion", state, responsibility: integrationFactsOf().started }]
+  })
+  const status = deliveryStatusOf({ _tag: "Run", runId: candidate.run.session.plannedAttempt.runId }, observation)
+  expect(status).toMatchObject({
+    _tag: "DeliveryStatusAvailable",
+    entries: [
+      { _tag: "TargetPromotionSafetyRefused", classification: "Blocked", subject: { taskId }, standing: { state } }
+    ]
+  })
 })

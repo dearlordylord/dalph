@@ -60,6 +60,7 @@ module acceptedResultIntegration {
     | PromotionRetryAuthorityRequired
     | PromotionRetryReady
     | PromotionReadPending
+    | PromotionSafetyRefused
     | PromotionSucceeded
     | PromotionStale
     | PromotionExhausted
@@ -344,6 +345,7 @@ module acceptedResultIntegration {
       PromotionRetryAuthorityRequired,
       PromotionRetryReady,
       PromotionReadPending,
+      PromotionSafetyRefused,
       PromotionSucceeded,
       PromotionStale,
       PromotionExhausted,
@@ -455,6 +457,7 @@ module acceptedResultIntegration {
       PromotionRetryAuthorityRequired,
       PromotionRetryReady,
       PromotionReadPending,
+      PromotionSafetyRefused,
       PromotionSucceeded,
       PromotionStale,
       PromotionExhausted,
@@ -718,6 +721,7 @@ module acceptedResultIntegration {
         PromotionRetryAuthorityRequired,
         PromotionRetryReady,
         PromotionReadPending,
+      PromotionSafetyRefused,
         PromotionSucceeded,
         PromotionStale,
         PromotionExhausted,
@@ -1472,6 +1476,7 @@ module acceptedResultIntegration {
           PromotionRetryAuthorityRequired,
           PromotionRetryReady,
           PromotionReadPending,
+      PromotionSafetyRefused,
           PromotionSucceeded,
           PromotionStale,
           PromotionExhausted,
@@ -3727,6 +3732,52 @@ module acceptedResultIntegration {
     }
   }
 
+  // A failed fresh precondition is a known non-write, even after numbered intent.
+  // The refused phase survives restart and grants neither CAS nor a budget refund.
+  action recordPromotionSafetyRefusal(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      Set(PromotionIntent, PromotionReconciliation, PromotionAttemptIntended).contains(result.phase),
+      result.targetHeld,
+      result.promotionIntentRecorded,
+      result.publicationProofRecorded,
+      state' = {
+        ...state,
+        targetReacquisitionRequired: true,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionSafetyRefused,
+          targetHeld: false,
+          promotionFreshExactHeadObservation: false,
+          promotionTargetFactsCurrent: false,
+          promotionExpectedHeadVerified: false,
+          promotionGitObservation: NoPromotionGitObservation,
+          promotionObservedTargetHead: 0,
+          promotionResponseAmbiguous: if (result.phase == PromotionAttemptIntended) false else result.promotionResponseAmbiguous,
+          promotionCompareAndSetRequested: false,
+        }),
+      },
+    }
+  }
+
+  val safetyRefusalRetainsPublicationAndCandidate: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != PromotionSafetyRefused or and {
+        result.publicationProofRecorded,
+        result.promotionIntentRecorded,
+        result.candidateQualificationProven,
+        result.submittedCandidate != 0,
+        not(result.targetHeld),
+        not(result.promotionResponseAmbiguous) or result.promotionAttemptCount > 0,
+        not(result.promotionCompareAndSetRequested),
+        not(result.promotionFreshExactHeadObservation),
+        not(result.promotionResultRecorded),
+        result.promotionLastAttempt == result.promotionAttemptCount,
+      }
+    })
+
   action reconcilePromotion(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -3738,7 +3789,7 @@ module acceptedResultIntegration {
       state.targetFactsCurrent,
       state.targetHeadProof == result.expectedTargetHead,
       or {
-        Set(PromotionResponseLost, PromotionReadPending).contains(result.phase),
+        Set(PromotionResponseLost, PromotionReadPending, PromotionSafetyRefused).contains(result.phase),
         and {
           result.phase == PromotionIntent,
           state.targetReacquisitionRequired,
@@ -4303,6 +4354,7 @@ module acceptedResultIntegration {
   action startSuccessorIntegratorOne: bool = startSuccessorIntegrator(1)
   action loseSuccessorResponseOne: bool = loseSuccessorResponse(1)
   action offerPromotionPremiseOne: bool = offerPromotionPremise(1)
+  action recordPromotionSafetyRefusalOne: bool = recordPromotionSafetyRefusal(1)
   action recordPromotionIntentOne: bool = recordPromotionIntent(1)
   action recordPromotionAttemptIntentOne: bool = recordPromotionAttemptIntent(1)
   action sendPromotionAttemptOne: bool = sendPromotionAttempt(1)
@@ -4401,6 +4453,7 @@ module acceptedResultIntegration {
     loseSuccessorResponseOne,
     offerPromotionPremiseOne,
     recordPromotionIntentOne,
+    recordPromotionSafetyRefusalOne,
     recordPromotionAttemptIntentOne,
     sendPromotionAttemptOne,
     losePromotionAttemptResponseOne,

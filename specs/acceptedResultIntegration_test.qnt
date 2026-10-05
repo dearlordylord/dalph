@@ -1814,4 +1814,80 @@ module acceptedResultIntegrationTest {
         settledDeliveryResumeIsReadOnly,
       })
   }
+
+  run initialSafetyRefusalRequiresFreshReadTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+
+      .then(recordPromotionSafetyRefusal(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionSafetyRefused,
+        state.results.get(1).promotionAttemptCount == 0,
+        not(canRecordPromotionAttemptIntent(state, 1)),
+        not(canSendPromotionAttempt(state, 1)),
+        safetyRefusalRetainsPublicationAndCandidate,
+      })
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .expect(canRecordPromotionAttemptIntent(state, 1))
+  }
+
+  run mutationSafetyRefusalPreservesAttemptBudgetTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(recordPromotionSafetyRefusal(1))
+      .expect(and {
+        state.results.get(1).promotionAttemptCount == 1,
+        not(canSendPromotionAttempt(state, 1)),
+        safetyRefusalRetainsPublicationAndCandidate,
+      })
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .expect(and {
+        state.results.get(1).promotionAttemptCount == 2,
+        promotionAttemptsAreBounded,
+      })
+  }
 }

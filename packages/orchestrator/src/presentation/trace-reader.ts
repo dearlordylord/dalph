@@ -68,6 +68,9 @@ import {
   TargetPromotionNonConvergenceObservation,
   TargetPromotionStaleObservation,
   TargetPromotionSuccessObservation,
+  TargetPromotionSafetyRefusedEvent,
+  TargetPromotionSafetyRefusal,
+  TargetPromotionSafetyObservationOrdinal,
   TargetPromotionTerminalBasis
 } from "../workflow/protocols/target-promotion/events.js"
 import { AttemptRestartAuthorityReadFailure } from "../workflow/protocols/attempt-choice/replacement-events.js"
@@ -378,6 +381,14 @@ export const TraceIntegrationFact = Schema.TaggedUnion({
   PromotionRequested: {
     basis: Schema.Literal("BeforeFirstAttempt"),
     correlation: TargetPromotionCorrelation,
+    source: TraceItemIdentity
+  },
+  PromotionSafetyRefused: {
+    boundary: TargetPromotionSafetyRefusedEvent.fields.boundary,
+    basis: TargetPromotionTerminalBasis,
+    correlation: TargetPromotionCorrelation,
+    observationOrdinal: TargetPromotionSafetyObservationOrdinal,
+    refusal: TargetPromotionSafetyRefusal,
     source: TraceItemIdentity
   },
   PromotionAttempt: {
@@ -1635,6 +1646,7 @@ const isHistoricalPromotionOccurrence = (
   WorkflowOccurrenceValue,
   {
     readonly _tag:
+      | "TargetPromotionSafetyRefused"
       | "TargetPromotionRequested"
       | "TargetPromotionAttemptRequested"
       | "TargetPromotionSucceeded"
@@ -1642,6 +1654,7 @@ const isHistoricalPromotionOccurrence = (
       | "TargetPromotionNonConvergent"
   }
 > =>
+  occurrence._tag === "TargetPromotionSafetyRefused" ||
   occurrence._tag === "TargetPromotionRequested" ||
   occurrence._tag === "TargetPromotionAttemptRequested" ||
   occurrence._tag === "TargetPromotionSucceeded" ||

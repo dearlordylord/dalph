@@ -1,49 +1,20 @@
-import { GitCommitSha, type IntegrationTarget, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
-import { Effect, Schema } from "effect"
+import { type GitCommitSha, type IntegrationTarget } from "@dalph/contracts"
+import { Effect } from "effect"
 import { RemoteBaselineFailure } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import type { GitCommandService } from "./command.js"
 import { failureReasonForCommand, runBounded, type RemoteOperationDeadline } from "./direct-publication-command.js"
 
-const Registration = Schema.Struct({
-  worktree: WorktreeLocator,
-  HEAD: Schema.optionalKey(GitCommitSha),
-  branch: Schema.optionalKey(TaskBranchRef),
-  bare: Schema.optionalKey(Schema.Literal("")),
-  detached: Schema.optionalKey(Schema.Literal("")),
-  locked: Schema.optionalKey(Schema.String)
-})
-const registrationSeparatorSuffixLength = 2
-
-const decodeRegistration = Effect.fn("RemoteBaselineGit.decodeRegistration")(function* (record: string) {
-  const fields: Record<string, string> = {}
-  for (const field of record.split("\0")) {
-    const separator = field.indexOf(" ")
-    const name = separator < 0 ? field : field.slice(0, separator)
-    if (Object.hasOwn(fields, name)) return yield* new RemoteBaselineFailure({ reason: "TargetUnreadable" })
-    fields[name] = separator < 0 ? "" : field.slice(separator + 1)
-  }
-  const registration = yield* Schema.decodeUnknownEffect(Registration)(fields, { onExcessProperty: "error" }).pipe(
-    Effect.mapError(() => new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
-  )
-  const modes = [registration.bare, registration.detached, registration.branch].filter((value) => value !== undefined)
-  if (modes.length !== 1 || (registration.bare === undefined && registration.HEAD === undefined)) {
-    return yield* new RemoteBaselineFailure({ reason: "TargetUnreadable" })
-  }
-  return registration
-})
+import { decodeGitWorktreeRegistrations } from "./worktree-registration.js"
 
 const proveUnoccupied = Effect.fn("RemoteBaselineGit.proveUnoccupied")(function* (
   output: string,
   target: IntegrationTarget
 ) {
-  if (!output.endsWith("\0\0")) return yield* new RemoteBaselineFailure({ reason: "TargetUnreadable" })
-  const paths = new Set<string>()
-  for (const record of output.slice(0, -registrationSeparatorSuffixLength).split("\0\0")) {
-    const registration = yield* decodeRegistration(record)
-    if (paths.has(registration.worktree) || String(registration.branch) === String(target.ref)) {
-      return yield* new RemoteBaselineFailure({ reason: "TargetUnreadable" })
-    }
-    paths.add(registration.worktree)
+  const registrations = yield* decodeGitWorktreeRegistrations(output).pipe(
+    Effect.mapError(() => new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
+  )
+  if (registrations.some((registration) => String(registration.branch) === String(target.ref))) {
+    return yield* new RemoteBaselineFailure({ reason: "TargetUnreadable" })
   }
 })
 

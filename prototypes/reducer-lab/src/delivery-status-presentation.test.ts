@@ -217,6 +217,7 @@ const available = {
 
 const exactLabels: Readonly<Record<DeliveryStatusEntry["_tag"], string>> = {
   ExecutorFailure: "Executor failed",
+  TargetPromotionSafetyRefused: "Integration target blocked",
   DependencyWait: "Waiting for prerequisites",
   TrackerFactWait: "Waiting for tracker facts",
   TaskWorkCapacityWait: "Waiting for task-work capacity",

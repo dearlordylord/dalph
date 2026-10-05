@@ -1,6 +1,9 @@
 import { Match, Schema } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
+  TargetPromotionSafetyRefusedEvent,
+  TargetPromotionSafetyRefusal,
+  TargetPromotionSafetyObservationOrdinal,
   TargetPromotionAttemptLimit,
   type TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
@@ -26,6 +29,13 @@ export type TargetPromotionPendingRetry = typeof TargetPromotionPendingRetry.Typ
 
 /** Durable state reconstructed from exact promotion occurrences. */
 export const TargetPromotionState = Schema.TaggedUnion({
+  PromotionSafetyRefused: {
+    boundary: TargetPromotionSafetyRefusedEvent.fields.boundary,
+    correlation: TargetPromotionCorrelation,
+    retry: TargetPromotionPendingRetry,
+    refusal: TargetPromotionSafetyRefusal,
+    observationOrdinal: TargetPromotionSafetyObservationOrdinal
+  },
   PromotionPending: { correlation: TargetPromotionCorrelation, retry: TargetPromotionPendingRetry },
   PromotionReconciliationDeferred: {
     afterAttemptOrdinal: TargetPromotionAttemptOrdinal,
@@ -190,6 +200,34 @@ const deferredStateFor = (
   })
 }
 
+/** Rejects a safety observation without a prior exact intent, latest attempt basis or sequential identity. */
+export const targetPromotionSafetyRefusalIssueFor = (
+  records: ReadonlyArray<JournalOccurrence>,
+  request: TargetPromotionCorrelation
+): string | undefined => {
+  const relevant = relevantPromotionOccurrences(records, request)
+  for (const record of relevant) {
+    const event = record.event
+    if (event._tag !== "TargetPromotionSafetyRefused") continue
+    const prior = relevant.filter(({ position }) => position < record.position)
+    const lastAttempt = latest(attemptRecords(prior))
+    const basis = event.basis._tag === "BeforeFirstAttempt" ? undefined : event.basis.attemptOrdinal
+    const expectedOrdinal = prior.filter(({ event }) => event._tag === "TargetPromotionSafetyRefused").length + 1
+    const knownMutationRefusal =
+      event.boundary !== "CompareAndSet" ||
+      (event.basis._tag === "AfterAttempt" && prior[prior.length - 1]?.event._tag === "TargetPromotionAttemptIntended")
+    if (
+      !knownMutationRefusal ||
+      correlationFromIntent(prior) === undefined ||
+      prior.some(isTerminalPromotionOccurrence) ||
+      basis !== lastAttempt?.event.attemptOrdinal ||
+      event.observationOrdinal !== expectedOrdinal
+    )
+      return "target promotion safety refusal has no exact causal basis or sequential observation identity"
+  }
+  return undefined
+}
+
 /** Reconstructs promotion state without treating a journal row as Git authority. */
 export const deriveTargetPromotionState = (
   records: ReadonlyArray<JournalOccurrence>,
@@ -202,6 +240,29 @@ export const deriveTargetPromotionState = (
   const intentCorrelation = correlationFromIntent(relevant)
   if (intentCorrelation === undefined) return undefined
   const lastAttempt = latest(attemptRecords(relevant))
+  const lastRefusal = relevant.findLast(({ event }) => event._tag === "TargetPromotionSafetyRefused")
+  const lastProgress = relevant.findLast(
+    ({ event }) =>
+      event._tag === "TargetPromotionAttemptIntended" || event._tag === "TargetPromotionReconciliationDeferred"
+  )
+  if (
+    lastRefusal?.event._tag === "TargetPromotionSafetyRefused" &&
+    (lastProgress === undefined || lastRefusal.position > lastProgress.position)
+  ) {
+    const event = lastRefusal.event
+    return TargetPromotionState.cases.PromotionSafetyRefused.make({
+      boundary: event.boundary,
+      correlation: event.correlation,
+      observationOrdinal: event.observationOrdinal,
+      refusal: event.refusal,
+      retry:
+        event.basis._tag === "BeforeFirstAttempt"
+          ? TargetPromotionPendingRetry.cases.NeedInitialReconciliationRead.make({})
+          : TargetPromotionPendingRetry.cases.NeedReconciliationRead.make({
+              afterAttemptOrdinal: event.basis.attemptOrdinal
+            })
+    })
+  }
   const deferred = deferredStateFor(relevant, lastAttempt)
   if (deferred !== undefined) return deferred
   return lastAttempt === undefined

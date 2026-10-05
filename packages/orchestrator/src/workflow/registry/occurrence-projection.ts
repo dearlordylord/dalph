@@ -157,6 +157,7 @@ const {
   TargetPromotionNonConvergent,
   TargetPromotionReconciliationDeferred,
   TargetPromotionRequested,
+  TargetPromotionSafetyRefused,
   TargetPromotionStale,
   TargetPromotionSucceeded,
   TaskAttemptPlanned,
@@ -907,6 +908,7 @@ const nonProjectedJournalEventKinds = {
   IntegratorSuccessorSessionFixed: true,
   IntegratorAutomaticSuccessorSessionFixed: true,
   TargetPromotionAttemptIntended: true,
+  TargetPromotionSafetyRefused: true,
   TargetPromotionReconciliationDeferred: true,
   TargetPromotionIntended: true,
   TargetPromotionNonConvergence: true,
@@ -1030,6 +1032,7 @@ const historicalJournalEventKinds = {
   PostPromotionBlockerCandidateAncestryReadIntended: true,
   StoppedAttemptClaimNoReleaseObserved: true,
   TargetPromotionAttemptIntended: true,
+  TargetPromotionSafetyRefused: true,
   TargetPromotionReconciliationDeferred: true,
   TargetPromotionIntended: true,
   TargetPromotionNonConvergence: true,
@@ -1436,6 +1439,7 @@ const historicalRemoteBaselineEventKinds = {
 
 const historicalPromotionEventKinds = {
   TargetPromotionAttemptIntended: true,
+  TargetPromotionSafetyRefused: true,
   TargetPromotionReconciliationDeferred: true,
   TargetPromotionIntended: true,
   TargetPromotionNonConvergence: true,
@@ -3009,6 +3013,23 @@ const projectHistoricalPromotion = (
 ): HistoricalProjectionResult => {
   if (event._tag === "TargetPromotionIntended") return projectHistoricalPromotionRequested(record, event, context)
   if (event._tag === "TargetPromotionAttemptIntended") return projectHistoricalPromotionAttempt(record, event, context)
+  if (event._tag === "TargetPromotionSafetyRefused") {
+    const intent = context.promotionIntents.get(event.correlation.requestId)
+    if (
+      intent === undefined ||
+      !targetPromotionCorrelationEquals(intent.correlation, event.correlation) ||
+      !promotionTerminalIntentIsValid(context, event.correlation.requestId, event.basis)
+    )
+      return historicalFailure(record, "promotion safety refusal has no exact prior intent")
+    return Effect.succeed(
+      TargetPromotionSafetyRefused.make({
+        ...event,
+        occurrenceClassification: "NonActionOccurrence",
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
+  }
   if (event._tag === "TargetPromotionReconciliationDeferred") {
     return projectHistoricalPromotionReconciliationDeferred(record, event, context)
   }

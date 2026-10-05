@@ -127,6 +127,8 @@ export const emptyIndexes = (): FoldIndexes => ({
   integratorRunCandidateGitReadIntents: HashMap.empty(),
   integratorRunCandidateGitObservations: HashMap.empty(),
   targetPromotionHistory: {
+    latestProgress: HashMap.empty(),
+    refusals: HashMap.empty(),
     attempts: HashMap.empty(),
     deferrals: HashMap.empty(),
     intents: HashMap.empty(),

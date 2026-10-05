@@ -41,6 +41,7 @@ const makeTargetPromotionEngineImplementation = <E, R>(readEvidence: CurrentTarg
     if (afterRead._tag !== "TargetPromotionAttemptAuthorized") return afterRead
     const intended = yield* transitions.recordTargetPromotionAttemptIntent(afterRead)
     const result = yield* transitions.sendTargetPromotionAttempt(intended)
+    if (result._tag === "PromotionSafetyRefused") return result
     return result._tag === "TargetPromotionAttemptAmbiguous"
       ? TargetPromotionState.cases.PromotionPending.make({
           correlation: result.correlation,

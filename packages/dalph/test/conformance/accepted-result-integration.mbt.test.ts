@@ -131,6 +131,7 @@ import {
 import { IntegratorSuccessorPreparationInput } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
 import { evaluateIntegratorRetryAuthorization } from "../../../orchestrator/src/workflow/protocols/integrator/retry-authorization.js"
 import {
+  TargetPromotionSafetyFailure,
   TargetPromotionCompareAndSetFailure,
   TargetPromotionCompareAndSetResult,
   TargetPromotionGit,
@@ -307,6 +308,7 @@ type Phase =
   | "PromotionReconciliation"
   | "PromotionRetryAuthorityRequired"
   | "PromotionRetryReady"
+  | "PromotionSafetyRefused"
   | "PromotionReadPending"
   | "PromotionSucceeded"
   | "PromotionStale"
@@ -769,6 +771,7 @@ type RuntimeState = {
   readonly setGitMode: (mode: GitMode) => void
   readonly failNextGitRead: () => void
   readonly failNextIntegratorCall: () => void
+  readonly recordPromotionSafetyRefusal: (candidate: IntegratorRunQualifiedCandidate) => Effect.Effect<void, unknown>
   readonly recordPromotionIntent: (candidate: IntegratorRunQualifiedCandidate) => Effect.Effect<void, unknown>
   readonly enterPromotionReconciliation: (
     candidate: IntegratorRunQualifiedCandidate,
@@ -1077,6 +1080,7 @@ const phaseNeedsResult = (phase: Phase): boolean =>
     "PromotionReconciliation",
     "PromotionRetryAuthorityRequired",
     "PromotionRetryReady",
+    "PromotionSafetyRefused",
     "PromotionReadPending",
     "PromotionSucceeded",
     "PromotionStale",
@@ -1115,6 +1119,7 @@ const phaseNeedsPreparedResult = (phase: Phase): boolean =>
     "PromotionReconciliation",
     "PromotionRetryAuthorityRequired",
     "PromotionRetryReady",
+    "PromotionSafetyRefused",
     "PromotionReadPending",
     "PromotionSucceeded",
     "PromotionStale",
@@ -1242,6 +1247,42 @@ const makeRuntime = (
     }
     promotionReadPending =
       outcome.success._tag === "PromotionReconciliationDeferred" && outcome.success.deferral._tag === "TargetReadFailed"
+    promotionResponseLost = false
+  })
+
+  const recordPromotionSafetyRefusal = Effect.fn("AcceptedResultIntegration.recordPromotionSafetyRefusal")(function* (
+    candidate: IntegratorRunQualifiedCandidate
+  ) {
+    const lane = requirePromotionLane()
+    const request = targetPromotionGitRequestFor(targetPromotionCorrelationFor(candidate))
+    const failure = new TargetPromotionSafetyFailure({
+      candidateCommit: request.candidateCommit,
+      expectedHead: request.expectedTargetHead,
+      target: request.integrationTarget,
+      refusal: { _tag: "OccupiedWorktree", worktree: WorktreeLocator.make("/controlled/occupied-target") }
+    })
+    const git = TargetPromotionGit.of({ read: () => Effect.fail(failure), compareAndSet: () => Effect.fail(failure) })
+    const read = promotionReadAuthorization
+    const intended = promotionIntendedAttempt
+    const outcome =
+      read !== undefined
+        ? yield* observeTargetPromotionRead(read).pipe(
+            Effect.provide(lane.context),
+            Effect.provideService(TargetPromotionGit, git)
+          )
+        : intended !== undefined
+          ? yield* sendTargetPromotionAttempt(intended).pipe(
+              Effect.provide(lane.context),
+              Effect.provideService(TargetPromotionGit, git)
+            )
+          : yield* Effect.die("safety refusal requires a live read or numbered mutation permission")
+    if (outcome._tag !== "PromotionSafetyRefused")
+      return yield* Effect.die("safety refusal became an ambiguous or successful outcome")
+    promotionReadAuthorization = undefined
+    promotionReadPhase = undefined
+    promotionIntendedAttempt = undefined
+    promotionAttemptAuthorization = undefined
+    promotionReadPending = false
     promotionResponseLost = false
   })
 
@@ -1388,21 +1429,23 @@ const makeRuntime = (
             ? "PromotionRetryReady"
             : promotionReadAuthorization !== undefined
               ? (promotionReadPhase ?? "PromotionReconciliation")
-              : durable._tag === "PromotionSucceeded"
-                ? "PromotionSucceeded"
-                : durable._tag === "PromotionStale"
-                  ? "PromotionStale"
-                  : durable._tag === "PromotionNonConvergent"
-                    ? "PromotionExhausted"
-                    : durable._tag === "PromotionReconciliationDeferred"
-                      ? durable.deferral._tag === "RetryAuthorityRequired"
-                        ? "PromotionRetryAuthorityRequired"
-                        : "PromotionReadPending"
-                      : promotionReadPending
-                        ? "PromotionReadPending"
-                        : promotionResponseLost || attempts.length > 0
-                          ? "PromotionResponseLost"
-                          : "PromotionIntent"
+              : durable._tag === "PromotionSafetyRefused"
+                ? "PromotionSafetyRefused"
+                : durable._tag === "PromotionSucceeded"
+                  ? "PromotionSucceeded"
+                  : durable._tag === "PromotionStale"
+                    ? "PromotionStale"
+                    : durable._tag === "PromotionNonConvergent"
+                      ? "PromotionExhausted"
+                      : durable._tag === "PromotionReconciliationDeferred"
+                        ? durable.deferral._tag === "RetryAuthorityRequired"
+                          ? "PromotionRetryAuthorityRequired"
+                          : "PromotionReadPending"
+                        : promotionReadPending
+                          ? "PromotionReadPending"
+                          : promotionResponseLost || attempts.length > 0
+                            ? "PromotionResponseLost"
+                            : "PromotionIntent"
     if (actualPhase !== model.phase) {
       rejectImpossibleTransition(`model/production promotion phase mismatch: ${model.phase} / ${actualPhase}`)
     }
@@ -1592,6 +1635,7 @@ const makeRuntime = (
     failNextIntegratorCall: () => {
       failNextIntegrator = true
     },
+    recordPromotionSafetyRefusal,
     recordPromotionIntent,
     enterPromotionReconciliation,
     observePromotionRead,
@@ -1676,6 +1720,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     recordQuarantineOne: {},
     recordRetryNotApplicableOne: {},
     recordPromotionAttemptIntentOne: {},
+    recordPromotionSafetyRefusalOne: {},
     recordPromotionIntentOne: {},
     reconcileCandidateGitOne: {},
     reconcilePublicationOne: {},
@@ -2921,6 +2966,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           result.phase.startsWith("Promotion") &&
           !new Set<Phase>([
             "PromotionRetryAuthorityRequired",
+            "PromotionSafetyRefused",
             "PromotionReadPending",
             "PromotionSucceeded",
             "PromotionStale",
@@ -2932,6 +2978,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           result.phase.startsWith("Promotion") &&
           !new Set<Phase>([
             "PromotionRetryAuthorityRequired",
+            "PromotionSafetyRefused",
             "PromotionReadPending",
             "PromotionSucceeded",
             "PromotionStale",
@@ -4010,6 +4057,24 @@ const acceptedResultIntegrationDriver = defineDriver(
           yield* runtime.recordPromotionAttemptIntent()
           modelPromotionAttemptIntent(1n)
         }),
+      recordPromotionSafetyRefusalOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.recordPromotionSafetyRefusal(promotionCandidateFor(1n))
+          updateModelResult(1n, (result) => ({
+            ...result,
+            phase: "PromotionSafetyRefused",
+            targetHeld: false,
+            promotionFreshExactHeadObservation: false,
+            promotionTargetFactsCurrent: false,
+            promotionExpectedHeadVerified: false,
+            promotionGitObservation: "NoPromotionGitObservation",
+            promotionObservedTargetHead: 0n,
+            promotionResponseAmbiguous:
+              result.phase === "PromotionAttemptIntended" ? false : result.promotionResponseAmbiguous,
+            promotionCompareAndSetRequested: false
+          }))
+          targetReacquisitionRequired = true
+        }),
       recordPromotionIntentOne: () =>
         Effect.gen(function* () {
           yield* runtime.recordPromotionIntent(promotionCandidateFor(1n))
@@ -4717,8 +4782,8 @@ quintIt(
     driverFactory: acceptedResultIntegrationDriver,
     maxSteps: 35,
     nTraces: 100,
-    // Trace 79, step 23 reaches reacquisition after an ambiguous candidate-Git
-    // response and proves the adapter rewinds to the same recorded read intent.
+    maxSamples: 100,
+    // Directed recovery tests below own mandatory ambiguity and refusal paths.
     seed: "57",
     spec: "specs/acceptedResultIntegration.qnt",
     stateCheck: stateCheck(
@@ -4895,3 +4960,55 @@ quintIt(
   },
   300_000
 )
+
+for (const afterNumberedIntent of [false, true]) {
+  it.effect(
+    `reconstructs a known safety refusal ${afterNumberedIntent ? "after numbered intent" : "before first attempt"} without refunding attempts`,
+    () =>
+      Effect.gen(function* () {
+        const driver = yield* acceptedResultIntegrationDriver.create()
+        const getState = driver.getState
+        if (getState === undefined) return yield* Effect.die("driver lacks promotion alignment")
+        const dispatch = Effect.fn("SafetyConformance.dispatch")(function* (name: keyof typeof driver.actions) {
+          const action = driver.actions[name]
+          if (action === undefined) return yield* Effect.die(`missing action ${name}`)
+          yield* action.handler({})
+          return yield* getState()
+        })
+        const intentIndex = promotionReadOnlyReconciliationActions.indexOf("recordPromotionIntentOne")
+        for (const name of promotionReadOnlyReconciliationActions.slice(0, intentIndex + 1)) yield* dispatch(name)
+        if (afterNumberedIntent) {
+          yield* dispatch("observePromotionExactExpectedHeadOne")
+          yield* dispatch("recordPromotionAttemptIntentOne")
+        }
+        yield* dispatch("recordPromotionSafetyRefusalOne")
+        expect((yield* getState()).results.get(1n)).toMatchObject({
+          phase: "PromotionSafetyRefused",
+          publicationProofRecorded: true,
+          promotionAttemptCount: afterNumberedIntent ? 1n : 0n,
+          promotionResponseAmbiguous: false,
+          promotionCompareAndSetRequested: false,
+          promotionResultRecorded: false,
+          targetHeld: false
+        })
+        yield* dispatch("recoverCoordinatorStep")
+        expect((yield* getState()).results.get(1n)?.phase).toBe("PromotionSafetyRefused")
+        for (const name of [
+          "observeTrackerFactsStep",
+          "observeTargetFactsOne",
+          "reconcilePromotionOne",
+          "observePromotionExactExpectedHeadOne",
+          "recordPromotionAttemptIntentOne",
+          "sendPromotionAttemptOne",
+          "observePromotionCandidateCurrentOne"
+        ] as const)
+          yield* dispatch(name)
+        expect((yield* getState()).results.get(1n)).toMatchObject({
+          phase: "PromotionSucceeded",
+          publicationProofRecorded: true,
+          promotionAttemptCount: afterNumberedIntent ? 2n : 1n,
+          promotionResultRecorded: true
+        })
+      })
+  )
+}

@@ -42,10 +42,17 @@ export interface TargetPromotionHistoryIndexes {
     TargetPromotionRequestId,
     HashMap.HashMap<number, Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionReconciliationDeferred" }>>
   >
+  readonly latestProgress: HashMap.HashMap<
+    TargetPromotionRequestId,
+    "AttemptIntended" | "SafetyRefused" | "ReconciliationDeferred"
+  >
+  readonly refusals: HashMap.HashMap<TargetPromotionRequestId, number>
   readonly terminals: HashSet.HashSet<TargetPromotionRequestId>
 }
 /** Creates one explicit per-history causal index; it is never authority or persisted state. */
 export const makeTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndexes => ({
+  latestProgress: HashMap.empty(),
+  refusals: HashMap.empty(),
   attempts: HashMap.empty(),
   deferrals: HashMap.empty(),
   intents: HashMap.empty(),
@@ -159,7 +166,11 @@ const invalidTargetPromotionAttempt = (
     detail: valid
       ? undefined
       : `target promotion attempt for request ${requestId} expected exact sequential ordinal ${expectedOrdinal} at or below ${targetPromotionAttemptLimit}`,
-    indexes: { ...indexes, attempts: HashMap.set(indexes.attempts, requestId, HashMap.set(attempts, ordinal, event)) }
+    indexes: {
+      ...indexes,
+      latestProgress: HashMap.set(indexes.latestProgress, requestId, "AttemptIntended"),
+      attempts: HashMap.set(indexes.attempts, requestId, HashMap.set(attempts, ordinal, event))
+    }
   }
 }
 
@@ -192,6 +203,7 @@ const invalidTargetPromotionDeferral = (
         `target promotion reconciliation deferral has no exact latest unresolved attempt for request ${requestId}`),
     indexes: {
       ...indexes,
+      latestProgress: HashMap.set(indexes.latestProgress, requestId, "ReconciliationDeferred"),
       deferrals: HashMap.set(indexes.deferrals, requestId, HashMap.set(deferrals, ordinal, event))
     }
   }
@@ -286,6 +298,38 @@ const invalidTargetPromotionTerminal = (
   }
 }
 
+const invalidTargetPromotionSafetyRefusal = (
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionSafetyRefused" }>,
+  indexes: TargetPromotionHistoryIndexes
+): TargetPromotionHistoryValidation => {
+  const requestId = event.correlation.requestId
+  const intent = mapGet(indexes.intents, requestId)
+  const attempts = mapGet(indexes.attempts, requestId)
+  const latestOrdinal = attempts === undefined ? 0 : HashMap.size(attempts)
+  const expectedObservation = (mapGet(indexes.refusals, requestId) ?? 0) + 1
+  const basisOrdinal = event.basis._tag === "BeforeFirstAttempt" ? 0 : event.basis.attemptOrdinal
+  const knownMutationRefusal =
+    event.boundary !== "CompareAndSet" ||
+    (event.basis._tag === "AfterAttempt" && mapGet(indexes.latestProgress, requestId) === "AttemptIntended")
+  const valid =
+    knownMutationRefusal &&
+    intent !== undefined &&
+    targetPromotionCorrelationEquals(intent.correlation, event.correlation) &&
+    !HashSet.has(indexes.terminals, requestId) &&
+    basisOrdinal === latestOrdinal &&
+    event.observationOrdinal === expectedObservation
+  return {
+    detail: valid
+      ? undefined
+      : `promotion safety refusal has no exact latest basis or sequential observation for request ${requestId}`,
+    indexes: {
+      ...indexes,
+      latestProgress: HashMap.set(indexes.latestProgress, requestId, "SafetyRefused"),
+      refusals: HashMap.set(indexes.refusals, requestId, event.observationOrdinal)
+    }
+  }
+}
+
 /** Validates one promotion event against the earlier Integrator Git qualification and CAS chronology. */
 export const invalidTargetPromotionHistory = (
   record: JournalRecord,
@@ -296,6 +340,7 @@ export const invalidTargetPromotionHistory = (
   if (event._tag === "TargetPromotionIntended") {
     return invalidTargetPromotionIntent(record, event, indexes, integratorObservations)
   }
+  if (event._tag === "TargetPromotionSafetyRefused") return invalidTargetPromotionSafetyRefusal(event, indexes)
   if (event._tag === "TargetPromotionAttemptIntended") return invalidTargetPromotionAttempt(event, indexes)
   if (event._tag === "TargetPromotionReconciliationDeferred") {
     return invalidTargetPromotionDeferral(event, indexes)
