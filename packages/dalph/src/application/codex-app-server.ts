@@ -1,3 +1,5 @@
+import { classifyJsonRpcEnvelope } from "./codex-json-rpc-envelope.js"
+import { readIndexedCodexThreads } from "./codex-thread-inventory.js"
 /* eslint-disable import/no-nodejs-modules -- the process adapter is the one explicit execution-substrate boundary. */
 /* eslint-disable max-lines -- The protocol transport and ownership gate form one audited application boundary. */
 import nodePath from "node:path"
@@ -332,6 +334,7 @@ const CodexAppServerOperation = Schema.Literals([
   "config/read",
   "thread/start",
   "thread/list",
+  "threadSection/list",
   "thread/loaded/list",
   "thread/read",
   "thread/turns/list",
@@ -1929,6 +1932,7 @@ interface JsonRpcClient {
       | "thread/start"
       | "thread/read"
       | "thread/list"
+      | "threadSection/list"
       | "thread/loaded/list"
       | "thread/turns/list"
       | "thread/resume"
@@ -1964,74 +1968,6 @@ const pendingJsonRpcRequest = (
 type JsonRpcClientProtocolState = {
   readonly terminalFailure: Option.Option<CodexAppServerFailure>
   readonly pending: ReadonlyMap<number, PendingJsonRpcRequest>
-}
-
-type JsonRpcEnvelope =
-  | { readonly _tag: "ServerRequest"; readonly method: string }
-  | { readonly _tag: "Notification"; readonly method: string }
-  | { readonly _tag: "SuccessResponse"; readonly id: number; readonly result: unknown }
-  | { readonly _tag: "ErrorResponse"; readonly id: number; readonly error: JsonObject }
-  | { readonly _tag: "Malformed"; readonly detail: string }
-
-const hasJsonRpcField = (message: JsonObject, field: string): boolean =>
-  Object.prototype.hasOwnProperty.call(message, field)
-
-const isJsonRpcId = (value: unknown): boolean =>
-  value === null || typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
-
-/**
- * Routes a decoded JSON-RPC object by its wire shape before touching pending
- * outbound requests. An ID-bearing method is provider work for the client,
- * not a response to one of Dalph's requests.
- */
-const classifyJsonRpcEnvelope = (message: JsonObject): JsonRpcEnvelope => {
-  // Codex app-server emits JSON-RPC-shaped messages without the optional
-  // version member; reject an explicit contradictory version but accept the
-  // provider's versionless response/notification envelopes.
-  if (hasJsonRpcField(message, "jsonrpc") && message["jsonrpc"] !== "2.0") {
-    return { _tag: "Malformed", detail: "JSON-RPC envelope version is invalid" }
-  }
-  const hasMethod = hasJsonRpcField(message, "method")
-  const hasId = hasJsonRpcField(message, "id")
-  const hasResult = hasJsonRpcField(message, "result")
-  const hasError = hasJsonRpcField(message, "error")
-  if (hasMethod) {
-    const method = message["method"]
-    if (typeof method !== "string") {
-      return { _tag: "Malformed", detail: "JSON-RPC envelope method is invalid" }
-    }
-    if (hasResult || hasError) {
-      return {
-        _tag: "Malformed",
-        detail: hasId
-          ? "JSON-RPC server request cannot contain result or error"
-          : "JSON-RPC notification cannot contain result or error"
-      }
-    }
-    if (hasId && !isJsonRpcId(message["id"])) {
-      return { _tag: "Malformed", detail: "JSON-RPC server request id is invalid" }
-    }
-    return hasId ? { _tag: "ServerRequest", method } : { _tag: "Notification", method }
-  }
-  if (!hasId) {
-    return { _tag: "Malformed", detail: "JSON-RPC envelope must contain method or id" }
-  }
-  const id = message["id"]
-  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
-    return { _tag: "Malformed", detail: "JSON-RPC response id is invalid" }
-  }
-  if (hasResult === hasError) {
-    return { _tag: "Malformed", detail: "JSON-RPC response must contain exactly one result or error" }
-  }
-  const error = message["error"]
-  if (hasError && !isJsonObject(error)) {
-    return { _tag: "Malformed", detail: "JSON-RPC response error is invalid" }
-  }
-  return hasResult
-    ? { _tag: "SuccessResponse", id, result: message["result"] }
-    : isJsonObject(error)
-      ? { _tag: "ErrorResponse", id, error }
-      : { _tag: "Malformed", detail: "JSON-RPC response error is invalid" }
 }
 
 const codexApprovalRequestMethods = new Set([
@@ -3640,6 +3576,13 @@ export const stopOwnedAppServer = (
       return yield* Effect.fail(operationFailure("close", "Ownership", "process identity changed before forced signal"))
     }
     const freshGroup = yield* groupCensus.observe(launch)
+    if (freshOwner._tag === "Absent" && freshGroup._tag === "Absent") {
+      // SIGTERM may finish between the grace observation and this census.
+      // Reread the original identities so an escaped writer cannot disappear
+      // from close authority merely because its current group is absent.
+      yield* awaitExactMembersAbsent(group.members, ownershipStopPollAttempts, native)
+      return
+    }
     if (freshGroup._tag !== "ExactLive") {
       return yield* Effect.fail(operationFailure("close", "Ownership", "process group changed before forced signal"))
     }
@@ -3982,49 +3925,13 @@ export const codexAppServerLayer = (
         }
         return source
       })
-      const listPersistentThreads = Effect.fn("CodexAppServer.listPersistentThreads")(function* (
-        cwd?: CodexThreadWorkingDirectory
-      ) {
-        let pages: ReadonlyArray<ReadonlyArray<CodexThreadListSummary>> = []
-        let cursors: ReadonlySet<CodexThreadListCursor> = new Set<CodexThreadListCursor>()
-        let cursor: CodexThreadListCursor | undefined
-        for (let page = 0; page < maximumThreadListPages; page += 1) {
-          const response = yield* rpc.requestBounded("thread/list", "thread/list", {
-            modelProviders: [],
-            sourceKinds: [
-              "cli",
-              "vscode",
-              "exec",
-              "appServer",
-              "subAgent",
-              "subAgentReview",
-              "subAgentCompact",
-              "subAgentThreadSpawn",
-              "subAgentOther",
-              "unknown"
-            ],
-            ...(cwd === undefined ? {} : { cwd }),
-            ...(cursor === undefined ? {} : { cursor })
-          })
-          const parsed = threadListPage(response)
-          if (parsed instanceof CodexAppServerFailure) return yield* Effect.fail(parsed)
-          if (cwd !== undefined && parsed.threads.some((thread) => thread.cwd !== cwd)) {
-            return yield* Effect.fail(
-              operationFailure("thread/list", "Ownership", "scoped thread list returned a foreign working directory")
-            )
-          }
-          pages = [...pages, parsed.threads]
-          if (parsed.nextCursor === undefined || parsed.nextCursor === null) {
-            return pages.flatMap((items) => items)
-          }
-          if (cursors.has(parsed.nextCursor)) {
-            return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list cursor repeated"))
-          }
-          cursors = new Set([...cursors, parsed.nextCursor])
-          cursor = parsed.nextCursor
-        }
-        return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list exceeded page bound"))
-      })
+      const listPersistentThreads = (cwd?: CodexThreadWorkingDirectory) =>
+        readIndexedCodexThreads({
+          ...(cwd === undefined ? {} : { cwd }),
+          request: (operation, params) => rpc.requestBounded(operation, operation, params),
+          parsePage: threadListPage,
+          failure: operationFailure
+        })
       const listThreads = Effect.fn("CodexAppServer.listThreads")(function* (cwd?: CodexThreadWorkingDirectory) {
         let threads = yield* listPersistentThreads(cwd)
         let cursors: ReadonlySet<string> = new Set()

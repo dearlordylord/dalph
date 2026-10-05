@@ -325,3 +325,36 @@ the second does not block an absent first session; an exact resource's live
 terminal/process remains `Foreign`/`LiveWriter` until it disappears.
 Independent sessions therefore do not block one another, while an exact
 foreign resource never becomes owned by cwd coincidence.
+
+## 7. Dalph inventories a populated Codex home without scanning every rollout
+
+Accepted repair scope: [#457](https://github.com/dearlordylord/dalph/issues/457).
+The Operator retains an exact candidate and session correlation, and Codex
+0.160.0 has initialized its shared home and completed its index backfill. The
+trigger is integration activation before thread creation, or reconciliation of
+a lost thread-start response.
+
+Dalph reads every `threadSection/list` page, then every `thread/list` page for
+`sectionId: null` and each returned section ID, preserving the exact cwd and
+all source/provider filters. These explicit section filters use Codex's indexed
+query and report unavailable or failed database reads as errors. Dalph does
+not use the unfiltered `useStateDbOnly` shortcut, whose native implementation
+can disguise a database failure as an empty list. It merges the persisted
+identity census with every loaded-thread page and exact metadata reads.
+
+Malformed, repeated or excessive pages, duplicate section identities, duplicate
+persisted thread identities, or a changed section catalogue fail closed. No
+thread or turn is created after an incomplete census. The existing exact cwd
+and ownership-token checks still reject foreign or duplicate candidate threads.
+A crash or lost thread-start response reconciles the same durable intent; it
+does not allocate another candidate or token. The section catalogue is checked
+again after the census so concurrent catalogue changes cannot silently omit a
+partition. Existing pagination does not claim an atomic snapshot across native
+RPC calls.
+
+Acceptance: protocol tests cover complete section/thread pagination, native
+indexed parameters, database/RPC failure, malformed/repeated pages, changed
+catalogue and duplicates; existing integrator tests cover lost-start, foreign
+token, duplicate candidate and failed reconciliation. A bounded native probe
+in the retained beta home confirms the exact filtered reads complete without
+a rollout scan. No model invocation is needed for that probe.

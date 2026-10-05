@@ -58,7 +58,6 @@ import {
   type RemoteBaselineGit,
   type RemotePublicationGit,
   TargetPromotionGit,
-  type TaskTrackerMutationThrottled,
   type TargetPromotionGitRequest,
   TrackerGraphReader,
   TrackerMutation,
@@ -158,7 +157,7 @@ import {
 } from "./production-configuration.js"
 import {
   productionRunReactivationLayer,
-  type ProductionCancellationBlocked,
+  type ProductionNonRetryableActivationFailure,
   productionWorkflowInterpreterLayer,
   productionTargetGitCommands,
   type ProductionApplicationExitRequestObserver,
@@ -211,6 +210,8 @@ export interface ProductionRunningHostObservation<E> extends ProductionHostObser
   readonly target: ProductionRepositoryHostConfiguration["target"]
   readonly readRunControl: Effect.Effect<ProductionPassiveRunControl, ProductionPassiveControlUnavailable>
   readonly activationFailure: Effect.Effect<Option.Option<E>>
+  /** Host-owned failure notification; subscribers do not poll or reactivate work. */
+  readonly awaitActivationFailure?: Effect.Effect<never, E>
   readonly closing: Effect.Effect<boolean>
   readonly commandAdmission: ApplicationExitAdmissionService
   readonly awaitExitResult: Effect.Effect<void>
@@ -990,7 +991,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
   run: (
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
-    onFailure: (failure: TaskTrackerMutationThrottled | ProductionCancellationBlocked) => Effect.Effect<void>,
+    onFailure: (failure: ProductionNonRetryableActivationFailure) => Effect.Effect<void>,
     applicationExit: ProductionHostApplicationExitShellService,
     provider: ProductionHostProviderAdmission,
     operation: "Run" | "Cancel" = "Run"
@@ -1282,11 +1283,16 @@ export const withDecodedProductionRepositoryHost = <
       const traceReaderContext = yield* Layer.build(TraceReaderLayer).pipe(Effect.provide(foundation))
       const traceReader = Context.get(traceReaderContext, TraceReader)
       const activationFailure = yield* Deferred.make<never, EActivation>()
+      const retainedFailure = yield* Ref.make<Option.Option<EActivation>>(Option.none())
       const run = yield* Layer.build(
         graph.run(
           configuration,
           selection,
-          (failure) => Deferred.fail(activationFailure, failure).pipe(Effect.asVoid),
+          (failure) =>
+            Ref.set(retainedFailure, Option.some(failure)).pipe(
+              Effect.andThen(Deferred.fail(activationFailure, failure)),
+              Effect.asVoid
+            ),
           applicationExit,
           provider,
           operation
@@ -1295,7 +1301,6 @@ export const withDecodedProductionRepositoryHost = <
       const source = Context.get(run, JournaledRunObservationSource)
       const bootstrap = Context.getOption(run, JournaledRunBootstrap)
       yield* Effect.raceFirst(source.awaitEstablished, Deferred.await(activationFailure))
-      const retainedFailure = yield* Ref.make<Option.Option<EActivation>>(Option.none())
       // An uncertain append retains its boundary until this exact Journal is
       // reconstructed. Client request IDs never authorize replay.
       const attachedUnpauseBoundary = yield* Ref.make<"Open" | "NeedsJournalReconciliation">("Open")
@@ -1371,6 +1376,7 @@ export const withDecodedProductionRepositoryHost = <
         target: configuration.target,
         readRunControl,
         activationFailure: Ref.get(retainedFailure),
+        awaitActivationFailure: Deferred.await(activationFailure),
         closing: applicationExit.admission.snapshot.pipe(Effect.map((state) => state.cutoffClosed)),
         commandAdmission: applicationExit.admission,
         awaitExitResult: applicationExit.awaitExitResult.pipe(Effect.asVoid),
@@ -1574,13 +1580,7 @@ export const withDecodedProductionRepositoryHost = <
       // Invocation callers end their scope on an activation failure. A listening
       // host retains that failure for passive readers and keeps its existing
       // coordinator and listener until the caller requests application Exit.
-      if (lifetime === "Listening") {
-        yield* Deferred.await(activationFailure).pipe(
-          Effect.catch((failure) => Ref.set(retainedFailure, Option.some(failure))),
-          Effect.forkScoped
-        )
-        return yield* use(observation)
-      }
+      if (lifetime === "Listening") return yield* use(observation)
       return yield* Effect.raceFirst(use(observation), Deferred.await(activationFailure))
     })
   )

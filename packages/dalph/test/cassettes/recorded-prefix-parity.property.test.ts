@@ -104,7 +104,38 @@ const capacityRecords = (capacities: ReadonlyArray<number>): ReadonlyArray<Journ
   ]
 }
 
-it("preserves complete cold checkpoint arrays for generated capacities and removed, duplicated, reordered prefixes", () => {
+const cassettePerturbations: ReadonlyArray<
+  readonly [string, (cassette: RecordedCassette, selected: number) => RecordedCassette]
+> = [
+  ["unchanged entries", (cassette) => cassette],
+  [
+    "removed entry",
+    (cassette, selected) =>
+      RecordedCassette.make({ ...cassette, entries: cassette.entries.filter((_entry, index) => index !== selected) })
+  ],
+  [
+    "duplicate entry",
+    (cassette, selected) =>
+      RecordedCassette.make({
+        ...cassette,
+        entries: [
+          ...cassette.entries.slice(0, selected),
+          ...cassette.entries.slice(selected, selected + 1),
+          ...cassette.entries.slice(selected)
+        ]
+      })
+  ],
+  ["reordered entries", (cassette) => RecordedCassette.make({ ...cassette, entries: [...cassette.entries].reverse() })],
+  [
+    "short prefix",
+    (cassette, selected) => RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, selected) })
+  ],
+  ["foreign Run", (cassette) => RecordedCassette.make({ ...cassette, runId: RunId.make("recorded-foreign-run") })]
+]
+
+// Each independent property keeps 100 generated cases and its ordinary deadline.
+// A timeout now identifies the transformation rather than an aggregate of six.
+it.each(cassettePerturbations)("preserves complete cold checkpoints for cassette %s", (_name, perturb) => {
   fc.assert(
     fc.property(
       fc.array(fc.integer({ min: 1, max: 8 }), { maxLength: 8 }),
@@ -112,31 +143,13 @@ it("preserves complete cold checkpoint arrays for generated capacities and remov
       (capacities, offset) => {
         const records = capacityRecords(capacities)
         const cassette = Effect.runSync(projectRecordedCassette(records))
-        const selected = offset % cassette.entries.length
-        const variants = [
-          cassette,
-          RecordedCassette.make({
-            ...cassette,
-            entries: cassette.entries.filter((_entry, index) => index !== selected)
-          }),
-          RecordedCassette.make({
-            ...cassette,
-            entries: [
-              ...cassette.entries.slice(0, selected),
-              ...cassette.entries.slice(selected, selected + 1),
-              ...cassette.entries.slice(selected)
-            ]
-          }),
-          RecordedCassette.make({ ...cassette, entries: [...cassette.entries].reverse() }),
-          RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, selected) }),
-          RecordedCassette.make({ ...cassette, runId: RunId.make("recorded-foreign-run") })
-        ]
-        for (const variant of variants)
-          expect(outcome(() => verifyRecordedCassetteRoundTrip(records, variant))).toEqual(
-            outcome(() => coldOracle(records, variant))
-          )
+        const variant = perturb(cassette, offset % cassette.entries.length)
+        expect(outcome(() => verifyRecordedCassetteRoundTrip(records, variant))).toEqual(
+          outcome(() => coldOracle(records, variant))
+        )
       }
-    )
+    ),
+    { numRuns: 100 }
   )
 })
 

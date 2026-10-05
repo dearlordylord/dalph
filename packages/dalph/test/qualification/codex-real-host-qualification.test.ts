@@ -780,45 +780,43 @@ const terminalReport = (event: HostEvent) => {
 }
 
 describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
-  qualificationTest(
-    "native long check completes with its exact shell allowance through direct and code-mode tools",
-    async () => {
-      for (const mode of ["native-long-check", "code-mode-long-check"] as const) {
-        const fixture = await makeFixture(mode)
-        const hosts: Array<BuiltHost> = []
-        try {
-          const host = await spawnHost(fixture, "settle", {
-            toolEffectPolicy: {
-              defaultLimitMilliseconds: 1_000,
-              longCommands: [
-                { command: "/bin/bash -lc 'sleep 3'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 8_000 }
-              ]
-            }
-          })
-          hosts.push(host)
-          expect(requireEvent(await host.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
-          const terminal = terminalReport(await host.waitForReport(2))
-          expect(
-            terminal.result._tag,
-            JSON.stringify({ mode, result: terminal.result, calls: fixture.model.calls.length })
-          ).toBe("Accepted")
-          await acceptedEvidenceFor(fixture, { event: "report", command: "Begin", report: terminal })
-          expect(await host.waitForExit()).toEqual({ code: 0, signal: null })
-          const snapshot = await latestPrivateSnapshot(fixture)
-          const admitted = snapshot.toolEffects?.find(
-            (item) => item.deadlineMilliseconds - item.startedAtMilliseconds === 8_000
-          )
-          if (admitted?._tag !== "Completed") throw new Error("native long check has no exact completed allowance")
-          expect(admitted.worktree).toBe(fixture.worktree)
-          expect(admitted.completedAtMilliseconds - admitted.startedAtMilliseconds).toBeGreaterThan(1_000)
-          expect(admitted.completedAtMilliseconds).toBeLessThan(admitted.deadlineMilliseconds)
-          expect(
-            snapshot.toolEffects?.some((item) => item._tag === "StopIntended" || item._tag === "LimitReached")
-          ).toBe(false)
-          expect(fixture.model.calls).toHaveLength(4)
-        } finally {
-          await dispose(fixture, hosts)
-        }
+  qualificationTest.each(["native-long-check", "code-mode-long-check"] as const)(
+    "native long check completes with its exact shell allowance (%s)",
+    async (mode) => {
+      const fixture = await makeFixture(mode)
+      const hosts: Array<BuiltHost> = []
+      try {
+        const host = await spawnHost(fixture, "settle", {
+          toolEffectPolicy: {
+            defaultLimitMilliseconds: 1_000,
+            longCommands: [
+              { command: "/bin/bash -lc 'sleep 3'", cwd: { _tag: "PlannedWorktree" }, limitMilliseconds: 8_000 }
+            ]
+          }
+        })
+        hosts.push(host)
+        expect(requireEvent(await host.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
+        const terminal = terminalReport(await host.waitForReport(2))
+        expect(
+          terminal.result._tag,
+          JSON.stringify({ mode, result: terminal.result, calls: fixture.model.calls.length })
+        ).toBe("Accepted")
+        await acceptedEvidenceFor(fixture, { event: "report", command: "Begin", report: terminal })
+        expect(await host.waitForExit()).toEqual({ code: 0, signal: null })
+        const snapshot = await latestPrivateSnapshot(fixture)
+        const admitted = snapshot.toolEffects?.find(
+          (item) => item.deadlineMilliseconds - item.startedAtMilliseconds === 8_000
+        )
+        if (admitted?._tag !== "Completed") throw new Error("native long check has no exact completed allowance")
+        expect(admitted.worktree).toBe(fixture.worktree)
+        expect(admitted.completedAtMilliseconds - admitted.startedAtMilliseconds).toBeGreaterThan(1_000)
+        expect(admitted.completedAtMilliseconds).toBeLessThan(admitted.deadlineMilliseconds)
+        expect(snapshot.toolEffects?.some((item) => item._tag === "StopIntended" || item._tag === "LimitReached")).toBe(
+          false
+        )
+        expect(fixture.model.calls).toHaveLength(4)
+      } finally {
+        await dispose(fixture, hosts)
       }
     },
     45_000
@@ -1310,9 +1308,11 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(processCanMutateWorktree(ownedChildPid)).toBe(false)
         await waitForProcessAbsence(ownedChildPid)
         expect(fixture.model.calls).toHaveLength(1)
-        expect(await suspended.waitForExit()).toEqual({ code: 0, signal: null })
+        const suspendedExit = await suspended.waitForExit()
+        expect(suspendedExit, JSON.stringify(suspended.events)).toEqual({ code: 0, signal: null })
 
-        const resumed = await spawnHost(fixture, "resume")
+        // Keep the fixture alive until its asynchronous continuation is observed.
+        const resumed = await spawnHost(fixture, "resume", { hold: true })
         hosts.push(resumed)
         const resumedReport = requireEvent(await resumed.waitForReport(1), "report")
         expect(resumedReport.command).toBe("Resume")

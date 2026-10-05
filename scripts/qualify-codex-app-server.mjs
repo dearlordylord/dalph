@@ -85,7 +85,7 @@ const main = async () => {
       cause: error
     })
   }
-  await run("pnpm", ["vitest", "run", ...testFiles, "--maxWorkers=1"], {
+  await run("pnpm", ["vitest", "run", ...testFiles, "--maxWorkers=1", "--reporter=verbose"], {
     env: { ...nodeProcess.env, CODEX_BIN: codexExecutable, DALPH_RUN_REAL_CODEX_QUALIFICATION: "1" }
   })
 }

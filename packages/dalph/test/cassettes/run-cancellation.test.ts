@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
 import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
@@ -25,6 +25,7 @@ import {
   journalStoreCapabilities,
   RunLifecycleJournal
 } from "../../../orchestrator/src/workflow-journal/store.js"
+import { decideWorkflowRunTermination } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { terminationPreconditionIssues } from "../../../orchestrator/src/workflow-journal/termination-preconditions.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
@@ -46,7 +47,14 @@ import {
   integrationRunCancellationAuthoredCassette,
   runAuthoredScenarioCassette,
   runningAttemptRunCancellationForeignClaimAuthoredCassette,
-  runningAttemptRunCancellationAuthoredCassette
+  runningAttemptRunCancellationAuthoredCassette,
+  CassetteIdentityRenaming,
+  invertCassetteIdentityRenaming,
+  projectRecordedCassette,
+  renameRecordedCassette,
+  renderRecordedCassetteLyrics,
+  verifyRecordedCassetteRoundTrip,
+  verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import {
@@ -80,22 +88,87 @@ const cancellationGraph = Option.getOrThrow(
   projectedCancellationGraph._tag === "Valid" ? Option.some(projectedCancellationGraph) : Option.none()
 )
 
-const expectCancellationTerminationFailsClosedForDamagedPrefixes = (records: ReadonlyArray<JournalRecord>): void => {
+const expectCancellationTerminationPreconditions = (records: ReadonlyArray<JournalRecord>): void => {
   const termination = records.findLast(({ event }) => event._tag === "WorkflowRunTerminated")
   if (termination?.event._tag !== "WorkflowRunTerminated") return expect.fail("cancellation fixture did not terminate")
   const evidence = termination.event.evidence
   const terminatedRunId = termination.runId
   const prefix = records.filter(({ event }) => event._tag !== "WorkflowRunTerminated")
   expect(terminationPreconditionIssues(prefix, terminatedRunId, evidence)).toEqual([])
-  const damagedIssues = prefix.flatMap((_, index) =>
-    terminationPreconditionIssues(
-      prefix.filter((__, candidateIndex) => candidateIndex !== index),
-      terminatedRunId,
-      evidence
-    )
-  )
-  expect(damagedIssues.length).toBeGreaterThan(0)
 }
+
+// Projection assertions reuse each accepted cancellation replay below; no extra
+// coordinator run is needed to test pure identity rewriting and rendering.
+const expectCancellationRecording = Effect.fn("RunCancellationTest.recording")(function* (
+  records: ReadonlyArray<JournalRecord>
+) {
+  const recorded = yield* projectRecordedCassette(records)
+  expect(
+    verifyRecordedCassetteRoundTrip(records, recorded).every(
+      (checkpoint) =>
+        checkpoint.workflowHistoryEquivalent &&
+        checkpoint.operationalStateEquivalent &&
+        checkpoint.pureSelectionEquivalent
+    )
+  ).toBe(true)
+  const abandoned = recorded.entries.find((entry) => entry._tag === "CancelledAttemptImplementationAbandoned")
+  const noRelease = recorded.entries.find((entry) => entry._tag === "CancelledAttemptClaimNoReleaseObserved")
+  const claims = [
+    ...(abandoned?._tag === "CancelledAttemptImplementationAbandoned" ? [abandoned.authorizedClaim] : []),
+    ...(noRelease?._tag === "CancelledAttemptClaimNoReleaseObserved" ? [noRelease.expectedClaim] : [])
+  ]
+  const operationIds = [
+    ...claims.map(({ operationId }) => operationId),
+    ...(noRelease?._tag === "CancelledAttemptClaimNoReleaseObserved" ? [noRelease.observationOperationId] : [])
+  ].filter((value, index, all) => all.indexOf(value) === index)
+  const renaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+    attemptIds:
+      abandoned?._tag === "CancelledAttemptImplementationAbandoned"
+        ? [{ from: abandoned.plannedAttempt.attemptId, to: "renamed-cancelled-attempt" }]
+        : [],
+    claimTokens: claims
+      .map(({ token }, index) => ({ from: token, to: `renamed-cancelled-claim-${index}` }))
+      .filter((value, index, all) => all.findIndex(({ from }) => from === value.from) === index),
+    integratorCandidateResourceLocators: [],
+    integratorSessionIds: [],
+    operationIds: operationIds.map((from, index) => ({ from, to: `renamed-cancelled-operation-${index}` })),
+    runIds: [{ from: recorded.runId, to: "renamed-cancelled-run" }],
+    taskBranchRefs:
+      abandoned?._tag === "CancelledAttemptImplementationAbandoned"
+        ? [{ from: abandoned.plannedAttempt.branch, to: "refs/heads/dalph/renamed-cancelled-attempt" }]
+        : [],
+    worktreeLocators:
+      abandoned?._tag === "CancelledAttemptImplementationAbandoned"
+        ? [{ from: abandoned.plannedAttempt.worktree, to: "/dalph/renamed-cancelled-attempt" }]
+        : []
+  })
+  const renamed = yield* renameRecordedCassette(recorded, renaming)
+  expect(renamed.runId).toBe("renamed-cancelled-run")
+  const renamedNoRelease = renamed.entries.find((entry) => entry._tag === "CancelledAttemptClaimNoReleaseObserved")
+  if (noRelease?._tag === "CancelledAttemptClaimNoReleaseObserved") {
+    if (renamedNoRelease?._tag !== "CancelledAttemptClaimNoReleaseObserved")
+      return expect.fail("lost claim preservation")
+    expect(renamedNoRelease.expectedClaim.operationId).toBe(
+      renaming.operationIds.find(({ from }) => from === noRelease.expectedClaim.operationId)?.to
+    )
+    expect(renamedNoRelease.observationOperationId).toBe(
+      renaming.operationIds.find(({ from }) => from === noRelease.observationOperationId)?.to
+    )
+  }
+  expect(
+    (yield* verifyRecordedCassetteRoundTripWithRenaming(
+      records,
+      renamed,
+      invertCassetteIdentityRenaming(renaming)
+    )).every((checkpoint) => checkpoint.workflowHistoryEquivalent)
+  ).toBe(true)
+  const lyrics = renderRecordedCassetteLyrics(renamed)
+  expect(lyrics).toContain("Operator applied Run cancellation.")
+  if (abandoned !== undefined) {
+    expect(lyrics).toContain("abandoned implementation responsibility for cancelled attempt")
+  }
+  if (noRelease !== undefined) expect(lyrics).toContain("cancelling attempt")
+})
 
 const cancellationOwnership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 const cancellationExecutorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
@@ -213,6 +286,7 @@ const cancelledFinalityProof = (runId: RunId, target: ReturnType<typeof FixtureT
 it.effect("cancels an idle Run after the durable direction and fresh graph read", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(idleRunCancellationAuthoredCassette)
+    yield* expectCancellationRecording(run.records)
     expect(run.records.filter(({ event }) => event._tag === "RunCancellationApplied")).toHaveLength(1)
     expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Cancelled" })
     expect(run.observedBehavior.protocolEvidence).toEqual([{ _tag: "RunCancellationApplied" }])
@@ -222,6 +296,7 @@ it.effect("cancels an idle Run after the durable direction and fresh graph read"
 it.effect("cancels a running exact attempt through suspension, claim release, and fresh classification", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runningAttemptRunCancellationAuthoredCassette)
+    yield* expectCancellationRecording(run.records)
     const eventTags = run.records.map(({ event }) => event._tag)
     expect(eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
@@ -232,13 +307,14 @@ it.effect("cancels a running exact attempt through suspension, claim release, an
     expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Cancelled" })
     expect(eventTags).not.toContain("AttemptImplementationAbandoned")
     expect(eventTags).not.toContain("PlannedAttemptReplaced")
-    expectCancellationTerminationFailsClosedForDamagedPrefixes(run.records)
+    expectCancellationTerminationPreconditions(run.records)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("cancels after admitted integration settles without rollback or replacement", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(integrationRunCancellationAuthoredCassette)
+    yield* expectCancellationRecording(run.records)
     const eventTags = run.records.map(({ event }) => event._tag)
     expect(eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
@@ -250,13 +326,14 @@ it.effect("cancels after admitted integration settles without rollback or replac
     expect(eventTags).not.toContain("PlannedAttemptReplaced")
     expect(eventTags).not.toContain("IntegrationRollbackStarted")
     expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Cancelled" })
-    expectCancellationTerminationFailsClosedForDamagedPrefixes(run.records)
+    expectCancellationTerminationPreconditions(run.records)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("cancels a running exact attempt without releasing a foreign claim", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runningAttemptRunCancellationForeignClaimAuthoredCassette)
+    yield* expectCancellationRecording(run.records)
     const eventTags = run.records.map(({ event }) => event._tag)
     expect(eventTags.filter((tag) => tag === "CancelledAttemptImplementationAbandoned")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "CancelledAttemptClaimNoReleaseObserved")).toHaveLength(1)
@@ -265,7 +342,7 @@ it.effect("cancels a running exact attempt without releasing a foreign claim", (
     expect(eventTags).not.toContain("AttemptImplementationAbandoned")
     expect(eventTags).not.toContain("PlannedAttemptReplaced")
     expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Cancelled" })
-    expectCancellationTerminationFailsClosedForDamagedPrefixes(run.records)
+    expectCancellationTerminationPreconditions(run.records)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -326,6 +403,31 @@ it.effect("re-enters once after an unacknowledged cancellation termination appen
         "TaskTrackerFactsObserved",
         "WorkflowRunTerminated"
       ])
+      expectCancellationTerminationPreconditions(firstRecords)
+      const terminal = firstRecords.at(-1)
+      if (terminal?.event._tag !== "WorkflowRunTerminated") return expect.fail("missing cancellation termination")
+      const prefix = firstRecords.slice(0, -1)
+      // Exercise the complete storage decision: it checks fresh evidence as
+      // well as prefix validity and retained responsibilities.
+      expect(
+        decideWorkflowRunTermination(prefix, runId, terminal.event.disposition, terminal.event.evidence)._tag
+      ).toBe("LifecycleTransitionAccepted")
+      for (const tag of [
+        "WorkflowRunBegan",
+        "RunCancellationApplied",
+        "TaskTrackerReadIntentRecorded",
+        "TaskTrackerFactsObserved"
+      ]) {
+        expect(
+          decideWorkflowRunTermination(
+            prefix.filter(({ event }) => event._tag !== tag),
+            runId,
+            terminal.event.disposition,
+            terminal.event.evidence
+          )._tag,
+          `missing ${tag}`
+        ).toBe("LifecycleTransitionRejected")
+      }
       expect(firstRecords.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(1)
       expect(yield* Ref.get(terminationCalls)).toBe(1)
 

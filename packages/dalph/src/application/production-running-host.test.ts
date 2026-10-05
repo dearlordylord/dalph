@@ -971,3 +971,65 @@ it.live(
     ).pipe(Effect.provide(runningHostFixtureLayer)),
   45_000
 )
+
+// #457 S3: one provider refusal crosses actual Git/SQLite and both public clients.
+it.live.each(["ResponseDeadline", "Unavailable"] as const)(
+  "retains integration responsibility and exposes a failed candidate census through CLI and MCP (%s)",
+  (integratorReadFailure) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeRunningHostFixture(builtEntry, false, undefined, undefined, false, {
+          integratorReadFailure
+        })
+        const address = yield* freeAddress
+        yield* withDecodedProductionRepositoryHost(
+          fixture.configuration,
+          fixture.graph,
+          (observation) =>
+            Effect.gen(function* () {
+              yield* serveRunningHost(address, observation)
+              yield* Deferred.await(fixture.turnEntered)
+              yield* fixture.release
+              if (observation.awaitActivationFailure === undefined)
+                return expect.fail("requires host failure notification")
+              const failed = yield* observation.awaitActivationFailure.pipe(Effect.result)
+              expect(failed).toMatchObject({ _tag: "Failure", failure: { _tag: "IntegratorCallFailure" } })
+              const runId = observation.selection.runId
+              const cli = yield* childClient(["attach", "snapshot", "--host", address, "--run", runId, "--json"])
+              expect(readEnvelope(cli.stdout)).toMatchObject({
+                result: { _tag: "Failure", error: { _tag: "ReadFailed", causeTag: "IntegratorCallFailure" } }
+              })
+              const mcp = yield* childClient(["mcp", "--host", address, "--run", runId], mcpInput(runId, "snapshot"))
+              const messages = mcp.stdout
+                .trim()
+                .split("\n")
+                .map((line) => JSON.parse(line))
+              expect(messages.find((message) => message.id === 2)?.result).toMatchObject({ isError: true })
+              expect(mcp.stdout).toContain("IntegratorCallFailure")
+              expect(mcp.stdout).not.toContain("controlled integration read failure")
+              const records = yield* fixture.readHistory(runId)
+              expect(records.some(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toBe(true)
+              expect(records.some(({ event }) => event._tag === "IntegratorRunStarted")).toBe(true)
+              expect(
+                records.some(
+                  ({ event }) =>
+                    event._tag === "IntegratorRunResultRecorded" ||
+                    event._tag === "WorkflowRunTerminated" ||
+                    event._tag === "IntegratorCandidateCleanupSettled"
+                )
+              ).toBe(false)
+              expect(yield* Ref.get(fixture.integrationCensusCalls)).toBe(1)
+              expect(yield* fixture.provider.snapshot()).toMatchObject({
+                taskLifecycle: "Open",
+                activeClaimCount: 1,
+                completionClaimCount: 0
+              })
+              expect((yield* observation.readRunControl).termination).toBeNull()
+            }),
+          "Run",
+          "Listening"
+        )
+      })
+    ).pipe(Effect.provide(runningHostFixtureLayer)),
+  60000
+)

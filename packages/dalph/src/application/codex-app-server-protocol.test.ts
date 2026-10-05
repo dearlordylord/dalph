@@ -34,7 +34,7 @@ let buffer = ""
 let requestNumber = 0
 let threadReadNumber = 0
 let lostTurnToken
-const mode = path.basename(process.argv[1])
+let mode = path.basename(process.argv[1])
 const validThread = {
   id: "protocol-thread",
   cwd: "/fixture/worktree",
@@ -53,6 +53,25 @@ const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.
 const writeVersionless = (id, result) => process.stdout.write(JSON.stringify({ id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method, params = {}) => {
+  if (method === "threadSection/list") {
+    if (mode === "section-census-paginated") return params.cursor === undefined
+      ? { data: [{ id: "section-a" }], nextCursor: "sections-two" }
+      : { data: [{ id: "section-b" }], nextCursor: null }
+    return { data: [], nextCursor: null }
+  }
+  if (method === "thread/list" && mode.startsWith("section-census-")) {
+    if (!Object.hasOwn(params, "sectionId") || params.useStateDbOnly !== undefined || params.limit !== 100 ||
+        params.cwd !== "/fixture/worktree" || params.modelProviders?.length !== 0 || !params.sourceKinds?.includes("unknown")) return { error: true }
+    if (mode === "section-census-paginated") {
+      if (params.sectionId === null) return { data: [{ id: "unsectioned", cwd: params.cwd }], nextCursor: null }
+      if (params.sectionId === "section-a") return params.cursor === undefined
+        ? { data: [{ id: "section-a-first", cwd: params.cwd }], nextCursor: "threads-two" }
+        : { data: [{ id: "section-a-second", cwd: params.cwd }], nextCursor: null }
+      if (params.sectionId === "section-b") return { data: [{ id: "section-b-thread", cwd: params.cwd }], nextCursor: null }
+      return { error: true }
+    }
+    return { data: [], nextCursor: null }
+  }
   if (method === "turn/steer") {
     const input = params.input?.[0]
     if (params.threadId !== "protocol-thread" || params.expectedTurnId !== "protocol-turn" ||
@@ -486,6 +505,9 @@ const responseFor = (method, params = {}) => {
                 : {}
 }
 const onMessage = (message) => {
+  if (path.basename(process.argv[1]) === "mutable-protocol" && fs.existsSync(process.argv[1] + ".mode")) {
+    mode = fs.readFileSync(process.argv[1] + ".mode", "utf8")
+  }
   if (message.method === "initialized") return
   requestNumber += 1
   if (message.method === "thread/read" && message.params?.includeTurns === true) threadReadNumber += 1
@@ -502,26 +524,6 @@ const onMessage = (message) => {
   }
   if (mode === "invalid-jsonrpc-version" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "1.0", id: message.id, result: {} }) + "\n")
-    return
-  }
-  if (mode.startsWith("malformed-envelope-") && requestNumber === 1) {
-    const envelope =
-      mode === "malformed-envelope-method"
-        ? { jsonrpc: "2.0", method: 1 }
-        : mode === "malformed-envelope-notification-result"
-          ? { jsonrpc: "2.0", method: "fixture/notice", result: {} }
-          : mode === "malformed-envelope-server-result"
-            ? { jsonrpc: "2.0", id: message.id, method: "fixture/request", result: {} }
-            : mode === "malformed-envelope-server-id"
-              ? { jsonrpc: "2.0", id: {}, method: "fixture/request" }
-              : mode === "malformed-envelope-response-id"
-                ? { jsonrpc: "2.0", id: 0, result: {} }
-                : mode === "malformed-envelope-response-both"
-                  ? { jsonrpc: "2.0", id: message.id, result: {}, error: {} }
-                  : mode === "malformed-envelope-response-neither"
-                    ? { jsonrpc: "2.0", id: message.id }
-                    : { jsonrpc: "2.0", id: message.id, error: "invalid" }
-    process.stdout.write(JSON.stringify(envelope) + "\n")
     return
   }
   if (mode === "idle-malformed-before-next-request") {
@@ -805,6 +807,29 @@ const withFixture = <A>(
     }).pipe(Effect.provide(NodeServices.layer))
   )
 
+type ProtocolFixtureAction<A> = (
+  app: CodexAppServerService,
+  root: string
+) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>
+type ProtocolFixtureMode = <A>(
+  mode: string,
+  action: ProtocolFixtureAction<A>
+) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>
+
+/** One real transport tests multiple reply shapes without repeated process custody. */
+const withProtocolModes = <A>(
+  action: (select: ProtocolFixtureMode) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>
+) =>
+  withFixture("mutable-protocol", (app, root) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const select: ProtocolFixtureMode = (mode, use) =>
+        fileSystem.writeFileString(path.join(root, "mutable-protocol.mode"), mode).pipe(Effect.andThen(use(app, root)))
+      return yield* action(select)
+    })
+  )
+
 const attachExactCompletionHints = (app: CodexAppServerService) => {
   const attach = app.attachExactTurnCompletedHints
   if (attach === undefined) return Effect.die("the Codex app-server must expose exact turn-completion hints")
@@ -935,142 +960,148 @@ it.effect("guidance acknowledgement timeout preserves the provider and never int
 )
 
 it.effect("maps malformed thread and turn state to typed protocol failures", () =>
-  Effect.forEach(
-    [
-      ["response-not-object", "thread/start"],
-      ["missing-thread", "thread/start"],
-      ["invalid-thread-fields", "thread/start"],
-      ["thread-turns-not-array", "thread/start"],
-      ["invalid-turn", "thread/start"],
-      ["invalid-turn-fields", "thread/start"],
-      ["invalid-turn-items", "thread/start"],
-      ["invalid-turn-correlation", "thread/start"],
-      ["invalid-turn-correlation-shape", "thread/start"],
-      ["invalid-turn-correlation-empty", "thread/start"],
-      ["invalid-turn-token", "thread/start"],
-      ["invalid-turn-token-empty", "thread/start"],
-      ["invalid-turn-input-item", "thread/start"],
-      ["turn-marker-malformed-user-message", "thread/start"],
-      ["turn-marker-contradictory-user-message", "thread/start"],
-      ["thread-start-invalid-metadata-token", "thread/start"],
-      ["thread-start-invalid-direct-token", "thread/start"],
-      ["thread-start-contradictory-tokens", "thread/start"],
-      ["duplicate-turn-marker", "thread/start"],
-      ["contradictory-turn-token", "thread/start"],
-      ["invalid-thread-correlation", "thread/start"],
-      ["invalid-thread-correlation-shape", "thread/start"],
-      ["invalid-thread-correlation-empty", "thread/start"]
-    ] as const,
-    ([mode, operation]) =>
-      withFixture(mode, (app) =>
-        Effect.exit(app.startThread("/fixture/worktree")).pipe(
-          Effect.tap((exit) => Effect.sync(() => expectAppFailure(exit, operation)))
+  withProtocolModes((withFixtureMode) =>
+    Effect.forEach(
+      [
+        ["response-not-object", "thread/start"],
+        ["missing-thread", "thread/start"],
+        ["invalid-thread-fields", "thread/start"],
+        ["thread-turns-not-array", "thread/start"],
+        ["invalid-turn", "thread/start"],
+        ["invalid-turn-fields", "thread/start"],
+        ["invalid-turn-items", "thread/start"],
+        ["invalid-turn-correlation", "thread/start"],
+        ["invalid-turn-correlation-shape", "thread/start"],
+        ["invalid-turn-correlation-empty", "thread/start"],
+        ["invalid-turn-token", "thread/start"],
+        ["invalid-turn-token-empty", "thread/start"],
+        ["invalid-turn-input-item", "thread/start"],
+        ["turn-marker-malformed-user-message", "thread/start"],
+        ["turn-marker-contradictory-user-message", "thread/start"],
+        ["thread-start-invalid-metadata-token", "thread/start"],
+        ["thread-start-invalid-direct-token", "thread/start"],
+        ["thread-start-contradictory-tokens", "thread/start"],
+        ["duplicate-turn-marker", "thread/start"],
+        ["contradictory-turn-token", "thread/start"],
+        ["invalid-thread-correlation", "thread/start"],
+        ["invalid-thread-correlation-shape", "thread/start"],
+        ["invalid-thread-correlation-empty", "thread/start"]
+      ] as const,
+      ([mode, operation]) =>
+        withFixtureMode(mode, (app) =>
+          Effect.exit(app.startThread("/fixture/worktree")).pipe(
+            Effect.tap((exit) => Effect.sync(() => expectAppFailure(exit, operation)))
+          )
         )
-      )
+    )
   )
 )
 
 it.effect("rejects schema-valid envelopes whose nested Codex identity fields are malformed", () =>
-  Effect.gen(function* () {
-    for (const [mode, operation, detail] of [
-      ["turn-marker-malformed-item-discriminator", "thread/start", "turn item discriminator is invalid"],
-      ["turn-marker-malformed-content-discriminator", "thread/start", "turn content discriminator is invalid"],
-      ["thread-start-missing-status", "thread/start", "thread id, cwd, or status is invalid"],
-      ["invalid-turn-token", "thread/start", "thread payload is invalid"],
-      ["thread-list-malformed-nested-item", "thread/list", "turn item discriminator is invalid"]
-    ] as const) {
-      const failure = yield* withFixture(mode, (app) =>
-        Effect.gen(function* () {
-          if (operation === "thread/list") {
-            if (app.listThreads === undefined) return yield* Effect.die("Node app-server did not expose thread/list")
-            return yield* app.listThreads().pipe(Effect.flip)
-          }
-          return yield* app.startThread("/fixture/worktree").pipe(Effect.flip)
-        })
-      )
-      expect(failure).toMatchObject({ kind: "Malformed", operation })
-      expect(failure.detail).toContain(detail)
-    }
-  })
+  withProtocolModes((withFixtureMode) =>
+    Effect.gen(function* () {
+      for (const [mode, operation, detail] of [
+        ["turn-marker-malformed-item-discriminator", "thread/start", "turn item discriminator is invalid"],
+        ["turn-marker-malformed-content-discriminator", "thread/start", "turn content discriminator is invalid"],
+        ["thread-start-missing-status", "thread/start", "thread id, cwd, or status is invalid"],
+        ["invalid-turn-token", "thread/start", "thread payload is invalid"],
+        ["thread-list-malformed-nested-item", "thread/list", "turn item discriminator is invalid"]
+      ] as const) {
+        const failure = yield* withFixtureMode(mode, (app) =>
+          Effect.gen(function* () {
+            if (operation === "thread/list") {
+              if (app.listThreads === undefined) return yield* Effect.die("Node app-server did not expose thread/list")
+              return yield* app.listThreads().pipe(Effect.flip)
+            }
+            return yield* app.startThread("/fixture/worktree").pipe(Effect.flip)
+          })
+        )
+        expect(failure).toMatchObject({ kind: "Malformed", operation })
+        expect(failure.detail).toContain(detail)
+      }
+    })
+  )
 )
 
 it.effect("reconciles valid turn markers, metadata, status, and correlation through public reads", () =>
-  Effect.gen(function* () {
-    const direct = yield* withFixture("turn-start-direct-token", (app) =>
-      Effect.gen(function* () {
-        const thread = yield* app.startThread("/fixture/worktree")
-        const turn = yield* app.startTurn(
-          thread.id,
-          "/fixture/worktree",
-          "work",
-          CodexOwnedTurnToken.make("wire-token")
-        )
-        expect(turn.ownedTurnToken).toBe("wire-token")
-        return turn.status
-      })
-    )
-    expect(direct).toBe("completed")
-
-    const marker = yield* withFixture("turn-start-marker-token", (app) =>
-      Effect.gen(function* () {
-        const thread = yield* app.startThread("/fixture/worktree")
-        const turn = yield* app.startTurn(
-          thread.id,
-          "/fixture/worktree",
-          "work",
-          CodexOwnedTurnToken.make("wire-token")
-        )
-        expect(turn.ownedTurnToken).toBe("wire-token")
-        return turn.status
-      })
-    )
-    expect(marker).toBe("completed")
-
-    const correlation = yield* withFixture("turn-start-correlation", (app) =>
-      Effect.gen(function* () {
-        const thread = yield* app.startThread("/fixture/worktree")
-        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
-        expect(turn.correlation?.runId).toBe("run:protocol")
-        return turn.correlation?.attemptId
-      })
-    )
-    expect(correlation).toBe("attempt:protocol")
-
-    const boundaries = yield* withFixture("happy", (app) =>
-      Effect.gen(function* () {
-        const started = yield* app.startThread("/fixture/worktree")
-        expect((yield* app.readThread(started.id)).id).toBe(started.id)
-        expect((yield* app.resumeThread(started.id, "/fixture/worktree")).cwd).toBe("/fixture/worktree")
-        const startedTurn = yield* app.startTurn(started.id, "/fixture/worktree", "work")
-        yield* app.interruptTurn(started.id, startedTurn.id)
-        expect(yield* app.listBackgroundTerminals(started.id)).toEqual([])
-        expect(yield* app.terminateBackgroundTerminal(started.id, "terminal")).toBe(true)
-        return startedTurn.id
-      })
-    )
-    expect(boundaries).toBe("protocol-turn")
-
-    const status = yield* withFixture("status-object", (app) =>
-      Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.status)
-    )
-    expect(status).toBe("idle")
-
-    const threadCorrelation = yield* withFixture("thread-correlation", (app) =>
-      Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.correlation)
-    )
-    expect(threadCorrelation).toEqual({ runId: "run:protocol", attemptId: "attempt:protocol" })
-
-    for (const mode of ["thread-no-turns", "thread-turn-items-omitted"] as const) {
-      const started = yield* withFixture(mode, (app) => app.startThread("/fixture/worktree"))
-      expect(started.turns).toEqual(
-        mode === "thread-no-turns" ? [] : [{ id: CodexTurnId.make("protocol-turn"), status: "completed", items: [] }]
+  withProtocolModes((withFixtureMode) =>
+    Effect.gen(function* () {
+      const direct = yield* withFixtureMode("turn-start-direct-token", (app) =>
+        Effect.gen(function* () {
+          const thread = yield* app.startThread("/fixture/worktree")
+          const turn = yield* app.startTurn(
+            thread.id,
+            "/fixture/worktree",
+            "work",
+            CodexOwnedTurnToken.make("wire-token")
+          )
+          expect(turn.ownedTurnToken).toBe("wire-token")
+          return turn.status
+        })
       )
-    }
-    for (const mode of ["thread-status-not-loaded", "thread-status-system-error"] as const) {
-      const started = yield* withFixture(mode, (app) => app.startThread("/fixture/worktree"))
-      expect(started.status).toBe(mode === "thread-status-not-loaded" ? "notLoaded" : "systemError")
-    }
-  })
+      expect(direct).toBe("completed")
+
+      const marker = yield* withFixtureMode("turn-start-marker-token", (app) =>
+        Effect.gen(function* () {
+          const thread = yield* app.startThread("/fixture/worktree")
+          const turn = yield* app.startTurn(
+            thread.id,
+            "/fixture/worktree",
+            "work",
+            CodexOwnedTurnToken.make("wire-token")
+          )
+          expect(turn.ownedTurnToken).toBe("wire-token")
+          return turn.status
+        })
+      )
+      expect(marker).toBe("completed")
+
+      const correlation = yield* withFixtureMode("turn-start-correlation", (app) =>
+        Effect.gen(function* () {
+          const thread = yield* app.startThread("/fixture/worktree")
+          const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+          expect(turn.correlation?.runId).toBe("run:protocol")
+          return turn.correlation?.attemptId
+        })
+      )
+      expect(correlation).toBe("attempt:protocol")
+
+      const boundaries = yield* withFixtureMode("happy", (app) =>
+        Effect.gen(function* () {
+          const started = yield* app.startThread("/fixture/worktree")
+          expect((yield* app.readThread(started.id)).id).toBe(started.id)
+          expect((yield* app.resumeThread(started.id, "/fixture/worktree")).cwd).toBe("/fixture/worktree")
+          const startedTurn = yield* app.startTurn(started.id, "/fixture/worktree", "work")
+          yield* app.interruptTurn(started.id, startedTurn.id)
+          expect(yield* app.listBackgroundTerminals(started.id)).toEqual([])
+          expect(yield* app.terminateBackgroundTerminal(started.id, "terminal")).toBe(true)
+          return startedTurn.id
+        })
+      )
+      expect(boundaries).toBe("protocol-turn")
+
+      const status = yield* withFixtureMode("status-object", (app) =>
+        Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.status)
+      )
+      expect(status).toBe("idle")
+
+      const threadCorrelation = yield* withFixtureMode("thread-correlation", (app) =>
+        Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.correlation)
+      )
+      expect(threadCorrelation).toEqual({ runId: "run:protocol", attemptId: "attempt:protocol" })
+
+      for (const mode of ["thread-no-turns", "thread-turn-items-omitted"] as const) {
+        const started = yield* withFixtureMode(mode, (app) => app.startThread("/fixture/worktree"))
+        expect(started.turns).toEqual(
+          mode === "thread-no-turns" ? [] : [{ id: CodexTurnId.make("protocol-turn"), status: "completed", items: [] }]
+        )
+      }
+      for (const mode of ["thread-status-not-loaded", "thread-status-system-error"] as const) {
+        const started = yield* withFixtureMode(mode, (app) => app.startThread("/fixture/worktree"))
+        expect(started.status).toBe(mode === "thread-status-not-loaded" ? "notLoaded" : "systemError")
+      }
+    })
+  )
 )
 
 it.effect("accepts ownership markers only from schema-decoded user-authored input", () =>
@@ -1103,96 +1134,100 @@ it.effect("controlled qualification provider serves loopback responses without a
 )
 
 it.effect("reads a complete persistent thread list and preserves malformed-list failures", () =>
-  Effect.gen(function* () {
-    const listed = yield* withFixture("thread-list-valid", (app) => {
-      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
-    })
-    expect(listed).toEqual(["protocol-thread"])
-
-    const owned = yield* withFixture("thread-start-owned-token", (app) =>
-      Effect.map(
-        app.startThread("/fixture/worktree", CodexThreadOwnershipToken.make("owned-thread")),
-        (thread) => thread.ownedThreadToken
-      )
-    )
-    expect(owned).toBe("owned-thread")
-
-    const metadataOwned = yield* withFixture("thread-start-metadata-token", (app) =>
-      Effect.map(
-        app.startThread("/fixture/worktree", CodexThreadOwnershipToken.make("metadata-owned-thread")),
-        (thread) => thread.ownedThreadToken
-      )
-    )
-    expect(metadataOwned).toBe("metadata-owned-thread")
-
-    const alternateKey = yield* withFixture("thread-list-threads-key", (app) => {
-      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
-    })
-    expect(alternateKey).toEqual(["protocol-thread"])
-
-    const identicalAliases = yield* withFixture("thread-list-identical-aliases", (app) => {
-      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
-    })
-    expect(identicalAliases).toEqual(["protocol-thread"])
-
-    for (const mode of [
-      "thread-list-not-array",
-      "thread-list-invalid-item",
-      "thread-list-invalid-fields",
-      "thread-list-invalid-status",
-      "thread-list-invalid-correlation",
-      "thread-list-invalid-token",
-      "thread-list-contradictory-values",
-      "thread-list-contradictory-cursors",
-      "thread-list-missing-values",
-      "thread-list-rpc-error"
-    ] as const) {
-      const result = yield* withFixture(mode, (app) => {
+  withProtocolModes((withFixtureMode) =>
+    Effect.gen(function* () {
+      const listed = yield* withFixtureMode("thread-list-valid", (app) => {
         if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-        return Effect.exit(app.listThreads())
+        return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
       })
-      expectAppFailure(result, "thread/list")
-    }
+      expect(listed).toEqual(["protocol-thread"])
 
-    for (const mode of ["thread-list-repeated-cursor", "thread-list-invalid-cursor"] as const) {
-      const result = yield* withFixture(mode, (app) => {
+      const owned = yield* withFixtureMode("thread-start-owned-token", (app) =>
+        Effect.map(
+          app.startThread("/fixture/worktree", CodexThreadOwnershipToken.make("owned-thread")),
+          (thread) => thread.ownedThreadToken
+        )
+      )
+      expect(owned).toBe("owned-thread")
+
+      const metadataOwned = yield* withFixtureMode("thread-start-metadata-token", (app) =>
+        Effect.map(
+          app.startThread("/fixture/worktree", CodexThreadOwnershipToken.make("metadata-owned-thread")),
+          (thread) => thread.ownedThreadToken
+        )
+      )
+      expect(metadataOwned).toBe("metadata-owned-thread")
+
+      const alternateKey = yield* withFixtureMode("thread-list-threads-key", (app) => {
         if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-        return Effect.exit(app.listThreads())
+        return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
       })
-      expectAppFailure(result, "thread/list")
-    }
-  })
+      expect(alternateKey).toEqual(["protocol-thread"])
+
+      const identicalAliases = yield* withFixtureMode("thread-list-identical-aliases", (app) => {
+        if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+        return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
+      })
+      expect(identicalAliases).toEqual(["protocol-thread"])
+
+      for (const mode of [
+        "thread-list-not-array",
+        "thread-list-invalid-item",
+        "thread-list-invalid-fields",
+        "thread-list-invalid-status",
+        "thread-list-invalid-correlation",
+        "thread-list-invalid-token",
+        "thread-list-contradictory-values",
+        "thread-list-contradictory-cursors",
+        "thread-list-missing-values",
+        "thread-list-rpc-error"
+      ] as const) {
+        const result = yield* withFixtureMode(mode, (app) => {
+          if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+          return Effect.exit(app.listThreads())
+        })
+        expectAppFailure(result, "thread/list")
+      }
+
+      for (const mode of ["thread-list-repeated-cursor", "thread-list-invalid-cursor"] as const) {
+        const result = yield* withFixtureMode(mode, (app) => {
+          if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+          return Effect.exit(app.listThreads())
+        })
+        expectAppFailure(result, "thread/list")
+      }
+    })
+  )
 )
 
 it.effect("keeps partial thread-list summaries distinct from exact thread snapshots", () =>
-  Effect.gen(function* () {
-    expectTypeOf<
-      Extract<CodexThreadListSummary, { readonly _tag: "CompleteSummary" }>
-    >().not.toMatchTypeOf<CodexThreadSnapshot>()
-    const summaries = yield* Effect.forEach(
-      ["thread-list-identity-only", "thread-list-missing-status", "thread-list-missing-turns", "thread-list-valid"],
-      (mode) =>
-        withFixture(mode, (app) => {
-          if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-          return Effect.map(app.listThreads(), (threads) => threads[0])
-        })
-    )
+  withProtocolModes((withFixtureMode) =>
+    Effect.gen(function* () {
+      expectTypeOf<
+        Extract<CodexThreadListSummary, { readonly _tag: "CompleteSummary" }>
+      >().not.toMatchTypeOf<CodexThreadSnapshot>()
+      const summaries = yield* Effect.forEach(
+        ["thread-list-identity-only", "thread-list-missing-status", "thread-list-missing-turns", "thread-list-valid"],
+        (mode) =>
+          withFixtureMode(mode, (app) => {
+            if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+            return Effect.map(app.listThreads(), (threads) => threads[0])
+          })
+      )
 
-    expect(summaries).toEqual([
-      { _tag: "IdentityOnly", id: "protocol-thread", cwd: "/fixture/worktree" },
-      { _tag: "IncompleteSummary", id: "protocol-thread", cwd: "/fixture/worktree", summary: { turns: [] } },
-      { _tag: "IncompleteSummary", id: "protocol-thread", cwd: "/fixture/worktree", summary: { status: "idle" } },
-      {
-        _tag: "CompleteSummary",
-        id: "protocol-thread",
-        cwd: "/fixture/worktree",
-        summary: { status: "idle", turns: [] }
-      }
-    ])
-  })
+      expect(summaries).toEqual([
+        { _tag: "IdentityOnly", id: "protocol-thread", cwd: "/fixture/worktree" },
+        { _tag: "IncompleteSummary", id: "protocol-thread", cwd: "/fixture/worktree", summary: { turns: [] } },
+        { _tag: "IncompleteSummary", id: "protocol-thread", cwd: "/fixture/worktree", summary: { status: "idle" } },
+        {
+          _tag: "CompleteSummary",
+          id: "protocol-thread",
+          cwd: "/fixture/worktree",
+          summary: { status: "idle", turns: [] }
+        }
+      ])
+    })
+  )
 )
 
 it.effect("reads every persistent thread-list page before reporting a complete identity list", () =>
@@ -1208,56 +1243,60 @@ it.effect("reads every persistent thread-list page before reporting a complete i
 )
 
 it.effect("rejects invalid turn-start responses and preserves the requested token boundary", () =>
-  Effect.forEach(
-    [
-      ["turn-start-invalid-response", "turn/start"],
-      ["turn-start-invalid-status", "turn/start"],
-      ["turn-start-invalid-items", "turn/start"],
-      ["turn-start-token-mismatch", "turn/start"]
-    ] as const,
-    ([mode, operation]) =>
-      withFixture(mode, (app) =>
-        Effect.gen(function* () {
-          const thread = yield* app.startThread("/fixture/worktree")
-          const result = yield* Effect.exit(
-            app.startTurn(thread.id, "/fixture/worktree", "work", CodexOwnedTurnToken.make("wire-token"))
-          )
-          expectAppFailure(result, operation)
-        })
-      )
+  withProtocolModes((withFixtureMode) =>
+    Effect.forEach(
+      [
+        ["turn-start-invalid-response", "turn/start"],
+        ["turn-start-invalid-status", "turn/start"],
+        ["turn-start-invalid-items", "turn/start"],
+        ["turn-start-token-mismatch", "turn/start"]
+      ] as const,
+      ([mode, operation]) =>
+        withFixtureMode(mode, (app) =>
+          Effect.gen(function* () {
+            const thread = yield* app.startThread("/fixture/worktree")
+            const result = yield* Effect.exit(
+              app.startTurn(thread.id, "/fixture/worktree", "work", CodexOwnedTurnToken.make("wire-token"))
+            )
+            expectAppFailure(result, operation)
+          })
+        )
+    )
   )
 )
 
 it.effect("keeps every real RPC operation failure typed at its public boundary", () =>
-  Effect.forEach(
-    [
-      ["read-response-not-object", "thread/read"] as const,
-      ["resume-response-not-object", "thread/resume"] as const,
-      ["turn-response-not-object", "turn/start"] as const,
-      ["background-response-not-object", "thread/backgroundTerminals/list"] as const,
-      ["terminate-response-not-object", "thread/backgroundTerminals/terminate"] as const,
-      ["interrupt-rpc-error", "turn/interrupt"] as const
-    ],
-    ([mode, operation]) =>
-      withFixture(mode, (app) =>
-        Effect.gen(function* () {
-          const started = yield* app.startThread("/fixture/worktree")
-          const result = yield* Effect.exit(
-            operation === "thread/read"
-              ? app.readThread(started.id)
-              : operation === "thread/resume"
-                ? app.resumeThread(started.id, "/fixture/worktree")
-                : operation === "turn/start"
-                  ? app.startTurn(started.id, "/fixture/worktree", "work")
-                  : operation === "thread/backgroundTerminals/list"
-                    ? app.listBackgroundTerminals(started.id)
-                    : operation === "thread/backgroundTerminals/terminate"
-                      ? app.terminateBackgroundTerminal(started.id, "terminal")
-                      : app.interruptTurn(started.id, CodexTurnId.make("protocol-turn"))
-          )
-          expectAppFailure(result, operation)
-        })
-      )
+  withProtocolModes((withFixtureMode) =>
+    Effect.forEach(
+      [
+        ["read-response-not-object", "thread/read"] as const,
+        ["resume-response-not-object", "thread/resume"] as const,
+        ["turn-response-not-object", "turn/start"] as const,
+        ["background-response-not-object", "thread/backgroundTerminals/list"] as const,
+        ["terminate-response-not-object", "thread/backgroundTerminals/terminate"] as const,
+        ["interrupt-rpc-error", "turn/interrupt"] as const
+      ],
+      ([mode, operation]) =>
+        withFixtureMode(mode, (app) =>
+          Effect.gen(function* () {
+            const started = yield* app.startThread("/fixture/worktree")
+            const result = yield* Effect.exit(
+              operation === "thread/read"
+                ? app.readThread(started.id)
+                : operation === "thread/resume"
+                  ? app.resumeThread(started.id, "/fixture/worktree")
+                  : operation === "turn/start"
+                    ? app.startTurn(started.id, "/fixture/worktree", "work")
+                    : operation === "thread/backgroundTerminals/list"
+                      ? app.listBackgroundTerminals(started.id)
+                      : operation === "thread/backgroundTerminals/terminate"
+                        ? app.terminateBackgroundTerminal(started.id, "terminal")
+                        : app.interruptTurn(started.id, CodexTurnId.make("protocol-turn"))
+            )
+            expectAppFailure(result, operation)
+          })
+        )
+    )
   )
 )
 
@@ -1371,48 +1410,50 @@ it.effect("rejects malformed turn censuses from thread/read and thread/resume", 
 )
 
 it.effect("normalizes background terminal observations and rejects unsafe terminal controls", () =>
-  Effect.gen(function* () {
-    const valid = yield* withFixture("background-valid-null-pid", (app) =>
-      Effect.gen(function* () {
-        const thread = yield* app.startThread("/fixture/worktree")
-        const terminals = yield* app.listBackgroundTerminals(thread.id)
-        expect(terminals).toEqual([{ processId: "p", itemId: "i", command: "echo", cwd: "/fixture", osPid: null }])
-        return yield* app.terminateBackgroundTerminal(thread.id, "p")
-      })
-    )
-    expect(valid).toBe(true)
-
-    const numericPid = yield* withFixture("background-valid-number-pid", (app) =>
-      Effect.gen(function* () {
-        const thread = yield* app.startThread("/fixture/worktree")
-        return yield* app.listBackgroundTerminals(thread.id)
-      })
-    )
-    expect(numericPid[0]?.osPid).toBe(42)
-
-    for (const mode of [
-      "background-not-array",
-      "background-invalid-item",
-      "background-invalid-identity",
-      "background-invalid-pid"
-    ] as const) {
-      const result = yield* withFixture(mode, (app) =>
+  withProtocolModes((withFixtureMode) =>
+    Effect.gen(function* () {
+      const valid = yield* withFixtureMode("background-valid-null-pid", (app) =>
         Effect.gen(function* () {
           const thread = yield* app.startThread("/fixture/worktree")
-          return yield* Effect.exit(app.listBackgroundTerminals(thread.id))
+          const terminals = yield* app.listBackgroundTerminals(thread.id)
+          expect(terminals).toEqual([{ processId: "p", itemId: "i", command: "echo", cwd: "/fixture", osPid: null }])
+          return yield* app.terminateBackgroundTerminal(thread.id, "p")
         })
       )
-      expectAppFailure(result, "thread/backgroundTerminals/list")
-    }
+      expect(valid).toBe(true)
 
-    const invalidTermination = yield* withFixture("terminate-invalid", (app) =>
-      Effect.gen(function* () {
-        const thread = yield* app.startThread("/fixture/worktree")
-        return yield* Effect.exit(app.terminateBackgroundTerminal(thread.id, "p"))
-      })
-    )
-    expectAppFailure(invalidTermination, "thread/backgroundTerminals/terminate")
-  })
+      const numericPid = yield* withFixtureMode("background-valid-number-pid", (app) =>
+        Effect.gen(function* () {
+          const thread = yield* app.startThread("/fixture/worktree")
+          return yield* app.listBackgroundTerminals(thread.id)
+        })
+      )
+      expect(numericPid[0]?.osPid).toBe(42)
+
+      for (const mode of [
+        "background-not-array",
+        "background-invalid-item",
+        "background-invalid-identity",
+        "background-invalid-pid"
+      ] as const) {
+        const result = yield* withFixtureMode(mode, (app) =>
+          Effect.gen(function* () {
+            const thread = yield* app.startThread("/fixture/worktree")
+            return yield* Effect.exit(app.listBackgroundTerminals(thread.id))
+          })
+        )
+        expectAppFailure(result, "thread/backgroundTerminals/list")
+      }
+
+      const invalidTermination = yield* withFixtureMode("terminate-invalid", (app) =>
+        Effect.gen(function* () {
+          const thread = yield* app.startThread("/fixture/worktree")
+          return yield* Effect.exit(app.terminateBackgroundTerminal(thread.id, "p"))
+        })
+      )
+      expectAppFailure(invalidTermination, "thread/backgroundTerminals/terminate")
+    })
+  )
 )
 
 it.effect("classifies transport protocol errors without fabricating a thread", () =>
@@ -1681,33 +1722,18 @@ it.effect("does not let an ID-bearing server request settle a colliding outbound
 )
 
 it.effect("fails malformed JSON-RPC envelopes through the typed protocol boundary", () =>
-  Effect.forEach(
-    [
-      ["malformed-envelope", "must contain method or id"],
-      ["malformed-envelope-method", "method is invalid"],
-      ["malformed-envelope-notification-result", "notification cannot contain result or error"],
-      ["malformed-envelope-server-result", "server request cannot contain result or error"],
-      ["malformed-envelope-server-id", "server request id is invalid"],
-      ["malformed-envelope-response-id", "response id is invalid"],
-      ["malformed-envelope-response-both", "response must contain exactly one result or error"],
-      ["malformed-envelope-response-neither", "response must contain exactly one result or error"],
-      ["malformed-envelope-response-error", "response error is invalid"]
-    ] as const,
-    ([mode, detail]) =>
-      withFixture(mode, (app) =>
-        Effect.gen(function* () {
-          const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
-          expectAppFailure(result, "initialize")
-          if (Exit.isFailure(result)) {
-            const failure = Cause.findErrorOption(result.cause)
-            if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
-              expect(failure.value).toMatchObject({ kind: "Protocol" })
-              expect(failure.value.detail).toContain(detail)
-            }
-          }
-        })
-      ),
-    { concurrency: 1 }
+  withFixture("malformed-envelope", (app) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
+      expectAppFailure(result, "initialize")
+      if (Exit.isFailure(result)) {
+        const failure = Cause.findErrorOption(result.cause)
+        expect(failure).toMatchObject({ _tag: "Some", value: { kind: "Protocol" } })
+        if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+          expect(failure.value.detail).toContain("must contain method or id")
+        }
+      }
+    })
   )
 )
 
@@ -2134,5 +2160,21 @@ it.effect("rearms the same completion receiver and retains the next turn hint be
         expect(yield* Fiber.join(received)).toEqual(Option.some({ threadId: thread.id, turnId: turn.id }))
       })
     )
+  )
+)
+
+// #457 S1/S2: indexed partitions retain complete discovery and fail closed.
+it.effect("inventories every native section and thread page through explicit indexed partitions", () =>
+  withFixture("section-census-paginated", (app) =>
+    Effect.gen(function* () {
+      if (app.listThreads === undefined) return expect.fail("thread census is required")
+      const threads = yield* app.listThreads(CodexThreadWorkingDirectory.make("/fixture/worktree"))
+      expect(threads.map((thread) => thread.id)).toEqual([
+        "unsectioned",
+        "section-a-first",
+        "section-a-second",
+        "section-b-thread"
+      ])
+    })
   )
 )

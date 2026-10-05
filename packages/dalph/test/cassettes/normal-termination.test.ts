@@ -1,20 +1,29 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Cause, Effect, Exit, Fiber, Queue, Ref } from "effect"
-import { expect } from "vitest"
+import { beforeAll, expect } from "vitest"
 import { deriveIntegrationFinalityStateFor, reduceWorkflowJournalHistory } from "@dalph/orchestrator"
 import { terminationPreconditionIssues } from "../../../orchestrator/src/workflow-journal/termination-preconditions.js"
+import { makeNormalTerminationSettledA } from "../../test-support/settled-a.js"
 import { makeNormalTermination } from "../../test-support/normal-termination.js"
 import { start, deliver, names } from "../../test-support/test-controls.js"
 
 type Fixture = Effect.Success<ReturnType<typeof makeNormalTermination>>
 const allNames = ["A", ...names]
 
+// Prepare the independently validated starting history once. This is immutable
+// records/evidence seed data, with no live runtime or scope retained by the cache.
+// The timed acceptance test still performs B–G delivery and both crash recoveries.
+const startingPrefix = Effect.runSync(
+  Effect.cached(makeNormalTerminationSettledA().pipe(Effect.provide(NodeCrypto.layer)))
+)
+beforeAll(() => Effect.runPromise(startingPrefix))
+
 it.effect(
   "settles seven tasks, refreshes Gfinal after a crash, and recovers lost termination acknowledgement",
   () =>
     Effect.gen(function* () {
-      const fixture = yield* makeNormalTermination()
+      const fixture = yield* makeNormalTermination(yield* startingPrefix)
       yield* Ref.set(fixture.terminationCut, { _tag: "Armed", at: "FinalGraphObserved" })
       const process = yield* start(fixture)
       yield* deliver(fixture, process)

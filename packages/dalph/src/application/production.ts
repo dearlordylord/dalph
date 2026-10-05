@@ -56,6 +56,7 @@ import {
   WorkflowTrace,
   type EvidenceStoreService,
   Integrator,
+  IntegratorCallFailure,
   type IntegratorService,
   type TargetPromotionRuntimeInput,
   nodeGitDirectPublicationLayer,
@@ -118,9 +119,7 @@ export interface ProductionRunReactivationOptions {
   /** Required observation of every typed tracker/Git/journal failure; no activation failure is swallowed. */
   readonly onFailure: ProductionRunReactivationFailureObserver
   /** Optional separate channel for the exact failure that must escape the host. */
-  readonly onNonRetryableFailure?: (
-    failure: TaskTrackerMutationThrottled | ProductionCancellationBlocked
-  ) => Effect.Effect<void>
+  readonly onNonRetryableFailure?: (failure: ProductionNonRetryableActivationFailure) => Effect.Effect<void>
   /** Apply Operator cancellation before this owner can enter ordinary delivery. */
   readonly cancelBeforeDelivery?: boolean
 }
@@ -332,14 +331,22 @@ const defaultProductionRunReactivationCooldown = ProductionRunReactivationInterv
 const isWorkflowRunAlreadyTerminated = (failure: unknown): boolean => failure instanceof WorkflowRunAlreadyTerminated
 
 /**
- * Provider throttling and a conclusive cancellation blocker stop this
- * process-local owner and escape the host. Other tracker, Git, Journal, and
- * executor failures remain their precise ordinary #218 cooldown observations.
+ * Provider throttling, an inconclusive integrator call and a conclusive
+ * cancellation blocker stop this process-local owner. A listening host retains
+ * their failure for inspection. Other failures keep their ordinary cooldown.
  */
+/** A stopped owner requires explicit reconciliation rather than timer admission. */
+export type ProductionNonRetryableActivationFailure =
+  | TaskTrackerMutationThrottled
+  | ProductionCancellationBlocked
+  | IntegratorCallFailure
+
 export const isNonRetryableProductionActivationFailure = (
   failure: unknown
-): failure is TaskTrackerMutationThrottled | ProductionCancellationBlocked =>
-  failure instanceof TaskTrackerMutationThrottled || failure instanceof ProductionCancellationBlocked
+): failure is ProductionNonRetryableActivationFailure =>
+  failure instanceof TaskTrackerMutationThrottled ||
+  failure instanceof ProductionCancellationBlocked ||
+  failure instanceof IntegratorCallFailure
 
 /** Requires cancellation to discharge every terminal precondition before the production owner can close. */
 export const requireProductionCancellationTermination = (runId: RunId, decision: RunFinalityDecision) =>

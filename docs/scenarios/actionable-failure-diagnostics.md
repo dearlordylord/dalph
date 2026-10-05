@@ -94,3 +94,32 @@ The host recalculates diagnostics when accepted history changes, including after
 its execution activation returns idle. This follows the existing accepted-history
 notification and reads the certified prefix; it does not introduce a provider
 poll or authorize fresh work. Each diagnostic retains its own source position.
+
+## Integration provider failure stops automatic activation
+
+Accepted repair: [#457](https://github.com/dearlordylord/dalph/issues/457).
+Dalph has recorded integration responsibility and retained the exact candidate.
+The integration boundary returns `IntegratorCallFailure`, including a bounded
+request timeout or transport loss before thread creation. The production owner
+stops its timer and tracker notification admission, reports the same typed
+failure once, and retains the candidate, responsibility and existing claim.
+It creates no replacement thread, turn or server and publishes no commit.
+
+A passive CLI/MCP snapshot returns sanitized `ReadFailed` with boundary
+`IntegratorCallFailure`. An already attached watch receives the same failure
+through the host-owned notification, even without another journal/state update.
+The existing Run control still reports pending termination evidence; this
+provider failure is not invalid finality evidence or task completion. Application
+Exit remains independently available. Crash/restart requires ordinary retained
+resource reconciliation before any new mutation; this process-local diagnosis
+does not create durable UI state or confer recovery authority.
+
+Acceptance: `reports activation failures and stops repeated integration calls
+after provider failure` advances controlled time by an hour and proves exactly
+one call; the passive HTTP read test proves pending finality and the exact
+sanitized error; `publishes integration failure to an attached watch without
+reactivation or false finality` proves notification, privacy and zero control
+reads. `retains integration responsibility and exposes a failed candidate census
+through CLI and MCP` exercises real Git/SQLite and both built public clients,
+with one census call, retained claim and zero termination or cleanup records.
+Existing integrator recovery tests prove retained intent/token identity.

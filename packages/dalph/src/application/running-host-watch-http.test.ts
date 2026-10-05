@@ -159,3 +159,37 @@ it.live(
       })
     )
 )
+
+// #457 S3: an existing watch observes failure without another state update.
+it.effect("publishes integration failure to an attached watch without reactivation or false finality", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const failure = yield* Deferred.make<never, unknown>()
+      const initial = yield* Deferred.make<void>()
+      const address = yield* availableLocalHostAddress
+      yield* serveRunningHost(address, { ...probe.observation, awaitActivationFailure: Deferred.await(failure) })
+      const client = yield* watchRunningHost(address, probe.runId).pipe(
+        Stream.tap((frame) => (frame.frame._tag === "Snapshot" ? Deferred.succeed(initial, undefined) : Effect.void)),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+      yield* Deferred.await(initial)
+      yield* Deferred.fail(failure, { _tag: "IntegratorCallFailure", detail: "private provider payload" })
+      const frames = yield* Fiber.join(client)
+      expect(frames.map(({ frame }) => frame)).toEqual([
+        { _tag: "Snapshot", value: { _tag: "NotReady", runId: probe.runId } },
+        {
+          _tag: "Failure",
+          error: {
+            _tag: "ReadFailed",
+            causeTag: "IntegratorCallFailure",
+            detail: "The integration provider failed. Its candidate and responsibility remain retained."
+          }
+        }
+      ])
+      expect(JSON.stringify(frames)).not.toContain("private provider payload")
+      expect(yield* Ref.get(probe.reads)).toBe(0)
+    })
+  )
+)

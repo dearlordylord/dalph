@@ -78,199 +78,196 @@ export interface NormalTermination extends SixTaskDeliveryRuntime {
   readonly releaseDelivery: Queue.Queue<void>
 }
 
-export const makeNormalTermination = Effect.fn("NormalTermination.makeNormalTermination")(
-  function* (): Effect.fn.Return<
-    NormalTermination,
-    AuthoredScenarioCassetteRunFailure | EmptyJournalCannotBeRecorded | InvalidWorkflowJournalHistory,
-    Crypto.Crypto | Scope.Scope
-  > {
-    const settledA = yield* makeNormalTerminationSettledA()
-    if (typeof settledA.target !== "string") return yield* Effect.die("controlled A prefix must use its fixture target")
-    const facts = {
-      ...makeSixTaskDeliveryFacts("issue-278"),
-      runId: settledA.runId,
-      target: FixtureTarget.make(settledA.target),
-      integrationTarget: settledA.claim.promotionCorrelation.qualifiedCandidate.run.session.integrationTarget,
-      baseSha: settledA.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
-    }
-    const graphReads = yield* Ref.make<ReadonlyArray<NormalTerminationGraphRead>>([])
-    // Tracker-owned lifecycle state: only successful completion provider calls change it.
-    const completedTasks = yield* Ref.make<ReadonlySet<TaskId>>(new Set([TaskId.make("A")]))
-    const specificationReads = yield* Ref.make<
-      ReadonlyArray<{ readonly target: TrackerTarget; readonly taskId: TaskId }>
-    >([])
-    const runtimeAtRead = yield* Ref.make<DeliveryRuntimeReadyObservation | null>(null)
-    const claimCalls = yield* Ref.make<ReadonlyArray<NormalTerminationClaimCall>>([])
-    const events = yield* Queue.unbounded<WorkflowEvent>()
-    const reached = yield* Queue.unbounded<NormalTerminationCut>()
-    const deliveryHold = yield* Ref.make<
-      { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: NormalTerminationDeliveryHold }
-    >({ _tag: "Disabled" })
-    const heldDelivery = yield* Queue.unbounded<NormalTerminationDeliveryHold>()
-    const releaseDelivery = yield* Queue.unbounded<void>()
-    const cut = yield* Ref.make<
-      { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: NormalTerminationCut }
-    >({ _tag: "Disabled" })
-    const record = (call: NormalTerminationClaimCall) => Ref.update(claimCalls, (all) => [...all, call])
-    const runtime = yield* makeSixTaskDeliveryRuntime(facts, {
-      initialize: settledA.seed,
-      observeRuntime: (observation) => Ref.set(runtimeAtRead, observation),
-      beforeAppend: () => Effect.void,
-      afterTermination: () =>
-        Effect.gen(function* () {
-          const selected = yield* Ref.get(cut)
-          if (selected._tag === "Armed" && selected.at === "TerminationAppended") {
-            yield* Queue.offer(reached, selected.at)
-            return yield* new JournalStorageUnavailable({
-              operation: "JournalStore.terminateRun",
-              detail: "controlled lost termination acknowledgement"
-            })
-          }
-        }),
-      afterAppend: (event) =>
-        Effect.gen(function* () {
-          yield* Queue.offer(events, event)
-          const hold = yield* Ref.get(deliveryHold)
-          if (hold._tag === "Armed" && event._tag === hold.at) {
-            yield* Queue.offer(heldDelivery, hold.at)
-            yield* Queue.take(releaseDelivery).pipe(Effect.interruptible)
-          }
-          const selected = yield* Ref.get(cut)
-          if (selected._tag === "Disabled" || selected.at === "TerminationAppended") return
-          const finalReads = yield* Ref.get(graphReads)
-          const matches =
-            event._tag === "TaskTrackerFactsObserved" &&
-            finalReads.some(
-              ({ intent, revision }) =>
-                revision.startsWith("Gfinal") &&
-                intent.event._tag === "TaskTrackerReadIntentRecorded" &&
-                intent.event.operation._tag === "ReadTrackerGraph" &&
-                intent.event.operation.cause._tag === "PostQuiescenceReconfirmation" &&
-                intent.event.operation.operationId === event.operationId
-            )
-          if (matches) {
-            yield* Queue.offer(reached, selected.at)
-            return yield* Effect.interrupt
-          }
-        }),
-      makeTrackerReader: (reader, journal) =>
-        TrackerGraphReader.of({
-          ...reader,
-          readTaskWorkSpecification: (target, taskId) =>
-            Ref.update(specificationReads, (all) => [...all, { target, taskId }]).pipe(
-              Effect.andThen(reader.readTaskWorkSpecification(target, taskId))
-            ),
-          read: (target) =>
-            Effect.gen(function* () {
-              const records = yield* journal.read(facts.runId).pipe(Effect.orDie)
-              const observed = new Set(
-                records.flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.operationId] : []))
-              )
-              const pending = records.filter(
-                ({ event }) =>
-                  event._tag === "TaskTrackerReadIntentRecorded" &&
-                  event.operation._tag === "ReadTrackerGraph" &&
-                  !observed.has(event.operation.operationId)
-              )
-              const intent = pending[0]
-              if (
-                pending.length !== 1 ||
-                intent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
-                intent.event.operation._tag !== "ReadTrackerGraph"
-              )
-                return yield* Effect.die("complete tracker call requires one exact pending durable intent")
-              if (intent.event.operation.target !== target)
-                return yield* Effect.die("tracker target differs from pending intent")
-              const settledTaskIds = records.flatMap(({ event }) =>
-                event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
-              )
-              const completed = yield* Ref.get(completedTasks)
-              const completedNames = allTaskNames.filter((name) => completed.has(TaskId.make(name)))
-              const revision =
-                completedNames.length === allTaskNames.length
-                  ? "Gfinal"
-                  : completedNames.length === 1
-                    ? "G5"
-                    : `G5:${completedNames.join(",")}`
-              const runtime = yield* Ref.get(runtimeAtRead)
-              const recordGraph = (snapshot: TaskDagSnapshot) =>
-                Ref.update(graphReads, (all) => [
-                  ...all,
-                  { target, intent, settledTaskIds, revision, runtime, snapshot }
-                ])
-              const projection = projectTrackerSnapshot({
-                revision,
-                rootTaskId: TaskId.make("A"),
-                tasks: allTaskNames.map((id) => ({
-                  id: TaskId.make(id),
-                  lifecycle: completed.has(TaskId.make(id)) ? { _tag: "CompletedSuccessfully" } : { _tag: "Open" },
-                  parentTaskId: null,
-                  prerequisiteIds: []
-                }))
-              })
-              if (projection._tag === "Invalid") return yield* Effect.die("invalid controlled tracker snapshot")
-              yield* recordGraph(projection.snapshot)
-              return projection.snapshot
-            })
-        }),
-      makeFinality: Effect.fn("NormalTermination.makeObservedFinality")(function* (tracker) {
-        const underlying = yield* makeSixTaskFinalityBoundaries(tracker)
-        return {
-          claimBoundary: CompletionClaimBoundary.of({
-            ...underlying.claimBoundary,
-            replaceTaskClaim: (request) =>
-              underlying.claimBoundary
-                .replaceTaskClaim(request)
-                .pipe(Effect.tap(() => record({ _tag: "Replace", request }))),
-            releaseOriginalTaskClaim: (request) =>
-              underlying.claimBoundary
-                .releaseOriginalTaskClaim(request)
-                .pipe(Effect.tap(() => record({ _tag: "ReleaseOriginal", request }))),
-            deleteTaskClaim: (request) =>
-              underlying.claimBoundary
-                .deleteTaskClaim(request)
-                .pipe(Effect.tap(() => record({ _tag: "Delete", request }))),
-            readCompletionClaimMarker: (request) =>
-              underlying.claimBoundary
-                .readCompletionClaimMarker(request)
-                .pipe(Effect.tap((observation) => record({ _tag: "Marker", request, observation }))),
-            readOriginalTaskClaim: (taskId) =>
-              underlying.claimBoundary
-                .readOriginalTaskClaim(taskId)
-                .pipe(Effect.tap((observation) => record({ _tag: "Active", taskId, observation })))
-          }),
-          taskBoundary: CompletionTaskBoundary.of({
-            ...underlying.taskBoundary,
-            completeTask: (request) =>
-              underlying.taskBoundary.completeTask(request).pipe(
-                Effect.tap(() => Ref.update(completedTasks, (all) => new Set(all).add(request.taskId))),
-                Effect.tap(() => record({ _tag: "Complete", request }))
-              ),
-            readCompletionRequest: (request) =>
-              underlying.taskBoundary
-                .readCompletionRequest(request)
-                .pipe(Effect.tap(() => record({ _tag: "Lookup", request }))),
-            readFocusedTaskCompletion: (request) =>
-              underlying.taskBoundary
-                .readFocusedTaskCompletion(request)
-                .pipe(Effect.tap((facts) => record({ _tag: "Focused", facts })))
+export const makeNormalTermination = Effect.fn("NormalTermination.makeNormalTermination")(function* (
+  startingPrefix?: NormalTerminationSettledA
+): Effect.fn.Return<
+  NormalTermination,
+  AuthoredScenarioCassetteRunFailure | EmptyJournalCannotBeRecorded | InvalidWorkflowJournalHistory,
+  Crypto.Crypto | Scope.Scope
+> {
+  const settledA = startingPrefix ?? (yield* makeNormalTerminationSettledA())
+  if (typeof settledA.target !== "string") return yield* Effect.die("controlled A prefix must use its fixture target")
+  const facts = {
+    ...makeSixTaskDeliveryFacts("issue-278"),
+    runId: settledA.runId,
+    target: FixtureTarget.make(settledA.target),
+    integrationTarget: settledA.claim.promotionCorrelation.qualifiedCandidate.run.session.integrationTarget,
+    baseSha: settledA.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+  }
+  const graphReads = yield* Ref.make<ReadonlyArray<NormalTerminationGraphRead>>([])
+  // Tracker-owned lifecycle state: only successful completion provider calls change it.
+  const completedTasks = yield* Ref.make<ReadonlySet<TaskId>>(new Set([TaskId.make("A")]))
+  const specificationReads = yield* Ref.make<
+    ReadonlyArray<{ readonly target: TrackerTarget; readonly taskId: TaskId }>
+  >([])
+  const runtimeAtRead = yield* Ref.make<DeliveryRuntimeReadyObservation | null>(null)
+  const claimCalls = yield* Ref.make<ReadonlyArray<NormalTerminationClaimCall>>([])
+  const events = yield* Queue.unbounded<WorkflowEvent>()
+  const reached = yield* Queue.unbounded<NormalTerminationCut>()
+  const deliveryHold = yield* Ref.make<
+    { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: NormalTerminationDeliveryHold }
+  >({ _tag: "Disabled" })
+  const heldDelivery = yield* Queue.unbounded<NormalTerminationDeliveryHold>()
+  const releaseDelivery = yield* Queue.unbounded<void>()
+  const cut = yield* Ref.make<
+    { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: NormalTerminationCut }
+  >({ _tag: "Disabled" })
+  const record = (call: NormalTerminationClaimCall) => Ref.update(claimCalls, (all) => [...all, call])
+  const runtime = yield* makeSixTaskDeliveryRuntime(facts, {
+    initialize: settledA.seed,
+    observeRuntime: (observation) => Ref.set(runtimeAtRead, observation),
+    beforeAppend: () => Effect.void,
+    afterTermination: () =>
+      Effect.gen(function* () {
+        const selected = yield* Ref.get(cut)
+        if (selected._tag === "Armed" && selected.at === "TerminationAppended") {
+          yield* Queue.offer(reached, selected.at)
+          return yield* new JournalStorageUnavailable({
+            operation: "JournalStore.terminateRun",
+            detail: "controlled lost termination acknowledgement"
           })
         }
-      })
+      }),
+    afterAppend: (event) =>
+      Effect.gen(function* () {
+        yield* Queue.offer(events, event)
+        const hold = yield* Ref.get(deliveryHold)
+        if (hold._tag === "Armed" && event._tag === hold.at) {
+          yield* Queue.offer(heldDelivery, hold.at)
+          yield* Queue.take(releaseDelivery).pipe(Effect.interruptible)
+        }
+        const selected = yield* Ref.get(cut)
+        if (selected._tag === "Disabled" || selected.at === "TerminationAppended") return
+        const finalReads = yield* Ref.get(graphReads)
+        const matches =
+          event._tag === "TaskTrackerFactsObserved" &&
+          finalReads.some(
+            ({ intent, revision }) =>
+              revision.startsWith("Gfinal") &&
+              intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+              intent.event.operation._tag === "ReadTrackerGraph" &&
+              intent.event.operation.cause._tag === "PostQuiescenceReconfirmation" &&
+              intent.event.operation.operationId === event.operationId
+          )
+        if (matches) {
+          yield* Queue.offer(reached, selected.at)
+          return yield* Effect.interrupt
+        }
+      }),
+    makeTrackerReader: (reader, journal) =>
+      TrackerGraphReader.of({
+        ...reader,
+        readTaskWorkSpecification: (target, taskId) =>
+          Ref.update(specificationReads, (all) => [...all, { target, taskId }]).pipe(
+            Effect.andThen(reader.readTaskWorkSpecification(target, taskId))
+          ),
+        read: (target) =>
+          Effect.gen(function* () {
+            const records = yield* journal.read(facts.runId).pipe(Effect.orDie)
+            const observed = new Set(
+              records.flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.operationId] : []))
+            )
+            const pending = records.filter(
+              ({ event }) =>
+                event._tag === "TaskTrackerReadIntentRecorded" &&
+                event.operation._tag === "ReadTrackerGraph" &&
+                !observed.has(event.operation.operationId)
+            )
+            const intent = pending[0]
+            if (
+              pending.length !== 1 ||
+              intent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+              intent.event.operation._tag !== "ReadTrackerGraph"
+            )
+              return yield* Effect.die("complete tracker call requires one exact pending durable intent")
+            if (intent.event.operation.target !== target)
+              return yield* Effect.die("tracker target differs from pending intent")
+            const settledTaskIds = records.flatMap(({ event }) =>
+              event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
+            )
+            const completed = yield* Ref.get(completedTasks)
+            const completedNames = allTaskNames.filter((name) => completed.has(TaskId.make(name)))
+            const revision =
+              completedNames.length === allTaskNames.length
+                ? "Gfinal"
+                : completedNames.length === 1
+                  ? "G5"
+                  : `G5:${completedNames.join(",")}`
+            const runtime = yield* Ref.get(runtimeAtRead)
+            const recordGraph = (snapshot: TaskDagSnapshot) =>
+              Ref.update(graphReads, (all) => [...all, { target, intent, settledTaskIds, revision, runtime, snapshot }])
+            const projection = projectTrackerSnapshot({
+              revision,
+              rootTaskId: TaskId.make("A"),
+              tasks: allTaskNames.map((id) => ({
+                id: TaskId.make(id),
+                lifecycle: completed.has(TaskId.make(id)) ? { _tag: "CompletedSuccessfully" } : { _tag: "Open" },
+                parentTaskId: null,
+                prerequisiteIds: []
+              }))
+            })
+            if (projection._tag === "Invalid") return yield* Effect.die("invalid controlled tracker snapshot")
+            yield* recordGraph(projection.snapshot)
+            return projection.snapshot
+          })
+      }),
+    makeFinality: Effect.fn("NormalTermination.makeObservedFinality")(function* (tracker) {
+      const underlying = yield* makeSixTaskFinalityBoundaries(tracker)
+      return {
+        claimBoundary: CompletionClaimBoundary.of({
+          ...underlying.claimBoundary,
+          replaceTaskClaim: (request) =>
+            underlying.claimBoundary
+              .replaceTaskClaim(request)
+              .pipe(Effect.tap(() => record({ _tag: "Replace", request }))),
+          releaseOriginalTaskClaim: (request) =>
+            underlying.claimBoundary
+              .releaseOriginalTaskClaim(request)
+              .pipe(Effect.tap(() => record({ _tag: "ReleaseOriginal", request }))),
+          deleteTaskClaim: (request) =>
+            underlying.claimBoundary
+              .deleteTaskClaim(request)
+              .pipe(Effect.tap(() => record({ _tag: "Delete", request }))),
+          readCompletionClaimMarker: (request) =>
+            underlying.claimBoundary
+              .readCompletionClaimMarker(request)
+              .pipe(Effect.tap((observation) => record({ _tag: "Marker", request, observation }))),
+          readOriginalTaskClaim: (taskId) =>
+            underlying.claimBoundary
+              .readOriginalTaskClaim(taskId)
+              .pipe(Effect.tap((observation) => record({ _tag: "Active", taskId, observation })))
+        }),
+        taskBoundary: CompletionTaskBoundary.of({
+          ...underlying.taskBoundary,
+          completeTask: (request) =>
+            underlying.taskBoundary.completeTask(request).pipe(
+              Effect.tap(() => Ref.update(completedTasks, (all) => new Set(all).add(request.taskId))),
+              Effect.tap(() => record({ _tag: "Complete", request }))
+            ),
+          readCompletionRequest: (request) =>
+            underlying.taskBoundary
+              .readCompletionRequest(request)
+              .pipe(Effect.tap(() => record({ _tag: "Lookup", request }))),
+          readFocusedTaskCompletion: (request) =>
+            underlying.taskBoundary
+              .readFocusedTaskCompletion(request)
+              .pipe(Effect.tap((facts) => record({ _tag: "Focused", facts })))
+        })
+      }
     })
-    return {
-      ...runtime,
-      facts,
-      settledA,
-      graphReads,
-      specificationReads,
-      claimCalls,
-      events,
-      reached,
-      terminationCut: cut,
-      deliveryHold,
-      heldDelivery,
-      releaseDelivery
-    }
+  })
+  return {
+    ...runtime,
+    facts,
+    settledA,
+    graphReads,
+    specificationReads,
+    claimCalls,
+    events,
+    reached,
+    terminationCut: cut,
+    deliveryHold,
+    heldDelivery,
+    releaseDelivery
   }
-)
+})

@@ -51,3 +51,27 @@ export const failControlledProviderClose = (enabled: Ref.Ref<boolean>) =>
         : Effect.void
     )
   )
+
+/** Fails only the retained candidate's census; executor observations stay ordinary. */
+export const failControlledIntegrationRead = (
+  cwd: string | undefined,
+  candidateRoot: string,
+  kind: "ResponseDeadline" | "Unavailable" | undefined,
+  calls: Ref.Ref<number>
+) =>
+  kind !== undefined && cwd?.startsWith(candidateRoot)
+    ? Ref.update(calls, (count) => count + 1).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new CodexAppServerFailure({ operation: "thread/list", kind, detail: "controlled integration read failure" })
+          )
+        )
+      )
+    : Effect.void
+
+/** Controlled failure inputs for the real Git/SQLite host composition. */
+export interface ControlledProviderDiagnostics {
+  readonly rejectResult?: boolean
+  readonly failClose?: boolean
+  readonly integratorReadFailure?: "ResponseDeadline" | "Unavailable"
+}

@@ -4,8 +4,10 @@ import {
 } from "./production-running-host-result-cycle.js"
 import { isolatedCodexProcessNativeService } from "./isolated-codex-process-native.js"
 import {
+  type ControlledProviderDiagnostics,
   projectControlledThread,
   failControlledGraphRead,
+  failControlledIntegrationRead,
   failControlledProviderClose
 } from "./production-running-host-provider-controls.js"
 import { githubGraphqlBatchTestClient } from "../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
@@ -89,7 +91,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     readonly onActivationIdle?: () => Effect.Effect<void>
   },
   interruptStopsTurn = false,
-  diagnostics?: { readonly rejectResult?: boolean; readonly failClose?: boolean }
+  diagnostics?: ControlledProviderDiagnostics
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const git = yield* GitCommand
@@ -142,6 +144,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const interrupted = yield* Ref.make(false)
   const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean, rejected: boolean) =>
     projectControlledThread(thread, visible, stopped, rejected)
+  const integrationCensusCalls = yield* Ref.make(0)
   const codex = CodexAppServer.of({
     ...provider.codex,
     interruptTurn: (threadId, turnId) =>
@@ -151,23 +154,32 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     unattendedPolicyAdmission: Effect.void,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachExactTurnCompletedHints: attachControlledResultCompletions(turnCompletedHint),
-    listThreads: () =>
-      (provider.codex.listThreads ?? (() => Effect.die("fixture requires thread listing")))().pipe(
-        Effect.zip(Ref.get(turnTerminalVisible)),
-        Effect.map(([threads, visible]) =>
-          visible
-            ? threads
-            : threads.map((thread) =>
-                thread._tag === "CompleteSummary"
-                  ? CodexThreadListSummary.CompleteSummary({
-                      ...thread,
-                      summary: {
-                        status: "active",
-                        turns: thread.summary.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
-                      }
-                    })
-                  : thread
-              )
+    listThreads: (cwd) =>
+      failControlledIntegrationRead(
+        cwd,
+        configuration.integratorCandidateWorktreeRoot,
+        diagnostics?.integratorReadFailure,
+        integrationCensusCalls
+      ).pipe(
+        Effect.andThen(
+          (provider.codex.listThreads ?? (() => Effect.die("fixture requires thread listing")))().pipe(
+            Effect.zip(Ref.get(turnTerminalVisible)),
+            Effect.map(([threads, visible]) =>
+              visible
+                ? threads
+                : threads.map((thread) =>
+                    thread._tag === "CompleteSummary"
+                      ? CodexThreadListSummary.CompleteSummary({
+                          ...thread,
+                          summary: {
+                            status: "active",
+                            turns: thread.summary.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
+                          }
+                        })
+                      : thread
+                  )
+            )
+          )
         )
       ),
     readThread: (id) =>
@@ -393,6 +405,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     activationFinalizing,
     activationIdle,
     provider,
+    integrationCensusCalls,
     allowValidResult: Ref.set(rejectResult, false),
     failures,
     trackerCalls,
