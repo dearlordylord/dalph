@@ -20,6 +20,40 @@ import { withoutInheritedCustody } from "./gate-custody-records.mjs"
 import { parseQualityCommandArguments } from "./quality-command-policy.mjs"
 
 const repository = fileURLToPath(new URL("../", import.meta.url))
+// Submission must expose cheap configuration failures before expensive qualification.
+// Assert required boundary order, allowing independent additional checks.
+const submissionBoundaries = [
+  "pnpm check:artifacts",
+  "pnpm test:formal:controls",
+  "pnpm check:fast",
+  "pnpm lint:code --census",
+  "pnpm test:cassettes:memory"
+]
+const assertSubmissionBoundaryOrder = (command) => {
+  const commands = command.split(" && ")
+  let previous = -1
+  for (const boundary of submissionBoundaries) {
+    const position = commands.indexOf(boundary)
+    assert.ok(position > previous, `Missing or out-of-order submission boundary: ${boundary}`)
+    previous = position
+  }
+}
+
+void test("submission discovers formal control failures before qualification", () => {
+  const { scripts } = JSON.parse(readFileSync(join(repository, "package.json"), "utf8"))
+  assertSubmissionBoundaryOrder(scripts["check:submit"])
+  assert.ok(scripts["test:formal:controls"].split(" ").includes("scripts/quality-command-routing.test.mjs"))
+})
+
+void test("submission order refuses an omitted control and a control after qualification", () => {
+  assert.throws(() => assertSubmissionBoundaryOrder(submissionBoundaries.filter((_, i) => i !== 1).join(" && ")))
+  assert.throws(() =>
+    assertSubmissionBoundaryOrder(
+      [...submissionBoundaries.slice(0, 1), ...submissionBoundaries.slice(2), submissionBoundaries[1]].join(" && ")
+    )
+  )
+})
+
 const base = execFileSync("git", ["rev-parse", "HEAD^"], { cwd: repository, encoding: "utf8" }).trim()
 const resume = "12345678-1234-1234-1234-123456789012"
 

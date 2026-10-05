@@ -31,9 +31,6 @@ it(
     expect(scripts["check:fast"]).toBe(
       "pnpm typecheck && pnpm lint:changed && node scripts/check-quality-selection-fixtures.mjs"
     )
-    expect(scripts["check:submit"]).toBe(
-      "pnpm check:artifacts && pnpm check:fast && pnpm lint:code --census && pnpm test:cassettes:memory"
-    )
     const { invocations, result } = await runQualityGateFixture({ fixtureName: "command-contract" })
 
     expect(result.exitCode).toBe(0)
