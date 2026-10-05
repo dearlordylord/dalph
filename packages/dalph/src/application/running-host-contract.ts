@@ -201,29 +201,28 @@ export const RunningHostWatchFrame = Schema.Struct({
 export type RunningHostWatchFrame = typeof RunningHostWatchFrame.Type
 export const watchFrameEnds = (value: RunningHostWatchFrame) =>
   value.frame._tag === "Failure" || value.frame.value._tag === "Closed"
-export const encodeRunningHostWatchFrame = Effect.fn("RunningHost.encodeWatchFrame")(function* (
-  frame: RunningHostWatchFrame
-) {
-  const encoded = yield* Schema.encodeUnknownEffect(RunningHostWatchFrame)(frame, { onExcessProperty: "error" }).pipe(
-    Effect.mapError(
-      (): RunningHostError => ({
-        _tag: "ProjectionFailed",
-        causeTag: "WatchSchemaInvalid",
-        detail: "The watch does not satisfy the public schema."
-      })
+export const encodeRunningHostWatchFrame: (frame: RunningHostWatchFrame) => Effect.Effect<string, RunningHostError> =
+  Effect.fn("RunningHost.encodeWatchFrame")(function* (frame: RunningHostWatchFrame) {
+    const encoded = yield* Schema.encodeUnknownEffect(RunningHostWatchFrame)(frame, { onExcessProperty: "error" }).pipe(
+      Effect.mapError(
+        (): RunningHostError => ({
+          _tag: "ProjectionFailed",
+          causeTag: "WatchSchemaInvalid",
+          detail: "The watch does not satisfy the public schema."
+        })
+      )
     )
-  )
-  const text = JSON.stringify(encoded)
-  const measuredBytes = new TextEncoder().encode(text).byteLength
-  if (measuredBytes > runningHostLimits.resultBytes)
-    return yield* Effect.fail<RunningHostError>({
-      _tag: "FrameTooLarge",
-      direction: "Outgoing",
-      maximumBytes: runningHostLimits.resultBytes,
-      measuredBytes
-    })
-  return text
-})
+    const text = JSON.stringify(encoded)
+    const measuredBytes = new TextEncoder().encode(text).byteLength
+    if (measuredBytes > runningHostLimits.resultBytes)
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "FrameTooLarge",
+        direction: "Outgoing",
+        maximumBytes: runningHostLimits.resultBytes,
+        measuredBytes
+      })
+    return text
+  })
 const PendingEvidence = Schema.TaggedUnion({
   Pending: {},
   FinalityFailed: {
@@ -361,26 +360,27 @@ export const runningHostSuccessEnvelope = (
   runId: request.runId,
   result: { _tag: "Success", value }
 })
-export const encodeRunningHostEnvelope = Effect.fn("RunningHost.encodeEnvelope")(function* (
-  envelope: RunningHostEnvelope
-) {
-  const encoded = yield* Schema.encodeUnknownEffect(RunningHostEnvelope)(envelope, { onExcessProperty: "error" }).pipe(
-    Effect.mapError(
-      (): RunningHostError => ({
-        _tag: "ProjectionFailed",
-        causeTag: "ResponseSchemaInvalid",
-        detail: "The response does not satisfy the public schema."
-      })
+export const encodeRunningHostEnvelope: (envelope: RunningHostEnvelope) => Effect.Effect<string, RunningHostError> =
+  Effect.fn("RunningHost.encodeEnvelope")(function* (envelope: RunningHostEnvelope) {
+    const encoded = yield* Schema.encodeUnknownEffect(RunningHostEnvelope)(envelope, {
+      onExcessProperty: "error"
+    }).pipe(
+      Effect.mapError(
+        (): RunningHostError => ({
+          _tag: "ProjectionFailed",
+          causeTag: "ResponseSchemaInvalid",
+          detail: "The response does not satisfy the public schema."
+        })
+      )
     )
-  )
-  const json = JSON.stringify(encoded)
-  const measuredBytes = new TextEncoder().encode(json).byteLength
-  if (measuredBytes > runningHostLimits.resultBytes)
-    return yield* Effect.fail<RunningHostError>({
-      _tag: "FrameTooLarge",
-      direction: "Outgoing",
-      maximumBytes: runningHostLimits.resultBytes,
-      measuredBytes
-    })
-  return json
-})
+    const json = JSON.stringify(encoded)
+    const measuredBytes = new TextEncoder().encode(json).byteLength
+    if (measuredBytes > runningHostLimits.resultBytes)
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "FrameTooLarge",
+        direction: "Outgoing",
+        maximumBytes: runningHostLimits.resultBytes,
+        measuredBytes
+      })
+    return json
+  })
