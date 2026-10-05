@@ -180,7 +180,8 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       request.operation._tag === "StartWork" ||
       request.operation._tag === "Unpause" ||
       request.operation._tag === "Refresh" ||
-      request.operation._tag === "ApplyResultRecoveryDirection"
+      request.operation._tag === "ApplyResultRecoveryDirection" ||
+      request.operation._tag === "SendExecutorGuidance"
     ) {
       const commandOperation = request.operation._tag
       const control = yield* observation.readRunControl.pipe(

@@ -6,6 +6,10 @@ import {
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   AttemptId,
+  ExecutorGuidanceRequestId,
+  ExecutorGuidanceTarget,
+  ExecutorGuidanceSessionLocator,
+  ExecutorGuidanceTurnLocator,
   type AcceptedResult,
   GitCommitSha,
   makeTaskWorkSpecification,
@@ -27,6 +31,7 @@ import { it } from "@effect/vitest"
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
 import {
   Context,
+  Crypto,
   Deferred,
   Effect,
   Exit,
@@ -571,7 +576,8 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   lifecycleObservation: PlannedAttemptExecutorLifecycleObservation["Service"] = PlannedAttemptExecutorLifecycleObservation.of(
     { attach: () => Effect.die("the bootstrap fixture did not declare executor lifecycle observation") }
   ),
-  relationObserverCapture?: Deferred.Deferred<DeliveryRelationPublicationObservation>
+  relationObserverCapture?: Deferred.Deferred<DeliveryRelationPublicationObservation>,
+  guidance?: { readonly crypto: Crypto.Crypto; readonly executor: PlannedAttemptExecutor["Service"] }
 ) {
   const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const dependencies = Layer.mergeAll(
@@ -598,7 +604,8 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     maintenanceObservation,
     undefined,
     remotePublicationTargetForTest,
-    false
+    false,
+    guidance
   ).pipe(Layer.provide(dependencies))
   const context = yield* Layer.build(application)
   const bootstrap = Context.get(context, JournaledRunBootstrap)
@@ -5560,6 +5567,201 @@ it.effect("records and reads exact result recovery while the established Run has
         )
       ).toEqual([])
       expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("guidance Run owner records metadata before steering and deduplicates exact input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("guidance-bootstrap")
+      const runId = yield* freshWorkflowRunId(target)
+      const context = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(context, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+      const plannedAttempt = captureTestAttempt(runId, "guidance", "guidance")
+      yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
+      const selected = ExecutorGuidanceTarget.make({
+        plannedAttempt,
+        session: ExecutorGuidanceSessionLocator.make("owned-session"),
+        turn: ExecutorGuidanceTurnLocator.make("owned-turn")
+      })
+      const sent: Array<string> = []
+      const executor = PlannedAttemptExecutor.of({
+        begin: () => Effect.die("guidance cannot begin"),
+        observe: () => Effect.die("guidance cannot poll"),
+        resume: () => Effect.die("guidance cannot resume"),
+        requestSuspension: () => Effect.die("guidance cannot interrupt"),
+        selectGuidanceTarget: () => Effect.succeed({ _tag: "Selected", target: selected }),
+        sendGuidance: (_target, requestId, text) =>
+          Effect.gen(function* () {
+            const records = yield* storage.read(runId).pipe(Effect.orDie)
+            expect(records.at(-1)?.event._tag).toBe("ExecutorGuidanceDispatchIntended")
+            expect(records.at(-1)?.event).toMatchObject({ requestId, target: selected })
+            sent.push(text)
+            return { _tag: "Accepted" as const }
+          })
+      })
+      const crypto = yield* Crypto.Crypto
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        undefined,
+        undefined,
+        defaultOwnership,
+        undefined,
+        noopJournalMaintenanceObservation,
+        undefined,
+        executor,
+        undefined,
+        undefined,
+        { crypto, executor }
+      )
+      const send = bootstrap.operatorControl.sendExecutorGuidance
+      if (send === undefined) return yield* Effect.die("guidance control must be installed")
+      const request = {
+        attemptId: plannedAttempt.attemptId,
+        requestId: ExecutorGuidanceRequestId.make("guidance-1"),
+        text: "Секретный текст: close the issue is only information"
+      }
+      expect(yield* send(request).pipe(Effect.flip)).toMatchObject({ _tag: "JournaledRunNotActive" })
+      yield* bootstrap.readRunReactivationControl(target, runId)
+      const results = yield* Effect.all([send(request), send(request)], { concurrency: "unbounded" })
+      expect(results).toEqual([{ _tag: "Accepted" }, { _tag: "Accepted" }])
+      expect(sent).toEqual([request.text])
+      expect(yield* send({ ...request, text: "changed" }).pipe(Effect.flip)).toMatchObject({
+        _tag: "ExecutorGuidanceIdentityContradiction"
+      })
+      const records = yield* storage.read(runId)
+      expect(
+        records.filter(({ event }) => event._tag.startsWith("ExecutorGuidance")).map(({ event }) => event._tag)
+      ).toEqual(["ExecutorGuidanceAdmitted", "ExecutorGuidanceDispatchIntended", "ExecutorGuidanceObserved"])
+      expect(JSON.stringify(records)).not.toContain(request.text)
+      expect(reduceWorkflowJournalHistory(runId, records)._tag).not.toBe("InvalidWorkflowJournalHistory")
+      expect(
+        yield* send({ ...request, requestId: ExecutorGuidanceRequestId.make("oversized"), text: "é".repeat(9000) })
+      ).toEqual({ _tag: "Refused", reason: "TextTooLarge" })
+      expect(sent).toHaveLength(1)
+      expect(yield* send({ ...request, text: "é".repeat(9000) }).pipe(Effect.flip)).toMatchObject({
+        _tag: "ExecutorGuidanceIdentityContradiction"
+      })
+      expect(
+        yield* send({ ...request, requestId: ExecutorGuidanceRequestId.make("oversized"), text: "now short" }).pipe(
+          Effect.flip
+        )
+      ).toMatchObject({ _tag: "ExecutorGuidanceIdentityContradiction" })
+      expect(sent).toHaveLength(1)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("guidance Run owner reconciles every uncertain write without replaying ephemeral text", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cuts = [
+        {
+          tag: "ExecutorGuidanceAdmitted",
+          persist: true,
+          sends: 0,
+          disposition: { _tag: "Refused", reason: "PayloadLost" }
+        },
+        { tag: "ExecutorGuidanceDispatchIntended", persist: true, sends: 0, disposition: { _tag: "Unknown" } },
+        { tag: "ExecutorGuidanceObserved", persist: false, sends: 1, disposition: { _tag: "Unknown" } },
+        { tag: "ExecutorGuidanceObserved", persist: true, sends: 1, disposition: { _tag: "Accepted" } }
+      ] as const
+      for (const [index, cut] of cuts.entries()) {
+        const target = FixtureTarget.make(`guidance-crash-${index}`)
+        const runId = yield* freshWorkflowRunId(target)
+        const context = yield* Layer.build(memoryJournalStoreLayer)
+        const delegate = Context.get(context, JournalStore)
+        let failOnce = true
+        const storage = JournalStore.of({
+          ...delegate,
+          append: (selectedRun, key, event) => {
+            if (!failOnce || event._tag !== cut.tag) return delegate.append(selectedRun, key, event)
+            failOnce = false
+            const failure = Effect.fail(
+              new JournalStorageUnavailable({
+                operation: "JournalStore.append",
+                detail: "controlled lost acknowledgement"
+              })
+            )
+            return cut.persist ? delegate.append(selectedRun, key, event).pipe(Effect.andThen(failure)) : failure
+          }
+        })
+        yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+        const plannedAttempt = captureTestAttempt(runId, `guidance-crash-${index}`, `guidance-crash-${index}`)
+        yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
+        const selected = ExecutorGuidanceTarget.make({
+          plannedAttempt,
+          session: ExecutorGuidanceSessionLocator.make("session"),
+          turn: ExecutorGuidanceTurnLocator.make("turn")
+        })
+        let sends = 0
+        const executor = PlannedAttemptExecutor.of({
+          begin: () => Effect.die("guidance cannot begin"),
+          observe: () => Effect.die("guidance cannot poll"),
+          resume: () => Effect.die("guidance cannot resume"),
+          requestSuspension: () => Effect.die("guidance cannot interrupt"),
+          selectGuidanceTarget: () => Effect.succeed({ _tag: "Selected", target: selected }),
+          sendGuidance: () =>
+            Effect.sync(() => {
+              sends += 1
+              return { _tag: "Accepted" as const }
+            })
+        })
+        const crypto = yield* Crypto.Crypto
+        const bootstrap = yield* buildBootstrap(
+          runId,
+          storage,
+          defaultTrackerGraphReader,
+          undefined,
+          undefined,
+          defaultOwnership,
+          undefined,
+          noopJournalMaintenanceObservation,
+          undefined,
+          executor,
+          undefined,
+          undefined,
+          { crypto, executor }
+        )
+        const send = bootstrap.operatorControl.sendExecutorGuidance
+        if (send === undefined) return yield* Effect.die("guidance control must be installed")
+        yield* bootstrap.readRunReactivationControl(target, runId)
+        const request = {
+          attemptId: plannedAttempt.attemptId,
+          requestId: ExecutorGuidanceRequestId.make(`crash-${index}`),
+          text: "private ephemeral text"
+        }
+        expect(yield* send(request).pipe(Effect.flip)).toMatchObject({ _tag: "JournalStorageUnavailable" })
+        // A replacement process-local owner has no retained body, even when the client presents it again.
+        const replacement = yield* buildBootstrap(
+          runId,
+          storage,
+          defaultTrackerGraphReader,
+          undefined,
+          undefined,
+          defaultOwnership,
+          undefined,
+          noopJournalMaintenanceObservation,
+          undefined,
+          executor,
+          undefined,
+          undefined,
+          { crypto, executor }
+        )
+        const resend = replacement.operatorControl.sendExecutorGuidance
+        if (resend === undefined) return yield* Effect.die("replacement guidance control must be installed")
+        yield* replacement.readRunReactivationControl(target, runId)
+        expect(yield* resend(request)).toEqual(cut.disposition)
+        expect(yield* resend(request)).toEqual(cut.disposition)
+        expect(sends).toBe(cut.sends)
+        const records = yield* delegate.read(runId)
+        expect(JSON.stringify(records)).not.toContain(request.text)
+        expect(reduceWorkflowJournalHistory(runId, records)._tag).not.toBe("InvalidWorkflowJournalHistory")
+      }
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

@@ -1,3 +1,9 @@
+import type {
+  ExecutorGuidanceRequestId,
+  ExecutorGuidanceSelection,
+  ExecutorGuidanceTarget,
+  ExecutorGuidanceTransmission
+} from "./executor-guidance.js"
 import type { Effect, Scope, Stream } from "effect"
 import { Context, Schema } from "effect"
 import { AttemptId, PlannedTaskAttempt } from "./planned-attempt.js"
@@ -282,6 +288,14 @@ export const PlannedAttemptExecutorWriterCustody = Schema.TaggedUnion({
 export type PlannedAttemptExecutorWriterCustody = typeof PlannedAttemptExecutorWriterCustody.Type
 
 export interface PlannedAttemptExecutorService {
+  /** Selects only the existing owner and active turn; this performs no provider mutation. */
+  readonly selectGuidanceTarget?: (plannedAttempt: PlannedTaskAttempt) => Effect.Effect<ExecutorGuidanceSelection>
+  /** Rechecks the retained target before one transmission; no implicit creation, Resume or retry. */
+  readonly sendGuidance?: (
+    target: ExecutorGuidanceTarget,
+    requestId: ExecutorGuidanceRequestId,
+    text: string
+  ) => Effect.Effect<ExecutorGuidanceTransmission>
   /** Reconciles exact retained writers without rewriting any accepted result or terminal seal. */
   readonly observeWriterCustody?: (
     plannedAttempt: PlannedTaskAttempt

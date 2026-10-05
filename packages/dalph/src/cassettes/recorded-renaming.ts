@@ -1,7 +1,5 @@
-/* oxlint-disable typescript/no-redundant-type-constituents, typescript/no-duplicate-type-constituents -- Oxlint cannot resolve workspace-barrel types in this exhaustive mapper; TypeScript typecheck verifies them. */
-/* eslint-disable max-lines -- Exhaustive alpha-renaming keeps every closed recorded-cassette variant in one reviewable boundary. */
-import { Effect, Match, Schema, type Brand } from "effect"
 import {
+  type ExecutorGuidanceRequestId,
   type AttemptId,
   type GitCommitSha,
   type GitRepositoryLocator,
@@ -17,6 +15,9 @@ import {
   type TaskRevision,
   type WorktreeLocator
 } from "@dalph/contracts"
+/* oxlint-disable typescript/no-redundant-type-constituents, typescript/no-duplicate-type-constituents -- Oxlint cannot resolve workspace-barrel types in this exhaustive mapper; TypeScript typecheck verifies them. */
+/* eslint-disable max-lines -- Exhaustive alpha-renaming keeps every closed recorded-cassette variant in one reviewable boundary. */
+import { Effect, Match, Schema, type Brand } from "effect"
 import {
   CompetingWorktreeRegistrations,
   ConflictingWorktreeRegistration,
@@ -169,7 +170,9 @@ type GeneratedCassetteIdentity =
  * identities, revisions, and claim owner; Git SHAs; configured executor and
  * tracker-target locators and executor-report ordinals.
  */
+/** Operator guidance nonces remain exact across alpha-renaming of their enclosing Run. */
 type PreservedCassetteBrand =
+  | ExecutorGuidanceRequestId
   | ClaimOwner
   | ControlDirectionApplicationOrdinal
   | FixtureTarget
@@ -2096,6 +2099,23 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           operationId: renamed(entry.operationId, maps.operationIds),
           request: renameCompletionTaskRequest(entry.request, maps)
+        }),
+      ExecutorGuidanceAdmitted: (entry) =>
+        completeFields<typeof entry>({
+          _tag: entry._tag,
+          metadata: { ...entry.metadata, plannedAttempt: renamePlannedAttempt(entry.metadata.plannedAttempt, maps) }
+        }),
+      ExecutorGuidanceDispatchIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: entry._tag,
+          requestId: preserveCassetteValue(entry.requestId),
+          target: { ...entry.target, plannedAttempt: renamePlannedAttempt(entry.target.plannedAttempt, maps) }
+        }),
+      ExecutorGuidanceObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: entry._tag,
+          requestId: preserveCassetteValue(entry.requestId),
+          disposition: preserveCassetteValue(entry.disposition)
         }),
       ResultRecoveryDirected: (entry) =>
         completeFields<typeof entry>({

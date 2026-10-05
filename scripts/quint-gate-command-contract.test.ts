@@ -26,14 +26,14 @@ const freshTaskBlockStart = 47
 const freshTaskBlockEnd = 60
 
 describe("Quint gate command contract", () => {
-  it("accepts the independent 137-command contract", () => {
+  it("accepts the independent 146-command contract", () => {
     assertQuintGateCommandContract({ manifest: quintGateCommandManifest, executed: quintGateExpectedCommandCounts })
     expect(quintGateExpectedCommandCounts).toEqual({
-      total: 137,
-      typecheck: 21,
-      test: 60,
-      "sampled-run": 30,
-      verify: 26
+      total: 146,
+      typecheck: 23,
+      test: 64,
+      "sampled-run": 32,
+      verify: 27
     })
   })
 

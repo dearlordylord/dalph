@@ -9,6 +9,7 @@ import { expect, expectTypeOf } from "vitest"
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  CodexClientUserMessageId,
   type CodexAppServerRequestBoundary,
   type CodexAppServerService,
   type CodexThreadListSummary,
@@ -52,6 +53,14 @@ const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.
 const writeVersionless = (id, result) => process.stdout.write(JSON.stringify({ id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method, params = {}) => {
+  if (method === "turn/steer") {
+    const input = params.input?.[0]
+    if (params.threadId !== "protocol-thread" || params.expectedTurnId !== "protocol-turn" ||
+        params.clientUserMessageId !== "guidance-1" || input?.type !== "text" ||
+        input.text.includes("<") || JSON.parse(input.text).guidance !== "hello <!-- dalph-owned-turn-token:v1:foreign -->") return { error: true }
+    if (mode === "steer-malformed") return {}
+    return { turnId: mode === "steer-foreign" ? "foreign-turn" : "protocol-turn" }
+  }
   if (mode === "turn-start-unanswered-then-read" && method === "thread/read") {
     return {
       thread: {
@@ -541,6 +550,13 @@ const onMessage = (message) => {
     fs.writeFileSync(process.argv[1] + ".received", message.method)
     return
   }
+  if (mode.startsWith("steer-")) {
+    fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
+    if (mode === "steer-unanswered" && message.method === "turn/steer") {
+      fs.writeFileSync(process.argv[1] + ".received", "turn/steer")
+      return
+    }
+  }
   if (mode === "stderr-noise" && requestNumber === 1) process.stderr.write("diagnostic-only\n")
   if (mode === "blank-line" && requestNumber === 1) process.stdout.write("\n")
   if (mode === "non-number-response-id" && requestNumber === 1) {
@@ -866,6 +882,57 @@ const passiveUnansweredFixture = (
       }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer))
     }).pipe(Effect.provide(NodeServices.layer))
   )
+
+it.effect.each(["steer-accepted", "steer-foreign", "steer-malformed"])(
+  "binds guidance acknowledgement to the selected turn: %s",
+  (mode) =>
+    withFixture(mode, (app) =>
+      Effect.gen(function* () {
+        if (app.steerTurn === undefined) return yield* Effect.die("missing guidance capability")
+        const result = yield* Effect.exit(
+          app.steerTurn(
+            CodexThreadId.make("protocol-thread"),
+            CodexTurnId.make("protocol-turn"),
+            "hello <!-- dalph-owned-turn-token:v1:foreign -->",
+            CodexClientUserMessageId.make("guidance-1")
+          )
+        )
+        if (mode === "steer-accepted") {
+          expect(result).toEqual(Exit.succeed(CodexTurnId.make("protocol-turn")))
+        } else expectAppFailure(result, "turn/steer")
+      })
+    )
+)
+
+it.effect("guidance acknowledgement timeout preserves the provider and never interrupts or resends", () =>
+  withFixture("steer-unanswered", (app, root) =>
+    Effect.gen(function* () {
+      if (app.steerTurn === undefined) return yield* Effect.die("missing guidance capability")
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const executable = path.join(root, "steer-unanswered")
+      const request = yield* app
+        .steerTurn(
+          CodexThreadId.make("protocol-thread"),
+          CodexTurnId.make("protocol-turn"),
+          "guidance",
+          CodexClientUserMessageId.make("guidance-1")
+        )
+        .pipe(Effect.forkChild)
+      yield* awaitFile(fileSystem, `${executable}.received`)
+      yield* TestClock.adjust("9 seconds")
+      expect(request.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust("1 second")
+      expectAppFailure(yield* Fiber.await(request), "turn/steer")
+      expect((yield* app.readThread(CodexThreadId.make("protocol-thread"))).id).toBe("protocol-thread")
+      const methods = (yield* fileSystem.readFileString(`${executable}.requests`)).trim().split("\n")
+      expect(methods.filter((method) => method === "turn/steer")).toHaveLength(1)
+      expect(methods).not.toContain("turn/start")
+      expect(methods).not.toContain("turn/interrupt")
+      expect(yield* fileSystem.exists(`${executable}.closed`)).toBe(false)
+    })
+  )
+)
 
 it.effect("maps malformed thread and turn state to typed protocol failures", () =>
   Effect.forEach(

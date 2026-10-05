@@ -26,6 +26,7 @@ const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], Read
   ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
   ReadResultRecoveryDirection: ["ResultRecoveryDirectionRecorded", "ResultRecoveryDirectionNotRecorded"],
   ApplyResultRecoveryDirection: ["ResultRecoveryDirectionRecorded"],
+  SendExecutorGuidance: ["ExecutorGuidanceResult"],
   StartWork: ["WakeSubmitted"],
   Refresh: ["RefreshSubmitted"],
   Unpause: ["UnpauseApplied"],
@@ -37,7 +38,7 @@ const compatibleFailures: Readonly<
 > = {
   SubscriptionLimitExceeded: ["WatchSnapshots", "WatchInspection"],
   UnpausePartiallyApplied: ["Unpause"],
-  RunClosed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
+  RunClosed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection", "SendExecutorGuidance"],
   ReadFailed: [
     "ReadSnapshot",
     "ReadRunControl",
@@ -54,8 +55,8 @@ const compatibleFailures: Readonly<
     "RefreshInspection",
     "WatchInspection"
   ],
-  CommandFailed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
-  CommandOutcomeUnknown: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"],
+  CommandFailed: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection", "SendExecutorGuidance"],
+  CommandOutcomeUnknown: ["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection", "SendExecutorGuidance"],
   FrameTooLarge: [
     ...inspectionOperations,
     "ReadSnapshot",
@@ -64,6 +65,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   HostClosing: [
@@ -74,6 +76,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   HostInstanceMismatch: [
@@ -84,6 +87,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   HostUnavailable: [
@@ -94,6 +98,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   InvalidRequest: [
@@ -104,6 +109,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   ProtocolVersionUnsupported: [
@@ -114,6 +120,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   RunMismatch: [
@@ -124,6 +131,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   TransportFailed: [
@@ -134,6 +142,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
   WriteTimedOut: [
@@ -144,6 +153,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ]
 }
@@ -276,6 +286,15 @@ const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (reques
   if (envelope.result._tag === "Success") {
     const value = envelope.result.value
     const operation = request.operation
+    if (
+      operation._tag === "SendExecutorGuidance" &&
+      (value._tag !== "ExecutorGuidanceResult" || value.guidanceRequestId !== operation.guidanceRequestId)
+    )
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "TransportFailed",
+        phase: "Response",
+        reason: "ResponseCorrelationMismatch"
+      })
     const recoveryMatches =
       operation._tag === "ApplyResultRecoveryDirection"
         ? value._tag === "ResultRecoveryDirectionRecorded" &&
@@ -303,6 +322,20 @@ const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (reques
       phase: "Response",
       reason: "ResponseOperationMismatch"
     })
+  if (
+    request.operation._tag === "SendExecutorGuidance" &&
+    envelope.result._tag === "Failure" &&
+    envelope.result.error._tag === "CommandOutcomeUnknown"
+  ) {
+    const error = envelope.result.error
+    if (error.guidanceRequestId !== undefined && error.guidanceRequestId !== request.operation.guidanceRequestId)
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "TransportFailed",
+        phase: "Response",
+        reason: "ResponseCorrelationMismatch"
+      })
+    return runningHostFailureEnvelope(request, { ...error, guidanceRequestId: request.operation.guidanceRequestId })
+  }
   yield* encodeRunningHostEnvelope(envelope)
   return envelope
 })
@@ -319,13 +352,15 @@ const failureAfterSubmission = (
       (operation._tag === "StartWork" ||
         operation._tag === "Unpause" ||
         operation._tag === "Refresh" ||
-        operation._tag === "ApplyResultRecoveryDirection")
+        operation._tag === "ApplyResultRecoveryDirection" ||
+        operation._tag === "SendExecutorGuidance")
       ? {
           _tag: "CommandOutcomeUnknown",
           operation: operation._tag,
           requestId: correlation.requestId,
           phase: "AdmissionUnconfirmed",
-          acceptedAt: null
+          acceptedAt: null,
+          ...(operation._tag === "SendExecutorGuidance" ? { guidanceRequestId: operation.guidanceRequestId } : {})
         }
       : error
   )

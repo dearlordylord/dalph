@@ -1,12 +1,23 @@
 import {
+  makeExecutorGuidanceControl,
+  type ExecutorGuidanceControlService
+} from "../../workflow/protocols/executor-guidance/control.js"
+import {
   makeResultRecoveryControl,
   type ResultRecoveryControlService
 } from "../../workflow/protocols/result-recovery/control.js"
 /* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
-import { plannedAttemptExecutorCorrelation, RemotePublicationTarget, RunId } from "@dalph/contracts"
+import {
+  plannedAttemptExecutorCorrelation,
+  RemotePublicationTarget,
+  RunId,
+  PlannedAttemptExecutor,
+  type PlannedAttemptExecutorService
+} from "@dalph/contracts"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   Context,
+  type Crypto,
   Deferred,
   Effect,
   Exit,
@@ -257,6 +268,7 @@ type ProcessJournalHolder =
       readonly _tag: "Established"
       readonly context: ProcessJournalContext
       readonly controlDirection: ControlDirectionApplication["Service"]
+      readonly executorGuidance?: ExecutorGuidanceControlService
       readonly resultRecovery: ResultRecoveryControlService
       readonly integrationQuarantineDirection: IntegrationQuarantineDirectionControlService
       readonly journal: Journal["Service"]
@@ -355,7 +367,8 @@ export const journaledRunBootstrapLayer = (
   operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary | undefined,
   remotePublicationTarget: RemotePublicationTarget,
   /** Low-level bootstrap fixtures may disable the production admission record while isolating another protocol. */
-  admitRemotePublication = true
+  admitRemotePublication = true,
+  guidance?: { readonly crypto: Crypto.Crypto; readonly executor: PlannedAttemptExecutorService }
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -470,6 +483,14 @@ export const journaledRunBootstrapLayer = (
             _tag: "Established",
             context,
             controlDirection: Context.get(controlContext, ControlDirectionApplication),
+            ...(guidance === undefined
+              ? {}
+              : {
+                  executorGuidance: yield* makeExecutorGuidanceControl(expectedRunId, guidance.crypto).pipe(
+                    Effect.provide(context),
+                    Effect.provideService(PlannedAttemptExecutor, guidance.executor)
+                  )
+                }),
             resultRecovery: yield* makeResultRecoveryControl().pipe(
               Effect.provide(context),
               Effect.provideService(PlannedAttemptProtocolController, processPlannedAttemptProtocolController)
@@ -1208,6 +1229,15 @@ export const journaledRunBootstrapLayer = (
               )
             )
           }),
+        sendExecutorGuidance: (input) =>
+          withJournalControl(
+            Effect.gen(function* () {
+              const holder = yield* Ref.get(processJournal)
+              if (holder._tag !== "Established" || holder.executorGuidance === undefined)
+                return yield* new JournaledRunNotActive()
+              return yield* holder.executorGuidance.send(input)
+            })
+          ),
         applyResultRecoveryDirection: (input) =>
           withJournalControl(
             Effect.gen(function* () {

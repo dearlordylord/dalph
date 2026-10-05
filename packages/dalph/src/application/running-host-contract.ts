@@ -1,19 +1,18 @@
-import { PlannedAttemptExecutorCorrelation, PlannedTaskAttempt, RunId, TaskId, TaskRevision } from "@dalph/contracts"
-import { RunningHostInspection } from "./running-host-inspection.js"
+import { coherentWire, RunningHostSnapshot, RunningHostInspectionSnapshot } from "./running-host-snapshot.js"
+import { LocalHostAddress } from "./running-host-address.js"
+import { AttemptId, ExecutorGuidanceRequestId, ExecutorGuidanceTransmission, RunId, TaskId } from "@dalph/contracts"
 import {
   ApplyResultRecoveryRequest,
   ResultRecoveryRequestId,
-  BoundedTicketRank,
   ControlDirectionApplicationOrdinal,
-  RunControlPolicy,
   RunTerminationDisposition,
-  TaskDagWire,
   TraceCursor,
   TrackerTarget
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
-import { ObligationReference } from "./production-cli-status-identity-schema.js"
-import { ProductionCliCurrentDeliveryStatus } from "./production-cli-status-schema.js"
+
+export { LocalHostAddress } from "./running-host-address.js"
+export { RunningHostSnapshot, RunningHostInspectionSnapshot } from "./running-host-snapshot.js"
 
 const SafeInteger = Schema.Int.check(
   Schema.isBetween({ minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER })
@@ -31,24 +30,6 @@ export type HostInstanceId = typeof HostInstanceId.Type
 /** Correlates one client invocation; it confers no durable replay identity. */
 export const RequestId = Schema.NonEmptyString.pipe(Schema.brand("RunningHostRequestId"))
 export type RequestId = typeof RequestId.Type
-const maximumTcpPort = 65535
-const maximumIpv4Octet = 255
-/** Explicit trusted-network IPv4 origin. No hostname, credentials, wildcard, path or discovery is accepted. */
-export const LocalHostAddress = Schema.String.check(
-  Schema.makeFilter((value) => {
-    const match = /^http:\/\/((?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}):([1-9][0-9]{0,4})$/.exec(value)
-    return (
-      (match !== null &&
-        match[1] !== undefined &&
-        match[1] !== "0.0.0.0" &&
-        match[1] !== "255.255.255.255" &&
-        match[1].split(".").every((octet) => Number(octet) <= maximumIpv4Octet) &&
-        Number(match[2]) <= maximumTcpPort) ||
-      "expected an explicit http://IPv4:PORT origin"
-    )
-  })
-).pipe(Schema.brand("LocalHostAddress"))
-export type LocalHostAddress = typeof LocalHostAddress.Type
 
 export const runningHostLimits = {
   requestBytes: 65536,
@@ -104,12 +85,23 @@ const Operation = Schema.TaggedUnion({
   ReadRunControl: {},
   ReadResultRecoveryDirection: { recoveryRequestId: ResultRecoveryRequestId },
   ApplyResultRecoveryDirection: { recovery: ApplyResultRecoveryRequest },
+  SendExecutorGuidance: {
+    attemptId: AttemptId,
+    guidanceRequestId: ExecutorGuidanceRequestId,
+    textBase64: Schema.String
+  },
   StartWork: {},
   Unpause: {},
   Refresh: { interest: RefreshInterest },
   WatchSnapshots: {}
 })
-const CommandOperation = Schema.Literals(["StartWork", "Unpause", "Refresh", "ApplyResultRecoveryDirection"])
+const CommandOperation = Schema.Literals([
+  "StartWork",
+  "Unpause",
+  "Refresh",
+  "ApplyResultRecoveryDirection",
+  "SendExecutorGuidance"
+])
 const requestFields = { hostInstanceId: HostInstanceId, requestId: RequestId, runId: RunId, operation: Operation }
 export const RunningHostRequest = Schema.Struct({ protocolVersion: Schema.Literal(1), ...requestFields })
 export type RunningHostRequest = typeof RunningHostRequest.Type
@@ -117,7 +109,7 @@ export type RunningHostRequest = typeof RunningHostRequest.Type
 export type RunningHostCommandRequest = Omit<RunningHostRequest, "operation"> & {
   readonly operation: Extract<
     RunningHostRequest["operation"],
-    { readonly _tag: "StartWork" | "Unpause" | "Refresh" | "ApplyResultRecoveryDirection" }
+    { readonly _tag: "StartWork" | "Unpause" | "Refresh" | "ApplyResultRecoveryDirection" | "SendExecutorGuidance" }
   >
 }
 const VersionedRequest = Schema.Struct({ protocolVersion: SafeInteger, ...requestFields })
@@ -143,6 +135,7 @@ export const RunningHostError = Schema.TaggedUnion({
     detail: Schema.NonEmptyString
   },
   CommandOutcomeUnknown: {
+    guidanceRequestId: Schema.optionalKey(ExecutorGuidanceRequestId),
     operation: CommandOperation,
     requestId: RequestId,
     phase: Schema.Literals(["AdmissionUnconfirmed", "AdmittedCompletionUnconfirmed"]),
@@ -170,80 +163,6 @@ export const RunningHostError = Schema.TaggedUnion({
 })
 export type RunningHostError = typeof RunningHostError.Type
 
-const Reason = Schema.TaggedUnion({
-  PrerequisitesIncomplete: { prerequisiteTaskIds: Schema.Array(TaskId) },
-  SuccessfulCompletion: {},
-  TerminalWithoutSuccess: {}
-})
-const Standing = Schema.TaggedUnion({
-  Eligible: { taskId: TaskId, taskRevision: TaskRevision },
-  Excluded: { taskId: TaskId, reasons: Schema.NonEmptyArray(Reason) }
-})
-const Placement = Schema.TaggedUnion({
-  Selected: { rank: BoundedTicketRank },
-  EligibleOutsideBound: { rank: BoundedTicketRank },
-  GraphExcluded: { reasons: Schema.NonEmptyArray(Reason) }
-})
-const ReadySnapshotShape = Schema.TaggedStruct("Ready", {
-  runId: RunId,
-  acceptedAt: Schema.NullOr(TraceCursor),
-  graph: Schema.TaggedUnion({ GraphNotEstablished: {}, GraphEstablished: { snapshot: TaskDagWire } }),
-  frontier: Schema.Struct({
-    policy: RunControlPolicy,
-    standings: Schema.Array(Standing),
-    placements: Schema.Array(Schema.Struct({ taskId: TaskId, placement: Placement }))
-  }),
-  delivery: ProductionCliCurrentDeliveryStatus,
-  retained: Schema.Array(
-    Schema.Struct({
-      taskId: TaskId,
-      obligationReference: ObligationReference,
-      kind: Schema.Literals([
-        "WorkflowResponsibility",
-        "AcceptedAwaitingIntegration",
-        "QueuedIntegration",
-        "StartedIntegration"
-      ]),
-      plannedAttempt: Schema.NullOr(PlannedTaskAttempt)
-    })
-  ),
-  held: Schema.Array(Schema.Struct({ taskId: TaskId, correlation: PlannedAttemptExecutorCorrelation }))
-})
-/** Reject inconsistent identities or unsafe numeric encodings anywhere in a public value. */
-const coherentWire = (value: unknown, runId: RunId | null): boolean => {
-  if (typeof value === "number") return Number.isSafeInteger(value)
-  if (value === null || typeof value !== "object") return true
-  if (runId !== null && "runId" in value && value.runId !== runId) return false
-  return Object.values(value).every((nested) => coherentWire(nested, runId))
-}
-const ReadySnapshot = ReadySnapshotShape.check(
-  Schema.makeFilter(
-    (value) =>
-      (coherentWire(value, value.runId) &&
-        value.delivery._tag === "DeliveryStatusAvailable" &&
-        value.delivery.subject._tag === "Run" &&
-        value.delivery.acceptedAt === (value.acceptedAt?.position ?? null) &&
-        new Set(value.retained.map(({ obligationReference }) => obligationReference)).size === value.retained.length &&
-        value.retained.every(
-          ({ plannedAttempt, taskId }) => plannedAttempt === null || plannedAttempt.taskId === taskId
-        )) ||
-      "snapshot identities, accepted position and exact retained obligations must agree"
-  )
-)
-export const RunningHostSnapshot = Schema.Union([
-  Schema.TaggedStruct("NotReady", { runId: RunId }),
-  ReadySnapshot,
-  Schema.TaggedStruct("Closed", { runId: RunId, final: Schema.NullOr(ReadySnapshot) }).check(
-    Schema.makeFilter((value) => coherentWire(value, value.runId) || "closed publication belongs to another Run")
-  )
-])
-export type RunningHostSnapshot = typeof RunningHostSnapshot.Type
-/** Joins independently fresh observations for presentation, with no atomic-source claim. */
-export const RunningHostInspectionSnapshot = Schema.TaggedStruct("InspectionSnapshot", {
-  run: RunningHostSnapshot,
-  inspection: RunningHostInspection
-})
-export type RunningHostInspectionSnapshot = typeof RunningHostInspectionSnapshot.Type
 export const RunningHostWatchFrame = Schema.Struct({
   protocolVersion: Schema.Literal(1),
   requestId: RequestId,
@@ -310,6 +229,10 @@ const Value = Schema.Union([
     acceptedAt: TraceCursor
   }),
   Schema.TaggedStruct("ResultRecoveryDirectionNotRecorded", { recoveryRequestId: ResultRecoveryRequestId }),
+  Schema.TaggedStruct("ExecutorGuidanceResult", {
+    guidanceRequestId: ExecutorGuidanceRequestId,
+    disposition: ExecutorGuidanceTransmission
+  }),
   Schema.TaggedStruct("WakeSubmitted", {}),
   Schema.TaggedStruct("RefreshSubmitted", { interest: RefreshInterest }),
   Schema.TaggedStruct("WatchOpened", { subscriptionId: SubscriptionId, uri: Schema.NonEmptyString }),
@@ -319,7 +242,14 @@ const Value = Schema.Union([
 export type RunningHostValue = typeof Value.Type
 export type RunningHostCommandValue = Extract<
   RunningHostValue,
-  { readonly _tag: "WakeSubmitted" | "UnpauseApplied" | "RefreshSubmitted" | "ResultRecoveryDirectionRecorded" }
+  {
+    readonly _tag:
+      | "WakeSubmitted"
+      | "UnpauseApplied"
+      | "RefreshSubmitted"
+      | "ResultRecoveryDirectionRecorded"
+      | "ExecutorGuidanceResult"
+  }
 >
 const RunningHostEnvelopeShape = Schema.Union([
   Schema.Struct({

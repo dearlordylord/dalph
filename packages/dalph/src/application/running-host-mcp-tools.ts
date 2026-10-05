@@ -1,6 +1,6 @@
 import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 import { Schema } from "effect"
-import { RunId } from "@dalph/contracts"
+import { AttemptId, ExecutorGuidanceRequestId, RunId } from "@dalph/contracts"
 import { RefreshInterest, RunningHostEnvelope } from "./running-host-contract.js"
 const document = Schema.toJsonSchemaDocument(RunningHostEnvelope, { additionalProperties: false })
 const outputSchema = { ...document.schema, type: "object", $defs: document.definitions }
@@ -21,7 +21,21 @@ const recoveryReadInput = Schema.toJsonSchemaDocument(
   Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId }),
   { additionalProperties: false }
 )
+export const ExecutorGuidanceToolArguments = Schema.Struct({
+  runId: RunId,
+  attemptId: AttemptId,
+  message: Schema.String,
+  guidanceRequestId: Schema.optionalKey(ExecutorGuidanceRequestId)
+})
+const guidanceInput = Schema.toJsonSchemaDocument(ExecutorGuidanceToolArguments, { additionalProperties: false })
 export const runningHostMcpTools = [
+  {
+    name: "dalph_guide_executor",
+    description:
+      "Send informational guidance to the selected active implementation attempt. Acceptance does not prove comprehension. Retain the returned request identity; never automatically resend an uncertain request.",
+    inputSchema: { ...guidanceInput.schema, $defs: guidanceInput.definitions },
+    outputSchema
+  },
   {
     name: "dalph_apply_result_recovery",
     description:

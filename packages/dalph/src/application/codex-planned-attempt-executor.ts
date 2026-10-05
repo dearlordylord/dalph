@@ -10,6 +10,11 @@ import {
   semanticCandidateInstructions
 } from "./provider-semantic-result.js"
 import {
+  ExecutorGuidanceSelection,
+  ExecutorGuidanceTransmission,
+  ExecutorGuidanceSessionLocator,
+  ExecutorGuidanceTurnLocator,
+  executorGuidanceTextByteLimit,
   AcceptedResultEvidenceManifest,
   EvidenceDigest,
   GitCommitSha,
@@ -79,6 +84,7 @@ import { logCodexCompletionTrace } from "./codex-completion-trace.js"
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  CodexClientUserMessageId,
   CodexOwnedActivityCensus,
   CodexThreadWorkingDirectory,
   nodeCodexOwnedActivityCensusLayer,
@@ -1134,6 +1140,24 @@ const makeCodexPlannedAttemptExecutorContext = (
       )
       return evidenceReferenceEquals(reference, EvidenceReference.make({ byteLength: bytes.byteLength, digest }))
     })
+
+    // Process-local dispatch admission closes irreversibly before item-stop
+    // persistence starts. Durable item records remain the restart authority.
+    const guidanceStopped = new Set<ReturnType<typeof plannedAttemptExecutorCorrelationKey>>()
+    const closeGuidanceAdmission = (correlation: PlannedAttemptExecutorCorrelation) =>
+      Effect.sync(() => {
+        guidanceStopped.add(plannedAttemptExecutorCorrelationKey(correlation))
+      })
+    const guidanceCustodyBlocked = (correlation: PlannedAttemptExecutorCorrelation) =>
+      Effect.gen(function* () {
+        const effects = yield* listToolEffects(correlation)
+        return yield* Effect.sync(() => {
+          const key = plannedAttemptExecutorCorrelationKey(correlation)
+          if (effects.some((effect) => effect._tag === "StopIntended" || effect._tag === "LimitReached"))
+            guidanceStopped.add(key)
+          return guidanceStopped.has(key)
+        })
+      })
 
     const gateFor = (correlation: PlannedAttemptExecutorCorrelation) =>
       Effect.gen(function* () {
@@ -2565,6 +2589,9 @@ const makeCodexPlannedAttemptExecutorContext = (
       record: Extract<CodexToolEffectRecord, { readonly _tag: "Started" }>,
       reason: "Elapsed" | "Malformed" | "MissingStart" | "ClockReversed"
     ) {
+      // Close before clock/store IO. Failed or interrupted intent persistence
+      // cannot reopen guidance in this executor owner.
+      yield* closeGuidanceAdmission({ runId: record.runId, attemptId: record.attemptId })
       const stopIntentAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
       const intent = CodexToolEffectRecord.cases.StopIntended.make({
         runId: record.runId,
@@ -3754,7 +3781,107 @@ const makeCodexPlannedAttemptExecutorContext = (
       )
     })
 
+    const selectGuidanceTarget = Effect.fn("CodexPlannedAttemptExecutor.selectGuidanceTarget")(
+      function* (
+        plannedAttempt: PlannedTaskAttempt
+      ): Effect.fn.Return<
+        ExecutorGuidanceSelection,
+        CodexAttemptStoreFailure | CodexAppServerFailure | CodexThreadMismatch | ForeignAttemptRecord
+      > {
+        if (app.steerTurn === undefined)
+          return ExecutorGuidanceSelection.cases.Refused.make({ reason: "CapabilityUnavailable" })
+        const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+        const retained = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+        if (Option.isNone(retained) || retained.value._tag !== "Running")
+          return ExecutorGuidanceSelection.cases.Refused.make({ reason: "AttemptInactive" })
+        const record = retained.value
+        if (
+          record.worktree !== plannedAttempt.worktree ||
+          record.correlationRunId !== correlation.runId ||
+          record.correlationAttemptId !== correlation.attemptId
+        )
+          return ExecutorGuidanceSelection.cases.Refused.make({ reason: "TargetChanged" })
+        if (yield* guidanceCustodyBlocked(correlation))
+          return ExecutorGuidanceSelection.cases.Refused.make({ reason: "CustodyUnproved" })
+        const thread = yield* app.readThread(record.threadId)
+        yield* enforceThreadIdentity(
+          { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree },
+          correlation,
+          record.threadId,
+          thread
+        )
+        const freshThread = yield* refreshThreadTurnLedger(thread)
+        const owned = ownedTurnForRecord(freshThread, record)
+        if (owned._tag !== "Found" || owned.turn.status !== "inProgress")
+          return ExecutorGuidanceSelection.cases.Refused.make({ reason: "AttemptInactive" })
+        const census = yield* observeOwnedActivity(freshThread)
+        if (
+          census._tag !== "ExactLive" ||
+          !census.activities.some((activity) => activity._tag === "ActiveTurn" && activity.turnId === owned.turn.id) ||
+          census.activities.some((activity) => activity._tag === "ActiveTurn" && activity.turnId !== owned.turn.id)
+        )
+          return ExecutorGuidanceSelection.cases.Refused.make({ reason: "CustodyUnproved" })
+        if (yield* guidanceCustodyBlocked(correlation))
+          return ExecutorGuidanceSelection.cases.Refused.make({ reason: "CustodyUnproved" })
+        return ExecutorGuidanceSelection.cases.Selected.make({
+          target: {
+            plannedAttempt,
+            session: ExecutorGuidanceSessionLocator.make(record.threadId),
+            turn: ExecutorGuidanceTurnLocator.make(owned.turn.id)
+          }
+        })
+      },
+      Effect.catch(() => Effect.succeed(ExecutorGuidanceSelection.cases.Refused.make({ reason: "CustodyUnproved" })))
+    )
     const executor: PlannedAttemptExecutorService = {
+      selectGuidanceTarget: (plannedAttempt) =>
+        gateFor(plannedAttemptExecutorCorrelation(plannedAttempt)).pipe(
+          Effect.flatMap((gate) => gate.withPermit(selectGuidanceTarget(plannedAttempt)))
+        ),
+      sendGuidance: (target, requestId, text) =>
+        gateFor(plannedAttemptExecutorCorrelation(target.plannedAttempt)).pipe(
+          Effect.flatMap((gate) =>
+            gate.withPermit(
+              Effect.gen(function* () {
+                if (new TextEncoder().encode(text).byteLength > executorGuidanceTextByteLimit)
+                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TextTooLarge" })
+                const selected = yield* selectGuidanceTarget(target.plannedAttempt)
+                if (selected._tag === "Refused")
+                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: selected.reason })
+                if (selected.target.session !== target.session || selected.target.turn !== target.turn)
+                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TargetChanged" })
+                const steer = app.steerTurn
+                if (steer === undefined)
+                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CapabilityUnavailable" })
+                const record = yield* store.readAttempt(target.plannedAttempt.runId, target.plannedAttempt.attemptId)
+                if (Option.isNone(record) || record.value._tag !== "Running")
+                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "AttemptInactive" })
+                if (
+                  ExecutorGuidanceSessionLocator.make(record.value.threadId) !== target.session ||
+                  ExecutorGuidanceTurnLocator.make(record.value.observedTurnId) !== target.turn
+                )
+                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TargetChanged" })
+                // Admission linearizes at this final durable/atomic flag check.
+                // A later item stop proceeds without waiting for the RPC ACK;
+                // this admitted input may acknowledge or become Unknown.
+                if (yield* guidanceCustodyBlocked(plannedAttemptExecutorCorrelation(target.plannedAttempt)))
+                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CustodyUnproved" })
+                return yield* steer(
+                  record.value.threadId,
+                  record.value.observedTurnId,
+                  text,
+                  CodexClientUserMessageId.make(requestId)
+                ).pipe(
+                  Effect.as(ExecutorGuidanceTransmission.cases.Accepted.make({})),
+                  Effect.catch(() => Effect.succeed(ExecutorGuidanceTransmission.cases.Unknown.make({})))
+                )
+              })
+            )
+          ),
+          Effect.catch(() =>
+            Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CustodyUnproved" }))
+          )
+        ),
       observeWriterCustody: (plannedAttempt) => {
         const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
         return gateFor(correlation).pipe(

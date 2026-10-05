@@ -11,6 +11,7 @@ import {
   runCancellationObligations,
   providerResultCorrectionObligations,
   resultRecoveryDirectionObligations,
+  executorGuidanceObligations,
   runActivationObligations,
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
@@ -1487,6 +1488,89 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
         "tlc",
         "--invariants",
         ...resultRecoveryDirectionObligations.invariants,
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+  run("executor guidance model typecheck", ["typecheck", "specs/executorGuidance.qnt"])
+  runFamily([
+    {
+      name: "executor guidance deterministic tests",
+      args: ["test", "specs/executorGuidance_test.qnt", "--main", "executorGuidanceTest"]
+    },
+    {
+      name: "executor guidance negative mutation profile",
+      args: ["test", "specs/executorGuidance_negative_test.qnt", "--main", "executorGuidanceNegativeTest"]
+    },
+    {
+      name: "executor guidance sampled model",
+      args: [
+        "run",
+        "specs/executorGuidance.qnt",
+        "--main",
+        "executorGuidance",
+        "--invariants",
+        ...executorGuidanceObligations.invariants,
+        "--witnesses",
+        ...executorGuidanceObligations.witnesses,
+        "--max-steps",
+        "40",
+        "--max-samples",
+        "1000",
+        "--seed",
+        "433",
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+  run("executor guidance proof projection typecheck", ["typecheck", "specs/executorGuidance_proof.qnt"])
+  runFamily([
+    {
+      name: "executor guidance proof projection deterministic tests",
+      args: ["test", "specs/executorGuidance_proof_test.qnt", "--main", "executorGuidanceProofTest"]
+    },
+    {
+      name: "executor guidance proof projection negative mutation profile",
+      args: ["test", "specs/executorGuidance_proof_negative_test.qnt", "--main", "executorGuidanceProofNegativeTest"]
+    },
+    {
+      name: "executor guidance proof projection sampled model",
+      args: [
+        "run",
+        "specs/executorGuidance_proof.qnt",
+        "--main",
+        "executorGuidanceProof",
+        "--step",
+        "projectedStep",
+        "--invariants",
+        ...executorGuidanceObligations.invariants,
+        "--witnesses",
+        ...executorGuidanceObligations.witnesses.filter((name) => name !== "independentAttemptsReached"),
+        "--max-steps",
+        "40",
+        "--max-samples",
+        "1000",
+        "--seed",
+        "433",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "executor guidance proof projection exhaustive model",
+      args: [
+        "verify",
+        "specs/executorGuidance_proof.qnt",
+        "--main",
+        "executorGuidanceProof",
+        "--step",
+        "projectedStep",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...executorGuidanceObligations.invariants,
         "--verbosity",
         "1"
       ]

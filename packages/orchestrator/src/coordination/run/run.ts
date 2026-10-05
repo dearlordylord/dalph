@@ -1,3 +1,4 @@
+import type { ExecutorGuidanceControlService } from "../../workflow/protocols/executor-guidance/control.js"
 import type { ResultRecoveryControlService } from "../../workflow/protocols/result-recovery/control.js"
 /* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
@@ -269,6 +270,13 @@ export interface JournaledRunBootstrapService {
       | JournaledRunBootstrapError
       | JournaledRunIdentityMismatch
       | JournaledRunNotActive
+    >
+    /** Informational input through the existing process owner; it grants no task authority. */
+    readonly sendExecutorGuidance?: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<ExecutorGuidanceControlService["send"]>>,
+      Effect.Error<ReturnType<ExecutorGuidanceControlService["send"]>> | ApplicationExiting | JournaledRunNotActive
     >
     readonly applyResultRecoveryDirection: (
       input: unknown
