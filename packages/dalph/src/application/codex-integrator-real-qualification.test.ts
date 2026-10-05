@@ -85,6 +85,7 @@ const respond = async (message) => {
     write(message.id, { userAgent: "dalph-integrator-qualification", codexHome: process.env.CODEX_HOME || "/tmp", platformFamily: "unix", platformOs: process.platform === "darwin" ? "macos" : "linux" })
     return
   }
+  if (message.method === "threadSection/list") return write(message.id, { data: [], nextCursor: null })
   if (message.method === "thread/list") {
     write(message.id, { data: state.threads.map((thread) => ({ ...threadFor(thread), turns: [] })) })
     return

@@ -5,6 +5,12 @@ import {
 import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
+  IntegratorCallFailure,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorSessionCorrelation,
+  IntegratorSessionId,
+  IntegratorCandidateResourceLocator,
   AcceptedJournalReader,
   ActiveTaskClaim,
   ClaimOwner,
@@ -86,6 +92,10 @@ import {
   AcceptedRunFactPublication
 } from "@dalph/orchestrator"
 import {
+  AcceptedResult,
+  EvidenceReference,
+  EvidenceDigest,
+  TaskRevision,
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -147,6 +157,40 @@ type ProductionExecutorCapabilitiesAreMandatory = Assert<
 const productionExecutorCapabilitiesAreMandatory: ProductionExecutorCapabilitiesAreMandatory = true
 void productionExecutorCapabilitiesAreMandatory
 
+const failedIntegratorCorrelation = () => {
+  const base = GitCommitSha.make("a".repeat(40))
+  const plannedAttempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make("failed-integrator-attempt"),
+    baseSha: base,
+    branch: TaskBranchRef.make("refs/heads/failed-integrator"),
+    executor: TaskExecutorLocator.make("executor:controlled"),
+    runId: RunId.make("production-reactivation-failure-run"),
+    taskId: TaskId.make("failed-integrator-task"),
+    taskRevision: TaskRevision.make("failed-integrator-revision"),
+    worktree: WorktreeLocator.make("/tmp/failed-integrator-attempt")
+  })
+  return IntegratorRunCorrelation.make({
+    ordinal: IntegratorRunOrdinal.make(1),
+    session: IntegratorSessionCorrelation.make({
+      acceptedResult: AcceptedResult.make({
+        commit: GitCommitSha.make("b".repeat(40)),
+        evidenceManifest: EvidenceReference.make({ digest: EvidenceDigest.make("c".repeat(64)), byteLength: 1 })
+      }),
+      candidateResource: IntegratorCandidateResourceLocator.make("/tmp/failed-integrator-candidate"),
+      expectedTargetHead: base,
+      integrationTarget: IntegrationTarget.make({
+        repository: GitRepositoryLocator.make("/tmp/failed-integrator-repository"),
+        ref: IntegrationTargetRef.make("refs/heads/master")
+      }),
+      plannedAttempt,
+      queuedAt: JournalPosition.make(1),
+      startedAt: JournalPosition.make(2),
+      targetLineageObservedAt: JournalPosition.make(3),
+      sessionId: IntegratorSessionId.make("failed-integrator-session")
+    })
+  })
+}
+
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 
 /**
@@ -154,7 +198,7 @@ const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.la
  * through the ordinary observer, and reports a throttle there even when no
  * separate non-retryable observer was configured.
  */
-it.effect("reports both recoverable and unhandled non-retryable production activation failures", () =>
+it.effect("reports activation failures and stops repeated integration calls after provider failure", () =>
   Effect.gen(function* () {
     const failures = [
       new Error("recoverable tracker read failure"),
@@ -163,11 +207,14 @@ it.effect("reports both recoverable and unhandled non-retryable production activ
         operation: "AcquireTaskClaim",
         operationId: OperationId.make("production-reactivation-unhandled-throttle"),
         retry: null
-      })
+      }),
+      new IntegratorCallFailure({ correlation: failedIntegratorCorrelation(), detail: "provider inventory timed out" })
     ] as const
 
     for (const failure of failures) {
       const observed = yield* Deferred.make<unknown>()
+      const calls = yield* Ref.make(0)
+      const stopped = yield* Deferred.make<void>()
       // The generic bootstrap method preserves any caller program error. This
       // controlled mock instead injects the exact runtime value asserted below.
       const injectedFailure = Effect.fail(failure) as Effect.Effect<never>
@@ -185,8 +232,9 @@ it.effect("reports both recoverable and unhandled non-retryable production activ
         requestBoundary: { requestExit: Effect.never }
       })
       const bootstrap = Layer.mock(JournaledRunBootstrap, {
-        activate: () => injectedFailure,
-        activateActiveWorkAuthorityRefresh: () => injectedFailure,
+        activate: () => Ref.update(calls, (count) => count + 1).pipe(Effect.andThen(injectedFailure)),
+        activateActiveWorkAuthorityRefresh: () =>
+          Ref.update(calls, (count) => count + 1).pipe(Effect.andThen(injectedFailure)),
         readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
         registerAcceptedRunReactivationObservers: () => Effect.void,
         operatorControl: {
@@ -210,7 +258,11 @@ it.effect("reports both recoverable and unhandled non-retryable production activ
         FixtureTarget.make("production-reactivation-failure-target"),
         Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity })),
         RunId.make("production-reactivation-failure-run"),
-        { onFailure: (reported) => Deferred.succeed(observed, reported).pipe(Effect.asVoid) }
+        {
+          onFailure: (reported) => Deferred.succeed(observed, reported).pipe(Effect.asVoid),
+          onTimerStateChange: (state) =>
+            state === "Stopped" ? Deferred.succeed(stopped, undefined).pipe(Effect.asVoid) : Effect.void
+        }
       ).pipe(
         Layer.provide(bootstrap),
         Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)),
@@ -221,7 +273,13 @@ it.effect("reports both recoverable and unhandled non-retryable production activ
       const reported = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* RunReactivationOwner
-          return yield* Deferred.await(observed)
+          const reported = yield* Deferred.await(observed)
+          if (failure instanceof IntegratorCallFailure) {
+            yield* Deferred.await(stopped)
+            yield* TestClock.adjust("1 hour")
+            expect(yield* Ref.get(calls)).toBe(1)
+          }
+          return reported
         }).pipe(Effect.provide(layer))
       )
       expect(reported).toBe(failure)

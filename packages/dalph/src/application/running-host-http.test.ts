@@ -83,9 +83,16 @@ it.live("HTTP reads remain passive, reject wrong identities and malformed bytes,
         result: { _tag: "Success", value: { _tag: "RunUnpaused", terminationEvidence: { _tag: "FinalityFailed" } } }
       })
       expect(yield* Ref.get(reads)).toBe(2)
+      yield* Ref.set(failure, Option.some({ _tag: "IntegratorCallFailure" }))
+      expect(yield* callRunningHost(address, runId, { _tag: "ReadSnapshot" })).toMatchObject({
+        result: { _tag: "Failure", error: { _tag: "ReadFailed", causeTag: "IntegratorCallFailure" } }
+      })
+      expect(yield* callRunningHost(address, runId, { _tag: "ReadRunControl" })).toMatchObject({
+        result: { _tag: "Success", value: { terminationEvidence: { _tag: "Pending" } } }
+      })
       yield* Ref.set(closing, true)
       expect(yield* readRunningHostDescriptor(address).pipe(Effect.flip)).toMatchObject({ _tag: "HostClosing" })
-      expect(yield* Ref.get(reads)).toBe(2)
+      expect(yield* Ref.get(reads)).toBe(3)
     })
   )
 )

@@ -42,6 +42,7 @@ import {
   GitCommand,
   memoryEvidenceStoreLayer,
   IntegratorRequest,
+  type IntegratorCallFailure,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorSessionCorrelation,
@@ -829,7 +830,9 @@ it("production host graph exposes only explicit non-retryable activation failure
   type ActivationFailure = Parameters<typeof graph.run>[2] extends (failure: infer Failure) => Effect.Effect<void>
     ? Failure
     : never
-  expectTypeOf<ActivationFailure>().toEqualTypeOf<TaskTrackerMutationThrottled | ProductionCancellationBlocked>()
+  expectTypeOf<ActivationFailure>().toEqualTypeOf<
+    TaskTrackerMutationThrottled | ProductionCancellationBlocked | IntegratorCallFailure
+  >()
 })
 
 it.effect("rejects a retained non-Codex provider before building a Codex Run", () =>

@@ -1,7 +1,8 @@
+import { integrationActivationReadFailure } from "./running-host-activation-failure.js"
 /* eslint-disable import/no-nodejs-modules -- This adapter owns one exact observation response. */
 import type { ServerResponse } from "node:http"
 import { NodeCrypto } from "@effect/platform-node"
-import { Crypto, Deferred, Effect, Ref, Stream } from "effect"
+import { Crypto, Deferred, Effect, Option, Ref, Stream } from "effect"
 import type { ProductionRunningHostObservation } from "./production-host.js"
 import {
   encodeRunningHostWatchFrame,
@@ -168,7 +169,18 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
         )
       })
     )
-    const stage = yield* makeRunningHostWatchStage(source, watchFrameEnds, (error) => frame({ _tag: "Failure", error }))
+    const providerFailure =
+      observation.awaitActivationFailure?.pipe(
+        Effect.catch((failure) => {
+          const readFailure = integrationActivationReadFailure(failure)
+          return Option.isSome(readFailure) ? Effect.fail(readFailure.value) : Effect.never
+        })
+      ) ?? Effect.never
+    const stage = yield* makeRunningHostWatchStage(
+      Stream.merge(source, Stream.fromEffect(providerFailure)),
+      watchFrameEnds,
+      (error) => frame({ _tag: "Failure", error })
+    )
     response.writeHead(httpOk, { "content-type": "application/x-ndjson", connection: "close" })
     const disconnected = Effect.callback<never, RunningHostError>((resume) => {
       const closed = () => resume(Effect.fail({ _tag: "TransportFailed", phase: "Watch", reason: "WatchDisconnected" }))

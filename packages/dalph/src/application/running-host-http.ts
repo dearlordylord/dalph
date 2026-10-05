@@ -1,3 +1,4 @@
+import { integrationActivationReadFailure } from "./running-host-activation-failure.js"
 import { TraceCursor } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
@@ -245,6 +246,13 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         },
         acceptedAt: TraceCursor.make({ runId: recorded.runId, position: recorded.position })
       })
+    }
+    if (request.operation._tag === "ReadSnapshot") {
+      const failure = yield* observation.activationFailure
+      if (Option.isSome(failure)) {
+        const readFailure = integrationActivationReadFailure(failure.value)
+        if (Option.isSome(readFailure)) return yield* Effect.fail(readFailure.value)
+      }
     }
     const value =
       request.operation._tag === "ReadSnapshot"
