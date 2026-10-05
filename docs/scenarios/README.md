@@ -52,6 +52,7 @@ Git history.
 
 - [Prepare the exact Codex task worktree before implementation checks](prepare-exact-codex-task-worktree.md)
 - [Bound one Codex tool effect without losing its planned attempt](contain-non-converging-codex-tool-effects.md)
+- [Codex runs an admitted long check in its exact attempt worktree](native-codex-long-check.md)
 - [Stop one Codex attempt without stopping its neighbours](isolated-codex-containment.md)
 - [Start independently owned Codex processes in one provider home](shared-codex-provider-home.md)
 - [Ask Codex to review a candidate before accepting it](codex-bounded-review-instruction.md)
