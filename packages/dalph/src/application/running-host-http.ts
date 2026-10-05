@@ -2,7 +2,7 @@ import { readRunningHostCapacity } from "./running-host-capacity.js"
 import { integrationActivationReadFailure } from "./running-host-activation-failure.js"
 import { TraceCursor } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { NodeCrypto } from "@effect/platform-node"
 import { Crypto, Effect, FiberSet, Option, Schema, Scope } from "effect"
 import { type ProductionRunningHostObservation } from "./production-host.js"
@@ -22,7 +22,7 @@ import { projectRunningHostRunControl, projectRunningHostSnapshot } from "./runn
 import { readRunningHostPageAsset } from "./running-host-page-assets.js"
 
 import { makeRunningHostCommandOwnership } from "./running-host-command-ownership.js"
-import { makeRunningHostHttpWatch, type writeRunningHostWatchFrame } from "./running-host-http-watch.js"
+import { makeRunningHostHttpWatch, type RunningHostWatchWriter } from "./running-host-http-watch.js"
 
 const browserReadOperations: ReadonlySet<string> = new Set([
   "ReadSnapshot",
@@ -120,11 +120,17 @@ const write = Effect.fn("RunningHostHttp.write")(
 )
 
 /** One listener dispatches passive requests against the already acquired host. */
+export interface RunningHostHttpServer {
+  readonly descriptor: RunningHostDescriptor
+  readonly address: LocalHostAddress
+  readonly server: Server
+}
+
 export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>(
   address: LocalHostAddress,
   observation: ProductionRunningHostObservation<E>,
-  watchWriter?: typeof writeRunningHostWatchFrame
-) {
+  watchWriter?: RunningHostWatchWriter
+): Effect.fn.Return<RunningHostHttpServer, RunningHostError, Crypto.Crypto | Scope.Scope> {
   const descriptor = RunningHostDescriptor.make({
     _tag: "HostDescriptor",
     protocolVersion: 1,

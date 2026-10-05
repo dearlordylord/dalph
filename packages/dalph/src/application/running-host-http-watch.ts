@@ -20,7 +20,12 @@ import type { RunningHostInspectionService } from "./running-host-inspection.js"
 
 const httpOk = 200
 
-export const writeRunningHostWatchFrame = Effect.fn("RunningHostWatch.write")(function* (
+export type RunningHostWatchWriter = (
+  response: ServerResponse,
+  value: RunningHostWatchFrame
+) => Effect.Effect<void, RunningHostError>
+
+export const writeRunningHostWatchFrame: RunningHostWatchWriter = Effect.fn("RunningHostWatch.write")(function* (
   response: ServerResponse,
   value: RunningHostWatchFrame
 ) {
@@ -62,7 +67,7 @@ export const writeRunningHostWatchFrame = Effect.fn("RunningHostWatch.write")(fu
  * for admitted response fibers; its existing absolute budget interrupts them. */
 export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(function* <E>(
   observation: ProductionRunningHostObservation<E>,
-  write: typeof writeRunningHostWatchFrame = writeRunningHostWatchFrame,
+  write: RunningHostWatchWriter = writeRunningHostWatchFrame,
   inspection?: Effect.Effect<RunningHostInspectionService>
 ) {
   const inspectionClosing = yield* Deferred.make<void>()
