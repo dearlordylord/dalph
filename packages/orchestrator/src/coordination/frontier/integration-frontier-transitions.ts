@@ -564,7 +564,7 @@ const promotionAttemptNeedsReconciliationRead = (promotion: PromotionState): boo
 
 /** A durable deferral can resume only through the authority-gated promotion protocol. */
 const promotionReconciliationIsDeferred = (promotion: PromotionState): boolean =>
-  promotion?._tag === "PromotionReconciliationDeferred"
+  promotion?._tag === "PromotionReconciliationDeferred" || promotion?._tag === "PromotionSafetyRefused"
 
 const promotionRecoveryMustPrecedeFreshLineage = (promotion: PromotionState): boolean =>
   promotionAttemptNeedsReconciliationRead(promotion) || promotionReconciliationIsDeferred(promotion)

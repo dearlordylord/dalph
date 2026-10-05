@@ -581,6 +581,7 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "stalePromotionPreservesCandidateAndNeverOverwrites",
     "unreadablePromotionStaysPending",
     "promotionRetryAuthorityDeferralIsStable",
+    "safetyRefusalRetainsPublicationAndCandidate",
     "promotionExhaustionPreservesCandidate",
     "promotionTerminalReleasesTarget",
     "promotionFreshObservationIsExactExpectedHead",

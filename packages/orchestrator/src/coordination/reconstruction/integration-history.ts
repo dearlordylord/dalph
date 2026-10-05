@@ -174,6 +174,7 @@ type TargetPromotionEvent = Extract<
     readonly _tag:
       | "TargetPromotionIntended"
       | "TargetPromotionAttemptIntended"
+      | "TargetPromotionSafetyRefused"
       | "TargetPromotionReconciliationDeferred"
       | "TargetPromotionObservedSuccess"
       | "TargetPromotionStale"
@@ -184,6 +185,7 @@ type TargetPromotionEvent = Extract<
 const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPromotionEvent =>
   event._tag === "TargetPromotionIntended" ||
   event._tag === "TargetPromotionAttemptIntended" ||
+  event._tag === "TargetPromotionSafetyRefused" ||
   event._tag === "TargetPromotionReconciliationDeferred" ||
   event._tag === "TargetPromotionObservedSuccess" ||
   event._tag === "TargetPromotionStale" ||

@@ -408,6 +408,7 @@ const isIntegrationResultFact = (fact: TraceIntegrationFact): fact is Integratio
   Object.hasOwn(integrationResultFactKinds, fact._tag)
 
 const promotionFactKinds = {
+  PromotionSafetyRefused: true,
   PromotionAttempt: true,
   PromotionNonConvergent: true,
   PromotionRequested: true,
@@ -736,6 +737,15 @@ const promotionFactIssue = (
 ): string | undefined => {
   if (fact._tag === "PromotionRequested") return promotionRequestedFactIssue(fact, source)
   if (fact._tag === "PromotionAttempt") return promotionAttemptFactIssue(fact, source, items)
+  if (fact._tag === "PromotionSafetyRefused")
+    return source._tag === "TargetPromotionSafetyRefused" &&
+      targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
+      sameJson(source.basis, fact.basis) &&
+      source.boundary === fact.boundary &&
+      sameJson(source.refusal, fact.refusal) &&
+      source.observationOrdinal === fact.observationOrdinal
+      ? undefined
+      : "Promotion safety refusal fact must identify its exact precondition observation"
   return promotionTerminalFactIssue(fact, source)
 }
 
@@ -1582,7 +1592,15 @@ const reducePromotionAttemptFact = (item: TraceHistoryItem, state: HistoricalFac
     ({ occurrence: candidate }) =>
       isPromotionTerminalOccurrence(candidate) && samePromotion(candidate.correlation, occurrence.correlation)
   )
-  if (terminal === undefined) {
+  const refused = state.items.some(
+    ({ occurrence: candidate }) =>
+      candidate._tag === "TargetPromotionSafetyRefused" &&
+      candidate.boundary === "CompareAndSet" &&
+      samePromotion(candidate.correlation, occurrence.correlation) &&
+      candidate.basis._tag === "AfterAttempt" &&
+      candidate.basis.attemptOrdinal === occurrence.attemptOrdinal
+  )
+  if (terminal === undefined && !refused) {
     state.observationGaps.push(
       state.factories.observationGap.PromotionResult.make({
         action: item.identity,
@@ -1638,6 +1656,18 @@ const reducePromotionTerminalFact = (item: TraceHistoryItem, state: HistoricalFa
 }
 
 const reducePromotionFacts = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
+  const occurrence = item.occurrence
+  if (occurrence._tag === "TargetPromotionSafetyRefused")
+    state.integrationFacts.push(
+      state.factories.integrationFact.PromotionSafetyRefused.make({
+        boundary: occurrence.boundary,
+        basis: occurrence.basis,
+        correlation: occurrence.correlation,
+        observationOrdinal: occurrence.observationOrdinal,
+        refusal: occurrence.refusal,
+        source: item.identity
+      })
+    )
   reducePromotionRequestFact(item, state)
   reducePromotionAttemptFact(item, state)
   reducePromotionTerminalFact(item, state)

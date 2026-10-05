@@ -1,3 +1,8 @@
+import {
+  targetPromotionCorrelationFor,
+  targetPromotionCorrelationEquals,
+  type TargetPromotionCorrelation
+} from "../../workflow/protocols/target-promotion/events.js"
 import { Data, Option, Schema } from "effect"
 import {
   RemoteBaselineCorrelation,
@@ -11,6 +16,7 @@ import { liveActionKeyOf, type LiveDeliveryActionKey } from "./live-delivery-act
 /** Why an exact proposal or its stable live action is excluded within this runtime activation. */
 export type DeliveryRuntimeLocalDeferral = Data.TaggedEnum<{
   /** One exact proposal could not proceed from the currently accepted Journal facts. */
+  TargetPromotionSafetyRefused: { readonly correlation: TargetPromotionCorrelation }
   AwaitChangedAcceptedFacts: { readonly acceptedAt: JournalPosition | null }
   /** The stable live action has already installed its process-local passive owner. */
   PassiveOwnerAttached: { readonly liveActionKey: LiveDeliveryActionKey }
@@ -29,11 +35,23 @@ const remoteBaselineCorrelationOf = (proposal: DeliveryActionProposal): RemoteBa
     : undefined
 }
 
+const promotionCorrelationOf = (proposal: DeliveryActionProposal): TargetPromotionCorrelation | undefined => {
+  const route = proposal.route
+  return route._tag === "IdentityFreeWorkflowRoute" &&
+    (route.transition._tag === "RunTargetPromotion" || route.transition._tag === "ReconcileTargetPromotionAttempt")
+    ? targetPromotionCorrelationFor(route.transition.candidate)
+    : undefined
+}
+
 /** Matches one exact remote-baseline continuation across frontier refreshes. */
 export const deliveryRuntimeLocalDeferralMatchesProposal = (
   deferral: DeliveryRuntimeLocalDeferral,
   proposal: DeliveryActionProposal
 ): boolean => {
+  if (deferral._tag === "TargetPromotionSafetyRefused") {
+    const correlation = promotionCorrelationOf(proposal)
+    return correlation !== undefined && targetPromotionCorrelationEquals(deferral.correlation, correlation)
+  }
   if (deferral._tag !== "RemoteBaselineReconciliationPending") return false
   const correlation = remoteBaselineCorrelationOf(proposal)
   return correlation !== undefined && remoteBaselineCorrelationEquals(deferral.correlation, correlation)
@@ -61,6 +79,11 @@ export const deliveryRuntimeLocalDeferralAfter = (
   acceptedAt: JournalPosition | null
 ): Option.Option<DeliveryRuntimeLocalDeferral> => {
   if (result._tag === "ActionDeferred") {
+    if (result.reason === "TargetPromotionSafetyRefused") {
+      const correlation = promotionCorrelationOf(proposal)
+      if (correlation !== undefined)
+        return Option.some(DeliveryRuntimeLocalDeferral.TargetPromotionSafetyRefused({ correlation }))
+    }
     const correlation =
       result.reason === "RemoteBaselineReconciliationPending" ? remoteBaselineCorrelationOf(proposal) : undefined
     return correlation === undefined
@@ -79,6 +102,7 @@ export const deliveryRuntimeLocalDeferralAppliesAt = (
   deferral: DeliveryRuntimeLocalDeferral,
   acceptedAt: JournalPosition | null
 ): boolean =>
+  deferral._tag === "TargetPromotionSafetyRefused" ||
   deferral._tag === "PassiveOwnerAttached" ||
   deferral._tag === "RemoteBaselineReconciliationPending" ||
   deferral.acceptedAt === acceptedAt

@@ -1298,3 +1298,23 @@ transport and ordering. Core `direct-publication/resume.test.ts`,
 duplicate, restart, exhausted, and no-hidden-retry cuts. The #418 macOS
 same-Run recovery is the production-backed retained push cut. The read-only
 subject command is checked against that retained Journal before submission.
+
+## Controlled qualification transport
+
+The disposable positive fixture detaches its own checkout before Dalph starts,
+leaving the integration ref unoccupied. Dalph does not change a checkout to
+resolve a promotion refusal. The GraphQL fixture decodes the actual serialized
+batch with issue descriptors, parent hierarchy and both paginated relation kinds;
+`production-hermetic-graphql-request.test.ts` covers that transport boundary.
+
+When the ordinary CLI reaches its history snapshot budget, the qualification
+wrapper registers `HistoryAdvanced` only after strictly checking the original
+accepted-history signal cursor against the selected Run and fixture manifest.
+Registration proves exact signal provenance, not independent validation of
+journal contents. It does not read a full snapshot to emit bounded progress.
+A foreign Run, changed cursor or extra private cursor field cannot obtain a
+digest registration. Full snapshots retain their original content validation. The original-history test in
+`production-hermetic-qualification-source.test.ts` covers those negative controls;
+`direct-remote-publication.integration.test.ts` retains the actual CLI composition.
+These changes affect qualification fixtures and record bookkeeping only; the
+production CLI budget, workflow decisions and provider mutation policy do not change.

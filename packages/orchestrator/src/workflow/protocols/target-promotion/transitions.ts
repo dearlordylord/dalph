@@ -1,3 +1,11 @@
+import {
+  makeTargetPromotionCapabilities,
+  type TargetPromotionReadAuthorization,
+  type TargetPromotionAttemptAuthorization,
+  type TargetPromotionIntendedAttempt,
+  type TargetPromotionSettlementClaim
+} from "./capabilities.js"
+import { appendTargetPromotionSafetyRefusal } from "./safety-observation.js"
 import { Effect } from "effect"
 import {
   targetPromotionAttemptIntentRecordKey,
@@ -9,7 +17,6 @@ import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
-  type TargetPromotionCompareAndSetResult,
   type TargetPromotionCorrelation,
   TargetPromotionGit,
   TargetPromotionIntendedEvent,
@@ -40,136 +47,28 @@ import {
   type CurrentTargetPromotionEvidence
 } from "./transition-journal.js"
 
+const {
+  availableAttemptAuthorizations,
+  availableIntendedAttempts,
+  availableObservedAttempts,
+  availableReadAuthorizations,
+  mintAttemptAuthorization,
+  mintIntendedAttempt,
+  mintObservedAttempt,
+  mintReadAuthorization
+} = makeTargetPromotionCapabilities()
+
 const ordinalFor = (value: number): TargetPromotionAttemptOrdinal => TargetPromotionAttemptOrdinal.make(value)
 
-const readAuthorizationBrand: unique symbol = Symbol("TargetPromotionReadAuthorization")
-const attemptAuthorizationBrand: unique symbol = Symbol("TargetPromotionAttemptAuthorization")
-const intendedAttemptBrand: unique symbol = Symbol("TargetPromotionIntendedAttempt")
-const observedAttemptBrand: unique symbol = Symbol("TargetPromotionObservedAttempt")
+export type {
+  TargetPromotionReadAuthorization,
+  TargetPromotionAttemptAuthorization,
+  TargetPromotionIntendedAttempt,
+  TargetPromotionAttemptBoundaryResult,
+  TargetPromotionProgress
+} from "./capabilities.js"
 
-const availableReadAuthorizations = new WeakSet<object>()
-const availableAttemptAuthorizations = new WeakSet<object>()
-const availableIntendedAttempts = new WeakSet<object>()
-const availableObservedAttempts = new WeakSet<object>()
-
-/** Process-local permission to perform exactly one promotion read; it is never durable authority. */
-export type TargetPromotionReadAuthorization = {
-  readonly _tag: "TargetPromotionReadAuthorized"
-  readonly [readAuthorizationBrand]: true
-  readonly authority: "ReadOnly" | "RetryAuthorized"
-  readonly correlation: TargetPromotionCorrelation
-  readonly durableBasis: "DeferredTargetReadFailed" | "PendingAttempt" | "PendingInitial"
-  readonly previousAttemptOrdinal: TargetPromotionAttemptOrdinal | undefined
-}
-
-/** Process-local proof that one exact-head read authorizes one numbered attempt intent. */
-export type TargetPromotionAttemptAuthorization = {
-  readonly _tag: "TargetPromotionAttemptAuthorized"
-  readonly [attemptAuthorizationBrand]: true
-  readonly attemptOrdinal: TargetPromotionAttemptOrdinal
-  readonly correlation: TargetPromotionCorrelation
-  readonly durableBasis: "DeferredRetryAuthority" | "DeferredTargetReadFailed" | "PendingAttempt" | "PendingInitial"
-  readonly reason: TargetPromotionAttemptReason
-}
-
-/** Process-local proof that the exact numbered attempt intent was appended before Git is called. */
-export type TargetPromotionIntendedAttempt = {
-  readonly _tag: "TargetPromotionAttemptIntended"
-  readonly [intendedAttemptBrand]: true
-  readonly attemptOrdinal: TargetPromotionAttemptOrdinal
-  readonly correlation: TargetPromotionCorrelation
-  readonly reason: TargetPromotionAttemptReason
-}
-
-/** An untrusted structural settlement claim; only a registered Git response can settle it. */
-type TargetPromotionSettlementClaim = {
-  readonly _tag: "TargetPromotionAttemptObserved"
-  readonly attemptOrdinal: TargetPromotionAttemptOrdinal
-  readonly correlation: TargetPromotionCorrelation
-  readonly result: TargetPromotionCompareAndSetResult
-}
-
-/** Process-local proof minted only from the response to one exact Git compare-and-set. */
-type TargetPromotionObservedAttempt = TargetPromotionSettlementClaim & { readonly [observedAttemptBrand]: true }
-
-/** The one Git compare-and-set has no trustworthy response and must be reconciled by a read. */
-type TargetPromotionAmbiguousAttempt = {
-  readonly _tag: "TargetPromotionAttemptAmbiguous"
-  readonly attemptOrdinal: TargetPromotionAttemptOrdinal
-  readonly correlation: TargetPromotionCorrelation
-}
-
-export type TargetPromotionAttemptBoundaryResult = TargetPromotionObservedAttempt | TargetPromotionAmbiguousAttempt
-
-export type TargetPromotionProgress =
-  | TargetPromotionState
-  | TargetPromotionReadAuthorization
-  | TargetPromotionAttemptAuthorization
-
-const mintReadAuthorization = (
-  correlation: TargetPromotionCorrelation,
-  previousAttemptOrdinal: TargetPromotionAttemptOrdinal | undefined,
-  authority: "ReadOnly" | "RetryAuthorized",
-  durableBasis: TargetPromotionReadAuthorization["durableBasis"]
-): TargetPromotionReadAuthorization => {
-  const authorization = Object.freeze({
-    _tag: "TargetPromotionReadAuthorized" as const,
-    [readAuthorizationBrand]: true as const,
-    authority,
-    correlation,
-    durableBasis,
-    previousAttemptOrdinal
-  })
-  availableReadAuthorizations.add(authorization)
-  return authorization
-}
-
-const mintAttemptAuthorization = (
-  correlation: TargetPromotionCorrelation,
-  attemptOrdinal: TargetPromotionAttemptOrdinal,
-  reason: TargetPromotionAttemptReason,
-  durableBasis: TargetPromotionAttemptAuthorization["durableBasis"]
-): TargetPromotionAttemptAuthorization => {
-  const authorization = Object.freeze({
-    _tag: "TargetPromotionAttemptAuthorized" as const,
-    [attemptAuthorizationBrand]: true as const,
-    attemptOrdinal,
-    correlation,
-    durableBasis,
-    reason
-  })
-  availableAttemptAuthorizations.add(authorization)
-  return authorization
-}
-
-const mintIntendedAttempt = (authorization: TargetPromotionAttemptAuthorization): TargetPromotionIntendedAttempt => {
-  const intended = Object.freeze({
-    _tag: "TargetPromotionAttemptIntended" as const,
-    [intendedAttemptBrand]: true as const,
-    attemptOrdinal: authorization.attemptOrdinal,
-    correlation: authorization.correlation,
-    reason: authorization.reason
-  })
-  availableIntendedAttempts.add(intended)
-  return intended
-}
-
-const mintObservedAttempt = (
-  intended: TargetPromotionIntendedAttempt,
-  result: TargetPromotionCompareAndSetResult
-): TargetPromotionAttemptBoundaryResult => {
-  const observed = Object.freeze({
-    _tag: "TargetPromotionAttemptObserved" as const,
-    [observedAttemptBrand]: true as const,
-    attemptOrdinal: intended.attemptOrdinal,
-    correlation: intended.correlation,
-    result
-  })
-  availableObservedAttempts.add(observed)
-  return observed
-}
-
-type PendingState = Extract<TargetPromotionState, { readonly _tag: "PromotionPending" }>
+type PendingState = Extract<TargetPromotionState, { readonly _tag: "PromotionPending" | "PromotionSafetyRefused" }>
 type DeferredState = Extract<TargetPromotionState, { readonly _tag: "PromotionReconciliationDeferred" }>
 
 const authorizePendingProgress = (
@@ -244,7 +143,7 @@ export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTarget
         detail: "target promotion progress requires a durable promotion intent"
       })
     }
-    if (state._tag === "PromotionPending") {
+    if (state._tag === "PromotionPending" || state._tag === "PromotionSafetyRefused") {
       const progress = authorizePendingProgress(state, authority)
       if (progress !== undefined) return progress
       return yield* new TargetPromotionResultContradiction({
@@ -272,7 +171,7 @@ export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTarget
       )
       return mintReadAuthorization(correlation, undefined, "RetryAuthorized", "PendingInitial")
     }
-    if (state._tag === "PromotionPending") {
+    if (state._tag === "PromotionPending" || state._tag === "PromotionSafetyRefused") {
       const progress = authorizePendingProgress(state, "RetryAuthorized")
       /* v8 ignore next -- @preserve RetryAuthorized always mints a read for either closed PromotionPending retry variant. */
       return progress ?? (yield* Effect.die("retry-authorized pending promotion did not authorize a read"))
@@ -340,11 +239,21 @@ export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTarget
       })
     }
     const readResult = yield* git.read(request).pipe(Effect.result)
-    const decision =
-      readResult._tag === "Failure"
-        ? decideFailedTargetPromotionRead(authorization, readResult.failure)
-        : decideSuccessfulTargetPromotionRead(authorization, readResult.success)
-    return yield* finishReadDecision(authorization, decision)
+    if (readResult._tag === "Success")
+      return yield* finishReadDecision(
+        authorization,
+        decideSuccessfulTargetPromotionRead(authorization, readResult.success)
+      )
+    const failure = readResult.failure
+    if (failure._tag === "TargetPromotionSafetyFailure")
+      return yield* appendTargetPromotionSafetyRefusal(
+        yield* readEvidence(targetPromotionRunIdOf(authorization.correlation)),
+        "ReconciliationRead",
+        authorization.correlation,
+        authorization.previousAttemptOrdinal,
+        failure.refusal
+      )
+    return yield* finishReadDecision(authorization, decideFailedTargetPromotionRead(authorization, failure))
   })
 
   /** Appends exactly one numbered compare-and-set intent and does not call Git. */
@@ -403,6 +312,14 @@ export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTarget
       })
     }
     const result = yield* git.compareAndSet(request).pipe(Effect.result)
+    if (result._tag === "Failure" && result.failure._tag === "TargetPromotionSafetyFailure")
+      return yield* appendTargetPromotionSafetyRefusal(
+        yield* readEvidence(targetPromotionRunIdOf(attempt.correlation)),
+        "CompareAndSet",
+        attempt.correlation,
+        attempt.attemptOrdinal,
+        result.failure.refusal
+      )
     return result._tag === "Failure"
       ? {
           _tag: "TargetPromotionAttemptAmbiguous" as const,

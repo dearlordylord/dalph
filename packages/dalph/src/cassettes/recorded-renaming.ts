@@ -98,6 +98,7 @@ import {
   type IntegratorCandidateCleanupEvidenceRevision,
   integratorCompetingHeadSuccessorAuthorizationIdFor,
   type WorktreeCleanupEvidenceRevision,
+  type TargetPromotionSafetyObservationOrdinal,
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
   remotePublicationAdmissionIdFor,
@@ -198,6 +199,7 @@ type PreservedCassetteBrand =
   | IntegratorAutomaticSuccessorGenerationType
   | IntegratorNotPreparedDetail
   | IntegrationQuarantineFailureDetail
+  | TargetPromotionSafetyObservationOrdinal
   | TargetPromotionAttemptOrdinal
   | TargetPromotionAttemptLimit
   | CompletionClaimRequestOrdinal
@@ -1767,6 +1769,19 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           reason: preserveCassetteValue(entry.reason)
+        }),
+      TargetPromotionSafetyRefused: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "TargetPromotionSafetyRefused",
+          boundary: preserveCassetteValue(entry.boundary),
+          basis: preserveCassetteValue(entry.basis),
+          correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
+          observationOrdinal: preserveCassetteValue(entry.observationOrdinal),
+          refusal:
+            entry.refusal._tag === "OccupiedWorktree"
+              ? { _tag: "OccupiedWorktree", worktree: renamed(entry.refusal.worktree, maps.worktreeLocators) }
+              : preserveCassetteValue(entry.refusal),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
       TargetPromotionReconciliationDeferred: (entry) =>
         completeFields<typeof entry>({

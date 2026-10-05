@@ -216,6 +216,13 @@ export interface DeliveryStatusGraphSource {
 /** One Run-wide or task-local status entry. Every variant keeps its exact supporting fact. */
 export type DeliveryStatusEntry =
   | {
+      /** A fresh Git safety refusal retains the qualified candidate and remote publication proof. */
+      readonly _tag: "TargetPromotionSafetyRefused"
+      readonly classification: "Blocked"
+      readonly subject: Extract<DeliveryStatusSubject, { readonly _tag: "Task" }>
+      readonly standing: Extract<TicketDeliveryStanding, { readonly _tag: "TargetPromotionSafetyRefused" }>
+    }
+  | {
       /** A pre-seal rejection retains its work and never settles delivery. */
       readonly _tag: "ExecutorResultRejected"
       readonly recoverySubject: Extract<ResultRecoverySubject, { readonly _tag: "RejectedResult" }>

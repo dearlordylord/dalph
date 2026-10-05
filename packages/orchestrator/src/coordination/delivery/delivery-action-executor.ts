@@ -1,3 +1,4 @@
+import type { TargetPromotionSafetyFailure } from "../../workflow/protocols/target-promotion/events.js"
 import type {
   ResultRecoveryNotAvailable,
   ResultRecoveryDirectionNotFound,
@@ -202,6 +203,7 @@ export type DeliveryActionResult =
         | "ContinuationAuthorizationStale"
         | "RemoteBaselineReconciliationPending"
         | "FocusedTaskCompletionSuccessRequired"
+        | "TargetPromotionSafetyRefused"
         | "TargetPromotionDestinationUnreadable"
         | "TargetPromotionRetryAuthorityRequired"
         | AcceptedResultEvidenceConflict
@@ -238,7 +240,9 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
   : never
 
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
+
 export type DeliveryActionExecutionError =
+  | TargetPromotionSafetyFailure
   | ResultRecoveryNotAvailable
   | ResultRecoveryDirectionNotFound
   | ResultRecoveryRequestIdentityContradiction

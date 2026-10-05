@@ -367,7 +367,18 @@ const entriesForStanding = (
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): DeliveryStatusProjectionConflict | null => {
-  if (standing._tag === "ResponsibilitySituation")
+  if (standing._tag === "TargetPromotionSafetyRefused" && includeForSubject(subject, delivery.taskId))
+    addEntry(
+      entries,
+      {
+        _tag: "TargetPromotionSafetyRefused",
+        classification: "Blocked",
+        subject: taskStatusSubject(subject, delivery.taskId),
+        standing
+      },
+      taskOrder
+    )
+  else if (standing._tag === "ResponsibilitySituation")
     addResponsibilityEntriesFor(subject, delivery, standing, taskOrder, entries)
   else if (standing._tag === "IntegrationWait")
     addIntegrationEntriesFor(subject, delivery, standing, taskOrder, entries)

@@ -77,6 +77,7 @@ import {
 import {
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
+  TargetPromotionSafetyRefused,
   TargetPromotionReconciliationDeferred,
   TargetPromotionRequested,
   TargetPromotionStale,
@@ -100,6 +101,7 @@ export {
 export {
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
+  TargetPromotionSafetyRefused,
   TargetPromotionReconciliationDeferred,
   TargetPromotionRequested,
   TargetPromotionStale,
@@ -465,6 +467,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
   TargetPromotionRequested,
+  TargetPromotionSafetyRefused,
   TargetPromotionReconciliationDeferred,
   TargetPromotionStale,
   TargetPromotionSucceeded,

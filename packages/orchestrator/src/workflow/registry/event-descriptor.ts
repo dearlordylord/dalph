@@ -40,6 +40,7 @@ import {
   targetPromotionIntentRecordKey,
   targetPromotionNonConvergenceRecordKey,
   targetPromotionObservedSuccessRecordKey,
+  targetPromotionSafetyRefusedRecordKey,
   targetPromotionReconciliationDeferredRecordKey,
   targetPromotionStaleRecordKey,
   completionClaimReplacementIntentRecordKey,
@@ -656,6 +657,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     TargetPromotionAttemptIntended: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: targetPromotionAttemptIntentRecordKey(event.correlation.requestId, event.attemptOrdinal)
+    }),
+    TargetPromotionSafetyRefused: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: targetPromotionSafetyRefusedRecordKey(event.correlation.requestId, event.observationOrdinal)
     }),
     TargetPromotionReconciliationDeferred: (event) => ({
       _tag: "GenericEventDescriptor",

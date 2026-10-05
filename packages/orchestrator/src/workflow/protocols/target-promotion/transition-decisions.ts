@@ -70,10 +70,11 @@ type TargetPromotionSettlementDecision =
   | { readonly _tag: "Succeeded"; readonly observation: TargetPromotionSuccessObservation }
 
 const pendingInitialReadMatches = (state: TargetPromotionState | undefined): boolean =>
-  state?._tag === "PromotionPending" && state.retry._tag === "NeedInitialReconciliationRead"
+  (state?._tag === "PromotionPending" || state?._tag === "PromotionSafetyRefused") &&
+  state.retry._tag === "NeedInitialReconciliationRead"
 
 const pendingAttemptReadMatches = (basis: TargetPromotionReadBasis, state: TargetPromotionState | undefined): boolean =>
-  state?._tag === "PromotionPending" &&
+  (state?._tag === "PromotionPending" || state?._tag === "PromotionSafetyRefused") &&
   state.retry._tag === "NeedReconciliationRead" &&
   state.retry.afterAttemptOrdinal === basis.previousAttemptOrdinal
 
@@ -96,11 +97,11 @@ const pendingInitialAttemptMatches = (
   state: TargetPromotionState | undefined
 ): boolean =>
   basis.attemptOrdinal === 1 &&
-  state?._tag === "PromotionPending" &&
+  (state?._tag === "PromotionPending" || state?._tag === "PromotionSafetyRefused") &&
   state.retry._tag === "NeedInitialReconciliationRead"
 
 const pendingAttemptMatches = (basis: TargetPromotionAttemptBasis, state: TargetPromotionState | undefined): boolean =>
-  state?._tag === "PromotionPending" &&
+  (state?._tag === "PromotionPending" || state?._tag === "PromotionSafetyRefused") &&
   state.retry._tag === "NeedReconciliationRead" &&
   state.retry.afterAttemptOrdinal === basis.attemptOrdinal - 1
 

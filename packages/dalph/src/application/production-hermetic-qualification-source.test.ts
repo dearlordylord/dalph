@@ -228,6 +228,7 @@ import { createServer, type ServerResponse } from "node:http"
 import {
   validateHermeticQualificationDeliveryFailure,
   validateHermeticQualificationHistory,
+  validateHermeticQualificationHistoryAdvanced,
   validateHermeticQualificationStatus
 } from "./production-hermetic-qualification-source.js"
 
@@ -3423,6 +3424,24 @@ describe("qualification original source boundary", () => {
       validateHermeticQualificationHistory(manifest, configuration, snapshot, runId)
     )
     expect(valid.snapshot).toBe(snapshot)
+    const reject = async (effect: Effect.Effect<unknown, HermeticQualificationSourceRejected>) => {
+      expect((await Effect.runPromise(effect.pipe(Effect.flip)))._tag).toBe("HermeticQualificationSourceRejected")
+    }
+    const advancement = await Effect.runPromise(
+      validateHermeticQualificationHistoryAdvanced(manifest, configuration, snapshot.cursor, snapshot.cursor, runId)
+    )
+    expect(advancement.digest).toBe(
+      hermeticCanonicalRecordDigest({ _tag: "HistoryAdvanced", cursor: snapshot.cursor, version: 1 })
+    )
+    await reject(
+      validateHermeticQualificationHistoryAdvanced(
+        manifest,
+        configuration,
+        snapshot.cursor,
+        TraceCursor.make({ ...snapshot.cursor, position: JournalPosition.make(snapshot.cursor.position + 1) }),
+        runId
+      )
+    )
     const privateSpecification = makeTaskWorkSpecification({
       taskId: context.taskId,
       title: context.specification.title,
@@ -3434,6 +3453,19 @@ describe("qualification original source boundary", () => {
     )
     expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
     expect(JSON.stringify(rejected)).not.toContain("private-prompt-sentinel")
+    await reject(
+      validateHermeticQualificationHistoryAdvanced(
+        manifest,
+        configuration,
+        { ...snapshot.cursor, privateSource: "private-prompt-sentinel" },
+        snapshot.cursor,
+        runId
+      )
+    )
+    const foreignCursor = TraceCursor.make({ ...snapshot.cursor, runId: RunId.make("foreign-run") })
+    await reject(
+      validateHermeticQualificationHistoryAdvanced(manifest, configuration, foreignCursor, foreignCursor, runId)
+    )
   })
 
   it("checks both historical worktree proof occurrence forms", async () => {

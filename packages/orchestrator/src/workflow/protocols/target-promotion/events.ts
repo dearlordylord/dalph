@@ -1,5 +1,5 @@
 import { Context, type Effect, Schema } from "effect"
-import { GitCommitSha, IntegrationTarget } from "@dalph/contracts"
+import { GitCommitSha, IntegrationTarget, WorktreeLocator } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
@@ -106,17 +106,42 @@ export class TargetPromotionCompareAndSetFailure extends Schema.TaggedError<Targ
   { candidateCommit: GitCommitSha, detail: Schema.String, expectedHead: GitCommitSha, target: IntegrationTarget }
 ) {}
 
+/** A proved promotion precondition refusal; no compare-and-set has been sent. */
+export const TargetPromotionSafetyRefusal = Schema.TaggedUnion({
+  OccupiedWorktree: { worktree: WorktreeLocator },
+  InventoryUnreadable: { detail: Schema.String },
+  TargetIdentityUnreadable: { detail: Schema.String }
+})
+export type TargetPromotionSafetyRefusal = typeof TargetPromotionSafetyRefusal.Type
+
+/** Positive sequence of safety observations for one exact promotion request; it grants no mutation authority. */
+export const TargetPromotionSafetyObservationOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("TargetPromotionSafetyObservationOrdinal")
+)
+export type TargetPromotionSafetyObservationOrdinal = typeof TargetPromotionSafetyObservationOrdinal.Type
+
+/** Known unsafe target facts are distinct from an uncertain compare-and-set outcome. */
+export class TargetPromotionSafetyFailure extends Schema.TaggedError<TargetPromotionSafetyFailure>()(
+  "TargetPromotionSafetyFailure",
+  {
+    candidateCommit: GitCommitSha,
+    expectedHead: GitCommitSha,
+    target: IntegrationTarget,
+    refusal: TargetPromotionSafetyRefusal
+  }
+) {}
+
 /** Provider-neutral target Git boundary used by the bounded promotion protocol. */
 export interface TargetPromotionGitService {
   readonly compareAndSet: (
     request: TargetPromotionGitRequest
   ) => Effect.Effect<
     TargetPromotionCompareAndSetResult,
-    TargetPromotionCompareAndSetFailure | CoordinatorOwnershipError
+    TargetPromotionCompareAndSetFailure | TargetPromotionSafetyFailure | CoordinatorOwnershipError
   >
   readonly read: (
     request: TargetPromotionGitRequest
-  ) => Effect.Effect<TargetPromotionGitReadObservation, TargetPromotionGitReadFailure>
+  ) => Effect.Effect<TargetPromotionGitReadObservation, TargetPromotionGitReadFailure | TargetPromotionSafetyFailure>
 }
 
 export class TargetPromotionGit extends Context.Service<TargetPromotionGit, TargetPromotionGitService>()(
@@ -151,6 +176,17 @@ export const TargetPromotionTerminalBasis = Schema.TaggedUnion({
   AfterAttempt: { attemptOrdinal: TargetPromotionAttemptOrdinal }
 })
 export type TargetPromotionTerminalBasis = typeof TargetPromotionTerminalBasis.Type
+
+/** Historical refusal of a fresh Git precondition check, distinct from a mutation outcome. */
+export const TargetPromotionSafetyRefusedEvent = Schema.TaggedStruct("TargetPromotionSafetyRefused", {
+  boundary: Schema.Literals(["ReconciliationRead", "CompareAndSet"]),
+  basis: TargetPromotionTerminalBasis,
+  correlation: TargetPromotionCorrelation,
+  observationOrdinal: TargetPromotionSafetyObservationOrdinal,
+  refusal: TargetPromotionSafetyRefusal,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type TargetPromotionSafetyRefusedEvent = typeof TargetPromotionSafetyRefusedEvent.Type
 
 /** Durable promotion intent is appended before the first Git mutation request. */
 export const TargetPromotionIntendedEvent = Schema.TaggedStruct("TargetPromotionIntended", {
@@ -236,6 +272,7 @@ export type TargetPromotionNonConvergenceEvent = typeof TargetPromotionNonConver
 
 /** Closed target-promotion vocabulary accepted by the workflow journal. */
 export const TargetPromotionJournalEvent = Schema.Union([
+  TargetPromotionSafetyRefusedEvent,
   TargetPromotionIntendedEvent,
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionReconciliationDeferredEvent,

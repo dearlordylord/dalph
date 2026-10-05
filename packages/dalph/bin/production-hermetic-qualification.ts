@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { NodeServices } from "@effect/platform-node"
-import { type DeliveryRuntimeObservationState, nodeGitCommandLayer } from "@dalph/orchestrator"
+import { type DeliveryRuntimeObservationState, type TraceCursor, nodeGitCommandLayer } from "@dalph/orchestrator"
 import { Config, Effect, Layer, Option, Schema, Stream } from "effect"
 import { makeProductionCliApplicationFromHost, makeProductionCliHostRunner } from "../src/application/live-cli.js"
 import { runDalphNodeMain } from "../src/application/node-main.js"
@@ -14,6 +14,7 @@ import { withHermeticQualificationFailureRegistration } from "../src/application
 import {
   validateHermeticQualificationApplicationExit,
   validateHermeticQualificationHistory,
+  validateHermeticQualificationHistoryAdvanced,
   validateHermeticQualificationRunDisposition,
   validateHermeticQualificationSelection,
   validateHermeticQualificationStatus
@@ -85,9 +86,30 @@ const application = Effect.gen(function* () {
                 )
               )
             }
+            const checkedHistoryCursor = (cursor: TraceCursor) =>
+              validateHermeticQualificationHistoryAdvanced(manifest, configuration, cursor, cursor, runId).pipe(
+                Effect.flatMap((registration) => registerHermeticExpectedRecord(endpoint, scope, registration)),
+                Effect.as(cursor),
+                Effect.orDie
+              )
+            const acceptedHistory = {
+              get: observation.acceptedHistory.get.pipe(Effect.flatMap(checkedHistoryCursor)),
+              changes: observation.acceptedHistory.changes.pipe(Stream.mapEffect(checkedHistoryCursor)),
+              attach: observation.acceptedHistory.attach.pipe(
+                Effect.flatMap((attached) =>
+                  checkedHistoryCursor(attached.current).pipe(
+                    Effect.as({
+                      current: attached.current,
+                      changes: attached.changes.pipe(Stream.mapEffect(checkedHistoryCursor))
+                    })
+                  )
+                )
+              )
+            }
             return yield* use(
               {
                 ...observation,
+                acceptedHistory,
                 current,
                 traceReader: {
                   readAt: (cursor) =>

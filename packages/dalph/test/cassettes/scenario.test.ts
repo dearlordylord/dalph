@@ -7183,6 +7183,7 @@ it.effect(
         PlannedAttemptReplaced: true,
         TargetPromotionIntended: true,
         TargetPromotionAttemptIntended: true,
+        TargetPromotionSafetyRefused: true,
         TargetPromotionReconciliationDeferred: true,
         TargetPromotionObservedSuccess: true,
         TargetPromotionStale: true,

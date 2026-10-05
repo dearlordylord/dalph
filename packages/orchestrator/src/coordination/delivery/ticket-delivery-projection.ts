@@ -244,6 +244,9 @@ const targetPromotionStandingFrom = (
 ): ReadonlyArray<TicketDeliveryStanding> =>
   Match.valueTags(state, {
     PromotionPending: (state): ReadonlyArray<TicketDeliveryStanding> => [{ _tag: "TargetPromotionPending", state }],
+    PromotionSafetyRefused: (state): ReadonlyArray<TicketDeliveryStanding> => [
+      { _tag: "TargetPromotionSafetyRefused", state }
+    ],
     PromotionReconciliationDeferred: (state): ReadonlyArray<TicketDeliveryStanding> => [
       { _tag: "TargetPromotionReconciliationDeferred", state }
     ],

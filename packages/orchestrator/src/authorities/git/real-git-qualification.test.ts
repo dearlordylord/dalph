@@ -117,6 +117,13 @@ const contractRequest = TargetPromotionGitRequest.make({
   expectedTargetHead: contractExpectedHead,
   integrationTarget: contractTarget
 })
+const safePromotionPrecondition = (args: ReadonlyArray<string>): GitCommandResult | undefined =>
+  args[0] === "symbolic-ref"
+    ? GitCommandResult.make({ exitCode: 1, stderr: "", stdout: "" })
+    : args[0] === "worktree"
+      ? GitCommandResult.make({ exitCode: 0, stderr: "", stdout: "worktree /contract.git\0bare\0\0" })
+      : undefined
+
 const contractNodeLayer = nodeGitTargetPromotionLayer.pipe(
   Layer.provide(
     Layer.succeed(
@@ -124,9 +131,10 @@ const contractNodeLayer = nodeGitTargetPromotionLayer.pipe(
       GitCommand.of({
         run: (_directory, args) =>
           Effect.succeed(
-            args[0] === "rev-parse"
-              ? GitCommandResult.make({ exitCode: 0, stderr: "", stdout: `${contractExpectedHead}\n` })
-              : GitCommandResult.make({ exitCode: 1, stderr: "", stdout: "" })
+            safePromotionPrecondition(args) ??
+              (args[0] === "rev-parse"
+                ? GitCommandResult.make({ exitCode: 0, stderr: "", stdout: `${contractExpectedHead}\n` })
+                : GitCommandResult.make({ exitCode: 1, stderr: "", stdout: "" }))
           ),
         runInWorktree: () => Effect.die("unused worktree command"),
         runBytesInWorktree: () => Effect.die("unused byte worktree command")
@@ -206,11 +214,16 @@ const scriptedTargetPromotion = <A>(
   Effect.gen(function* () {
     const remaining = yield* Ref.make(responses)
     const commands = GitCommand.of({
-      run: () =>
-        Ref.modify(remaining, ([next, ...rest]) => [
-          next ?? GitCommandResult.make({ exitCode: 2, stderr: "missing scripted response", stdout: "" }),
-          rest
-        ]),
+      run: (_directory, args) =>
+        Effect.suspend(() => {
+          const safe = safePromotionPrecondition(args)
+          return safe === undefined
+            ? Ref.modify(remaining, ([next, ...rest]) => [
+                next ?? GitCommandResult.make({ exitCode: 2, stderr: "missing scripted response", stdout: "" }),
+                rest
+              ])
+            : Effect.succeed(safe)
+        }),
       runBytesInWorktree: () => Effect.die("unused"),
       runInWorktree: () => Effect.die("unused")
     })
@@ -224,15 +237,20 @@ const targetPromotionTransportFailureAfter = (responses: ReadonlyArray<GitComman
   Effect.gen(function* () {
     const call = yield* Ref.make(0)
     const commands = GitCommand.of({
-      run: () =>
-        Ref.getAndUpdate(call, (current) => current + 1).pipe(
-          Effect.flatMap((index) => {
-            const response = responses[index]
-            return response === undefined
-              ? Effect.fail(new GitCommandInvocationFailure({ detail: `transport failed at call ${index + 1}` }))
-              : Effect.succeed(response)
-          })
-        ),
+      run: (_directory, args) =>
+        Effect.suspend(() => {
+          const safe = safePromotionPrecondition(args)
+          return safe === undefined
+            ? Ref.getAndUpdate(call, (current) => current + 1).pipe(
+                Effect.flatMap((index) => {
+                  const response = responses[index]
+                  return response === undefined
+                    ? Effect.fail(new GitCommandInvocationFailure({ detail: `transport failed at call ${index + 1}` }))
+                    : Effect.succeed(response)
+                })
+              )
+            : Effect.succeed(safe)
+        }),
       runBytesInWorktree: () => Effect.die("unused"),
       runInWorktree: () => Effect.die("unused")
     })
@@ -492,6 +510,7 @@ it.effect(
             ref: IntegrationTargetRef.make("refs/heads/main"),
             repository: gitDirectory
           })
+          yield* run("checkout", "--detach", targetHead)
           const correlation = promotionCorrelationFor(target, targetHead, accepted, candidate)
           const request = targetPromotionGitRequestFor(correlation)
           yield* Effect.gen(function* () {

@@ -23,6 +23,7 @@ import type {
   IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
 import type {
+  TargetPromotionSafetyObservationOrdinal,
   TargetPromotionAttemptOrdinal,
   TargetPromotionRequestId
 } from "../workflow/protocols/target-promotion/events.js"
@@ -459,6 +460,13 @@ export const targetPromotionReconciliationDeferredRecordKey = (
   JournalRecordKey.make(
     `${targetPromotionRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}:reconciliation-deferred`
   )
+
+/** Each changed safety observation has an exact identity; repeated identical refusals reuse their observation. */
+export const targetPromotionSafetyRefusedRecordKey = (
+  requestId: TargetPromotionRequestId,
+  observationOrdinal: TargetPromotionSafetyObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:safety-refused:${observationOrdinal}`)
 
 /** Stable journal key for the one exact promotion proof. */
 export const targetPromotionObservedSuccessRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>

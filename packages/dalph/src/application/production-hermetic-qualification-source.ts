@@ -4,6 +4,7 @@ import {
   completionTaskRequestFor,
   JournaledRunTermination,
   ProductionRunSelection,
+  TraceCursor,
   type TraceAtCursor,
   type CurrentDeliveryStatus,
   type DeliveryRuntimeObservationState
@@ -186,3 +187,27 @@ export const validateHermeticQualificationHistory = Effect.fn("HermeticQualifica
   yield* validateHermeticQualificationHistoricalSource(snapshot, context)
   return { snapshot, registration: yield* validatedRecordToken({ _tag: "HistoricalSnapshot", snapshot, version: 1 }) }
 })
+
+/** Registers exact signal provenance only; full snapshot contents have their separate validator. */
+export const validateHermeticQualificationHistoryAdvanced = Effect.fn("HermeticQualification.validateHistoryAdvanced")(
+  function* (
+    manifest: HermeticFixtureManifest,
+    configuration: ProductionRepositoryHostConfiguration,
+    originalCursor: unknown,
+    requestedCursor: TraceCursor,
+    selectedRunId: RunId
+  ) {
+    const original = yield* Schema.decodeUnknownEffect(
+      TraceCursor,
+      strictSource
+    )(originalCursor).pipe(Effect.mapError(sourceRejected))
+    const requested = yield* Schema.decodeUnknownEffect(
+      TraceCursor,
+      strictSource
+    )(requestedCursor).pipe(Effect.mapError(sourceRejected))
+    if (original.runId !== selectedRunId || !Schema.toEquivalence(TraceCursor)(original, requested))
+      return yield* sourceRejected()
+    yield* contextFor(manifest, configuration, selectedRunId)
+    return yield* validatedRecordToken({ _tag: "HistoryAdvanced", cursor: original, version: 1 })
+  }
+)

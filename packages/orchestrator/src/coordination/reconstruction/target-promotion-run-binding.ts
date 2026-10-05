@@ -8,6 +8,7 @@ type TargetPromotionRunBindingEvent = Extract<
     readonly _tag:
       | "TargetPromotionIntended"
       | "TargetPromotionAttemptIntended"
+      | "TargetPromotionSafetyRefused"
       | "TargetPromotionReconciliationDeferred"
       | "TargetPromotionObservedSuccess"
       | "TargetPromotionStale"

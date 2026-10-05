@@ -100,6 +100,8 @@ export const createHermeticFixture = Effect.fn("HermeticFixture.create")(functio
     yield* runGit(["add", "base.txt"])
     yield* runGit(["commit", "-m", "base"])
     const baseSha = yield* Schema.decodeUnknownEffect(GitCommitSha)(yield* runGit(["rev-parse", "HEAD"]))
+    // This disposable positive fixture leaves the integration ref unoccupied.
+    yield* runGit(["checkout", "--detach", baseSha])
     const invocation = HermeticInvocationId.make(root)
     const document = {
       repository,

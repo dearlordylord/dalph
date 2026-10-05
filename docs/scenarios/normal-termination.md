@@ -66,17 +66,17 @@ cut points expose the boundaries.
 
 ## Scenario-to-test mapping and implementation plan
 
-The three normal/recovery tests live in
+One chronological normal/recovery test lives in
 `packages/dalph/test/cassettes/normal-termination.test.ts`.
 The two outstanding-work tests live in
 `packages/dalph/test/cassettes/outstanding-work.test.ts`.
 
 | Scenario | Acceptance test |
 | --- | --- |
-| Seven exact successful tasks and separate claim absence | `proves seven tracker successes from Gfinal and seven exact claim absences` |
-| Empty work and one normal termination, distinct from Exit | `proves seven tracker successes from Gfinal and seven exact claim absences` |
-| Terminal G2 crash loses process-local freshness; restart gets a distinct later G2 | `obtains a distinct later Gfinal after a crash before termination` |
-| Successful termination append loses acknowledgement | `reconstructs lost termination acknowledgement without another append attempt or boundary call` |
+| Seven exact successful tasks and separate claim absence | `settles seven tasks, refreshes Gfinal after a crash, and recovers lost termination acknowledgement` |
+| Empty work and one normal termination, distinct from Exit | `settles seven tasks, refreshes Gfinal after a crash, and recovers lost termination acknowledgement` |
+| Terminal G2 crash loses process-local freshness; restart gets a distinct later G2 | `settles seven tasks, refreshes Gfinal after a crash, and recovers lost termination acknowledgement` |
+| Successful termination append loses acknowledgement | `settles seven tasks, refreshes Gfinal after a crash, and recovers lost termination acknowledgement` |
 | Actual proposal, live owner, held/executor work, integration, finality, and pending exact claim cleanup forbid termination | `keeps proposals live owners held executor integration finality and claim-cleanup work nonterminal` |
 | Another exact executor's report cannot settle B | `keeps an exact executor correlation conflict and its retained position nonterminal` |
 | Deferred #256 capstone: A FullRerun predecessor cleanup and lost-response reconciliation | #337/#279 must add the downstream acceptance test `completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup`: exact predecessor candidate cleanup, preserved predecessor history/evidence, and cleanup crash reconciliation must precede terminal proof. It composes the FullRerun cleanup seam with B–G delivery and this termination seam; the ordinary singleton A prefix here does not satisfy that future test. |
@@ -91,8 +91,12 @@ distinct #278 operation identities and the same integration target.
 
 The normal termination and exact-success assertions share one seven-task execution,
 rather than repeating the full delivery solely for termination observations.
-The two crash tests reuse that Journal and the same outside boundaries while
-creating a fresh application scope. The final read captures the runtime's last
+Both crash cuts reuse that Journal and the same outside boundaries while
+creating a fresh application scope. The test delivers B–G once, loses terminal
+G2 freshness, obtains a later G2, then loses the termination acknowledgement.
+Reentry must leave every observed boundary count and the terminal prefix unchanged.
+This removes repeated seven-task setup without increasing the test deadline;
+Dalph runtime behavior and all accepted negative outcomes remain unchanged. The final read captures the runtime's last
 Ready observation at the actual provider boundary, before any scope teardown.
 The negative controls stop real delivery at B's executing report, admitted
 Integrator call, exact replacement claim, and pending marker deletion. A foreign
@@ -102,8 +106,8 @@ it supplies no permission to settle B. No claim is inferred from the graph.
 Focused tests and `pnpm check:fast` check the adapters. The separately owned
 activation-model refinement and its directed conformance test distinguish
 termination commit from lost acknowledgement, including a negative duplicate
-attempt control. The orchestrator owns final `check:all` and `check:quint` on the
-frozen candidate; development checks do not replace those integration gates.
+attempt control. Choose candidate checks through [the development check owner](../development/checks.md#choosing-checks);
+focused evidence does not credit unrun hosted qualification.
 
 ## Review evidence
 

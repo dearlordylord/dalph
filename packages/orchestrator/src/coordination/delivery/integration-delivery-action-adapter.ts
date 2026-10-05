@@ -615,7 +615,7 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   if (Option.isNone(ownership)) return yield* new TargetPromotionRuntimeUnavailable()
   const acceptedJournal = yield* AcceptedJournalReader
   const correlation = targetPromotionCorrelationFor(transition.candidate)
-  yield* lease.integrationTargets
+  const result = yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
       runTargetPromotion(
@@ -644,7 +644,9 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
         )
       )
     )
-  return deliveryActionCompleted(action.proposal.id)
+  return result._tag === "PromotionSafetyRefused"
+    ? deliveryActionDeferred(action.proposal.id, "TargetPromotionSafetyRefused")
+    : deliveryActionCompleted(action.proposal.id)
 })
 
 const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication")(function* (
@@ -781,6 +783,8 @@ const executeTargetPromotionReconciliation = Effect.fn("DeliveryAction.reconcile
         )
       )
     )
+  if (result._tag === "PromotionSafetyRefused")
+    return deliveryActionDeferred(action.proposal.id, "TargetPromotionSafetyRefused")
   if (result._tag !== "PromotionReconciliationDeferred") return deliveryActionCompleted(action.proposal.id)
   return deliveryActionDeferred(
     action.proposal.id,

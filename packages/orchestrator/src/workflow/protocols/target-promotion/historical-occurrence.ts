@@ -3,6 +3,9 @@ import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { RunId } from "@dalph/contracts"
 import { WorkflowActor } from "../../registry/actor.js"
 import {
+  TargetPromotionSafetyRefusedEvent,
+  TargetPromotionSafetyObservationOrdinal,
+  TargetPromotionSafetyRefusal,
   TargetPromotionAttemptLimit,
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
@@ -51,6 +54,19 @@ export const TargetPromotionReconciliationDeferred = Schema.TaggedStruct("Target
   runId: RunId
 })
 export type TargetPromotionReconciliationDeferred = typeof TargetPromotionReconciliationDeferred.Type
+
+/** Git refused a promotion precondition; this occurrence is historical evidence only. */
+export const TargetPromotionSafetyRefused = Schema.TaggedStruct("TargetPromotionSafetyRefused", {
+  boundary: TargetPromotionSafetyRefusedEvent.fields.boundary,
+  basis: TargetPromotionTerminalBasis,
+  correlation: TargetPromotionCorrelation,
+  observationOrdinal: TargetPromotionSafetyObservationOrdinal,
+  refusal: TargetPromotionSafetyRefusal,
+  ...nonAction,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type TargetPromotionSafetyRefused = typeof TargetPromotionSafetyRefused.Type
 
 /** Git proved the qualified candidate current or in target ancestry. */
 export const TargetPromotionSucceeded = Schema.TaggedStruct("TargetPromotionSucceeded", {

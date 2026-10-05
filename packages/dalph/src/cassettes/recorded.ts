@@ -42,6 +42,7 @@ import {
   TargetPromotionObservedSuccessEvent,
   TargetPromotionStaleEvent,
   TargetPromotionNonConvergenceEvent,
+  TargetPromotionSafetyRefusedEvent,
   TargetPromotionReconciliationDeferredEvent,
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
@@ -451,6 +452,7 @@ type RecordedTargetPromotionEntry = Extract<RecordedCassetteEntry, { readonly _t
 const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPromotionEvent =>
   event._tag === "TargetPromotionIntended" ||
   event._tag === "TargetPromotionAttemptIntended" ||
+  event._tag === "TargetPromotionSafetyRefused" ||
   event._tag === "TargetPromotionReconciliationDeferred" ||
   event._tag === "TargetPromotionObservedSuccess" ||
   event._tag === "TargetPromotionStale" ||
@@ -459,6 +461,7 @@ const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPro
 const isRecordedTargetPromotionEntry = (entry: RecordedCassetteEntry): entry is RecordedTargetPromotionEntry =>
   entry._tag === "TargetPromotionIntended" ||
   entry._tag === "TargetPromotionAttemptIntended" ||
+  entry._tag === "TargetPromotionSafetyRefused" ||
   entry._tag === "TargetPromotionReconciliationDeferred" ||
   entry._tag === "TargetPromotionObservedSuccess" ||
   entry._tag === "TargetPromotionStale" ||
@@ -480,6 +483,15 @@ const recordTargetPromotionEntry = (event: TargetPromotionEvent): RecordedTarget
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
         reason: value.reason
+      }),
+      TargetPromotionSafetyRefused: (value): RecordedTargetPromotionEntry => ({
+        _tag: value._tag,
+        boundary: value.boundary,
+        basis: value.basis,
+        correlation: value.correlation,
+        observationOrdinal: value.observationOrdinal,
+        refusal: value.refusal,
+        occurrenceClassification: "NonActionOccurrence"
       }),
       TargetPromotionReconciliationDeferred: (value): RecordedTargetPromotionEntry => ({
         _tag: value._tag,
@@ -1699,6 +1711,15 @@ const eventForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): Work
         reason: value.reason,
         version: workflowJournalEventVersion
       }),
+    TargetPromotionSafetyRefused: (value) =>
+      TargetPromotionSafetyRefusedEvent.make({
+        boundary: value.boundary,
+        basis: value.basis,
+        correlation: value.correlation,
+        observationOrdinal: value.observationOrdinal,
+        refusal: value.refusal,
+        version: workflowJournalEventVersion
+      }),
     TargetPromotionReconciliationDeferred: (value) =>
       TargetPromotionReconciliationDeferredEvent.make({
         afterAttemptOrdinal: value.afterAttemptOrdinal,
@@ -2211,6 +2232,8 @@ const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): stri
       `Dalph coordinator fixed exact promotion ${value.correlation.qualifiedCandidate.run.session.expectedTargetHead} -> ${value.correlation.qualifiedCandidate.candidateCommit}.`,
     TargetPromotionAttemptIntended: (value) =>
       `Dalph coordinator sent exact compare-and-set attempt ${value.attemptOrdinal} for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+    TargetPromotionSafetyRefused: (value) =>
+      `Git refused promotion of ${value.correlation.qualifiedCandidate.candidateCommit}: ${value.refusal._tag}.`,
     TargetPromotionReconciliationDeferred: (value) =>
       `Dalph deferred promotion attempt ${value.afterAttemptOrdinal} after ${value.deferral._tag}.`,
     TargetPromotionObservedSuccess: (value) =>

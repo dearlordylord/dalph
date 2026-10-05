@@ -1,4 +1,5 @@
 import {
+  TargetPromotionSafetyRefusal,
   ResultRecoverySubject,
   DeliveryDiagnostics,
   BoundedTicketRank,
@@ -16,6 +17,7 @@ import {
   TrackerRevision
 } from "@dalph/orchestrator"
 import {
+  GitCommitSha,
   AttemptId,
   plannedTaskAttemptEquivalence,
   IntegrationTarget,
@@ -86,6 +88,15 @@ const entryBase = {
 }
 
 const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
+  TargetPromotionSafetyRefused: {
+    ...entryBase,
+    boundary: Schema.Literals(["ReconciliationRead", "CompareAndSet"]),
+    classification: Schema.Literal("Blocked"),
+    taskId: TaskId,
+    integrationTarget: IntegrationTarget,
+    candidateCommit: GitCommitSha,
+    refusal: TargetPromotionSafetyRefusal
+  },
   ExecutorResultRejected: {
     ...entryBase,
     classification: Schema.Literal("Blocked"),
@@ -244,6 +255,7 @@ const trackerFactRelationshipIsValid = (entry: PublicTrackerFactWait): boolean =
 
 const entryRelationshipCheck = Match.type<typeof PublicDeliveryStatusEntryShape.Type>().pipe(
   Match.tagsExhaustive({
+    TargetPromotionSafetyRefused: (entry) => taskMatchesSubject(entry.taskId, entry.subject),
     ExecutorResultRejected: (entry) =>
       entry.plannedAttempt.runId === entry.subject.runId &&
       taskMatchesSubject(entry.plannedAttempt.taskId, entry.subject) &&
