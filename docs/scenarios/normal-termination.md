@@ -66,6 +66,11 @@ cut points expose the boundaries.
 
 ## Scenario-to-test mapping and implementation plan
 
+The test prepares A’s independently validated immutable starting prefix in fixture
+setup, then executes B–G delivery and both crash/recovery boundaries inside the
+existing 30-second test budget. Setup retains no live runtime or scoped writer.
+This test-harness separation changes no Dalph runtime behavior.
+
 One chronological normal/recovery test lives in
 `packages/dalph/test/cassettes/normal-termination.test.ts`.
 The two outstanding-work tests live in
