@@ -7489,6 +7489,40 @@ it.effect(
         expect(recoveryJson).toContain(`"${to}"`)
       }
       expect(recoveryJson).toContain(recoveryRequestId.nonce)
+      const guidanceRequestId = "alpha-guidance"
+      const guidanceEntries = yield* Schema.decodeUnknownEffect(Schema.Array(RecordedCassetteEntry))([
+        {
+          _tag: "ExecutorGuidanceAdmitted",
+          metadata: {
+            requestId: guidanceRequestId,
+            plannedAttempt: recoverySubject.plannedAttempt,
+            payloadDigest: "a".repeat(64),
+            payloadBytes: 11
+          }
+        },
+        {
+          _tag: "ExecutorGuidanceDispatchIntended",
+          requestId: guidanceRequestId,
+          target: { plannedAttempt: recoverySubject.plannedAttempt, session: "owned-session", turn: "owned-turn" }
+        },
+        { _tag: "ExecutorGuidanceObserved", requestId: guidanceRequestId, disposition: { _tag: "Unknown" } }
+      ])
+      const guidanceRecorded = RecordedCassette.make({ ...replacementRecorded, entries: guidanceEntries })
+      const renamedGuidance = yield* renameRecordedCassette(guidanceRecorded, replacementRenaming)
+      expect(
+        yield* renameRecordedCassette(renamedGuidance, invertCassetteIdentityRenaming(replacementRenaming))
+      ).toEqual(guidanceRecorded)
+      const guidanceJson = JSON.stringify(renamedGuidance.entries)
+      const originalGuidanceJson = JSON.stringify(guidanceEntries)
+      for (const { from, to } of [...replacementRenaming.attemptIds, ...replacementRenaming.runIds]) {
+        expect(guidanceJson).not.toContain(`"${from}"`)
+        if (originalGuidanceJson.includes(`"${from}"`)) expect(guidanceJson).toContain(`"${to}"`)
+      }
+      expect(guidanceJson).toContain(guidanceRequestId)
+      expect(guidanceJson).toContain("owned-session")
+      expect(guidanceJson).toContain("owned-turn")
+      expect(guidanceJson).toContain("a".repeat(64))
+      expect(guidanceJson).toContain('"payloadBytes":11')
       const renamedReplacement = yield* renameRecordedCassette(replacementRecorded, replacementRenaming)
       const renamedRestartFailure = yield* renameRecordedCassette(restartFailureRecorded, replacementRenaming)
       const encodedReplacement = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamedReplacement))
@@ -7833,7 +7867,8 @@ it.effect(
             ...directPublicationEntries,
             ...automaticSuccessorEntries,
             ...quarantineEntries,
-            ...recoveryEntries
+            ...recoveryEntries,
+            ...guidanceEntries
           ]
             .map(({ _tag }) => _tag)
             .concat("WorkflowRunTerminated")
