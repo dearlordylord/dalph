@@ -3576,6 +3576,13 @@ export const stopOwnedAppServer = (
       return yield* Effect.fail(operationFailure("close", "Ownership", "process identity changed before forced signal"))
     }
     const freshGroup = yield* groupCensus.observe(launch)
+    if (freshOwner._tag === "Absent" && freshGroup._tag === "Absent") {
+      // SIGTERM may finish between the grace observation and this census.
+      // Reread the original identities so an escaped writer cannot disappear
+      // from close authority merely because its current group is absent.
+      yield* awaitExactMembersAbsent(group.members, ownershipStopPollAttempts, native)
+      return
+    }
     if (freshGroup._tag !== "ExactLive") {
       return yield* Effect.fail(operationFailure("close", "Ownership", "process group changed before forced signal"))
     }

@@ -135,6 +135,29 @@ No tracker mutation or claim release occurs at this boundary.
 
 ## S5: Host-wide Exit
 
+### Natural exit before forced process close
+
+Accepted repair: [#459](https://github.com/dearlordylord/dalph/issues/459).
+The existing [S4 stop reconciliation](#s4-crash-and-ambiguous-stop) and S5
+ownership rules remain in force. Dalph has freshly proved one launch and its
+original member identities, sent SIGTERM, and observed a member still present
+at the ordinary grace boundary. Before escalation, the last member exits.
+When both the fresh launch and group observations report absence, Dalph rereads
+every original member identity. Proved absence completes close without SIGKILL;
+a live, unreadable or reused identity retains custody and refuses close.
+An absent current group cannot erase an original escaped writer. Foreign or
+unreadable current ownership still grants no signal authority. No provider,
+thread, turn or workflow result is created by this reconciliation. A crash
+retains the original launch; retry rereads execution-substrate authority.
+
+Controlled acceptance: `reconciles natural exit before forced close without
+signalling again` and `retains original writer custody after an absent fresh
+group`. Existing native resistant-writer and sibling tests retain escalation
+and ownership proof. Native long-check and Suspend/Exit/Resume fixtures prove
+the real cleanup boundary. The Resume fixture keeps its disposable host alive
+until the expected model request, so fixture teardown cannot cancel that
+observation. This fixture lifetime adjustment changes no production behavior.
+
 Starting facts: several executor owners and the integrator remain live. Exit
 closes process-wide forward admission once and keeps the existing five-second
 drain. Finalization reaches every owned containment independently. Report

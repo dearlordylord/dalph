@@ -34,7 +34,8 @@ it. Git/tracker publication is inapplicable here: this fixture qualifies the
 executor's item boundary with a disposable Git commit and a local fake model.
 
 Acceptance: `codex-real-host-qualification.test.ts`, `native long check completes
-with its exact shell allowance through direct and code-mode tools`; the test
+with its exact shell allowance (%s)` registers direct and code-mode cases
+separately under their existing per-case deadline; each test
 checks retained item start/deadline/completion, accepted evidence and exact
 provider absence during cleanup.
 

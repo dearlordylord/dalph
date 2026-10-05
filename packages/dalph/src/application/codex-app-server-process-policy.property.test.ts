@@ -1111,6 +1111,61 @@ describe("Codex process observation policy", () => {
     expect(signals).toBe(2)
   })
 
+  it.each(["absent", "live", "foreign", "unreadable"] as const)(
+    "reconciles natural exit before forced close without signalling again; retains original writer custody after an absent fresh group (%s)",
+    async (outcome) => {
+      const launch = CodexServerLaunchRecord.make({
+        command: ["codex", "app-server"],
+        incarnation: CodexServerIncarnation.make("stop|linux%3A70"),
+        phase: "Live",
+        pid: 70
+      })
+      const member = stat(71, 70, 70, "linux:71")
+      let ownerReads = 0
+      let groupReads = 0
+      let retainedMemberReads = 0
+      const signals: Array<readonly [number, number | NodeJS.Signals]> = []
+      const selectedNative = native({
+        kill: (pid, signal) => {
+          signals.push([pid, signal])
+        },
+        readFile: async () => {
+          if (groupReads < 2) return linuxStatText(member)
+          retainedMemberReads += 1
+          if (outcome === "absent" || outcome === "unreadable") {
+            throw Object.assign(new Error("controlled member observation"), {
+              code: outcome === "absent" ? "ENOENT" : "EACCES"
+            })
+          }
+          return linuxStatText(outcome === "foreign" ? stat(71, 1, 71, "linux:72") : member)
+        }
+      })
+      const result = await Effect.runPromiseExit(
+        stopOwnedAppServer(
+          {
+            discover: () => Effect.succeed({ _tag: "Absent" as const }),
+            stop: () => Effect.void,
+            observe: () =>
+              Effect.sync(() =>
+                ++ownerReads === 1 ? { _tag: "ExactLive" as const, pid: 70 } : { _tag: "Absent" as const }
+              )
+          },
+          {
+            observe: () =>
+              Effect.sync(() =>
+                ++groupReads === 1 ? { _tag: "ExactLive" as const, members: [member] } : { _tag: "Absent" as const }
+              )
+          },
+          launch,
+          selectedNative
+        )
+      )
+      expect(Exit.isSuccess(result)).toBe(outcome === "absent")
+      expect(retainedMemberReads).toBeGreaterThan(0)
+      expect(signals).toEqual([[-70, "SIGTERM"]])
+    }
+  )
+
   it("preserves already typed app-server failures and wraps foreign failures", () => {
     const typed = new CodexAppServerFailure({ detail: "typed", kind: "Ownership", operation: "close" })
     expect(preserveAppServerFailure("close", "Ownership")(typed)).toBe(typed)
