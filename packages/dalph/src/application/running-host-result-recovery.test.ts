@@ -1,3 +1,4 @@
+import { runningHostRecoveryInput as recoveryInput } from "../../test-support/running-host-recovery-input.js"
 import { NodeServices } from "@effect/platform-node"
 import { Command } from "effect/unstable/cli"
 import { makeRunningHostCommands, RunningHostCliOutput } from "./running-host-cli.js"
@@ -25,25 +26,6 @@ import {
   runningHostLimits
 } from "./running-host-contract.js"
 import { serveRunningHost } from "./running-host-http.js"
-
-const recoveryInput = (runId: RunId) => ({
-  direction: "ContinueRetainedAttempt",
-  requestId: { nonce: "one-explicit-recovery", runId },
-  subject: {
-    _tag: "RejectedResult",
-    reportOrdinal: 2,
-    plannedAttempt: {
-      attemptId: "attempt-A",
-      runId,
-      taskId: "A",
-      taskRevision: "revision-A",
-      executor: "executor:controlled-fake",
-      baseSha: "a".repeat(40),
-      branch: "refs/heads/dalph/A",
-      worktree: "/tmp/dalph-A"
-    }
-  }
-})
 
 it.effect("binds recovery input to the selected Run and refuses legacy failure Continue", () =>
   Effect.gen(function* () {

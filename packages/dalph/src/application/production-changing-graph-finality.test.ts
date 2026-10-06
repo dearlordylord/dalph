@@ -1,3 +1,7 @@
+import { appendIncomparableChangingGraph } from "../../test-support/incomparable-changing-graph.js"
+import { publicDeliveryClient } from "../../test-support/public-delivery-client.js"
+import { availableLocalHostAddress } from "../../test-support/running-host-read-probe.js"
+import { serveRunningHost } from "./running-host-http.js"
 import { githubGraphqlBatchTestClient } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import { GitCommitSha, RemotePublicationTarget, RemotePublicationEndpoint } from "@dalph/contracts"
 import {
@@ -5,6 +9,8 @@ import {
   GithubGraphqlClient,
   GithubIssueNodeId,
   JournalStore,
+  JournalTerminationQualification,
+  type JournalRecord,
   attachCurrentSignal,
   githubTaskIdFor,
   nodeGitCommandLayer,
@@ -21,6 +27,7 @@ import { expect } from "vitest"
 import {
   productionRepositoryHostGraph,
   withDecodedProductionRepositoryHost,
+  type ProductionRunningHostObservation,
   type ProductionHostObservation
 } from "./production-host.js"
 import { CodexAppServer, CodexThreadListSummary, type CodexThreadSnapshot } from "./codex-app-server.js"
@@ -76,462 +83,611 @@ const snapshotOf = (state: DeliveryRuntimeReadyObservation) => {
   return graph.observation.snapshot
 }
 
-it.live(
-  "settles Alice's changing graph as Blocked while retaining A at capacity one",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem
-        const git = yield* GitCommand
-        const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
-        const remoteRepository = `${fixture.container}/remote.git`
-        expect(
-          (yield* git.runInWorktree(fixture.configuration.repository, [
-            "clone",
-            "--bare",
-            fixture.configuration.repository,
-            remoteRepository
-          ])).exitCode
-        ).toBe(0)
-        const configuration = ProductionRepositoryHostConfiguration.make({
-          ...fixture.configuration,
-          remotePublicationTarget: RemotePublicationTarget.make({
-            endpoint: RemotePublicationEndpoint.make(remoteRepository),
-            branch: fixture.configuration.remotePublicationTarget.branch
+for (const { invalidHistory, name } of [
+  { name: "settles Alice's changing graph as Blocked while retaining A at capacity one", invalidHistory: false },
+  { name: "public clients retain typed incomparable S10 failure without terminal records", invalidHistory: true }
+]) {
+  it.live(
+    name,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem
+          const git = yield* GitCommand
+          const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
+          const remoteRepository = `${fixture.container}/remote.git`
+          expect(
+            (yield* git.runInWorktree(fixture.configuration.repository, [
+              "clone",
+              "--bare",
+              fixture.configuration.repository,
+              remoteRepository
+            ])).exitCode
+          ).toBe(0)
+          const configuration = ProductionRepositoryHostConfiguration.make({
+            ...fixture.configuration,
+            remotePublicationTarget: RemotePublicationTarget.make({
+              endpoint: RemotePublicationEndpoint.make(remoteRepository),
+              branch: fixture.configuration.remotePublicationTarget.branch
+            })
           })
-        })
-        yield* Effect.addFinalizer(() =>
-          fileSystem.remove(fixture.container, { force: true, recursive: true }).pipe(Effect.orDie)
-        )
-        const turnEntered = yield* Deferred.make<void>()
-        const turnCompletedHint = yield* Deferred.make<void>()
-        const turnTerminalVisible = yield* Ref.make(false)
-        const completionEntered = yield* Deferred.make<void>()
-        const releaseCompletion = yield* Deferred.make<void>()
-        yield* Effect.addFinalizer(() =>
-          Effect.all([
-            Deferred.succeed(turnCompletedHint, undefined),
-            Deferred.succeed(releaseCompletion, undefined)
-          ]).pipe(Effect.asVoid)
-        )
-        const provider = yield* makeHermeticProviderState(
-          configuration,
-          (boundary) =>
-            boundary._tag === "CompletionResponse"
-              ? Deferred.succeed(completionEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseCompletion)))
-              : Effect.void,
-          fixture.manifest.invocationId
-        )
-        const maskThread = (thread: CodexThreadSnapshot, visible: boolean): CodexThreadSnapshot =>
-          visible
-            ? thread
-            : {
-                ...thread,
-                status: "active" as const,
-                turns: thread.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
-              }
-        const codex = CodexAppServer.of({
-          ...provider.codex,
-          unattendedPolicyAdmission: Effect.void,
-          attachTurnCompletedHints: Effect.succeed(Stream.empty),
-          attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
-            Effect.gen(function* () {
-              const expected = yield* Deferred.make<CodexTurnId>()
-              if (expectedTurnId !== undefined) yield* Deferred.succeed(expected, expectedTurnId)
-              return {
-                expectTurnId: (turnId: CodexTurnId) => Deferred.succeed(expected, turnId).pipe(Effect.asVoid),
-                hints: Stream.fromEffect(
-                  Deferred.await(turnCompletedHint).pipe(
-                    Effect.andThen(Deferred.await(expected)),
-                    Effect.map((turnId) => ({ threadId, turnId }))
+          yield* Effect.addFinalizer(() =>
+            fileSystem.remove(fixture.container, { force: true, recursive: true }).pipe(Effect.orDie)
+          )
+          const turnEntered = yield* Deferred.make<void>()
+          const turnCompletedHint = yield* Deferred.make<void>()
+          const turnTerminalVisible = yield* Ref.make(false)
+          const completionEntered = yield* Deferred.make<void>()
+          const releaseCompletion = yield* Deferred.make<void>()
+          yield* Effect.addFinalizer(() =>
+            Effect.all([
+              Deferred.succeed(turnCompletedHint, undefined),
+              Deferred.succeed(releaseCompletion, undefined)
+            ]).pipe(Effect.asVoid)
+          )
+          const provider = yield* makeHermeticProviderState(
+            configuration,
+            (boundary) =>
+              boundary._tag === "CompletionResponse"
+                ? Deferred.succeed(completionEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseCompletion)))
+                : Effect.void,
+            fixture.manifest.invocationId
+          )
+          const maskThread = (thread: CodexThreadSnapshot, visible: boolean): CodexThreadSnapshot =>
+            visible
+              ? thread
+              : {
+                  ...thread,
+                  status: "active" as const,
+                  turns: thread.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
+                }
+          const codex = CodexAppServer.of({
+            ...provider.codex,
+            unattendedPolicyAdmission: Effect.void,
+            attachTurnCompletedHints: Effect.succeed(Stream.empty),
+            attachExactTurnCompletedHints: (threadId, expectedTurnId) =>
+              Effect.gen(function* () {
+                const expected = yield* Deferred.make<CodexTurnId>()
+                if (expectedTurnId !== undefined) yield* Deferred.succeed(expected, expectedTurnId)
+                return {
+                  expectTurnId: (turnId: CodexTurnId) => Deferred.succeed(expected, turnId).pipe(Effect.asVoid),
+                  hints: Stream.fromEffect(
+                    Deferred.await(turnCompletedHint).pipe(
+                      Effect.andThen(Deferred.await(expected)),
+                      Effect.map((turnId) => ({ threadId, turnId }))
+                    )
+                  )
+                }
+              }),
+            listThreads: () =>
+              (provider.codex.listThreads ?? (() => Effect.die("fixture requires thread listing")))().pipe(
+                Effect.zip(Ref.get(turnTerminalVisible)),
+                Effect.map(([threads, visible]) =>
+                  visible
+                    ? threads
+                    : threads.map((thread) =>
+                        thread._tag === "CompleteSummary"
+                          ? CodexThreadListSummary.CompleteSummary({
+                              ...thread,
+                              summary: {
+                                status: "active",
+                                turns: thread.summary.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
+                              }
+                            })
+                          : thread
+                      )
+                )
+              ),
+            readThread: (id) =>
+              provider.codex
+                .readThread(id)
+                .pipe(
+                  Effect.flatMap((thread) =>
+                    Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
+                  )
+                ),
+            resumeThread: (id, cwd) =>
+              provider.codex
+                .resumeThread(id, cwd)
+                .pipe(
+                  Effect.flatMap((thread) =>
+                    Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
+                  )
+                ),
+            startTurn: (...args) =>
+              provider.codex.startTurn(...args).pipe(
+                Effect.tap(() => Deferred.succeed(turnEntered, undefined)),
+                Effect.flatMap((turn) =>
+                  Ref.get(turnTerminalVisible).pipe(
+                    Effect.map((visible) => (visible ? turn : { ...turn, status: "inProgress" as const }))
                   )
                 )
-              }
-            }),
-          listThreads: () =>
-            (provider.codex.listThreads ?? (() => Effect.die("fixture requires thread listing")))().pipe(
-              Effect.zip(Ref.get(turnTerminalVisible)),
-              Effect.map(([threads, visible]) =>
-                visible
-                  ? threads
-                  : threads.map((thread) =>
-                      thread._tag === "CompleteSummary"
-                        ? CodexThreadListSummary.CompleteSummary({
-                            ...thread,
-                            summary: {
-                              status: "active",
-                              turns: thread.summary.turns.map((turn) => ({ ...turn, status: "inProgress" as const }))
-                            }
-                          })
-                        : thread
-                    )
               )
-            ),
-          readThread: (id) =>
-            provider.codex
-              .readThread(id)
-              .pipe(
-                Effect.flatMap((thread) =>
-                  Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
-                )
-              ),
-          resumeThread: (id, cwd) =>
-            provider.codex
-              .resumeThread(id, cwd)
-              .pipe(
-                Effect.flatMap((thread) =>
-                  Ref.get(turnTerminalVisible).pipe(Effect.map((visible) => maskThread(thread, visible)))
-                )
-              ),
-          startTurn: (...args) =>
-            provider.codex.startTurn(...args).pipe(
-              Effect.tap(() => Deferred.succeed(turnEntered, undefined)),
-              Effect.flatMap((turn) =>
-                Ref.get(turnTerminalVisible).pipe(
-                  Effect.map((visible) => (visible ? turn : { ...turn, status: "inProgress" as const }))
-                )
+          })
+          const graphPhase = yield* Ref.make<"Initial" | "Expanded" | "Settled">("Initial")
+          const changedGraphReads = yield* Ref.make(0)
+          const changedGraphReadEntered = yield* Deferred.make<void>()
+          const forbiddenChildWorkReads = yield* Ref.make<ReadonlyArray<string>>([])
+          const rootNodeId = hermeticQualificationTrackerIdentity.issueNodeId
+          const repositoryNodeId = hermeticQualificationTrackerIdentity.repositoryNodeId
+          const childNodeId = GithubIssueNodeId.make("changing-graph-child")
+          const blockerNodeId = GithubIssueNodeId.make("changing-graph-blocker")
+          const independentNodeId = GithubIssueNodeId.make("changing-graph-independent")
+          const rootTaskId = githubTaskIdFor(repositoryNodeId, rootNodeId)
+          const childTaskId = githubTaskIdFor(repositoryNodeId, childNodeId)
+          const blockerTaskId = githubTaskIdFor(repositoryNodeId, blockerNodeId)
+          const independentTaskId = githubTaskIdFor(repositoryNodeId, independentNodeId)
+          const delegateGithub = (request: GithubGraphqlRequest) =>
+            provider.github(providerBodyFor(request)).pipe(
+              Effect.orDie,
+              Effect.flatMap((response) =>
+                response.status === 200
+                  ? Effect.succeed({ body: response.body })
+                  : Effect.die(`controlled GitHub provider returned HTTP ${response.status}`)
               )
             )
-        })
-        const graphPhase = yield* Ref.make<"Initial" | "Expanded" | "Settled">("Initial")
-        const changedGraphReads = yield* Ref.make(0)
-        const changedGraphReadEntered = yield* Deferred.make<void>()
-        const forbiddenChildWorkReads = yield* Ref.make<ReadonlyArray<string>>([])
-        const rootNodeId = hermeticQualificationTrackerIdentity.issueNodeId
-        const repositoryNodeId = hermeticQualificationTrackerIdentity.repositoryNodeId
-        const childNodeId = GithubIssueNodeId.make("changing-graph-child")
-        const blockerNodeId = GithubIssueNodeId.make("changing-graph-blocker")
-        const independentNodeId = GithubIssueNodeId.make("changing-graph-independent")
-        const rootTaskId = githubTaskIdFor(repositoryNodeId, rootNodeId)
-        const childTaskId = githubTaskIdFor(repositoryNodeId, childNodeId)
-        const blockerTaskId = githubTaskIdFor(repositoryNodeId, blockerNodeId)
-        const independentTaskId = githubTaskIdFor(repositoryNodeId, independentNodeId)
-        const delegateGithub = (request: GithubGraphqlRequest) =>
-          provider.github(providerBodyFor(request)).pipe(
-            Effect.orDie,
-            Effect.flatMap((response) =>
-              response.status === 200
-                ? Effect.succeed({ body: response.body })
-                : Effect.die(`controlled GitHub provider returned HTTP ${response.status}`)
-            )
-          )
-        const connection = (
-          issueNodeId: GithubIssueNodeId,
-          field: "blockedBy" | "subIssues",
-          ids: ReadonlyArray<GithubIssueNodeId>
-        ) => ({
-          body: {
-            data: {
-              node: {
-                __typename: "Issue",
-                id: issueNodeId,
-                [field]: { nodes: ids.map((id) => ({ id })), pageInfo: { endCursor: null, hasNextPage: false } }
+          const connection = (
+            issueNodeId: GithubIssueNodeId,
+            field: "blockedBy" | "subIssues",
+            ids: ReadonlyArray<GithubIssueNodeId>
+          ) => ({
+            body: {
+              data: {
+                node: {
+                  __typename: "Issue",
+                  id: issueNodeId,
+                  [field]: { nodes: ids.map((id) => ({ id })), pageInfo: { endCursor: null, hasNextPage: false } }
+                }
               }
             }
-          }
-        })
-        const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
-          Effect.gen(function* () {
-            const phase = yield* Ref.get(graphPhase)
-            if (phase === "Initial") {
-              if (request._tag === "ReadSubIssues") return connection(request.issueNodeId, "subIssues", [])
-              return yield* delegateGithub(request)
-            }
-            if (request._tag === "ReadSubIssues") {
-              if (request.issueNodeId === rootNodeId) {
-                yield* Ref.update(changedGraphReads, (current) => current + 1)
-                yield* Deferred.succeed(changedGraphReadEntered, undefined)
-                return connection(rootNodeId, "subIssues", [childNodeId, independentNodeId])
+          })
+          const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
+            Effect.gen(function* () {
+              const phase = yield* Ref.get(graphPhase)
+              if (phase === "Initial") {
+                if (request._tag === "ReadSubIssues") return connection(request.issueNodeId, "subIssues", [])
+                return yield* delegateGithub(request)
               }
-              return connection(request.issueNodeId, "subIssues", [])
-            }
-            if (request._tag === "ReadBlockedBy") {
-              return connection(
-                request.issueNodeId,
-                "blockedBy",
-                request.issueNodeId === childNodeId ? [blockerNodeId] : []
-              )
-            }
-            if (request._tag === "ReadIssue" && request.issueNodeId !== rootNodeId) {
-              const isChild = request.issueNodeId === childNodeId
-              const isIndependent = request.issueNodeId === independentNodeId
-              if (!isChild && !isIndependent && request.issueNodeId !== blockerNodeId) {
-                return yield* Effect.die(`unexpected changing-graph issue ${request.issueNodeId}`)
+              if (request._tag === "ReadSubIssues") {
+                if (request.issueNodeId === rootNodeId) {
+                  yield* Ref.update(changedGraphReads, (current) => current + 1)
+                  yield* Deferred.succeed(changedGraphReadEntered, undefined)
+                  return connection(rootNodeId, "subIssues", [childNodeId, independentNodeId])
+                }
+                return connection(request.issueNodeId, "subIssues", [])
               }
-              return {
-                body: {
-                  data: {
-                    node: {
-                      __typename: "Issue",
-                      id: request.issueNodeId,
-                      parent: isChild || isIndependent ? { id: rootNodeId } : null,
-                      repository: { id: repositoryNodeId },
-                      state: isChild || (isIndependent && phase === "Expanded") ? "OPEN" : "CLOSED",
-                      stateReason: isChild || (isIndependent && phase === "Expanded") ? null : "NOT_PLANNED"
+              if (request._tag === "ReadBlockedBy") {
+                return connection(
+                  request.issueNodeId,
+                  "blockedBy",
+                  request.issueNodeId === childNodeId ? [blockerNodeId] : []
+                )
+              }
+              if (request._tag === "ReadIssue" && request.issueNodeId !== rootNodeId) {
+                const isChild = request.issueNodeId === childNodeId
+                const isIndependent = request.issueNodeId === independentNodeId
+                if (!isChild && !isIndependent && request.issueNodeId !== blockerNodeId) {
+                  return yield* Effect.die(`unexpected changing-graph issue ${request.issueNodeId}`)
+                }
+                return {
+                  body: {
+                    data: {
+                      node: {
+                        __typename: "Issue",
+                        id: request.issueNodeId,
+                        parent: isChild || isIndependent ? { id: rootNodeId } : null,
+                        repository: { id: repositoryNodeId },
+                        state: isChild || (isIndependent && phase === "Expanded") ? "OPEN" : "CLOSED",
+                        stateReason: isChild || (isIndependent && phase === "Expanded") ? null : "NOT_PLANNED"
+                      }
                     }
                   }
                 }
               }
-            }
-            if (request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNodeId) {
-              yield* Ref.update(forbiddenChildWorkReads, (current) => [
-                ...current,
-                `${request._tag}:${request.issueNodeId}`
-              ])
-              return yield* Effect.die("blocked or terminal task reached a work-specification read")
-            }
-            return yield* delegateGithub(request)
+              if (request._tag === "ReadTaskWorkSpecification" && request.issueNodeId !== rootNodeId) {
+                yield* Ref.update(forbiddenChildWorkReads, (current) => [
+                  ...current,
+                  `${request._tag}:${request.issueNodeId}`
+                ])
+                return yield* Effect.die("blocked or terminal task reached a work-specification read")
+              }
+              return yield* delegateGithub(request)
+            })
+          )
+          const observationReady = yield* Deferred.make<ProductionRunningHostObservation<unknown>>()
+          const expandedFrozen = yield* Deferred.make<void>()
+          const releaseExpanded = yield* Deferred.make<void>()
+          const freezeExpanded = yield* Ref.make(true)
+          const failures = yield* Ref.make<ReadonlyArray<unknown>>([])
+          const failureObserved = yield* Deferred.make<void>()
+          const invalidPrefix = yield* Ref.make<Option.Option<ReadonlyArray<JournalRecord>>>(Option.none())
+          const terminationRequests = yield* Ref.make(0)
+          const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+          const preDeliveryGraph = yield* Ref.make<Option.Option<ReturnType<typeof snapshotOf>>>(Option.none())
+          const productionGraph = productionRepositoryHostGraph({
+            githubRequestCircuitMaxRequests: 2_000,
+            onActivationFinalizationStart: () =>
+              Effect.gen(function* () {
+                if (!(yield* Ref.get(freezeExpanded))) return
+                const observation = yield* Deferred.await(observationReady)
+                const current = yield* observation.current.get
+                if (
+                  current._tag !== "Ready" ||
+                  current.evaluation.current.trackerGraph._tag !== "GraphEstablished" ||
+                  current.evaluation.current.trackerGraph.observation.snapshot.taskIds().length !== 4
+                )
+                  return
+                yield* Ref.set(freezeExpanded, false)
+                yield* Deferred.succeed(expandedFrozen, undefined)
+                yield* Deferred.await(releaseExpanded)
+              }),
+            onTimerStateChange: (state) => Ref.update(timerStates, (all) => [...all, state]),
+            onActivationFailure: (failure) =>
+              Ref.update(failures, (current) => [...current, failure]).pipe(
+                Effect.andThen(Deferred.succeed(failureObserved, undefined))
+              ),
+            codexAppServer: () =>
+              Layer.effect(
+                CodexAppServer,
+                Effect.addFinalizer(() => provider.codex.close.pipe(Effect.orDie)).pipe(Effect.as(codex))
+              ),
+            githubClient: () => Layer.succeed(GithubGraphqlClient, github)
           })
-        )
-        const failures = yield* Ref.make<ReadonlyArray<unknown>>([])
-        const graph = productionRepositoryHostGraph({
-          githubRequestCircuitMaxRequests: 2_000,
-          onActivationFailure: (failure) => Ref.update(failures, (current) => [...current, failure]),
-          codexAppServer: () =>
-            Layer.effect(
-              CodexAppServer,
-              Effect.addFinalizer(() => provider.codex.close.pipe(Effect.orDie)).pipe(Effect.as(codex))
-            ),
-          githubClient: () => Layer.succeed(GithubGraphqlClient, github)
-        })
-        const observationReady = yield* Deferred.make<ProductionHostObservation>()
-        const releaseHost = yield* Deferred.make<void>()
-        const hostFiber = yield* withDecodedProductionRepositoryHost(configuration, graph, (observation) =>
-          Deferred.succeed(observationReady, observation).pipe(Effect.andThen(Deferred.await(releaseHost)))
-        ).pipe(Effect.forkScoped)
-        const observation = yield* Deferred.await(observationReady).pipe(
-          Effect.raceFirst(Fiber.join(hostFiber).pipe(Effect.andThen(Effect.die("host closed before observation")))),
-          Effect.timeout("20 seconds")
-        )
-        yield* Deferred.await(turnEntered).pipe(Effect.timeout("20 seconds"))
-        const executingHistory = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const history = yield* attachCurrentSignal(observation.acceptedHistory)
-            const current = yield* observation.traceReader.readAt(history.current)
-            const executing = (view: typeof current) =>
-              view.items.some(
-                ({ occurrence }) =>
-                  occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
-                  occurrence.report._tag === "ExecutorWorkExecuting"
+          const graph = {
+            ...productionGraph,
+            run: (...input: Parameters<typeof productionGraph.run>) =>
+              productionGraph.run(...input).pipe(
+                Layer.provide(
+                  invalidHistory
+                    ? Layer.succeed(
+                        JournalTerminationQualification,
+                        JournalTerminationQualification.of({
+                          decorate: (journal, terminate) => (disposition, originalEvidence) =>
+                            Effect.gen(function* () {
+                              yield* Ref.update(terminationRequests, (count) => count + 1)
+                              const before = yield* Ref.get(preDeliveryGraph)
+                              if (Option.isNone(before)) return yield* Effect.die("missing S10 pre-delivery graph")
+                              const evidence = yield* appendIncomparableChangingGraph(
+                                journal,
+                                originalEvidence.runId,
+                                originalEvidence.target,
+                                before.value
+                              ).pipe(Effect.orDie)
+                              yield* Ref.set(
+                                invalidPrefix,
+                                Option.some(yield* journal.read(originalEvidence.runId).pipe(Effect.orDie))
+                              )
+                              return yield* terminate(disposition, evidence)
+                            })
+                        })
+                      )
+                    : Layer.empty
+                )
               )
-            if (executing(current)) return current
-            return Option.getOrThrow(
-              yield* history.changes.pipe(
-                Stream.mapEffect((cursor) => observation.traceReader.readAt(cursor)),
-                Stream.filter(executing),
-                Stream.runHead
+          }
+          const address = yield* availableLocalHostAddress
+          const releaseHost = yield* Deferred.make<void>()
+          const hostFiber = yield* withDecodedProductionRepositoryHost(
+            configuration,
+            graph,
+            (observation) =>
+              Effect.scoped(
+                serveRunningHost(address, observation).pipe(
+                  Effect.andThen(Deferred.succeed(observationReady, observation)),
+                  Effect.andThen(Deferred.await(releaseHost)),
+                  Effect.ensuring(Deferred.succeed(releaseExpanded, undefined).pipe(Effect.asVoid))
+                )
+              ),
+            "Run",
+            "Listening"
+          ).pipe(Effect.forkScoped)
+          const observation = yield* Deferred.await(observationReady).pipe(
+            Effect.raceFirst(Fiber.join(hostFiber).pipe(Effect.andThen(Effect.die("host closed before observation")))),
+            Effect.timeout("20 seconds")
+          )
+          yield* Deferred.await(turnEntered).pipe(Effect.timeout("20 seconds"))
+          const executingHistory = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const history = yield* attachCurrentSignal(observation.acceptedHistory)
+              const current = yield* observation.traceReader.readAt(history.current)
+              const executing = (view: typeof current) =>
+                view.items.some(
+                  ({ occurrence }) =>
+                    occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+                    occurrence.report._tag === "ExecutorWorkExecuting"
+                )
+              if (executing(current)) return current
+              return Option.getOrThrow(
+                yield* history.changes.pipe(
+                  Stream.mapEffect((cursor) => observation.traceReader.readAt(cursor)),
+                  Stream.filter(executing),
+                  Stream.runHead
+                )
               )
+            })
+          ).pipe(Effect.timeout("20 seconds"))
+          const initial = yield* awaitReady(
+            observation,
+            (state) => state.evaluation.current.trackerGraph._tag === "GraphEstablished"
+          )
+          expect(snapshotOf(initial).taskIds()).toEqual([rootTaskId])
+          const initialPlan = executingHistory.items.find(
+            ({ occurrence }) => occurrence._tag === "TaskAttemptPlanned"
+          )?.occurrence
+          if (initialPlan?._tag !== "TaskAttemptPlanned") return expect.fail("A requires an accepted immutable plan")
+          const plannedAttempt = initialPlan.operation.plannedAttempt
+          expect(plannedAttempt.baseSha).toBe(configuration.plannedAttemptBaseSha)
+          expect(plannedAttempt.taskId).toBe(rootTaskId)
+          const exactWorktree = yield* git.runInWorktree(plannedAttempt.worktree, ["rev-parse", "HEAD"])
+          expect(exactWorktree.exitCode).toBe(0)
+          expect(
+            (yield* git.runInWorktree(plannedAttempt.worktree, [
+              "merge-base",
+              "--is-ancestor",
+              plannedAttempt.baseSha,
+              "HEAD"
+            ])).exitCode
+          ).toBe(0)
+
+          yield* Ref.set(graphPhase, "Expanded")
+          const expanded = yield* awaitReady(observation, (state) => {
+            const graph = state.evaluation.current.trackerGraph
+            return graph._tag === "GraphEstablished" && graph.observation.snapshot.taskIds().length === 4
+          })
+          const tasks = snapshotOf(expanded).toWire().tasks
+          expect(tasks.find(({ id }) => id === childTaskId)).toMatchObject({
+            parentTaskId: rootTaskId,
+            prerequisiteIds: [blockerTaskId]
+          })
+          expect(tasks.find(({ id }) => id === blockerTaskId)).toMatchObject({
+            parentTaskId: null,
+            lifecycle: { _tag: "TerminalWithoutSuccess" }
+          })
+          expect(tasks.find(({ id }) => id === independentTaskId)).toMatchObject({
+            parentTaskId: rootTaskId,
+            prerequisiteIds: [],
+            lifecycle: { _tag: "Open" }
+          })
+          const placements = expanded.evaluation.current.ticketDeliveries.source.placements
+          expect(placements.find(({ taskId }) => taskId === independentTaskId)?.placement).toEqual({
+            _tag: "Selected",
+            rank: 0
+          })
+          expect(placements.find(({ taskId }) => taskId === rootTaskId)?.placement).toEqual({
+            _tag: "EligibleOutsideBound",
+            rank: 1
+          })
+          yield* Deferred.await(expandedFrozen).pipe(Effect.timeout("20 seconds"))
+          const publicPrefix = yield* observation.acceptedHistory.get
+          const publicExpanded = yield* publicDeliveryClient("CLI", address, observation.selection.runId)
+          expect(publicExpanded).toEqual(yield* publicDeliveryClient("MCP", address, observation.selection.runId))
+          expect(publicExpanded).toMatchObject({
+            _tag: "Success",
+            value: {
+              _tag: "Ready",
+              graph: { _tag: "GraphEstablished", snapshot: { tasks: expect.arrayContaining([...tasks]) } }
+            }
+          })
+          expect(yield* observation.acceptedHistory.get).toEqual(publicPrefix)
+          const retainedHistory = yield* observation.traceReader.readAt(yield* observation.acceptedHistory.get)
+          expect(
+            retainedHistory.items
+              .filter(({ occurrence }) => occurrence._tag === "TaskAttemptPlanned")
+              .map(({ occurrence }) => occurrence)
+          ).toEqual([initialPlan])
+          expect(
+            retainedHistory.items.filter(
+              ({ occurrence }) => occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+            )
+          ).toHaveLength(1)
+          expect((yield* provider.snapshot()).operationCounts.find(({ tag }) => tag === "CodexStartTurn")?.count).toBe(
+            1
+          )
+          expect(yield* Ref.get(forbiddenChildWorkReads)).toEqual([])
+          expect((yield* git.runInWorktree(plannedAttempt.worktree, ["rev-parse", "HEAD"])).stdout).toBe(
+            exactWorktree.stdout
+          )
+
+          yield* Deferred.succeed(releaseExpanded, undefined)
+          yield* Ref.set(graphPhase, "Settled")
+          const settledBeforeDelivery = yield* awaitReady(observation, (state) => {
+            const graph = state.evaluation.current.trackerGraph
+            return (
+              graph._tag === "GraphEstablished" &&
+              graph.observation.snapshot
+                .toWire()
+                .tasks.some(
+                  ({ id, lifecycle }) => id === independentTaskId && lifecycle._tag === "TerminalWithoutSuccess"
+                )
             )
           })
-        ).pipe(Effect.timeout("20 seconds"))
-        const initial = yield* awaitReady(
-          observation,
-          (state) => state.evaluation.current.trackerGraph._tag === "GraphEstablished"
-        )
-        expect(snapshotOf(initial).taskIds()).toEqual([rootTaskId])
-        const initialPlan = executingHistory.items.find(
-          ({ occurrence }) => occurrence._tag === "TaskAttemptPlanned"
-        )?.occurrence
-        if (initialPlan?._tag !== "TaskAttemptPlanned") return expect.fail("A requires an accepted immutable plan")
-        const plannedAttempt = initialPlan.operation.plannedAttempt
-        expect(plannedAttempt.baseSha).toBe(configuration.plannedAttemptBaseSha)
-        expect(plannedAttempt.taskId).toBe(rootTaskId)
-        const exactWorktree = yield* git.runInWorktree(plannedAttempt.worktree, ["rev-parse", "HEAD"])
-        expect(exactWorktree.exitCode).toBe(0)
-        expect(
-          (yield* git.runInWorktree(plannedAttempt.worktree, [
-            "merge-base",
-            "--is-ancestor",
-            plannedAttempt.baseSha,
-            "HEAD"
-          ])).exitCode
-        ).toBe(0)
-
-        yield* Ref.set(graphPhase, "Expanded")
-        const expanded = yield* awaitReady(observation, (state) => {
-          const graph = state.evaluation.current.trackerGraph
-          return graph._tag === "GraphEstablished" && graph.observation.snapshot.taskIds().length === 4
-        })
-        const tasks = snapshotOf(expanded).toWire().tasks
-        expect(tasks.find(({ id }) => id === childTaskId)).toMatchObject({
-          parentTaskId: rootTaskId,
-          prerequisiteIds: [blockerTaskId]
-        })
-        expect(tasks.find(({ id }) => id === blockerTaskId)).toMatchObject({
-          parentTaskId: null,
-          lifecycle: { _tag: "TerminalWithoutSuccess" }
-        })
-        expect(tasks.find(({ id }) => id === independentTaskId)).toMatchObject({
-          parentTaskId: rootTaskId,
-          prerequisiteIds: [],
-          lifecycle: { _tag: "Open" }
-        })
-        const placements = expanded.evaluation.current.ticketDeliveries.source.placements
-        expect(placements.find(({ taskId }) => taskId === independentTaskId)?.placement).toEqual({
-          _tag: "Selected",
-          rank: 0
-        })
-        expect(placements.find(({ taskId }) => taskId === rootTaskId)?.placement).toEqual({
-          _tag: "EligibleOutsideBound",
-          rank: 1
-        })
-        const retainedHistory = yield* observation.traceReader.readAt(yield* observation.acceptedHistory.get)
-        expect(
-          retainedHistory.items
-            .filter(({ occurrence }) => occurrence._tag === "TaskAttemptPlanned")
-            .map(({ occurrence }) => occurrence)
-        ).toEqual([initialPlan])
-        expect(
-          retainedHistory.items.filter(
-            ({ occurrence }) => occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-          )
-        ).toHaveLength(1)
-        expect((yield* provider.snapshot()).operationCounts.find(({ tag }) => tag === "CodexStartTurn")?.count).toBe(1)
-        expect(yield* Ref.get(forbiddenChildWorkReads)).toEqual([])
-        expect((yield* git.runInWorktree(plannedAttempt.worktree, ["rev-parse", "HEAD"])).stdout).toBe(
-          exactWorktree.stdout
-        )
-
-        yield* Ref.set(graphPhase, "Settled")
-        yield* awaitReady(observation, (state) => {
-          const graph = state.evaluation.current.trackerGraph
-          return (
-            graph._tag === "GraphEstablished" &&
-            graph.observation.snapshot
-              .toWire()
-              .tasks.some(
-                ({ id, lifecycle }) => id === independentTaskId && lifecycle._tag === "TerminalWithoutSuccess"
-              )
-          )
-        })
-        yield* Ref.set(turnTerminalVisible, true)
-        yield* Deferred.succeed(turnCompletedHint, undefined)
-        yield* Deferred.await(completionEntered).pipe(Effect.timeout("20 seconds"))
-        yield* Deferred.succeed(releaseCompletion, undefined)
-        const termination = yield* observation.runTermination.await.pipe(Effect.timeout("20 seconds"))
-        expect(termination.disposition).toBe("Blocked")
-        expect(yield* Ref.get(failures)).toEqual([])
-        yield* Deferred.succeed(releaseHost, undefined)
-        yield* Fiber.join(hostFiber).pipe(Effect.timeout("20 seconds"))
-
-        const records = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const context = yield* Layer.build(sqliteJournalStoreLayer({ filename: configuration.journalDatabase }))
-            return yield* Context.get(context, JournalStore).read(observation.selection.runId)
-          })
-        )
-        const terminalRecords = records.filter(({ event }) => event._tag === "WorkflowRunTerminated")
-        expect(terminalRecords).toHaveLength(1)
-        expect(terminalRecords[0]).toMatchObject({
-          runId: observation.selection.runId,
-          position: termination.terminatedAt.position,
-          event: { disposition: "Blocked" }
-        })
-        expect(records.at(-1)).toEqual(terminalRecords[0])
-        const terminal = terminalRecords[0]
-        if (terminal?.event._tag !== "WorkflowRunTerminated") return expect.fail("expected actual terminal record")
-        const terminalEvidence = terminal.event.evidence
-        const finalObservation = records.find(({ position }) => position === terminalEvidence.observedAt)
-        expect(finalObservation).toMatchObject({
-          event: { _tag: "TaskTrackerFactsObserved", operationId: terminal.event.evidence.operationId }
-        })
-        expect(terminal.position).toBe(terminal.event.evidence.observedAt + 1)
-        expect(terminal.event.evidence).toMatchObject({
-          graphOutcome: "Blocked",
-          blockedTaskIds: expect.arrayContaining([childTaskId, blockerTaskId, independentTaskId]),
-          terminalTaskIds: expect.arrayContaining([blockerTaskId, independentTaskId])
-        })
-        expect(terminal.event.evidence.blockedTaskIds).toHaveLength(3)
-        expect(terminal.event.evidence.terminalTaskIds).toHaveLength(2)
-        const graphIntents = records.flatMap(({ event, position }) =>
-          event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
-            ? [{ operation: event.operation, position }]
-            : []
-        )
-        const completedGraph = records.find(
-          ({ event }) =>
-            event._tag === "TaskTrackerFactsObserved" &&
-            event.observation._tag === "CompleteTaskTrackerFacts" &&
-            event.observation.factFamilies[1].lifecycles.some(
-              ({ lifecycle, taskId }) => taskId === rootTaskId && lifecycle._tag === "CompletedSuccessfully"
+          yield* Ref.set(preDeliveryGraph, Option.some(snapshotOf(settledBeforeDelivery)))
+          yield* Ref.set(turnTerminalVisible, true)
+          yield* Deferred.succeed(turnCompletedHint, undefined)
+          yield* Deferred.await(completionEntered).pipe(Effect.timeout("20 seconds"))
+          yield* Deferred.succeed(releaseCompletion, undefined)
+          if (invalidHistory) {
+            yield* Deferred.await(failureObserved).pipe(Effect.timeout("20 seconds"))
+            const expectedFailure = {
+              _tag: "WorkflowRunTerminationEvidenceInvalid",
+              runId: observation.selection.runId,
+              detail: "termination requires tracker graph observations to be causally comparable"
+            }
+            expect(yield* Ref.get(failures)).toContainEqual(expect.objectContaining(expectedFailure))
+            if (observation.awaitActivationFailure === undefined)
+              return expect.fail("Listening host must expose its retained failure source")
+            yield* observation.awaitActivationFailure.pipe(Effect.flip, Effect.timeout("20 seconds"))
+            const cli = yield* publicDeliveryClient("CLI", address, observation.selection.runId, "control")
+            expect(cli).toEqual(yield* publicDeliveryClient("MCP", address, observation.selection.runId, "control"))
+            expect(cli).toMatchObject({
+              _tag: "Success",
+              value: {
+                terminationEvidence: {
+                  _tag: "FinalityFailed",
+                  failure: { ...expectedFailure, detail: "Run termination evidence is causally invalid." }
+                }
+              }
+            })
+            expect(yield* observation.runTermination.poll).toEqual(Option.none())
+            expect(yield* publicDeliveryClient("CLI", address, observation.selection.runId)).toMatchObject({
+              _tag: "Success",
+              value: { _tag: "Ready" }
+            })
+            expect(yield* Ref.get(terminationRequests)).toBe(1)
+            expect((yield* Ref.get(timerStates)).at(-1)).toBe("Stopped")
+            yield* Deferred.succeed(releaseHost, undefined)
+            yield* Fiber.join(hostFiber).pipe(Effect.timeout("20 seconds"))
+            const retained = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const context = yield* Layer.build(sqliteJournalStoreLayer({ filename: configuration.journalDatabase }))
+                return yield* Context.get(context, JournalStore).read(observation.selection.runId)
+              })
             )
-        )
-        if (completedGraph?.event._tag !== "TaskTrackerFactsObserved") return expect.fail("requires A's changed graph")
-        const completedGraphOperationId = completedGraph.event.operationId
-        const replacement = graphIntents.find(({ operation }) => operation.operationId === completedGraphOperationId)
-        const priorG2 = graphIntents.findLast(
-          ({ operation, position }) =>
-            operation.cause._tag === "PostQuiescenceReconfirmation" && position < (replacement?.position ?? 0)
-        )
-        expect(replacement?.operation.cause._tag).toBe("WorkflowEstablishment")
-        expect(priorG2).toBeDefined()
-        expect(replacement?.operation.predecessorOperationIds).toContain(priorG2?.operation.operationId)
-        const worktreeSettlements = records.flatMap(({ event }) =>
-          event._tag === "WorktreeCleanupSettled" ? [event] : []
-        )
-        expect(worktreeSettlements).toHaveLength(1)
-        expect(worktreeSettlements[0]?.authorization).toMatchObject({
-          locator: plannedAttempt.worktree,
-          owner: { attemptId: plannedAttempt.attemptId, branch: plannedAttempt.branch },
-          disposition: { _tag: "Settled", plannedAttempt }
-        })
-        expect(yield* fileSystem.exists(plannedAttempt.worktree)).toBe(false)
-        const branchSettlements = records.flatMap(({ event }) => (event._tag === "BranchCleanupSettled" ? [event] : []))
-        expect(branchSettlements).toHaveLength(1)
-        expect(branchSettlements[0]?.authorization).toMatchObject({
-          locator: plannedAttempt.branch,
-          owner: { attemptId: plannedAttempt.attemptId },
-          disposition: { _tag: "Settled", plannedAttempt }
-        })
-        expect(
-          (yield* git.runInWorktree(configuration.repository, [
-            "show-ref",
-            "--verify",
-            "--quiet",
-            plannedAttempt.branch
-          ])).exitCode
-        ).toBe(1)
-        const candidates = records.flatMap(({ event }) =>
-          event._tag === "IntegratorCandidateCleanupSettled" ? [event] : []
-        )
-        expect(candidates).toHaveLength(1)
-        const candidate = candidates[0]
-        if (candidate === undefined) return expect.fail("requires exact Integrator candidate settlement")
-        expect(candidate.authorization.disposition._tag).toBe("Settled")
-        const gitWorktrees = yield* git.runInWorktree(configuration.repository, ["worktree", "list", "--porcelain"])
-        expect(gitWorktrees.exitCode).toBe(0)
-        expect(gitWorktrees.stdout).not.toContain(configuration.integratorCandidateWorktreeRoot)
-        expect(gitWorktrees.stdout).not.toContain(plannedAttempt.worktree)
-        const cassette = yield* projectRecordedCassette(records)
-        expect(cassette.entries.at(-1)).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Blocked" })
-        expect(
-          verifyRecordedCassetteRoundTrip(records, cassette).every(
-            (checkpoint) =>
-              checkpoint.operationalStateEquivalent &&
-              checkpoint.workflowHistoryEquivalent &&
-              checkpoint.pureSelectionEquivalent &&
-              checkpoint.appliedOccurrencePositionEquivalent
+            expect(retained).toEqual(Option.getOrThrow(yield* Ref.get(invalidPrefix)))
+            expect(retained.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(0)
+            expect(retained.at(-1)).toMatchObject({ event: { _tag: "TaskTrackerFactsObserved", operationId: "g11" } })
+            return
+          }
+          const termination = yield* observation.runTermination.await.pipe(Effect.timeout("20 seconds"))
+          expect(termination.disposition).toBe("Blocked")
+          const publicTerminal = {
+            _tag: "Success",
+            value: { _tag: "RunTerminated", terminationEvidence: { _tag: "Accepted", ...termination } }
+          }
+          expect(yield* publicDeliveryClient("CLI", address, observation.selection.runId, "control")).toEqual(
+            publicTerminal
           )
-        ).toBe(true)
+          expect(yield* publicDeliveryClient("MCP", address, observation.selection.runId, "control")).toEqual(
+            publicTerminal
+          )
+          expect(yield* Ref.get(failures)).toEqual([])
+          yield* Deferred.succeed(releaseHost, undefined)
+          yield* Fiber.join(hostFiber).pipe(Effect.timeout("20 seconds"))
 
-        expect(records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
-        expect(
-          records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
-        ).toHaveLength(1)
-        expect(records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
-        expect(records.filter(({ event }) => event._tag === "IntegrationFinalitySettled")).toHaveLength(1)
-        expect(
-          records.some(
+          const records = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const context = yield* Layer.build(sqliteJournalStoreLayer({ filename: configuration.journalDatabase }))
+              return yield* Context.get(context, JournalStore).read(observation.selection.runId)
+            })
+          )
+          const terminalRecords = records.filter(({ event }) => event._tag === "WorkflowRunTerminated")
+          expect(terminalRecords).toHaveLength(1)
+          expect(terminalRecords[0]).toMatchObject({
+            runId: observation.selection.runId,
+            position: termination.terminatedAt.position,
+            event: { disposition: "Blocked" }
+          })
+          expect(records.at(-1)).toEqual(terminalRecords[0])
+          const terminal = terminalRecords[0]
+          if (terminal?.event._tag !== "WorkflowRunTerminated") return expect.fail("expected actual terminal record")
+          const terminalEvidence = terminal.event.evidence
+          const finalObservation = records.find(({ position }) => position === terminalEvidence.observedAt)
+          expect(finalObservation).toMatchObject({
+            event: { _tag: "TaskTrackerFactsObserved", operationId: terminal.event.evidence.operationId }
+          })
+          expect(terminal.position).toBe(terminal.event.evidence.observedAt + 1)
+          expect(terminal.event.evidence).toMatchObject({
+            graphOutcome: "Blocked",
+            blockedTaskIds: expect.arrayContaining([childTaskId, blockerTaskId, independentTaskId]),
+            terminalTaskIds: expect.arrayContaining([blockerTaskId, independentTaskId])
+          })
+          expect(terminal.event.evidence.blockedTaskIds).toHaveLength(3)
+          expect(terminal.event.evidence.terminalTaskIds).toHaveLength(2)
+          const graphIntents = records.flatMap(({ event, position }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+              ? [{ operation: event.operation, position }]
+              : []
+          )
+          const completedGraph = records.find(
             ({ event }) =>
               event._tag === "TaskTrackerFactsObserved" &&
-              event.observation._tag === "FocusedTaskCompletionFacts" &&
-              event.observation.purpose._tag === "Confirmation" &&
-              event.observation.facts.lifecycle === "CompletedSuccessfully"
+              event.observation._tag === "CompleteTaskTrackerFacts" &&
+              event.observation.factFamilies[1].lifecycles.some(
+                ({ lifecycle, taskId }) => taskId === rootTaskId && lifecycle._tag === "CompletedSuccessfully"
+              )
           )
-        ).toBe(true)
-        expect((yield* provider.snapshot()).operationCounts.find(({ tag }) => tag === "CodexStartTurn")?.count).toBe(2)
-        expect(yield* Ref.get(forbiddenChildWorkReads)).toEqual([])
-      })
-    ).pipe(Effect.provide(fixtureLayer)),
-  60_000
-)
+          if (completedGraph?.event._tag !== "TaskTrackerFactsObserved")
+            return expect.fail("requires A's changed graph")
+          const completedGraphOperationId = completedGraph.event.operationId
+          const replacement = graphIntents.find(({ operation }) => operation.operationId === completedGraphOperationId)
+          const priorG2 = graphIntents.findLast(
+            ({ operation, position }) =>
+              operation.cause._tag === "PostQuiescenceReconfirmation" && position < (replacement?.position ?? 0)
+          )
+          expect(replacement?.operation.cause._tag).toBe("WorkflowEstablishment")
+          expect(priorG2).toBeDefined()
+          expect(replacement?.operation.predecessorOperationIds).toContain(priorG2?.operation.operationId)
+          const worktreeSettlements = records.flatMap(({ event }) =>
+            event._tag === "WorktreeCleanupSettled" ? [event] : []
+          )
+          expect(worktreeSettlements).toHaveLength(1)
+          expect(worktreeSettlements[0]?.authorization).toMatchObject({
+            locator: plannedAttempt.worktree,
+            owner: { attemptId: plannedAttempt.attemptId, branch: plannedAttempt.branch },
+            disposition: { _tag: "Settled", plannedAttempt }
+          })
+          expect(yield* fileSystem.exists(plannedAttempt.worktree)).toBe(false)
+          const branchSettlements = records.flatMap(({ event }) =>
+            event._tag === "BranchCleanupSettled" ? [event] : []
+          )
+          expect(branchSettlements).toHaveLength(1)
+          expect(branchSettlements[0]?.authorization).toMatchObject({
+            locator: plannedAttempt.branch,
+            owner: { attemptId: plannedAttempt.attemptId },
+            disposition: { _tag: "Settled", plannedAttempt }
+          })
+          expect(
+            (yield* git.runInWorktree(configuration.repository, [
+              "show-ref",
+              "--verify",
+              "--quiet",
+              plannedAttempt.branch
+            ])).exitCode
+          ).toBe(1)
+          const candidates = records.flatMap(({ event }) =>
+            event._tag === "IntegratorCandidateCleanupSettled" ? [event] : []
+          )
+          expect(candidates).toHaveLength(1)
+          const candidate = candidates[0]
+          if (candidate === undefined) return expect.fail("requires exact Integrator candidate settlement")
+          expect(candidate.authorization.disposition._tag).toBe("Settled")
+          const gitWorktrees = yield* git.runInWorktree(configuration.repository, ["worktree", "list", "--porcelain"])
+          expect(gitWorktrees.exitCode).toBe(0)
+          expect(gitWorktrees.stdout).not.toContain(configuration.integratorCandidateWorktreeRoot)
+          expect(gitWorktrees.stdout).not.toContain(plannedAttempt.worktree)
+          const cassette = yield* projectRecordedCassette(records)
+          expect(cassette.entries.at(-1)).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Blocked" })
+          expect(
+            verifyRecordedCassetteRoundTrip(records, cassette).every(
+              (checkpoint) =>
+                checkpoint.operationalStateEquivalent &&
+                checkpoint.workflowHistoryEquivalent &&
+                checkpoint.pureSelectionEquivalent &&
+                checkpoint.appliedOccurrencePositionEquivalent
+            )
+          ).toBe(true)
+
+          expect(records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+          expect(
+            records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
+          ).toHaveLength(1)
+          expect(records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+          expect(records.filter(({ event }) => event._tag === "IntegrationFinalitySettled")).toHaveLength(1)
+          expect(
+            records.some(
+              ({ event }) =>
+                event._tag === "TaskTrackerFactsObserved" &&
+                event.observation._tag === "FocusedTaskCompletionFacts" &&
+                event.observation.purpose._tag === "Confirmation" &&
+                event.observation.facts.lifecycle === "CompletedSuccessfully"
+            )
+          ).toBe(true)
+          expect((yield* provider.snapshot()).operationCounts.find(({ tag }) => tag === "CodexStartTurn")?.count).toBe(
+            2
+          )
+          expect(yield* Ref.get(forbiddenChildWorkReads)).toEqual([])
+        })
+      ).pipe(Effect.provide(fixtureLayer)),
+    60_000
+  )
+}

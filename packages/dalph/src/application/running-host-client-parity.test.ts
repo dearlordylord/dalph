@@ -1,12 +1,15 @@
+import { runningHostRecoveryInput } from "../../test-support/running-host-recovery-input.js"
+import { NodeServices } from "@effect/platform-node"
 /* eslint-disable import/no-nodejs-modules -- The qualification peer exercises both actual public client processes. */
 import { execFile, spawn } from "node:child_process"
 import { createServer } from "node:http"
 import process from "node:process"
 import { setTimeout, clearTimeout } from "node:timers"
 import { fileURLToPath } from "node:url"
-import { RunId } from "@dalph/contracts"
+import { RunId, AttemptId, ExecutorGuidanceRequestId } from "@dalph/contracts"
 import {
   FixtureTarget,
+  ApplyResultRecoveryRequest,
   ControlDirectionApplicationOrdinal,
   JournalPosition,
   TraceCursor,
@@ -14,7 +17,7 @@ import {
   TaskWorkCapacity
 } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Effect, FileSystem, Schema } from "effect"
 import { expect } from "vitest"
 import {
   HostInstanceId,
@@ -36,6 +39,7 @@ class ParityFixtureError extends Schema.TaggedError<ParityFixtureError>()("Parit
 }) {}
 const builtEntry = fileURLToPath(new URL("../../dist/bin/dalph.js", import.meta.url))
 const runId = RunId.make("parity-run")
+const guidanceRequestId = ExecutorGuidanceRequestId.make("00000000-0000-4000-8000-000000000375")
 const instance = HostInstanceId.make("parity-host")
 const descriptor = RunningHostDescriptor.make({
   protocolVersion: 1,
@@ -110,13 +114,16 @@ const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError>
     disposition: "Completed",
     terminatedAt: TraceCursor.make({ runId, position: JournalPosition.make(4) })
   },
-  ...(["StartWork", "Unpause", "Refresh", "SetCapacity"] as const).flatMap(
+  ...(
+    ["StartWork", "Unpause", "Refresh", "SetCapacity", "SendExecutorGuidance", "ApplyResultRecoveryDirection"] as const
+  ).flatMap(
     (operation): ReadonlyArray<RunningHostError> => [
       { _tag: "CommandFailed", operation, stage: "PreAdmission", causeTag: "NoControl", detail: "unavailable" },
       { _tag: "CommandFailed", operation, stage: "BeforeApplication", causeTag: "Rejected", detail: "not applied" },
       {
         _tag: "CommandOutcomeUnknown",
         operation,
+        ...(operation === "SendExecutorGuidance" ? { guidanceRequestId } : {}),
         requestId: RequestId.make("replaced-per-request"),
         phase: "AdmissionUnconfirmed",
         acceptedAt: null
@@ -124,6 +131,7 @@ const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError>
       {
         _tag: "CommandOutcomeUnknown",
         operation,
+        ...(operation === "SendExecutorGuidance" ? { guidanceRequestId } : {}),
         requestId: RequestId.make("replaced-per-request"),
         phase: "AdmittedCompletionUnconfirmed",
         acceptedAt: TraceCursor.make({ runId, position: JournalPosition.make(3) })
@@ -139,7 +147,17 @@ const failuresFor = (address: LocalHostAddress): ReadonlyArray<RunningHostError>
   }
 ]
 
-type AttachedParityOperation = "snapshot" | "control" | "start" | "unpause" | "refresh" | "capacity" | "set-capacity"
+type AttachedParityOperation =
+  | "snapshot"
+  | "control"
+  | "start"
+  | "unpause"
+  | "refresh"
+  | "capacity"
+  | "set-capacity"
+  | "guide"
+  | "recovery-apply"
+  | "recovery-read"
 const operationsFor = (error: RunningHostError): ReadonlyArray<AttachedParityOperation> =>
   error._tag === "CommandFailed" || error._tag === "CommandOutcomeUnknown"
     ? [
@@ -149,7 +167,11 @@ const operationsFor = (error: RunningHostError): ReadonlyArray<AttachedParityOpe
             ? ("start" as const)
             : error.operation === "Refresh"
               ? ("refresh" as const)
-              : ("unpause" as const)
+              : error.operation === "SendExecutorGuidance"
+                ? "guide"
+                : error.operation === "ApplyResultRecoveryDirection"
+                  ? "recovery-apply"
+                  : ("unpause" as const)
       ]
     : error._tag === "PolicyRevisionConflict"
       ? ["set-capacity"]
@@ -158,10 +180,21 @@ const operationsFor = (error: RunningHostError): ReadonlyArray<AttachedParityOpe
         : error._tag === "UnpausePartiallyApplied"
           ? ["unpause" as const]
           : error._tag === "RunClosed"
-            ? (["start", "unpause", "refresh", "capacity", "set-capacity"] as const)
+            ? (["start", "unpause", "refresh", "capacity", "set-capacity", "guide", "recovery-apply"] as const)
             : error._tag === "ReadFailed" || error._tag === "ProjectionFailed"
-              ? (["snapshot", "control", "capacity"] as const)
-              : (["snapshot", "control", "start", "unpause", "refresh", "capacity", "set-capacity"] as const)
+              ? (["snapshot", "control", "capacity", "recovery-read"] as const)
+              : ([
+                  "snapshot",
+                  "control",
+                  "start",
+                  "unpause",
+                  "refresh",
+                  "capacity",
+                  "set-capacity",
+                  "guide",
+                  "recovery-apply",
+                  "recovery-read"
+                ] as const)
 
 for (const selectedOperation of [
   "snapshot",
@@ -170,7 +203,10 @@ for (const selectedOperation of [
   "unpause",
   "refresh",
   "capacity",
-  "set-capacity"
+  "set-capacity",
+  "guide",
+  "recovery-apply",
+  "recovery-read"
 ] as const) {
   for (const [errorIndex, error] of failuresFor(LocalHostAddress.make("http://127.0.0.1:43127")).entries()) {
     if (!operationsFor(error).includes(selectedOperation)) continue
@@ -225,6 +261,13 @@ for (const selectedOperation of [
                 }),
               catch: (error) => new ParityFixtureError({ detail: String(error) })
             })
+            const fs = yield* FileSystem.FileSystem
+            const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-parity-recovery-" })
+            const recovery = yield* Schema.decodeUnknownEffect(ApplyResultRecoveryRequest)(
+              runningHostRecoveryInput(runId)
+            )
+            yield* fs.writeFileString(`${directory}/apply.json`, JSON.stringify(recovery))
+            yield* fs.writeFileString(`${directory}/read.json`, JSON.stringify(recovery.requestId))
             const errors = failuresFor(address)
 
             for (const error of errors.slice(errorIndex, errorIndex + 1)) {
@@ -240,26 +283,37 @@ for (const selectedOperation of [
                 const source = yield* callRunningHost(
                   address,
                   runId,
-                  operation === "set-capacity"
+                  operation === "guide"
                     ? {
-                        _tag: "SetCapacity",
-                        capacity: TaskWorkCapacity.make(2),
-                        expectedRevision: RunPolicyRevision.make(1)
+                        _tag: "SendExecutorGuidance",
+                        attemptId: AttemptId.make("attempt-A"),
+                        guidanceRequestId,
+                        textBase64: "cGFyaXR5"
                       }
-                    : operation === "refresh"
-                      ? { _tag: "Refresh", interest: { _tag: "WholeGraph" } }
-                      : {
-                          _tag:
-                            operation === "snapshot"
-                              ? "ReadSnapshot"
-                              : operation === "control"
-                                ? "ReadRunControl"
-                                : operation === "capacity"
-                                  ? "ReadCapacity"
-                                  : operation === "start"
-                                    ? "StartWork"
-                                    : "Unpause"
-                        }
+                    : operation === "recovery-apply"
+                      ? { _tag: "ApplyResultRecoveryDirection", recovery }
+                      : operation === "recovery-read"
+                        ? { _tag: "ReadResultRecoveryDirection", recoveryRequestId: recovery.requestId }
+                        : operation === "set-capacity"
+                          ? {
+                              _tag: "SetCapacity",
+                              capacity: TaskWorkCapacity.make(2),
+                              expectedRevision: RunPolicyRevision.make(1)
+                            }
+                          : operation === "refresh"
+                            ? { _tag: "Refresh", interest: { _tag: "WholeGraph" } }
+                            : {
+                                _tag:
+                                  operation === "snapshot"
+                                    ? "ReadSnapshot"
+                                    : operation === "control"
+                                      ? "ReadRunControl"
+                                      : operation === "capacity"
+                                        ? "ReadCapacity"
+                                        : operation === "start"
+                                          ? "StartWork"
+                                          : "Unpause"
+                              }
                 )
                 if (source.result._tag !== "Failure") return expect.fail("source client must return the shared failure")
                 expect(normalize(source.result.error)).toEqual(normalize(error))
@@ -272,7 +326,13 @@ for (const selectedOperation of [
                   runId,
                   "--json",
                   ...(operation === "refresh" ? ["--whole-graph"] : []),
-                  ...(operation === "set-capacity" ? ["--capacity", "2", "--expected-revision", "1"] : [])
+                  ...(operation === "set-capacity" ? ["--capacity", "2", "--expected-revision", "1"] : []),
+                  ...(operation === "guide"
+                    ? ["--attempt", "attempt-A", "--message", "parity", "--request-id", guidanceRequestId]
+                    : []),
+                  ...(operation === "recovery-apply" || operation === "recovery-read"
+                    ? ["--request-file", `${directory}/${operation === "recovery-apply" ? "apply" : "read"}.json`]
+                    : [])
                 ])
                 const expectedStatus = [
                   "HostUnavailable",
@@ -306,23 +366,34 @@ for (const selectedOperation of [
                     method: "tools/call",
                     params: {
                       name:
-                        operation === "set-capacity"
-                          ? "dalph_set_capacity"
-                          : operation === "capacity"
-                            ? "dalph_read_capacity"
-                            : operation === "snapshot"
-                              ? "dalph_read_snapshot"
-                              : operation === "control"
-                                ? "dalph_read_run_control"
-                                : operation === "refresh"
-                                  ? "dalph_refresh"
-                                  : operation === "start"
-                                    ? "dalph_start_work"
-                                    : "dalph_unpause",
+                        operation === "guide"
+                          ? "dalph_guide_executor"
+                          : operation === "recovery-apply"
+                            ? "dalph_apply_result_recovery"
+                            : operation === "recovery-read"
+                              ? "dalph_read_result_recovery"
+                              : operation === "set-capacity"
+                                ? "dalph_set_capacity"
+                                : operation === "capacity"
+                                  ? "dalph_read_capacity"
+                                  : operation === "snapshot"
+                                    ? "dalph_read_snapshot"
+                                    : operation === "control"
+                                      ? "dalph_read_run_control"
+                                      : operation === "refresh"
+                                        ? "dalph_refresh"
+                                        : operation === "start"
+                                          ? "dalph_start_work"
+                                          : "dalph_unpause",
                       arguments: {
                         runId,
                         ...(operation === "refresh" ? { interest: { _tag: "WholeGraph" } } : {}),
-                        ...(operation === "set-capacity" ? { capacity: 2, expectedRevision: 1 } : {})
+                        ...(operation === "set-capacity" ? { capacity: 2, expectedRevision: 1 } : {}),
+                        ...(operation === "guide"
+                          ? { attemptId: "attempt-A", message: "parity", guidanceRequestId }
+                          : {}),
+                        ...(operation === "recovery-apply" ? { recovery } : {}),
+                        ...(operation === "recovery-read" ? { recoveryRequestId: recovery.requestId } : {})
                       }
                     }
                   }
@@ -342,7 +413,7 @@ for (const selectedOperation of [
               }
             }
           })
-        ),
+        ).pipe(Effect.provide(NodeServices.layer)),
       60000
     )
   }

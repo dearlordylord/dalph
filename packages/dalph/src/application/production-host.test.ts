@@ -77,6 +77,7 @@ import {
   ProductionRunSelectionConflict,
   RunPolicyRevision,
   RunFinalityDecision,
+  WorkflowRunTerminationEvidenceInvalid,
   sqliteJournalStoreLayer,
   StartupRecoveryBlocked,
   TaskWorkCapacityChangedEvent,
@@ -831,7 +832,10 @@ it("production host graph exposes only explicit non-retryable activation failure
     ? Failure
     : never
   expectTypeOf<ActivationFailure>().toEqualTypeOf<
-    TaskTrackerMutationThrottled | ProductionCancellationBlocked | IntegratorCallFailure
+    | TaskTrackerMutationThrottled
+    | ProductionCancellationBlocked
+    | IntegratorCallFailure
+    | WorkflowRunTerminationEvidenceInvalid
   >()
 })
 
@@ -875,6 +879,14 @@ it("uses one canonical fatal classifier for throttles and recoverable failures",
   expect(
     isNonRetryableProductionActivationFailure(
       new ProductionCancellationBlocked({ blocker: "UnsettledResponsibility", runId: RunId.make("blocked-cancel") })
+    )
+  ).toBe(true)
+  expect(
+    isNonRetryableProductionActivationFailure(
+      new WorkflowRunTerminationEvidenceInvalid({
+        runId: RunId.make("incomparable-finality"),
+        detail: "termination requires tracker graph observations to be causally comparable"
+      })
     )
   ).toBe(true)
   expect(isNonRetryableProductionActivationFailure(recoverable)).toBe(false)

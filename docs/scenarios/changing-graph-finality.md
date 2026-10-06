@@ -148,3 +148,42 @@ own work specification and a foreign tracker claim. It remains unfinished;
 Dalph must not begin it. Returning C's work specification for a D read was
 invalid fixture evidence and prevented the real Exit drain from reconstructing
 history. The fixture now returns D's exact facts without changing production.
+
+### #375 public invalid-history composition
+
+The public production host also executes the retained S10 correction chronology.
+For its negative variant only, the controlled journal input before the final
+termination call acquires its publication lock appends g1–g9 and post-quiescence g10 from the complete
+pre-delivery graph, then changed g11 with no predecessors. All appends use the same accepted process journal, preserving its publication
+and immutable acknowledged prefix. The optional `JournalTerminationQualification`
+constructor capability decorates only termination input before the original
+terminator acquires its lock; it leaves append,
+read, reconstruction and storage unchanged and delegates to the original
+terminator. Ordinary production supplies no implementation. The real SQLite
+lifecycle validator receives g11's exact evidence and must return typed
+`WorkflowRunTerminationEvidenceInvalid`. The host retains that actual failure;
+actual CLI/MCP children read identical `FinalityFailed` evidence. Its terminal
+source remains pending and reopening SQLite proves zero terminal records.
+`production-changing-graph-finality.test.ts`, `public clients retain typed
+incomparable S10 failure without terminal records`, owns this negative public
+composition. This controlled invalid-history input bypasses the corrected
+producer, as the original negative scenario requires; it introduces no runtime
+behavior or separate finality decision.
+
+### Public retention of a conclusive finality rejection
+
+Dalph receives `WorkflowRunTerminationEvidenceInvalid` from the real journal
+lifecycle boundary after an established Run proposes termination from
+incomparable tracker observations. The journal has positively rejected the
+terminal append and keeps its acknowledged nonterminal prefix. The production
+owner stops ordinary timer admission and retains the exact typed failure for
+attached clients; it cannot turn that failure into Pending, retry termination
+automatically, append a terminal occurrence, or infer a disposition from task
+success. Actual CLI and MCP control reads expose `FinalityFailed` with the
+original Run identity and the existing public causal-invalid diagnostic while snapshot lifecycle remains independent.
+
+No process crash or ambiguous mutation response occurs at this rejection: the
+validator proves absence of the terminal append. Recovery and later actions
+require explicit reconciliation of the offending evidence. The public negative
+composition and the canonical production failure-classifier test own these
+acceptance assertions; the independent memory/SQLite S10 test remains required.

@@ -938,3 +938,81 @@ rewriting the failed receipt. That routing changes no Dalph runtime behavior.
 The focused failure was reproduced and repaired before the full rerun above.
 This closes local implementation evidence for #374; it does not claim tracker
 closure or the complete #375 delivery suffix.
+
+### #375 complete S6 delivery fixture chronology
+
+Alice targets open C, whose tracker lists open grouped A (parser) and B
+(validation) and explicit blockers A → C and B → C. The production host
+plans A at its exact Git Base and worktree and begins its executor turn.
+Actual CLI and MCP children attach to that same Run while A executes.
+Alice authors grouped open E and blocker E → C directly in the tracker;
+Refresh hints and ordinary timer reads discover that edit. Client exits and
+replacement attachment leave the original coordinator, claims and attempts
+owned by the host. C has no plan or Begin until A, B and E each have real
+accepted results, integration candidates, promotion, tracker confirmation
+and exact cleanup. Only then does C execute and settle Completed, with the
+accepted disposition and position exposed identically by both clients.
+
+`production-complete-delivery.acceptance.test.ts` owns this complete suffix;
+`production-complete-delivery-tracker.ts` controls only tracker responses and
+operator-authored edges. Git, SQLite, workflow interpretation, claim labels,
+executor result commits, integration, promotion and cleanup remain real.
+No crash or ambiguous mutation retry occurs in this S6 chronology; their
+accepted boundaries retain the #374 and command-owner tests above. The
+fixture cannot change Dalph runtime behavior.
+
+### #375 complete scenario and adapter audit
+
+The host owns one Run, coordinator and workflow interpreter; attached CLI/MCP
+clients decode into its shared request algebra. The rows below retain all
+thirteen accepted scenario rows, including the independent S10 negative control.
+They identify assertion owners, not passing credit for an unqualified candidate.
+
+| Accepted row | Concrete maintained owner and decisive proof |
+| --- | --- |
+| S1 | `production-running-host.test.ts`, `Alice and two public clients observe one Run without starting work and reconnect after delivery`, compares actual children, the accepted prefix, tracker/Git counters and one Begin. `running-host-watch-stage.test.ts` retains the current-first publication cut. |
+| S2 | The minimal delivery test and all five `production-complete-delivery.acceptance.test.ts` variants kill actual CLI/MCP watch children while A executes, prove unchanged history/zero Exit requests, then replace them against the same Run and observe accepted completion. |
+| S3 | `running-host-capacity-admission.acceptance.test.ts`, `the agent raises and lowers capacity, admits B through actual claim worktree and Begin, and retains both exact attempts`, owns contraction/non-preemption. The full delivery variants additionally apply capacity through both adapters and retain A/B while C has no attempt. |
+| S4 | `running-host-command.acceptance.test.ts` owns each adapter's real SQLite INSERT/COMMIT/callback cuts, wake-preserves-Pause, accepted Unpause callback and final delivery cassette. The full delivery variants submit wake and explicit Unpause through the same original owner. |
+| S5 | `running-host-capacity.acceptance.test.ts`, `two capacity writers at one revision receive one accepted change and one complete conflict`, owns one winner and exact revision conflicts; `running-host-command.acceptance.test.ts`, each adapter's `receives exact partial Unpause evidence after the real owner callback fails and never replays over Pause`, owns partial/Unknown and later Pause. Its callback drain tests preserve the original Exit budget. |
+| S6 | `production-complete-delivery.acceptance.test.ts`, `public clients follow A, B and E discovered by %s through delivery before C completes`, has CLI/MCP WholeGraph, CLI/MCP advisory [C,E], and timer-only variants. Each proves one Run, ordered A/B/E plans before C, per-task claim/Begin/accepted Git result/confirmation/exact cleanup, real promotion and the same accepted Completed position through replacement clients. `running-host-refresh.acceptance.test.ts` retains coalescing, incomplete evidence, Pause and stopped-owner races. |
+| S7 | `running-host-intermediate-edits.acceptance.test.ts`, `timer reads %s authored D evidence before later edits and both clients preserve its exact meaning`, independently exercises complete, missing-page, missing-blocker, contradictory and unreadable evidence. #373's accepted admission chronology remains unchanged; no readiness transaction or edit barrier is added. |
+| S8 | `running-host-watch-stage.test.ts`, `running-host-watch-http.test.ts`, `running-host-mcp-watch.test.ts`, `running-host-watch-contract.test.ts`, and `running-host-watch-shutdown.test.ts` own initial/latest/Closed, same-position states, each exact byte/count/deadline/expiry edge and exact source/slot release. Actual child stdout cancellation remains `running-host-client-parity.test.ts`. |
+| S9 | `running-host-death.acceptance.test.ts`, each adapter's `host loss reconstructs durable Unpause and exact work without retry`, owns actual SIGKILL, stopped writers, same resources/Run/ordinals/Base/executor association and reconciled continuation. Its qualified #374 evidence is recorded above. Original graceful Exit admission/drain remains the #369 and #372 owners. |
+| S10 negative | `production-changing-graph-finality.test.ts`, `public clients retain typed incomparable S10 failure without terminal records`, appends the controlled g1–g11 input through the same accepted process journal before original termination validation, retains the real rejection, stops the timer and exposes identical native CLI/MCP FinalityFailed with zero terminal records. The memory/SQLite `store.test.ts` g10/g11 control remains independent. |
+| S10 corrected | The same file's `settles Alice's changing graph as Blocked while retaining A at capacity one` preserves the #367 producer correction, exact retained attempt and real promotion/confirmation. Replacement CLI/MCP children observe one stable expanded graph, then the actual accepted Blocked disposition and position. |
+| S11 | `running-host-client-parity.test.ts` compares actual children for every applicable typed failure over equivalent peer states. Contract, CLI, MCP, HTTP and refresh/capacity validation tests separately prove malformed bytes/brands, wrong Run, unsupported version, stale instance and unavailable host before effects. |
+| S12 | `production-running-host.test.ts` owns actual terminal lifecycle and continued listener availability. `running-host-capacity-clients.test.ts`, projection/HTTP tests and native parity retain explicit inactive capacity, exact terminal refusal, pending/failed/accepted evidence and independent snapshot closure. |
+
+The native parity matrix also audits the subsequently supported guidance and
+result-recovery tools, without changing their existing semantic owners.
+
+| Supported public operation | CLI / MCP encoding and assertion owner |
+| --- | --- |
+| Descriptor and selected-Run handshake | `attach descriptor` / MCP initialize; production, CLI, MCP and client-parity tests validate the same descriptor and refusal before dispatch. MCP JSON-RPC failures remain separate from application envelopes. |
+| Snapshot and Run control | `attach snapshot`, `attach control` / `dalph_read_snapshot`, `dalph_read_run_control`; complete delivery and both S10 cases compare native children. Common typed failure rows use native parity. |
+| Capacity read and compare-and-set | `attach capacity`, `attach set-capacity` / `dalph_read_capacity`, `dalph_set_capacity`; #370 public tests and native parity preserve full policy/revision, inactive and conflict results. |
+| Wake and explicit Unpause | `attach start`, `attach unpause` (resume alias) / `dalph_start_work`, `dalph_unpause`; #369 cuts and native parity preserve Applied/partial/Unknown and host-owned completion. |
+| Whole/advisory Refresh | `attach refresh --whole-graph` or repeated `--task` / `dalph_refresh`; five complete-delivery variants and #371 parser/owner tests preserve submitted interest without making IDs authoritative. |
+| Guidance | `attach guide` / `dalph_guide_executor`; CLI/MCP guidance tests own exact UTF-8 and generated identity; native parity includes all applicable common failures and response loss without replay. |
+| Recovery apply and read | `attach recovery-apply`, `attach recovery-read` / `dalph_apply_result_recovery`, `dalph_read_result_recovery`; `running-host-result-recovery.test.ts` owns identical recorded subject/position, passive read and correlation refusal. Native parity includes applicable common refusals and apply Unknown. |
+| Watch open/current/latest/close | `attach watch` / `dalph_watch_snapshots`, resources/read, subscribe/unsubscribe and `dalph_close_watch`; #372's separate CLI/MCP resource tests retain URI/session ownership, every finite boundary and exact release. CLI process cancellation is its close boundary; it does not create a host Exit operation. |
+
+The governing D12–D15 admission/capacity, D20 locality, D21–D24 ambiguity,
+D35 progress, D38–D40 Run and D47 Operator boundaries remain enforced by these
+owners. No client death releases capacity, accepted command or executor custody;
+no client creates a coordinator, Run, attempt, tracker fact, arbitrary assignment
+or client-triggered host Exit. No response-loss handler blindly repeats Unpause,
+refreshes an expected revision, or treats a hint as an authority read. The
+accepted Q17 complete intermediate edit remains eligible; incomplete evidence
+cannot prove absent blockers. Claims, task facts, Git identity/cleanup and
+execution observations retain their owning authorities. Existing executor and
+result-recovery operations remain separately bounded; this audit adds no generic
+workflow command or external-worker admission protocol.
+
+The concrete predecessor graph and public process/transport cuts refine existing
+formal boundaries. The finality rejection uses the existing failure and stopped
+owner alternatives, without a new event, persisted state, or finality rule.
+Fresh `check:all` and `check:quint` plus scoped domain/spec,
+architecture/connascence and correctness review are still required before
+integration; aggregate totals never replace the row-specific evidence above.

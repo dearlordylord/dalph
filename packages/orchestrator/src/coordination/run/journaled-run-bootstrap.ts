@@ -1,3 +1,4 @@
+import { JournalTerminationQualification } from "./journal-termination-qualification.js"
 import {
   makeExecutorGuidanceControl,
   type ExecutorGuidanceControlService
@@ -372,6 +373,7 @@ export const journaledRunBootstrapLayer = (
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
+      const terminationQualification = yield* Effect.serviceOption(JournalTerminationQualification)
       const bootstrapScope = yield* Scope.Scope
       const ownership = yield* CoordinatorOwnership
       const storage = yield* JournalStore
@@ -469,8 +471,17 @@ export const journaledRunBootstrapLayer = (
             yield* Ref.set(processJournal, { _tag: "Failed", failure })
             return yield* failure
           }
-          const context = built.value
-          const journal = Context.get(context, Journal)
+          const originalJournal = Context.get(built.value, Journal)
+          const journal = Option.isNone(terminationQualification)
+            ? originalJournal
+            : Journal.of({
+                ...originalJournal,
+                terminate: terminationQualification.value.decorate(
+                  { append: originalJournal.append, read: originalJournal.read },
+                  originalJournal.terminate
+                )
+              })
+          const context = Context.add(built.value, Journal, journal)
           const accepted = Context.get(context, AcceptedJournalReader)
           const inRun = Context.get(context, InRunJournal)
           const controlContext = yield* Layer.build(

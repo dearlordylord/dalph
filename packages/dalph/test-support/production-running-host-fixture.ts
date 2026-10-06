@@ -1,3 +1,4 @@
+import { makeCompleteDeliveryTracker } from "./production-complete-delivery-tracker.js"
 import { makeRunningHostTrackerEdits } from "./production-running-host-tracker-edits.js"
 import { runningHostProviderBody } from "./production-running-host-fixture-request.js"
 import {
@@ -64,6 +65,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   includeBlockedChildren = false,
   paused?: PausedRunningHostFixture,
   discovery?: {
+    readonly completeDelivery?: boolean
     readonly startupIncludesE?: boolean
     readonly independentB?: boolean
     readonly authoredIntermediateD?: boolean
@@ -211,6 +213,10 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     includeBlockedChildren,
     discovery
   )
+  const completeDelivery =
+    discovery?.completeDelivery === true
+      ? yield* makeCompleteDeliveryTracker(rootNode, childC, childB, childE)
+      : undefined
   const nodeIds = [rootNode, childB, childC, childE]
   const taskIds = nodeIds.map((node) => githubTaskIdFor(hermeticQualificationTrackerIdentity.repositoryNodeId, node))
   const trackerCalls = yield* Ref.make(0)
@@ -229,7 +235,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         `${request._tag}:${"issueNodeId" in request ? request.issueNodeId : "root"}`
       ])
       yield* failControlledGraphRead(request, graphReadFailure)
-      const authored = yield* trackerEdits.respond(request)
+      const authored = yield* completeDelivery?.respond(request) ?? trackerEdits.respond(request)
       if (authored !== undefined) return authored
       return yield* provider.github(runningHostProviderBody(request)).pipe(
         Effect.orDie,
@@ -355,7 +361,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     taskIds,
     observationOrder: trackerEdits.observationOrder,
     authorD: trackerEdits.authorD,
-    authorE: trackerEdits.authorE,
+    authorE: completeDelivery?.authorE ?? trackerEdits.authorE,
     setIncompleteEvidence: trackerEdits.setIncompleteEvidence,
     bootstrap: Deferred.await(bootstrapReady),
     readHistory: (runId: RunId) => Deferred.await(pausedStore).pipe(Effect.flatMap((store) => store.read(runId))),

@@ -1,3 +1,4 @@
+export { JournalTerminationQualification } from "./coordination/run/journal-termination-qualification.js"
 /* eslint-disable max-lines -- The package barrel intentionally lists the complete public API in one place. */
 export type {
   AcceptedJournalPrefix,

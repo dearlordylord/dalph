@@ -40,6 +40,7 @@ import {
   CoordinatorOwnership,
   type JournalStore,
   type RunLifecycleJournal,
+  WorkflowRunTerminationEvidenceInvalid,
   nodeGitCommandLayer,
   nodeGitIntegratorCandidateLayer,
   nodeGitTargetLineageLayer,
@@ -348,13 +349,15 @@ export type ProductionNonRetryableActivationFailure =
   | TaskTrackerMutationThrottled
   | ProductionCancellationBlocked
   | IntegratorCallFailure
+  | WorkflowRunTerminationEvidenceInvalid
 
 export const isNonRetryableProductionActivationFailure = (
   failure: unknown
 ): failure is ProductionNonRetryableActivationFailure =>
   failure instanceof TaskTrackerMutationThrottled ||
   failure instanceof ProductionCancellationBlocked ||
-  failure instanceof IntegratorCallFailure
+  failure instanceof IntegratorCallFailure ||
+  failure instanceof WorkflowRunTerminationEvidenceInvalid
 
 /** Requires cancellation to discharge every terminal precondition before the production owner can close. */
 export const requireProductionCancellationTermination = (runId: RunId, decision: RunFinalityDecision) =>
