@@ -81,7 +81,12 @@ const currentProposalEncodingForOwner = (
 ): string =>
   canonicalEncodingOf({
     ...current,
-    order,
+    order:
+      owner.proposal.order._tag === order._tag &&
+      "frontierOrdinal" in owner.proposal.order &&
+      "frontierOrdinal" in order
+        ? { ...order, frontierOrdinal: owner.proposal.order.frontierOrdinal }
+        : order,
     ...(preservesMaterializedReadIdentity(owner, current) ? { actionIdentity: owner.proposal.actionIdentity } : {})
   })
 
@@ -92,23 +97,11 @@ export const currentProposalPresentationMatches = (
   evaluation: DeliveryRuntimeEvaluation
 ): boolean => {
   const admitted = owner.proposal
-  if (admitted.order._tag === "IntegrationOrder" && current.order._tag === "IntegrationOrder") {
-    return (
-      canonicalEncodingOf(admitted) ===
-      currentProposalEncodingForOwner(owner, current, {
-        ...current.order,
-        frontierOrdinal: admitted.order.frontierOrdinal
-      })
-    )
+  if (admitted.order._tag === "RecoveredWorkflowOrder" || admitted.order._tag === "TrackerGraphOrder") {
+    return currentEvaluationPositionMatches(owner, current, evaluation)
   }
-  if (admitted.order._tag === "FreshWorkflowOrder" && current.order._tag === "FreshWorkflowOrder") {
-    return (
-      canonicalEncodingOf(admitted) ===
-      currentProposalEncodingForOwner(owner, current, {
-        ...current.order,
-        frontierOrdinal: admitted.order.frontierOrdinal
-      })
-    )
-  }
-  return currentEvaluationPositionMatches(owner, current, evaluation)
+  return (
+    admitted.order._tag === current.order._tag &&
+    canonicalEncodingOf(admitted) === currentProposalEncodingForOwner(owner, current, current.order)
+  )
 }

@@ -1,6 +1,6 @@
 import { AttemptId, PlannedTaskAttempt, RunId, TaskId } from "@dalph/contracts"
 import * as fc from "fast-check"
-import { Effect } from "effect"
+import { Effect, HashSet } from "effect"
 import { expect, it } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
@@ -17,8 +17,12 @@ import {
   trackerGraphReadProposalOf,
   DeliveryProposalId,
   DeliveryProposalOrdinal,
+  type DeliveryActionProposal,
   type DeliveryProposalDerivationIssue
 } from "./delivery-action-proposal.js"
+import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { makeTargetLineageObservationOperation } from "../../workflow/registry/operation.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
   DeliveryRuntimeObservationState,
@@ -40,6 +44,7 @@ import {
 import {
   deliveryStatusOf,
   DeliveryStatusSubject,
+  DeliveryStatusProjectionConflict,
   type CurrentDeliveryStatus,
   type DeliveryStatusEntry
 } from "./delivery-status.js"
@@ -548,5 +553,175 @@ it("orders every simultaneous delivery-status phenomenon independently of source
       }
     ),
     { numRuns: 50 }
+  )
+})
+
+const listingChangeArbitrary = fc.record({
+  before: fc.array(fc.boolean(), { maxLength: 6 }),
+  inserted: fc.integer({ min: 0, max: 6 }),
+  prefix: fc.integer({ min: 1, max: 100 }),
+  advance: fc.integer({ min: 0, max: 20 }),
+  settled: fc.boolean()
+})
+
+const movedReadState = ({
+  advance,
+  before,
+  inserted,
+  prefix,
+  settled
+}: {
+  readonly before: ReadonlyArray<boolean>
+  readonly inserted: number
+  readonly prefix: number
+  readonly advance: number
+  readonly settled: boolean
+}) => {
+  const taskId = TaskId.make("B")
+  const plannedAttempt = { ...integrationFinalityFixture.plannedAttempt, runId, taskId }
+  const operationId = OperationId.make("property-materialized-lineage")
+  const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+    plannedAttempt,
+    operationIdentity: "Allocate",
+    operation: makeTargetLineageObservationOperation({
+      operationId,
+      plannedAttempt,
+      integrationTarget: integrationFinalityFixture.integrationTarget,
+      predecessorOperationIds: []
+    })
+  })
+  const derived = deliveryProposalsOf({
+    acceptedAt: JournalPosition.make(prefix),
+    acceptedOperationIds: HashSet.empty(),
+    fresh: [],
+    runId,
+    transitions: [transition]
+  }).ticketDelivery[0]
+  if (
+    derived?.order._tag !== "RecoveredWorkflowOrder" ||
+    derived.route._tag !== "RecoveredNewActionRoute" ||
+    derived.actionIdentity._tag !== "FreshOperationIdRequired"
+  )
+    return expect.fail("must derive recovered lineage read")
+  const original = {
+    ...derived,
+    route: derived.route,
+    actionIdentity: derived.actionIdentity,
+    order: { ...derived.order, frontierOrdinal: DeliveryProposalOrdinal.make(before.length) }
+  }
+  const owner = ticketOwnerSnapshotForTest(original, {
+    _tag: settled ? "SettledMaterializedDeliveryAction" : "MaterializedDeliveryAction",
+    intent: "IntentRecorded",
+    operationId
+  })
+  const current = {
+    ...original,
+    actionIdentity: { _tag: "FreshOperationIdRequired" as const, source: { _tag: "Preserve" as const, operationId } },
+    order: {
+      ...original.order,
+      acceptedAt: JournalPosition.make(prefix + advance),
+      frontierOrdinal: DeliveryProposalOrdinal.make(before.filter(Boolean).length + inserted)
+    }
+  }
+  const unrelated = [
+    ...before.flatMap((keep, index) => (keep ? [`remaining:${index}`] : [])),
+    ...Array.from({ length: inserted }, (_, index) => `inserted:${index}`)
+  ].map((id, index) => proposalOf(id, TaskId.make("A"), index))
+  const base = stateOf(["A", "A2", "B"], ["A", "B"], false, false, false)
+  if (base._tag !== "Ready") return expect.fail("property base must be Ready")
+  const project = (
+    proposal: DeliveryActionProposal = current,
+    owners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [owner],
+    acceptedAt = JournalPosition.make(prefix + advance)
+  ) =>
+    deliveryStatusOf(SchemaSubject, {
+      ...base,
+      liveOwners: owners,
+      evaluation: {
+        ...base.evaluation,
+        acceptedAt,
+        proposedActions: {
+          _tag: "DeliveryProposalsAvailable",
+          freshTaskCandidates: [],
+          isolatedIssues: [],
+          proposals: [...unrelated, proposal]
+        }
+      }
+    })
+  return { original, current, owner, project }
+}
+
+it("keeps exact admitted actions visible across generated current listing changes", () => {
+  fc.assert(
+    fc.property(listingChangeArbitrary, (input) => {
+      const { original, owner, project } = movedReadState(input)
+      const status = project()
+      expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+      if (status._tag !== "DeliveryStatusAvailable") return expect.fail("unchanged admitted read must remain visible")
+      const live = status.entries.filter(
+        (entry) =>
+          (entry._tag === "LiveDeliveryAction" || entry._tag === "AcceptedFactPublicationWait") &&
+          entry.owner.proposal.id === original.id
+      )
+      expect(live).toHaveLength(1)
+      expect(live[0]).toMatchObject({ owner })
+      expect(owner.proposal).toEqual(original)
+    }),
+    { numRuns: 100, examples: [[{ before: [false], inserted: 0, prefix: 81, advance: 3, settled: false }]] }
+  )
+})
+
+it("rejects changed causal evidence despite generated listing changes", () => {
+  fc.assert(
+    fc.property(listingChangeArbitrary, (input) => {
+      const { current, owner, project } = movedReadState(input)
+      const foreignId = OperationId.make("foreign-property-read")
+      const changes: ReadonlyArray<DeliveryActionProposal> = [
+        { ...current, order: { ...current.order, taskId: TaskId.make("A") } },
+        { ...current, order: { ...current.order, responsibilityBeganAt: JournalPosition.make(1) } },
+        { ...current, order: { ...current.order, transition: "ObserveResponsibleTaskClaim" } },
+        { ...current, waitsForLiveOperationId: foreignId },
+        {
+          ...current,
+          actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: foreignId } }
+        },
+        { ...current, owner: "DeliverySettlement" },
+        {
+          ...current,
+          admission: {
+            ...current.admission,
+            taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: TaskId.make("A") }
+          }
+        },
+        { ...current, order: { ...current.order, acceptedAt: JournalPosition.make(input.prefix + input.advance + 1) } }
+      ]
+      if (current.route.action._tag !== "ReadTargetLineage") return expect.fail("must preserve lineage route")
+      const changedRoute = {
+        ...current,
+        route: {
+          ...current.route,
+          action: {
+            ...current.route.action,
+            operation: { ...current.route.action.operation, predecessorOperationIds: [foreignId] }
+          }
+        }
+      }
+      for (const changed of [...changes, changedRoute])
+        expect(project(changed)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+      expect(project(current, [owner, owner])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+      expect(project(current, [{ ...owner, admissionAuthority: { ...owner.admissionAuthority } }])).toBeInstanceOf(
+        DeliveryStatusProjectionConflict
+      )
+      expect(project(current, [{ ...owner, proposal: current }])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+      if (input.prefix > 1)
+        expect(
+          project(
+            { ...current, order: { ...current.order, acceptedAt: JournalPosition.make(input.prefix - 1) } },
+            [owner],
+            JournalPosition.make(input.prefix - 1)
+          )
+        ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    }),
+    { numRuns: 100 }
   )
 })

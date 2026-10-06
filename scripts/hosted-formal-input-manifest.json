@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "2d3872a0f94df90b1b39563f2c703bddcc3d3da129c50da759ce5dbc041f92d2",
+  "digest": "c80bc9dcbeb30b5a0b4aa5f4c59b9f9cf4713ea0534bb01278dedd5934a5a832",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -210,6 +210,7 @@
     "packages/orchestrator/src/coordination/run/current-delivery-frame.ts",
     "packages/orchestrator/src/coordination/run/fresh-run-identity.ts",
     "packages/orchestrator/src/coordination/run/fresh-workflow.ts",
+    "packages/orchestrator/src/coordination/run/journal-termination-qualification.ts",
     "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts",
     "packages/orchestrator/src/coordination/run/passive-planned-attempt-observer.ts",
     "packages/orchestrator/src/coordination/run/pause-progress-observation.ts",

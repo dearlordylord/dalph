@@ -764,17 +764,19 @@ _Avoid_: Workflow occurrence, admitted action, runtime ownership
 **Proposal evaluation position**:
 The accepted workflow-journal position at which a tracker graph or recovered
 workflow proposal was evaluated. It is distinct from the admitted owner's
-original ordering evidence and from the task, transition, ordinal and
-responsibility positions that identify and order its work.
+original ordering evidence and from the task, transition and responsibility
+positions that identify its work. Current listing positions are separate
+descriptive metadata.
 _Avoid_: Graph-read identity, replacement admission, current owner revision
 
-**Integration frontier listing position**:
-The current transition-list index represented by IntegrationOrder.frontierOrdinal.
+**Proposal frontier listing position**:
+The current transition-list index represented by `frontierOrdinal` in fresh,
+recovered, integration and unqueued-result order evidence.
 It is derived ordering metadata, not an integration responsibility identity or
 journal occurrence. Nested recovery work can move an unchanged admitted action
 within the current list. Its original position remains bound by the complete
-admission witness; task identity and integration queue/start positions remain
-distinct causal facts.
+admission witness; task/transition identity and responsibility, terminal and
+integration queue/start positions remain distinct causal facts.
 _Avoid_: Responsibility ordinal, operation identity, replacement admission
 
 **Planned-attempt protocol guard**:

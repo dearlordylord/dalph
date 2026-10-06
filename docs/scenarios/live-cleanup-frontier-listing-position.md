@@ -29,7 +29,9 @@ integration task, queue/start positions and operation facts remain distinct.
 This accepted #339 presentation repair preserves #300's exact original witness
 and every causal identity/field. It permits only the proven current-listing
 movement for matching IntegrationOrder proposals. Existing Graph/Recovered
-evaluation-position rules and strict responsibility ordinals remain unchanged.
+evaluation-position rules and exact responsibility-beginning facts remain unchanged.
+The [later listing refinement](current-status-admission-witness.md#alice-keeps-seeing-b-when-a-leaves-the-current-action-list)
+applies the same distinction to recovered and unqueued-result listings.
 No workflow frontier, admission, recovery, retry or model transition changes.
 
 The owner/current comparison is not an independent validator of the current
@@ -70,7 +72,7 @@ no permission to repeat a mutation, adopt a resource or infer completion.
 - Forged/copied/rebound original witness or changed task/queue/start/route/action/
   payload/wait/admission → focused negative tests still report conflict.
 - Different order tags, malformed/duplicate proposal records and changed
-  RecoveredWorkflowOrder responsibility ordinal → existing negative cases remain.
+  RecoveredWorkflowOrder responsibility beginning → existing negative cases remain.
 - Complete ordinary command → #307's protected live qualification is the final
   composed proof that the shipped CLI reaches actual CAS, M parents H,C and
   protocol-proven terminal output without projection failure. Focused tests own

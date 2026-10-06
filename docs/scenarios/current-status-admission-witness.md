@@ -268,8 +268,10 @@ witness; the existing journal reconciliation rules own restart and retry.
 This accepted #339 refinement extends the preceding graph-read rule only to
 the evaluation position in `RecoveredWorkflowOrder`. Its constructor takes
 that position from the current evaluation for every recovered transition;
-task, transition, frontier ordinal and responsibility beginning are separate
-facts. This is not a new claim-read permission or a route-specific recovery
+task, transition and responsibility beginning are separate causal facts.
+The current frontier ordinal is a listing position; the refinement below
+supersedes the requirement that its numeric value remain unchanged. This is not
+a new claim-read permission or a route-specific recovery
 rule. The preceding governing behavior and opaque admission checks remain
 applicable, and no Quint transition or outside request is added.
 
@@ -306,10 +308,11 @@ than manufacture an unexplained evaluation change.
    evaluation's position and must not regress. Null is an initial position,
    not a permitted return from an acknowledged non-null position.
 3. Status compares the complete proposals after replacing only the current
-   order's evaluation position with the original position. The graph owner
-   and graph-read route checks remain. Every other recovered order field,
+   order's evaluation position with the original position (and, under the listing
+   refinement below, its listing index). The graph owner
+   and graph-read route checks remain. Every causal recovered order field,
    owner, route, identity, payload, admission requirement and wait correlation
-   remains exact. Other order variants still require complete equality.
+   remains exact. Other order variants retain their own descriptive-listing comparison rules.
 4. Alice sees the latest accepted prefix beside the actual original owner.
    Status does not rewrite that owner or witness, freeze the evaluation,
    append history, create a claim, read GitHub again, or authorize a retry.
@@ -331,7 +334,7 @@ adds no recovery request or automatic qualification rerun.
   outside read, successful projection and ordinary successor owner removal.
 - Evaluation position is descriptive for both typed variants → pure status
   tests cover forward/null-initial positions while preserving the graph case.
-- Changed recovered task, transition, frontier ordinal or responsibility
+- Changed recovered task, transition or responsibility
   beginning → independent negative controls still report projection conflict.
 - Invalid owner/current chronology or action → existing and extended controls
   reject witness/order tampering, duplicate/forged/copied/rebound witnesses,
@@ -426,3 +429,82 @@ backoff, or durable publication append: it only reads already-established
 signals and writes stdout. Crash points therefore apply to in-memory pending
 values and process ownership, while provider ambiguity, cleanup, and journal
 recovery remain owned by their existing scenarios and tests.
+
+## Alice keeps seeing B when A leaves the current action list
+
+The Operator accepts this narrow repair through the instruction to fix the
+reproduced dogfood status defect and add regression/property-based tests.
+It supersedes only the earlier requirement that a recovered proposal's current
+`frontierOrdinal` equal its original admitted listing position. Workflow proposal
+constructors derive that ordinal from the current transition list, including
+unqueued accepted results; it is not a durable responsibility ordinal.
+
+### Governing behavior
+
+When an unchanged admitted action moves within a newer evaluation, preserve
+[the original admission-witness checks](#alice-remains-attached-while-an-admitted-proposal-leaves-the-current-graph)
+and extend the existing
+[integration listing distinction](live-cleanup-frontier-listing-position.md#governing-distinction)
+to every order variant carrying `frontierOrdinal`. The
+[D29 and D30 process/durability obligations](../DELIVERY-INVARIANTS.md#process-and-durability)
+and [D21 and D22 ambiguity obligations](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence)
+remain unchanged. Existing admission/recovery Quint models do not own passive
+status comparison or opaque JavaScript witnesses; production-backed tests below
+own this refinement. Scheduling, admission priority and workflow algebra do
+not change.
+
+### Starting facts, trigger and ordered boundaries
+
+Alice watches one Run with independent executing tasks A and B. Both exact
+planned attempts own unfinished executor work and need a Git target-lineage
+read during an ordinary timer authority refresh. Their proposals occupy current
+listing positions 0 and 1. The runtime has admitted both with genuine original
+witnesses; B's responsibility beginning and all causal fields are exact.
+
+1. Dalph records each read intent before its outside Git call. The controlled
+   regression holds B's original call and permits A's call to finish.
+2. Dalph accepts A's observation and publishes a new evaluation. A leaves the
+   current list; B's same action moves from position 1 to 0. Its recorded read
+   identity is preserved and its evaluation prefix advances coherently.
+3. Status validates the complete original owner against the complete original
+   opaque admission witness. It compares current versus admitted proposals with
+   only current listing positions normalized; recovered evaluation prefixes
+   retain their existing coherent, non-regressing checks. Allocate-to-Preserve
+   remains permitted only for that materialized owner's exact recorded read.
+4. Alice sees B's original live owner without a projection conflict. The status
+   read performs no Git/tracker call, journal append, retry or admission.
+5. B's original call returns. Ordinary successor publication removes the owner;
+   no second B request is issued.
+
+The same listing rule applies when unrelated work enters the current list,
+and to fresh, integration and unqueued-result order variants. Task, step or
+transition, responsibility beginning, queue/start/terminal positions, route,
+causal predecessors, admission requirements and wait correlation remain exact.
+An original owner/witness mismatch, duplicate owner, foreign preserved read ID,
+incoherent or regressing recovered evaluation still fails closed.
+
+### Crash, retry and forbidden results
+
+Process loss destroys the owner and opaque witness. Ordinary recovery must
+reconcile uncertain read outcomes from retained history; status cannot restore
+pre-crash authority, repeat a call or interpret missing evidence as success.
+No live provider retry is part of the successful controlled regression. Status
+must not rewrite the original witness, change scheduling, swallow genuine
+conflicts, persist derived ordering or infer an action from its list index.
+
+### Scenario-to-test mapping
+
+- Two admitted reads, A completion, B 1-to-0 movement, one B call and ordinary
+  owner removal: `run-delivery-runtime.test.ts`, `keeps B's admitted read while
+  A completes and B moves up the current list`.
+- Generated insertion/removal orderings and coherent prefix advances:
+  `delivery-status.property.test.ts`, `keeps exact admitted actions visible
+  across generated current listing changes`.
+- Generated changed causal identities and invalid admission witnesses:
+  `delivery-status.property.test.ts`, `rejects changed causal evidence despite
+  generated listing changes`.
+- All listing-bearing variants, including unqueued results, and exact negative
+  controls: `delivery-status.test.ts`, `permits current listing movement for
+  every listing-bearing order while keeping causal fields exact`.
+- Existing restart and CLI failure tests continue to own old-witness rejection
+  and the prohibition on workflow mutations from status failure.

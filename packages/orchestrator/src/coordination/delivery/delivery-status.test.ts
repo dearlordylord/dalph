@@ -1310,7 +1310,7 @@ it("rejects graph-read order exceptions for altered proposals, witnesses, and in
   ).toBeInstanceOf(DeliveryStatusProjectionConflict)
 })
 
-it("compares only the recovered evaluation position while preserving exact causal proposal evidence", () => {
+it("compares recovered evaluation and listing positions while preserving exact causal proposal evidence", () => {
   const taskId = TaskId.make("recovered-prefix-task")
   const derived = deliveryProposalsOf({
     acceptedAt: JournalPosition.make(1),
@@ -1352,13 +1352,15 @@ it("compares only the recovered evaluation position while preserving exact causa
     return deliveryStatusOf(subject, { ...observation, evaluation: { ...observation.evaluation, acceptedAt } })
   }
   expect(project(current)).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  expect(
+    project({ ...current, order: { ...current.order, frontierOrdinal: DeliveryProposalOrdinal.make(1) } })
+  ).toMatchObject({ _tag: "DeliveryStatusAvailable" })
   expect(genuine.proposal).toEqual(admitted)
   const initial = { ...admitted, order: { ...admitted.order, acceptedAt: null } }
   expect(project(current, [ownerOf(initial, false)])).toMatchObject({ _tag: "DeliveryStatusAvailable" })
   const changed: ReadonlyArray<DeliveryActionProposal> = [
     { ...current, order: { ...current.order, taskId: TaskId.make("other-recovered-task") } },
     { ...current, order: { ...current.order, transition: "ObserveStoppedAttemptClaim" } },
-    { ...current, order: { ...current.order, frontierOrdinal: DeliveryProposalOrdinal.make(1) } },
     { ...current, order: { ...current.order, responsibilityBeganAt: JournalPosition.make(1) } },
     {
       ...current,
@@ -3673,4 +3675,68 @@ it("projects a retained promotion safety refusal as a blocked task status", () =
       { _tag: "TargetPromotionSafetyRefused", classification: "Blocked", subject: { taskId }, standing: { state } }
     ]
   })
+})
+
+it("permits current listing movement for every listing-bearing order while keeping causal fields exact", () => {
+  const taskId = TaskId.make("listing-variant-task")
+  const orders: ReadonlyArray<DeliveryActionProposal["order"]> = [
+    {
+      _tag: "FreshWorkflowOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(1),
+      step: "ReadCurrentTaskGraph",
+      taskId
+    },
+    {
+      _tag: "RecoveredWorkflowOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(1),
+      acceptedAt: JournalPosition.make(4),
+      responsibilityBeganAt: JournalPosition.make(2),
+      transition: "ObserveResponsibleTaskClaim",
+      taskId
+    },
+    {
+      _tag: "IntegrationOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(1),
+      queuedAt: JournalPosition.make(2),
+      startedAt: JournalPosition.make(3),
+      taskId
+    },
+    {
+      _tag: "UnqueuedAcceptedResultOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(1),
+      terminalAt: JournalPosition.make(3),
+      taskId
+    }
+  ]
+  for (const order of orders) {
+    if (!("frontierOrdinal" in order)) return expect.fail("fixture must have a listing position")
+    const admitted = { ...taskProposalOf(`listing:${order._tag}`, taskId), order }
+    const owner = ownerOf(admitted, false)
+    const current = {
+      ...admitted,
+      order: {
+        ...order,
+        frontierOrdinal: DeliveryProposalOrdinal.make(0),
+        ...(order._tag === "RecoveredWorkflowOrder" ? { acceptedAt: JournalPosition.make(5) } : {})
+      }
+    }
+    const project = (
+      proposal: DeliveryActionProposal,
+      owners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [owner]
+    ) =>
+      deliveryStatusOf(
+        DeliveryStatusSubject.cases.Run.make({ runId }),
+        evaluationOf({ proposals: [proposal], liveOwners: owners })
+      )
+    expect(project(current)).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    expect(
+      project({ ...current, order: { ...current.order, taskId: TaskId.make("foreign-listing-task") } })
+    ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    expect(project(current, [{ ...owner, proposal: current }])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    expect(owner.proposal).toEqual(admitted)
+    if (current.order._tag === "UnqueuedAcceptedResultOrder")
+      expect(project({ ...current, order: { ...current.order, terminalAt: JournalPosition.make(4) } })).toBeInstanceOf(
+        DeliveryStatusProjectionConflict
+      )
+  }
 })

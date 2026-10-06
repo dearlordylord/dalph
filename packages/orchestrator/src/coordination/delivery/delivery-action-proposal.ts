@@ -31,7 +31,7 @@ import {
 export const DeliveryProposalId = Schema.NonEmptyString.pipe(Schema.brand("DeliveryProposalId"))
 export type DeliveryProposalId = typeof DeliveryProposalId.Type
 
-/** Position assigned by pure domain reconciliation before live admission is consulted. */
+/** Current-list position assigned by pure reconciliation; it may move between evaluations without changing action identity. */
 export const DeliveryProposalOrdinal = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
   Schema.brand("DeliveryProposalOrdinal")
 )
@@ -39,7 +39,7 @@ export type DeliveryProposalOrdinal = typeof DeliveryProposalOrdinal.Type
 
 export type DeliveryProposalOwner = "DeliveryReflection" | "DeliverySettlement" | "TicketDelivery" | "TrackerGraph"
 
-/** Why this proposal appears at this exact place in the immutable domain order. */
+/** Ordering within one evaluation, combining descriptive list positions with exact causal history facts. */
 export type DeliveryProposalOrderEvidence =
   | {
       readonly _tag: "FreshWorkflowOrder"

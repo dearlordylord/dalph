@@ -51,6 +51,7 @@ import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim, UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { TaskAdmissionOccupancy } from "../admission/fresh-task-admission.js"
@@ -7478,3 +7479,226 @@ it.effect("retains an occupied promotion exclusion across unrelated progress unt
     })
   )
 )
+
+it.effect("keeps B's admitted read while A completes and B moves up the current list", () => {
+  const fixture = integrationFinalityFixture
+  const historyFor = (label: string, priorRecords?: ReadonlyArray<JournalRecord>) => {
+    const taskId = TaskId.make(`listing-read-${label}`)
+    const specification = makeTaskWorkSpecification({
+      taskId,
+      title: `Read ${label}`,
+      body: "Check the exact target lineage."
+    })
+    const attempt = {
+      ...fixture.plannedAttempt,
+      runId,
+      taskId,
+      attemptId: AttemptId.make(`listing-attempt-${label}`),
+      taskRevision: specification.fingerprint,
+      branch: TaskBranchRef.make(`refs/heads/listing-${label}`),
+      worktree: WorktreeLocator.make(`/listing/${label}`)
+    }
+    return makeExecutingAttemptHistory({
+      runId,
+      trackerTarget: target,
+      plannedAttempt: attempt,
+      taskSpecification: specification,
+      activeClaim: ActiveTaskClaim.make({
+        ...fixture.activeClaim,
+        taskId,
+        operationId: OperationId.make(`listing-claim-${label}`),
+        token: ClaimToken.make(`listing-token-${label}`)
+      }),
+      ...(priorRecords === undefined ? {} : { priorRecords })
+    })
+  }
+  const a = historyFor("A")
+  const b = historyFor("B", a.records)
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* Journal
+      const inRun = yield* InRunJournal
+      const initialJournal = yield* journal.state.get
+      const base = yield* baseEvaluation
+      const completed = yield* Ref.make<ReadonlyArray<TaskId>>([])
+      const calls = yield* Ref.make<ReadonlyArray<{ readonly taskId: TaskId; readonly operationId: OperationId }>>([])
+      const reachedA = yield* Deferred.make<void>()
+      const reachedB = yield* Deferred.make<void>()
+      const releaseA = yield* Deferred.make<void>()
+      const releaseB = yield* Deferred.make<void>()
+      const bothOwned = yield* Deferred.make<DeliveryRuntimeObservationState>()
+      const moved = yield* Deferred.make<DeliveryRuntimeObservationState>()
+      const derive = Effect.gen(function* () {
+        const records = yield* inRun.read(runId)
+        const done = yield* Ref.get(completed)
+        const acceptedAt = (yield* journal.state.get).position
+        const transitions = [a, b]
+          .filter((history) => !done.includes(history.plannedAttempt.taskId))
+          .map((history) => {
+            const pending = records.findLast(
+              ({ event, position }) =>
+                position > initialJournal.position &&
+                event._tag === "GitReadIntentRecorded" &&
+                event.operation.plannedAttempt.taskId === history.plannedAttempt.taskId
+            )
+            const operationId =
+              pending?.event._tag === "GitReadIntentRecorded"
+                ? pending.event.operation.operationId
+                : OperationId.make(`listing-provisional-${history.plannedAttempt.taskId}`)
+            return RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+              plannedAttempt: history.plannedAttempt,
+              operationIdentity: "Allocate",
+              operation: makeTargetLineageObservationOperation({
+                operationId,
+                plannedAttempt: history.plannedAttempt,
+                integrationTarget: fixture.integrationTarget,
+                predecessorOperationIds: [history.planOperation.operationId]
+              })
+            })
+          })
+        const result = deliveryProposalsOf({
+          acceptedAt,
+          acceptedOperationIds: acceptedOperationIdsOf(records),
+          pendingReadOperationIds: pendingReadOperationIdsOf(records),
+          fresh: [],
+          responsibilities: (yield* journal.state.get).reconstructed.responsibility.entries,
+          runId,
+          transitions
+        })
+        expect(result.issues).toEqual([])
+        return { ...withProposals(base, result.ticketDelivery), acceptedAt }
+      })
+      const initial = yield* derive
+      const originalB =
+        initial.proposedActions._tag === "DeliveryProposalsAvailable" ? initial.proposedActions.proposals[1] : undefined
+      if (originalB?.order._tag !== "RecoveredWorkflowOrder") return expect.fail("must derive B at listing 1")
+      expect(originalB.order.frontierOrdinal).toBe(1)
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
+        yield* makeIntegrationTargetResourceController()
+      )
+      const unused = () => Effect.die("unrequested workflow boundary")
+      const outside = WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTrackerGraph: unused,
+        readTaskWorktree: unused,
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused,
+        readTaskClaim: unused,
+        readTargetLineage: (operation) =>
+          Effect.gen(function* () {
+            const isA = operation.plannedAttempt.taskId === a.plannedAttempt.taskId
+            yield* Ref.update(calls, (values) => [
+              ...values,
+              { taskId: operation.plannedAttempt.taskId, operationId: operation.operationId }
+            ])
+            yield* Deferred.succeed(isA ? reachedA : reachedB, undefined)
+            yield* Deferred.await(isA ? releaseA : releaseB)
+            return {
+              _tag: "AuthoritativeTargetLineageObserved" as const,
+              observation: TargetLineageObservation.make({
+                plannedBaseIsAncestorOfTargetHead: true,
+                plannedBaseSha: operation.plannedAttempt.baseSha,
+                targetHeadSha: operation.plannedAttempt.baseSha
+              })
+            }
+          })
+      })
+      const interpreter = yield* WorkflowInterpreter.pipe(
+        Effect.provide(journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, outside)))
+      )
+      const observer = yield* capabilities.resources.runtimeObservation.changes.pipe(
+        Stream.runForEach((state) => {
+          if (state._tag !== "Ready") return Effect.void
+          const bOwner = state.liveOwners.find(({ proposal }) => proposal.id === originalB.id)
+          if (bOwner?._tag !== "MaterializedDeliveryAction" || bOwner.intent !== "IntentRecorded") return Effect.void
+          const current =
+            state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable"
+              ? state.evaluation.proposedActions.proposals.find(({ id }) => id === originalB.id)
+              : undefined
+          if (current?.order._tag === "RecoveredWorkflowOrder" && current.order.frontierOrdinal === 0)
+            return Deferred.succeed(moved, state)
+          return state.liveOwners.length === 2 ? Deferred.succeed(bothOwned, state) : Effect.void
+        }),
+        Effect.forkChild
+      )
+      const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(identitySupportLayers),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: (action, lease) =>
+              Effect.gen(function* () {
+                if (
+                  action._tag !== "FreshOperationAction" ||
+                  action.proposal.route._tag !== "RecoveredNewActionRoute" ||
+                  action.proposal.route.action._tag !== "ReadTargetLineage"
+                )
+                  return yield* Effect.die("must materialize target-lineage read")
+                const operation = { ...action.proposal.route.action.operation, operationId: action.operationId }
+                yield* interpreter.readTargetLineage(
+                  operation,
+                  lease.recordIntent(action.operationId).pipe(
+                    Effect.andThen(
+                      Effect.gen(function* () {
+                        yield* relation.publish(yield* derive)
+                      })
+                    ),
+                    Effect.orDie
+                  )
+                )
+                yield* Ref.update(completed, (values) => [...values, operation.plannedAttempt.taskId])
+                yield* relation.publish(yield* derive)
+                return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+              })
+          })
+        ),
+        Effect.forkChild
+      )
+      const waitFor = <A>(signal: Deferred.Deferred<A>) =>
+        Effect.race(
+          Deferred.await(signal),
+          Fiber.join(runtime).pipe(Effect.andThen(Effect.die("runtime ended before held read")))
+        )
+      yield* waitFor(reachedA)
+      yield* waitFor(reachedB)
+      const before = yield* waitFor(bothOwned)
+      if (before._tag !== "Ready") return expect.fail("both owners must be Ready")
+      const admittedOwner = before.liveOwners.find(({ proposal }) => proposal.id === originalB.id)
+      yield* Deferred.succeed(releaseA, undefined)
+      const held = yield* waitFor(moved)
+      if (held._tag !== "Ready") return expect.fail("moved owner must be Ready")
+      const owner = held.liveOwners.find(({ proposal }) => proposal.id === originalB.id)
+      expect(owner).toEqual(admittedOwner)
+      expect(owner?.proposal).toEqual(originalB)
+      const status = deliveryStatusOf(DeliveryStatusSubject.cases.Run.make({ runId }), held)
+      if (status instanceof DeliveryStatusProjectionConflict) return expect.fail(status.detail)
+      expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+      const records = yield* inRun.read(runId)
+      expect(
+        records.filter(
+          ({ event }) =>
+            event._tag === "GitReadIntentRecorded" && event.operation.plannedAttempt.taskId === b.plannedAttempt.taskId
+        )
+      ).toHaveLength(1)
+      expect(
+        records.filter(
+          ({ event }) =>
+            event._tag === "TargetLineageObserved" && event.plannedAttempt.taskId === a.plannedAttempt.taskId
+        )
+      ).toHaveLength(1)
+      expect((yield* Ref.get(calls)).filter(({ taskId }) => taskId === b.plannedAttempt.taskId)).toHaveLength(1)
+      yield* Deferred.succeed(releaseB, undefined)
+      yield* Fiber.join(runtime)
+      yield* Fiber.join(observer)
+      expect(yield* capabilities.resources.runtimeObservation.get).toMatchObject({
+        _tag: "Closed",
+        final: { liveOwners: [] }
+      })
+      expect(yield* Ref.get(calls)).toHaveLength(2)
+    })
+  ).pipe(Effect.provide(liveJournalTestLayer({ runId, target, records: b.records })))
+})
