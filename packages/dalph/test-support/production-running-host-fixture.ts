@@ -215,7 +215,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   )
   const completeDelivery =
     discovery?.completeDelivery === true
-      ? yield* makeCompleteDeliveryTracker(rootNode, childC, childB, childE)
+      ? yield* makeCompleteDeliveryTracker(rootNode, childC, childB, childE, discovery.onRootGraphRead)
       : undefined
   const nodeIds = [rootNode, childB, childC, childE]
   const taskIds = nodeIds.map((node) => githubTaskIdFor(hermeticQualificationTrackerIdentity.repositoryNodeId, node))

@@ -18,7 +18,21 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
   (discovery) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* makeRunningHostFixture(builtEntry, true, undefined, { completeDelivery: true })
+        const holdGraph = yield* Ref.make(false)
+        const graphEntered = yield* Deferred.make<void>()
+        const graphRelease = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.succeed(graphRelease, undefined).pipe(Effect.asVoid))
+        const fixture = yield* makeRunningHostFixture(builtEntry, true, undefined, {
+          completeDelivery: true,
+          onRootGraphRead: () =>
+            Ref.get(holdGraph).pipe(
+              Effect.flatMap((hold) =>
+                hold
+                  ? Deferred.succeed(graphEntered, undefined).pipe(Effect.andThen(Deferred.await(graphRelease)))
+                  : Effect.void
+              )
+            )
+        })
         const address = yield* availableLocalHostAddress
         yield* withDecodedProductionRepositoryHost(
           {
@@ -30,6 +44,12 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
           (observation) =>
             Effect.scoped(
               Effect.gen(function* () {
+                yield* Effect.addFinalizer(() =>
+                  Deferred.succeed(graphRelease, undefined).pipe(
+                    Effect.andThen(fixture.releaseObservationCut),
+                    Effect.asVoid
+                  )
+                )
                 yield* serveRunningHost(address, observation)
                 yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
                 yield* Deferred.await(fixture.activationFinalizing).pipe(Effect.timeout("20 seconds"))
@@ -50,12 +70,17 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                   expect(yield* fixture.readHistory(runId)).toEqual(before)
                   expect(yield* Ref.get(fixture.exitCalls)).toBe(0)
                 }
+                yield* Ref.set(holdGraph, true)
                 yield* fixture.releaseObservationCut
+                // The next ordinary timer read holds its real runtime lease while the native client starts.
+                yield* Deferred.await(graphEntered).pipe(Effect.timeout("20 seconds"))
                 const operatorAdapter = discovery.startsWith("MCP") ? "MCP" : "CLI"
                 expect(yield* publicDeliveryClient(operatorAdapter, address, runId, "set-capacity")).toMatchObject({
                   _tag: "Success",
                   value: { _tag: "CapacityApplied" }
                 })
+                yield* Ref.set(holdGraph, false)
+                yield* Deferred.succeed(graphRelease, undefined)
                 expect(yield* publicDeliveryClient(operatorAdapter, address, runId, "start")).toMatchObject({
                   _tag: "Success",
                   value: { _tag: "WakeSubmitted" }

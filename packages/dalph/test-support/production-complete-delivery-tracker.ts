@@ -8,7 +8,8 @@ export const makeCompleteDeliveryTracker = Effect.fn("CompleteDeliveryTracker.ma
   c: GithubIssueNodeId,
   b: GithubIssueNodeId,
   a: GithubIssueNodeId,
-  e: GithubIssueNodeId
+  e: GithubIssueNodeId,
+  onRootGraphRead?: () => Effect.Effect<void>
 ) {
   const includesE = yield* Ref.make(false)
   const completed = yield* Ref.make<ReadonlySet<GithubIssueNodeId>>(new Set())
@@ -28,6 +29,7 @@ export const makeCompleteDeliveryTracker = Effect.fn("CompleteDeliveryTracker.ma
       })
     switch (request._tag) {
       case "ReadIssue": {
+        if (id === c) yield* onRootGraphRead?.() ?? Effect.void
         const done = (yield* Ref.get(completed)).has(id)
         return data({
           ...base,

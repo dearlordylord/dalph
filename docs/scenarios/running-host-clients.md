@@ -953,6 +953,12 @@ accepted results, integration candidates, promotion, tracker confirmation
 and exact cleanup. Only then does C execute and settle Completed, with the
 accepted disposition and position exposed identically by both clients.
 
+The fixture holds the next ordinary timer root read at the tracker boundary
+while the native capacity client starts. This preserves the real active runtime
+lease required by capacity changes; between-lease `RunInactive` remains the
+independent capacity-lifecycle owner. The hold is released after the exact
+capacity receipt and is also released on fixture cleanup.
+
 `production-complete-delivery.acceptance.test.ts` owns this complete suffix;
 `production-complete-delivery-tracker.ts` controls only tracker responses and
 operator-authored edges. Git, SQLite, workflow interpretation, claim labels,
