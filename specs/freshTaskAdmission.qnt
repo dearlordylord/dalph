@@ -1212,6 +1212,9 @@ module freshTaskAdmission {
     state.admission.get(task) == exactPostClaimGraph(task),
     state.admission.get(task) == exactSpecification(task),
     state.admission.get(task) == FreshTaskCommitted(BaseReadIntentRecorded(baseReadIdentityFor(task))),
+    state.admission.get(task) == FreshTaskCommitted(BaseRefused(baseReadIdentityFor(task))),
+    state.admission.get(task) == FreshTaskCommitted(BaseRetryRequested(baseReadIdentityFor(task))),
+    state.admission.get(task) == FreshTaskCommitted(BaseRetryTrackerFactsKnown(baseReadIdentityFor(task))),
     Set(BaseA, BaseB, BaseC, BaseD, BaseE).exists(selectedHead =>
       state.admission.get(task) == FreshTaskCommitted(BaseReadCalled({ identity: baseReadIdentityFor(task), selectedHead: selectedHead }))),
     state.admission.get(task) == FreshTaskCommitted(BaseQualified({ identity: baseReadIdentityFor(task), selectedHead: state.selectedBase.get(task) })),

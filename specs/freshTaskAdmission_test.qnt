@@ -578,4 +578,12 @@ module freshTaskAdmissionTest {
   run refusedBaseDoesNotRetryWithoutDirectionTest = qualifiedSpecification
     .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(refuseBaseFor(TaskA))
     .then(crash).then(recover).then(recordBaseReadIntentFor(TaskA).fail())
+  // CI seed0x776d reached Refused: each durable retry prefix is still one exact occupancy.
+  run refusedAndRetryStagesHaveExactClosedOccupancyTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(refuseBaseFor(TaskA))
+    .expect(and { currentOccupancyHasOneClosedRepresentation, occupiedCount(state) == 1 })
+    .then(crash).then(recover).then(requestExplicitBaseRetryFor(TaskA))
+    .expect(and { currentOccupancyHasOneClosedRepresentation, occupiedCount(state) == 1 })
+    .then(crash).then(recover).then(acceptBaseRetryTrackerFactsFor(TaskA))
+    .expect(and { currentOccupancyHasOneClosedRepresentation, occupiedCount(state) == 1 })
 }

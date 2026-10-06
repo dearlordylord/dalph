@@ -443,4 +443,17 @@ module freshTaskAdmissionNegativeTest {
   run foreignPlanBaseTurnsInvariantRedTest = qualifiedSpecification
     .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(acceptQualifiedBaseFor(TaskA))
     .then(planAtForeignBase).expect(not(qualifiedPlanLineageUsesSelectedBase))
+  action substituteForeignRetryIdentity(stage: FreshCommitmentStage): bool = all {
+    state' = { ...state, admission: state.admission.put(TaskA, FreshTaskCommitted(stage)) },
+  }
+  run foreignRetryStageIdentityTurnsClosedOccupancyRedTest = {
+    nondet identity = Set(
+      { task: TaskB, claim: ClaimA, revision: SpecificationA },
+      { task: TaskA, claim: ClaimB, revision: SpecificationA },
+      { task: TaskA, claim: ClaimA, revision: SpecificationB }
+    ).oneOf()
+    nondet stage = Set(BaseRefused(identity), BaseRetryRequested(identity), BaseRetryTrackerFactsKnown(identity)).oneOf()
+    qualifiedSpecification.then(substituteForeignRetryIdentity(stage))
+      .expect(not(currentOccupancyHasOneClosedRepresentation))
+  }
 }
