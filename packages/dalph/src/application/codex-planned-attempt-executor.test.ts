@@ -5494,7 +5494,15 @@ it.effect("preserves ambiguous Suspend across an idle hint and restart before Re
         const recovered = yield* lifecycle.attach(correlation)
         expect(recovered.current._tag).toBe("Unreadable")
         yield* recovered.close
-        expect((yield* executor.requestSuspension(attempt))._tag).toBe("ExecutorWorkSafelySuspended")
+        expect((yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Resume" }))._tag).toBe(
+          "Unreadable"
+        )
+        expect(harness.currentRecord()?._tag).toBe("SuspensionInterruptIntended")
+        expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Suspend" })).toEqual(
+          PlannedAttemptExecutorProjection.cases.Exact.make({
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+          })
+        )
         expect((yield* executor.resume(request))._tag).toBe("ExecutorWorkExecuting")
         expect(harness.interruptCount()).toBe(1)
         expect(harness.turnCount()).toBe(2)

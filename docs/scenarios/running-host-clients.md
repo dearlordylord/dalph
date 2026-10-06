@@ -748,8 +748,9 @@ Mutating commands and watches remain owned by the later slices above.
 | Both interfaces preserve every shared failure | `running-host-client-parity.test.ts` compares the source HTTP client and actual CLI/MCP children for all eleven errors through both passive operations, the exact shared result-byte boundary and rejection of excess descriptor properties before requests. Its blocked-stdout subprocess test proves client exit and a surviving peer after each cancellation. |
 | MCP protocol, resources and errors | `running-host-mcp.test.ts` proves the pinned handshake, tool/resource parity, incompatible versions, extra arguments, incoming framing/UTF-8, finite RPC identities and bounded writes. |
 
-The full changing-graph settlement and abrupt host death remain #375 and #374
-respectively. These future owners do not replace the passive assertions above.
+The full changing-graph settlement remains #375; abrupt host death has the
+#374 mapping below. Other milestone subsets retain their owning tickets.
+These owners do not replace the passive assertions above.
 
 ## Maintained wake and Unpause implementation (#369)
 
@@ -847,3 +848,61 @@ and recorded cassette replay. Later blocker authoring preserves executing
 attempt responsibility; safely suspended work still requires clear prerequisites
 before resumption. Stale inspection remains explicitly process-local and cannot
 replace unavailable current workflow graph authority.
+
+## Maintained abrupt host death and reconstruction (#374)
+
+Alice applies Pause while task A retains its claim, immutable plan, real Git
+worktree, and executing Codex association. The executor receives an interrupt
+request, but its response is withheld without yet proving stopped work. Pause
+stops the owner's timer; neither the unacknowledged request nor later host loss releases the occupied
+position. An attached CLI or MCP client explicitly submits Unpause.
+
+The maintained `running-host-death.acceptance.test.ts` runs the production
+composition in `running-host-death-fixture.ts` as an actual Node child. Its
+storage wrapper delegates to real SQLite, then withholds the exact Unpause
+append acknowledgement after COMMIT and before accepted publication or the
+bootstrap owner callback. The controller observes the returned durable record,
+kills that exact host group with SIGKILL, and proves both its terminal OS receipt
+and process-group absence before fixture removal. Failed proof retains the
+fixture files.
+Providers remain outside the killed process; actual Git and SQLite remain in
+one disposable fixture. No real-provider mutation or ambient provider home is
+used.
+
+Alice separately starts a new host over those same resources. Startup reacquires
+coordinator ownership and discovers the same unfinished Run. The reconstructed
+owner reads Unpause, starts its timer and admits an ordinary activation without
+another direction or a replayed callback. The provider holds the exact retained
+thread observation: while it is unproved, the same responsibilities, occupied
+position, planned Base, worktree, branch, and opaque attempt/thread/turn
+correlations remain. The unmatched Suspend intent is reconciled without a
+second interrupt. No cleanup, replacement Begin, second Run beginning, or
+synthetic crash event is authorized.
+
+The controlled executor then reports the exact prior turn interrupted with no
+background writers. Recovery records the qualifying safe-suspension report,
+reads current tracker membership/instructions/claims and real Git
+worktree/lineage, authorizes continuation, and resumes the same attempt in the
+same thread. This new continuation turn is distinct from replaying the original
+Begin or Unpause. The preserved result producer reuses its existing Git candidate;
+it does not recreate task work at the planned Base. No second crash/retry occurs
+in this suffix. Full delivery completion is outside this recovery chronology
+and remains owned by the existing delivery scenarios and #375.
+
+| Owned scenario | Maintained decisive assertions |
+| --- | --- |
+| S9 committed Unpause survives actual abrupt death | `CLI host loss reconstructs durable Unpause and exact work without retry` and its MCP counterpart assert SIGKILL/terminal exit, exact committed record, no Unpause callback before death, same Run/new host instance after separately restarting, one beginning, two control ordinals, restarted timer, and no replayed callback. |
+| S9 unresolved execution stays retained until authority reconciliation | Both tests hold the actual executor thread observation, compare reconstructed responsibilities and required occupied positions, private executor associations, immutable Base and physical Git worktree inventory, and forbid cleanup/release/abandonment. After exact interrupted-turn evidence, they assert successful activation, Executing → SafelySuspended → Executing for the same correlation, one Begin, one original thread and a new continuation turn. |
+| S5/S9 both public clients report uncertainty and attach passively | Both tests run actual CLI/MCP command children. The lost Unpause returns CommandOutcomeUnknown; a new read against the dead host returns HostUnavailable; a wrong-Run request is a known RunMismatch rejection. CLI exit statuses distinguish unknown (3) from rejection (2). MCP waits for initialization and asserts its JSON-RPC handshake errors separately from the tool application envelope. CLI and MCP watch adapters report TransportFailed, never successful EOF or Closed/accepted completion. Replacement control/snapshot children need no prior chat or cursor, read pending RunUnpaused, and perform no provider calls or direction replay. |
+| Maintained recovery cassette chronology | Both tests project the real recovered SQLite history through `projectRecordedCassette` and verify every recorded-cassette checkpoint reconstructs equivalent workflow history, including the original plan and the two control directions. |
+
+The executor now settles a retained interrupt intent only when observing the
+matching durable Suspend command and exact idle turn, after proving owned
+activity quiescent. Passive lifecycle and Resume observations remain unreadable
+for that intent. `preserves ambiguous Suspend across an idle hint and restart
+before Resume` checks those distinctions and prohibits a duplicate interrupt.
+This uses the existing workflow and journal/model contracts; no new event or
+model state is introduced. The coverage configuration serializes this process-heavy
+acceptance file alongside the existing host command files; it changes scheduling
+of checks only. Graceful command admission/Exit remains #369, graceful watch
+closure remains #372, and complete changing-graph settlement remains #375.

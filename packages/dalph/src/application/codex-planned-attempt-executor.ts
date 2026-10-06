@@ -2392,7 +2392,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     })
 
     const suspendIdle = Effect.fn("CodexPlannedAttemptExecutor.suspendIdle")(function* (
-      attempt: PlannedTaskAttempt,
+      attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord,
       current: ThreadReconciliation
@@ -2810,6 +2810,18 @@ const makeCodexPlannedAttemptExecutorContext = (
         return projectionOutcome(exact(report), false, record.threadId, record.observedTurnId)
       }
       const reconciliation = yield* reconcile(attempt, correlation, record)
+      // Only reconciliation of the durable Suspend command may settle its
+      // lost interrupt response. The exact idle turn and activity census prove
+      // stopped custody before publishing Safe; passive reads retain uncertainty.
+      if (
+        record._tag === "SuspensionInterruptIntended" &&
+        purpose._tag === "ReconcileCommand" &&
+        purpose.command === "Suspend" &&
+        reconciliation._tag === "Idle"
+      ) {
+        const report = yield* suspendIdle(attempt, correlation, record, reconciliation)
+        return projectionOutcome(exact(report))
+      }
       if (record._tag === "SuspensionInterruptIntended" && reconciliation._tag !== "Terminal")
         return projectionOutcome(
           unreadable(correlation, "Codex Suspend interruption awaits exact command reconciliation"),
