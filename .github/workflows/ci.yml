@@ -160,10 +160,11 @@ jobs:
     needs: [change-plan, quality-preflight]
     if: needs.change-plan.outputs.docs-only != 'true' && needs.quality-preflight.result == 'success'
     runs-on: ubuntu-latest
-    # Five minutes for install, five for artifact preparation, twenty for
-    # coverage, five seconds for termination grace, two for process absence,
-    # and setup/export/upload reserve.
-    timeout-minutes: 35
+    # Ten minutes for clean-runner preparation, thirty-five for the longest
+    # child stage, five seconds for termination grace, two for process absence,
+    # and five minutes for setup/restore/export/upload, rounded up to minutes.
+    # The stage-plan test checks this outer bound against the stage algebra.
+    timeout-minutes: 51
     env:
       DALPH_HOSTED_QUALITY_CANDIDATE_SHA: ${{ needs.change-plan.outputs.head-sha }}
       DALPH_HOSTED_QUALITY_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}

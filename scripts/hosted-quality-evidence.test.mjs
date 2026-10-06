@@ -81,19 +81,7 @@ const fixture = () => {
   const reports = hostedQualityStageIds.map((stageId) => {
     const directory = join(root, stageId)
     mkdirSync(directory, { recursive: true })
-    const log =
-      stageId === "delivery-repeatability"
-        ? Array.from(
-            { length: deliveryRepeatabilityDefaultIterations },
-            (_value, index) =>
-              `delivery repeatability fresh iteration ${index + 1}/${deliveryRepeatabilityDefaultIterations} PASS ` +
-              `elapsedMs=1 occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} ` +
-              `acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}`
-          ).join("\n") +
-          `\ndelivery repeatability complete mode=fresh warmIterations=${deliveryRepeatabilityDefaultIterations} ` +
-          `freshSampleIterations=0 elapsedMs=20 occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} ` +
-          `acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}\n`
-        : `${stageId} complete\n`
+    const log = `${stageId} complete\n`
     writeFileSync(join(directory, "stage.log"), log)
     const artifacts = [{ path: "stage.log", bytes: Buffer.byteLength(log), sha256: digest(Buffer.from(log)) }]
     if (stageId === "coverage") {
@@ -126,18 +114,7 @@ const fixture = () => {
         finishedAt: "2026-09-20T10:01:00.000Z"
       },
       artifacts,
-      childDiagnostics: [],
-      ...(stageId === "delivery-repeatability"
-        ? {
-            delivery: {
-              expectedIterations: deliveryRepeatabilityDefaultIterations,
-              completedIterations: deliveryRepeatabilityDefaultIterations,
-              summaryCount: 1,
-              occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount,
-              acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest
-            }
-          }
-        : {})
+      childDiagnostics: []
     }
     const report = join(directory, "envelope.json")
     writeFileSync(report, `${JSON.stringify(seal(payload))}\n`)
@@ -149,15 +126,7 @@ const fixture = () => {
     change(envelope)
     writeFileSync(reports[index], `${JSON.stringify(seal(envelope))}\n`)
   }
-  const rewriteLog = (index, change) => {
-    const logPath = join(dirname(reports[index]), "stage.log")
-    const log = change(readFileSync(logPath, "utf8"))
-    writeFileSync(logPath, log)
-    rewrite(index, (envelope) => {
-      envelope.artifacts[0] = { path: "stage.log", bytes: Buffer.byteLength(log), sha256: digest(Buffer.from(log)) }
-    })
-  }
-  return { root, reports, rewrite, rewriteLog, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+  return { root, reports, rewrite, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 
 void test("separates the portable semantic plan from the absolute owner execution manifest", () => {
@@ -188,32 +157,34 @@ void test("aggregates a complete exact suffix and retains every artifact locatio
     assert.equal(result.succeeded, true)
     assert.deepEqual(
       result.rows.map(({ outcome }) => outcome),
-      ["passed", "passed", "passed"]
+      ["passed", "passed"]
     )
-    assert.ok(result.rows[2].artifacts.some((path) => path.endsWith("/coverage/coverage-final.json")))
-    assert.ok(result.rows[2].artifacts.some((path) => path.endsWith("/coverage/coverage-summary.json")))
+    assert.ok(result.rows[1].artifacts.some((path) => path.endsWith("/coverage/coverage-final.json")))
+    assert.ok(result.rows[1].artifacts.some((path) => path.endsWith("/coverage/coverage-summary.json")))
   } finally {
     f.cleanup()
   }
 })
 
-void test("reports two independent failures and the passing stage in one fail-slow result", () => {
-  const f = fixture()
-  try {
-    for (const index of [0, 2])
-      f.rewrite(index, (envelope) => {
-        envelope.outcome = "failed"
-        envelope.terminal = { ...envelope.terminal, childOutcome: "exit:23", exitCode: 23 }
-      })
-    const result = aggregateHostedQualityStages({ binding, reports: f.reports })
-    assert.equal(result.succeeded, false)
-    assert.deepEqual(
-      result.rows.map(({ outcome }) => outcome),
-      ["failed", "passed", "failed"]
-    )
-    assert.ok(result.rows.every(({ artifacts }) => artifacts.some((path) => path.endsWith("/stage.log"))))
-  } finally {
-    f.cleanup()
+void test("reports each independent failure and retains passing-stage evidence fail-slow", () => {
+  for (const failedIndices of [[0], [1], [0, 1]]) {
+    const f = fixture()
+    try {
+      for (const index of failedIndices)
+        f.rewrite(index, (envelope) => {
+          envelope.outcome = "failed"
+          envelope.terminal = { ...envelope.terminal, childOutcome: "exit:23", exitCode: 23 }
+        })
+      const result = aggregateHostedQualityStages({ binding, reports: f.reports })
+      assert.equal(result.succeeded, false)
+      assert.deepEqual(
+        result.rows.map(({ outcome }) => outcome),
+        [0, 1].map((index) => (failedIndices.includes(index) ? "failed" : "passed"))
+      )
+      assert.ok(result.rows.every(({ artifacts }) => artifacts.some((path) => path.endsWith("/stage.log"))))
+    } finally {
+      f.cleanup()
+    }
   }
 })
 
@@ -221,27 +192,27 @@ void test("rejects missing, duplicate, malformed, changed-candidate, and mixed-t
   const cases = [
     (f) => f.reports.pop(),
     (f) => f.reports.push(f.reports[0]),
-    (f) => writeFileSync(f.reports[1], "not json\n"),
+    (f) => writeFileSync(f.reports[0], "not json\n"),
     (f) => f.rewrite(0, (envelope) => (envelope.binding.candidateSha = "d".repeat(40))),
-    (f) => f.rewrite(1, (envelope) => (envelope.binding.baseSha = "e".repeat(40))),
-    (f) => f.rewrite(1, (envelope) => (envelope.binding.runAttempt = "3")),
-    (f) => f.rewrite(1, (envelope) => (envelope.configurationDigest = "f".repeat(64))),
-    (f) => f.rewrite(1, (envelope) => (envelope.nodeVersion = "99.0.0")),
+    (f) => f.rewrite(0, (envelope) => (envelope.binding.baseSha = "e".repeat(40))),
+    (f) => f.rewrite(0, (envelope) => (envelope.binding.runAttempt = "3")),
+    (f) => f.rewrite(0, (envelope) => (envelope.configurationDigest = "f".repeat(64))),
+    (f) => f.rewrite(0, (envelope) => (envelope.nodeVersion = "99.0.0")),
     (f) =>
-      f.rewrite(1, (envelope) => {
+      f.rewrite(0, (envelope) => {
         envelope.terminal = { ...envelope.terminal, childOutcome: "exit:23", exitCode: 23 }
       }),
     (f) =>
-      f.rewrite(1, (envelope) => {
+      f.rewrite(0, (envelope) => {
         envelope.outcome = "failed"
       }),
     (f) =>
-      f.rewrite(1, (envelope) => {
+      f.rewrite(0, (envelope) => {
         envelope.outcome = "failed"
         envelope.terminal = { ...envelope.terminal, childOutcome: "timed-out", exitCode: "none", signal: "SIGKILL" }
       }),
-    (f) => writeFileSync(join(dirname(f.reports[2]), "coverage", "coverage-final.json"), "changed\n"),
-    (f) => writeFileSync(join(dirname(f.reports[1]), "unlisted-artifact.txt"), "unexpected\n")
+    (f) => writeFileSync(join(dirname(f.reports[1]), "coverage", "coverage-final.json"), "changed\n"),
+    (f) => writeFileSync(join(dirname(f.reports[0]), "unlisted-artifact.txt"), "unexpected\n")
   ]
   for (const mutate of cases) {
     const f = fixture()
@@ -250,7 +221,7 @@ void test("rejects missing, duplicate, malformed, changed-candidate, and mixed-t
       const result = aggregateHostedQualityStages({ binding, reports: f.reports })
       assert.equal(result.succeeded, false)
       assert.ok(result.failures.length > 0)
-      assert.equal(result.rows.length, 3)
+      assert.equal(result.rows.length, 2)
     } finally {
       f.cleanup()
     }
@@ -261,17 +232,17 @@ void test("keeps malformed structured artifact entries unproven while reporting 
   for (const malformed of [null, "not-an-artifact"]) {
     const f = fixture()
     try {
-      f.rewrite(1, (envelope) => {
+      f.rewrite(0, (envelope) => {
         envelope.artifacts[0] = malformed
       })
       const result = aggregateHostedQualityStages({ binding, reports: f.reports })
       assert.equal(result.succeeded, false)
       assert.deepEqual(
         result.rows.map(({ outcome }) => outcome),
-        ["passed", "UNPROVEN", "passed"]
+        ["UNPROVEN", "passed"]
       )
-      assert.equal(result.rows.length, 3)
-      assert.ok(result.rows[1].failures.some((failure) => failure.includes("malformed portable artifact")))
+      assert.equal(result.rows.length, 2)
+      assert.ok(result.rows[0].failures.some((failure) => failure.includes("malformed portable artifact")))
       assert.ok(result.failures.some((failure) => failure.startsWith("recorded-catalog:")))
     } finally {
       f.cleanup()
@@ -281,8 +252,8 @@ void test("keeps malformed structured artifact entries unproven while reporting 
 
 void test("keeps directory artifact entries unproven without aborting the other rows", () => {
   for (const [index, path] of [
-    [1, "."],
-    [2, "coverage"]
+    [0, "."],
+    [1, "coverage"]
   ]) {
     const f = fixture()
     try {
@@ -292,10 +263,10 @@ void test("keeps directory artifact entries unproven without aborting the other 
       assert.doesNotThrow(() => aggregateHostedQualityStages({ binding, reports: f.reports }))
       const result = aggregateHostedQualityStages({ binding, reports: f.reports })
       assert.equal(result.succeeded, false)
-      assert.equal(result.rows.length, 3)
+      assert.equal(result.rows.length, 2)
       assert.deepEqual(
         result.rows.map(({ outcome }) => outcome),
-        [0, 1, 2].map((row) => (row === index ? "UNPROVEN" : "passed"))
+        [0, 1].map((row) => (row === index ? "UNPROVEN" : "passed"))
       )
       assert.ok(result.rows[index].failures.some((failure) => failure.includes("regular file")))
       assert.ok(
@@ -307,35 +278,38 @@ void test("keeps directory artifact entries unproven without aborting the other 
   }
 })
 
-void test("revalidates every delivery digest candidate against the hosted binding", () => {
-  const f = fixture()
-  try {
-    const otherCandidate = "d".repeat(40)
-    f.rewriteLog(0, (log) => log.replaceAll(`candidateSha=${candidateSha}`, `candidateSha=${otherCandidate}`))
-    const result = aggregateHostedQualityStages({ binding, reports: f.reports })
-    assert.equal(result.succeeded, false)
-    assert.deepEqual(
-      result.rows.map(({ outcome }) => outcome),
-      ["UNPROVEN", "passed", "passed"]
-    )
-    assert.ok(result.failures.some((failure) => failure.startsWith("delivery-repeatability:")))
-  } finally {
-    f.cleanup()
-  }
+const deliveryLog = () =>
+  Array.from(
+    { length: deliveryRepeatabilityDefaultIterations },
+    (_value, index) =>
+      `delivery repeatability fresh iteration ${index + 1}/${deliveryRepeatabilityDefaultIterations} PASS ` +
+      `elapsedMs=1 occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} ` +
+      `acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}`
+  ).join("\n") +
+  `\ndelivery repeatability complete mode=fresh warmIterations=${deliveryRepeatabilityDefaultIterations} ` +
+  `freshSampleIterations=0 elapsedMs=20 occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} ` +
+  `acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}\n`
+
+void test("revalidates every delivery digest candidate against its exact binding", () => {
+  const changed = deliveryLog().replaceAll(`candidateSha=${candidateSha}`, `candidateSha=${"d".repeat(40)}`)
+  assert.throws(
+    () => deliveryEvidence(changed, "passed", candidateSha, deliveryRepeatabilityDefaultIterations),
+    /digest candidate differs/u
+  )
 })
 
 void test("uses the checked-in command when a sealed stage contract is malformed", () => {
   const f = fixture()
   try {
-    f.rewrite(1, (envelope) => {
+    f.rewrite(0, (envelope) => {
       envelope.stageContract.command = { executable: { malformed: true }, args: { malformed: true } }
     })
     const result = aggregateHostedQualityStages({ binding, reports: f.reports })
     assert.equal(result.succeeded, false)
-    assert.equal(result.rows.length, 3)
-    assert.equal(result.rows[1].outcome, "UNPROVEN")
+    assert.equal(result.rows.length, 2)
+    assert.equal(result.rows[0].outcome, "UNPROVEN")
     assert.deepEqual(
-      result.rows[1].command,
+      result.rows[0].command,
       plan.stages.find((cell) => cell.nodeVersion === nodeVersion && cell.stageId === "recorded-catalog")?.command
     )
   } finally {
@@ -384,53 +358,35 @@ void test("resolves every aggregate CLI report without leaking Array.map callbac
 void test("accepts terminal timeout as diagnostic evidence but never as qualification success", () => {
   const f = fixture()
   try {
-    f.rewrite(1, (envelope) => {
+    f.rewrite(0, (envelope) => {
       envelope.outcome = "failed"
       envelope.terminal = { ...envelope.terminal, childOutcome: "timed-out", exitCode: null, signal: "SIGKILL" }
     })
     const result = aggregateHostedQualityStages({ binding, reports: f.reports })
-    assert.equal(result.rows[1].outcome, "failed")
+    assert.equal(result.rows[0].outcome, "failed")
     assert.equal(result.succeeded, false)
   } finally {
     f.cleanup()
   }
 })
 
-void test("requires twenty ordered delivery digests and accepts zero or one production summary", () => {
-  const cases = [
-    (f) => f.rewriteLog(0, (log) => log.replace(/^delivery repeatability complete.*\n/u, "")),
-    (f) =>
-      f.rewriteLog(
-        0,
-        (log) =>
-          `${log}delivery repeatability complete mode=fresh occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}\n`
-      ),
-    (f) =>
-      f.rewriteLog(0, (log) =>
-        log.replace("delivery repeatability fresh iteration 1/20", "delivery repeatability fresh iteration 2/20")
-      ),
-    (f) => f.rewriteLog(0, (log) => `${log}delivery repeatability fresh iteration malformed\n`)
+void test("requires ordered delivery digests and accepts zero or one production summary", () => {
+  const log = deliveryLog()
+  const zeroSummary = log.replace(/^delivery repeatability complete.*\n/mu, "")
+  assert.equal(
+    deliveryEvidence(zeroSummary, "passed", candidateSha, deliveryRepeatabilityDefaultIterations).summaryCount,
+    0
+  )
+  const invalid = [
+    `${log}delivery repeatability complete mode=fresh occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}\n`,
+    log.replace(
+      `delivery repeatability fresh iteration 1/${deliveryRepeatabilityDefaultIterations}`,
+      `delivery repeatability fresh iteration 2/${deliveryRepeatabilityDefaultIterations}`
+    ),
+    `${log}delivery repeatability fresh iteration malformed\n`
   ]
-  const [zeroSummary, duplicateSummary, reordered, malformed] = cases
-  const valid = fixture()
-  try {
-    zeroSummary(valid)
-    assert.equal(aggregateHostedQualityStages({ binding, reports: valid.reports }).succeeded, true)
-  } finally {
-    valid.cleanup()
-  }
-  for (const mutate of [duplicateSummary, reordered, malformed]) {
-    const f = fixture()
-    try {
-      mutate(f)
-      const result = aggregateHostedQualityStages({ binding, reports: f.reports })
-      assert.equal(result.succeeded, false)
-      assert.equal(result.rows[0].outcome, "UNPROVEN")
-      assert.ok(result.failures.some((failure) => failure.startsWith("delivery-repeatability:")))
-    } finally {
-      f.cleanup()
-    }
-  }
+  for (const changed of invalid)
+    assert.throws(() => deliveryEvidence(changed, "passed", candidateSha, deliveryRepeatabilityDefaultIterations))
 })
 
 void test("includes setup time in hosted quality timing and rejects reversed cell starts", () => {
@@ -445,12 +401,12 @@ void test("includes setup time in hosted quality timing and rejects reversed cel
     assert.equal(result.metrics.makespanMilliseconds, 180_000)
     assert.equal(result.metrics.firstActionableFailureMilliseconds, 180_000)
 
-    f.rewrite(1, (envelope) => {
+    f.rewrite(0, (envelope) => {
       envelope.timing.cellStartedAt = "2026-09-20T10:01:01.000Z"
     })
     const reversed = aggregateHostedQualityStages({ binding, reports: f.reports })
     assert.equal(reversed.succeeded, false)
-    assert.equal(reversed.rows[1].outcome, "UNPROVEN")
+    assert.equal(reversed.rows[0].outcome, "UNPROVEN")
   } finally {
     f.cleanup()
   }
@@ -617,21 +573,21 @@ void test("rejects malformed or contradictory descendant terminal evidence", () 
   ]
   const accepted = fixture()
   try {
-    accepted.rewrite(1, (envelope) => (envelope.childDiagnostics = structuredClone(valid)))
-    assert.equal(aggregateHostedQualityStages({ binding, reports: accepted.reports }).rows[1].outcome, "passed")
+    accepted.rewrite(0, (envelope) => (envelope.childDiagnostics = structuredClone(valid)))
+    assert.equal(aggregateHostedQualityStages({ binding, reports: accepted.reports }).rows[0].outcome, "passed")
   } finally {
     accepted.cleanup()
   }
   for (const mutate of mutations) {
     const f = fixture()
     try {
-      f.rewrite(1, (envelope) => {
+      f.rewrite(0, (envelope) => {
         envelope.childDiagnostics = structuredClone(valid)
         mutate(envelope.childDiagnostics)
       })
       const result = aggregateHostedQualityStages({ binding, reports: f.reports })
-      assert.equal(result.rows[1].outcome, "UNPROVEN")
-      assert.ok(result.rows[1].failures.some((failure) => failure.includes("child diagnostic")))
+      assert.equal(result.rows[0].outcome, "UNPROVEN")
+      assert.ok(result.rows[0].failures.some((failure) => failure.includes("child diagnostic")))
     } finally {
       f.cleanup()
     }

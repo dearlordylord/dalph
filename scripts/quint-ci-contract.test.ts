@@ -171,6 +171,8 @@ describe("hosted formal-model contract", () => {
     expect(packageJson.scripts["check:ci:quality:preflight"]).toBe("pnpm check:preflight")
     expect(packageJson.scripts["check:ci:quality:stage"]).toBe("node scripts/run-hosted-quality-stage.mjs")
     expect(packageJson.scripts["check:ci:quality:aggregate"]).toBe("node scripts/aggregate-hosted-quality-stages.mjs")
+    expect(packageJson.scripts["test:ci-change-classification"]).toContain("scripts/quality-gate-stage-plan.test.mjs")
+    expect(packageJson.scripts["test:ci-change-classification"]).toContain("scripts/hosted-quality-evidence.test.mjs")
 
     const jobs = parseWorkflowJobs(ciWorkflow)
     const changePlanJob = jobs.get("change-plan")?.join("\n") ?? ""
@@ -189,8 +191,7 @@ describe("hosted formal-model contract", () => {
 
     expect(suffixJob).toContain("needs: [change-plan, quality-preflight]")
     expect(suffixJob).toContain("needs.quality-preflight.result == 'success'")
-    expect(suffixJob).toContain("timeout-minutes: 35")
-    expect(suffixJob).toContain("five for artifact preparation")
+    expect(suffixJob).toMatch(/timeout-minutes: \d+/u)
     expect(suffixJob).toContain("fail-fast: false")
     expect(suffixJob).toContain("max-parallel: 3")
     expect(suffixJob).toContain("include: ${{ fromJSON(needs.change-plan.outputs.quality-stages) }}")

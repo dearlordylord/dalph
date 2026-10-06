@@ -164,3 +164,26 @@ void test("ordinary hosted changes select the same coverage policy as local chec
   })
   assert.equal(broad.stages.length, 4)
 })
+
+void test("the hosted suffix job budget contains preparation, child stop, and evidence export", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
+  const suffix = workflow.split("  quality-suffix:\n")[1]?.split(/^  [a-z][a-z-]*:\n/mu)[0]
+  assert.ok(suffix, "missing hosted quality suffix job")
+  const timeout = suffix.match(/^    timeout-minutes: (\d+)$/mu)
+  assert.ok(timeout, "hosted suffix requires an explicit finite outer deadline")
+  const jobBudgetMilliseconds = Number(timeout[1]) * 60_000
+  const setupAndEvidenceReserveMilliseconds = 5 * 60_000
+  for (const stage of qualificationQualityGates()) {
+    const requiredMilliseconds =
+      stage.cleanRunnerPreparation.timeoutMilliseconds +
+      stage.timeout +
+      stage.terminationGrace +
+      stage.processGroupAbsenceTimeout +
+      setupAndEvidenceReserveMilliseconds
+    assert.ok(
+      jobBudgetMilliseconds >= requiredMilliseconds,
+      `${stage.id} requires preparation + complete child allowance + proved stop + setup/evidence reserve; ` +
+        `outer ${jobBudgetMilliseconds}ms truncates ${requiredMilliseconds}ms`
+    )
+  }
+})

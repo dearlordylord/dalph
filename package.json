@@ -14,7 +14,7 @@
     "bootstrap:worktree": "node scripts/bootstrap-worktree.mjs",
     "prewarm:vitest": "node scripts/prewarm-vitest.mjs",
     "test:preflight": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/preflight-census.test.mjs scripts/quality-lint-census.test.mjs scripts/candidate-secret-history.test.mjs scripts/quality-check-selection.test.mjs scripts/candidate-checks.test.mjs",
-    "test:ci-change-classification": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/classify-docs-only-change.test.mjs",
+    "test:ci-change-classification": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/classify-docs-only-change.test.mjs scripts/quality-gate-stage-plan.test.mjs scripts/hosted-quality-evidence.test.mjs",
     "typecheck": "node scripts/run-clean-typecheck.mjs",
     "typecheck:dev": "node node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit --incremental --tsBuildInfoFile .scratch/typecheck-dev.tsbuildinfo",
     "typecheck:effect": "node scripts/run-effect-diagnostics.mjs",

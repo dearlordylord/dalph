@@ -109,7 +109,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Manually run the historical DS01–DS13 strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. It is no longer an automatic local or hosted gate under #413's causal publication contract. |
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
-| `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
+| `test:ci-change-classification` | Prove CI classification, suffix plan/budget consistency, and hosted evidence/cancellation controls. |
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. Baseline and full preflight bound the command to seven minutes: a timed successful smoke took 330.592 seconds under shared-host contention, including 165.727 seconds in two capstone DOM scenarios. The command remains mandatory when selected. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
 | `check:lab:browser:causal` | Host an ephemeral Lab and replay the causal cassette with exact occurrence identity in Chromium. Use for causal matcher and authoring changes. |
