@@ -4,8 +4,14 @@ import { existsSync, mkdtempSync, watch, readFileSync, readdirSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
-import { fileURLToPath } from "node:url"
-import { repositoryLocation, wallClockTimestamp, withoutInheritedCustody } from "./gate-custody-records.mjs"
+import {
+  inheritedCustody,
+  readRecord,
+  repositoryLocation,
+  wallClockTimestamp,
+  withoutInheritedCustody
+} from "./gate-custody-records.mjs"
+import { proveStageDescendantsStopped } from "./gate-registration.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { disposeOwnedServerFixture, disposeProvenFixture } from "./owned-server-fixture.mjs"
 import {
@@ -14,7 +20,6 @@ import {
   validateOwnedQuintJava
 } from "./quint-owned-server.mjs"
 
-const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const helper = new URL("./quint-owned-server.mjs", import.meta.url).href
 const inputGuard = new URL("./gate-resume-inputs.mjs", import.meta.url).href
 const boundedCommand = new URL("./run-bounded-command.mjs", import.meta.url).href
@@ -114,6 +119,20 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
   // The gate owns the execution deadline; the enclosing runner allows its
   // five-second termination grace and two-second absence observation to finish.
   const gateBudgetMilliseconds = 15000
+  // The outer bounded launch remains registered with its admitted parent.
+  // Only its disposable child crosses into the fixture repository's own
+  // admission: registerSpawn deliberately restores parent custody even when
+  // callers supply a replacement environment.
+  const admission = join(root, "admission.mjs")
+  writeFileSync(
+    admission,
+    `import {withoutInheritedCustody} from ${JSON.stringify(custodyModule)};
+const isolated=withoutInheritedCustody(process.env);
+for(const name of Object.keys(process.env))if(!(name in isolated))delete process.env[name];
+process.env.DALPH_GATE_DEADLINE=${JSON.stringify(new Date(Date.parse(wallClockTimestamp()) + gateBudgetMilliseconds).toISOString())};
+await import(${JSON.stringify(new URL("./with-gate-slot.mjs", import.meta.url).href)});
+`
+  )
   const outerController = new AbortController()
   const watcher =
     mode === "busy-interruption"
@@ -129,7 +148,7 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
   try {
     processResult = await runBoundedCommand({
       executable: process.execPath,
-      args: [wrapper, "--", process.execPath, script],
+      args: [admission, "--", process.execPath, script],
       cwd: root,
       environment,
       name: `owned-server fixture ${mode}`,
@@ -141,11 +160,17 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
       timeoutMilliseconds: gateBudgetMilliseconds + 10000
     })
   } catch (cause) {
-    if (
-      mode === "busy-interruption" &&
-      cause.quintCommandResult === "cancelled" &&
-      cause.stoppedWritersProven === true
-    ) {
+    if (mode === "busy-interruption" && cause.quintCommandResult === "cancelled") {
+      if (cause.stoppedWritersProven !== true) {
+        const context = inheritedCustody()
+        if (context === undefined || typeof cause.gateObligationId !== "string") throw cause
+        // Cancellation preserves its original receipt. Under an admitted
+        // parent, positively prove the exact stopped inventory separately.
+        proveStageDescendantsStopped({
+          context,
+          intent: readRecord(join(context.runDirectory, "obligations", `${cause.gateObligationId}.json`))
+        })
+      }
       processResult = cause
     } else {
       // Reconciliation refuses a live/unreadable descendant and preserves its

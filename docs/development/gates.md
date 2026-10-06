@@ -90,6 +90,18 @@ at fresh and inherited admission before launch. Run opt-in real qualification
 separately; tests can still set their own disposable capture paths internally.
 
 A command exit, stopped custody, and final qualification are distinct evidence.
+
+The owned-server fixture first registers its bounded launcher with any enclosing
+gate, then that exact child removes inherited admission metadata before entering
+the disposable repository's own gate. A replacement environment passed to the
+bounded runner cannot remove parent registration, so stripping metadata only in
+the caller would incorrectly bind the fixture wrapper to another worktree.
+`scripts/quint-owned-server.test.mjs::uses and terminates only the identified
+owned server with a foreign same-port IPv4 listener` covers this path when run
+under an admitted parent as well as standalone. The fixture validates and
+disposes its own stopped custody; no parent receipt qualifies the fixture.
+This test-launch routing changes no Dalph workflow or production process rule.
+
 A failed child receipt retains its historical absence observation. If its enclosing
 test later stops the group, a separate exact group-absence record can prove stopped
 custody without rewriting that child result. Missing terminal receipts remain
