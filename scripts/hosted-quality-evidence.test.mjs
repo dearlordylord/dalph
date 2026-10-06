@@ -453,6 +453,8 @@ void test("the production runner exports owner-validated stopped custody from a 
     const runner = fileURLToPath(new URL("./run-hosted-quality-stage.mjs", import.meta.url))
     const output = join(root, ".scratch", "portable")
     const environment = withoutInheritedCustody(process.env)
+    // This controlled local runner has fixture identities, not its parent's hosted binding.
+    environment.GITHUB_ACTIONS = "false"
     delete environment.DALPH_COVERAGE_BASE_SHA
     const result = spawnSync(
       process.execPath,
@@ -639,6 +641,7 @@ void test("relays cancellation, settles descendants, and never exports cancellat
     const output = join(root, ".scratch", "portable")
     const environment = withoutInheritedCustody({
       ...process.env,
+      GITHUB_ACTIONS: "false",
       CONTROLLED_CHILD_PID_FILE: pidPath,
       CONTROLLED_GROUP_PID_FILE: groupPidPath,
       npm_execpath: pnpm
