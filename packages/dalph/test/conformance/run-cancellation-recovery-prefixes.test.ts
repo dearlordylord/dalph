@@ -102,6 +102,7 @@ const productionRuntimeLayer = (
   executorLayer: ReturnType<typeof cancellationRecoveryExecutorLayer>
 ) => {
   const interpreter = WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: () => Effect.die("cancellation recovery does not acquire a task claim"),
     readTaskClaim: () => Effect.die("cancellation recovery does not read a task claim"),
     readTaskWorktree: () => Effect.die("cancellation recovery does not read Git worktrees"),

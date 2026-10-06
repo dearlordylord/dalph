@@ -1041,6 +1041,8 @@ export {
   presentWorkflowOccurrence,
   projectWorkflowOccurrences,
   TaskTrackerFactsObserved,
+  TaskAttemptBaseReadInitiated,
+  TaskAttemptBaseObserved,
   TrackerOutcomeWithoutReadIntent,
   TaskTrackerReadInitiated,
   WorkflowActor,
@@ -1135,3 +1137,29 @@ export { ResultRecoveryAttemptReplacedEvent } from "./workflow/protocols/result-
 
 export * from "./workflow/protocols/executor-guidance/events.js"
 export * from "./workflow/protocols/executor-guidance/control.js"
+
+export {
+  GitTaskAttemptBase,
+  GitTaskAttemptBaseUnsettled,
+  nodeGitTaskAttemptBaseLayer
+} from "./authorities/git/task-attempt-base.js"
+export { AttemptBasePolicy, TaskAttemptBaseObservation } from "./workflow/protocols/task-attempt-planning/base.js"
+export { controlledTaskAttemptBaseLayer } from "./workflow/interpretation/layers.js"
+export { TaskAttemptBaseReadIntendedEvent, TaskAttemptBaseObservedEvent } from "./workflow/registry/event.js"
+export { taskAttemptBaseReadOperationIdFor } from "./workflow/protocols/task-attempt-planning/base-read-identity.js"
+
+export {
+  ApplyTaskAttemptBaseRetryRequest,
+  TaskAttemptBaseRetryRequestId,
+  TaskAttemptBaseRetrySubject,
+  TaskAttemptBaseRetryRequestedEvent,
+  TaskAttemptBaseRetryRejected
+} from "./workflow/protocols/task-attempt-planning/retry-data.js"
+export {
+  applyTaskAttemptBaseRetry,
+  readTaskAttemptBaseRetryRequest,
+  taskAttemptBaseRetryFactOperationId,
+  taskAttemptBaseRetryRecordKey
+} from "./workflow/protocols/task-attempt-planning/retry.js"
+
+export { TaskAttemptBaseRetryRequested } from "./workflow/registry/occurrence-projection.js"

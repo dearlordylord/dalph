@@ -493,6 +493,7 @@ const boundaryWorkflowInterpreter = (
   reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"]
 ): WorkflowInterpreter["Service"] =>
   WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: () => increment(calls, "tracker").pipe(Effect.andThen(Effect.die("unexpected tracker mutation"))),
     readTaskClaim: () => increment(calls, "tracker").pipe(Effect.andThen(Effect.die("unexpected tracker read"))),
     readTaskWorktree: () => increment(calls, "git").pipe(Effect.andThen(Effect.die("unexpected Git read"))),

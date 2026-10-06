@@ -1,3 +1,4 @@
+import { taskAttemptBaseRetryRecordKey } from "../protocols/task-attempt-planning/retry.js"
 import {
   executorGuidanceAdmittedRecordKey,
   executorGuidanceDispatchIntendedRecordKey,
@@ -269,6 +270,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     CancelledAttemptClaimNoReleaseObserved: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: cancelledAttemptClaimNoReleaseRecordKey(event.plannedAttempt.attemptId)
+    }),
+    TaskAttemptBaseRetryRequested: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: taskAttemptBaseRetryRecordKey(event.subject.refusedReadOperationId)
     }),
     TaskWorkCapacityChanged: (event) => ({
       _tag: "RunPolicyEventDescriptor",
@@ -776,6 +781,20 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         expectedKey: intentRecordKey(event.operation.operationId),
         operationId: event.operation.operationId,
         requiredOperationIds: event.operation.predecessorOperationIds
+      }),
+    TaskAttemptBaseReadIntended: (event) =>
+      operationEvent({
+        expectedKey: intentRecordKey(event.operation.operationId),
+        operationId: event.operation.operationId,
+        requiredOperationIds: event.operation.predecessorOperationIds
+      }),
+    TaskAttemptBaseObserved: (event) =>
+      operationEvent({
+        expectedKey: outcomeRecordKey(event.operationId),
+        operationId: event.operationId,
+        requiredOperationIds: [event.operationId],
+        requiredPredecessorKey: intentRecordKey(event.operationId),
+        requiredPredecessorKinds: ["TaskAttemptBaseReadIntended"]
       }),
     GitReadIntentRecorded: (event) =>
       operationEvent({

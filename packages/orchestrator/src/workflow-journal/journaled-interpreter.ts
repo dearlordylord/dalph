@@ -6,6 +6,8 @@ import { InRunJournal, type InRunJournalService, type JournalAppendError } from 
 import { AcceptedJournalReader, type AcceptedJournalReaderService } from "./accepted-reader.js"
 import { journalEvidenceBefore, journalRecordByKey, journalRecordsForTask } from "./record-evidence.js"
 import {
+  TaskAttemptBaseReadIntendedEvent,
+  TaskAttemptBaseObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
@@ -350,6 +352,48 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         )
       })
 
+      const readTaskAttemptBase: WorkflowInterpreterService["readTaskAttemptBase"] = Effect.fn(
+        "WorkflowInterpreter.Journaled.readTaskAttemptBase"
+      )(function* (operation, onIntentRecorded = Effect.void, interruptibleBoundary) {
+        yield* Effect.uninterruptible(
+          journal
+            .append(
+              runId,
+              intentRecordKey(operation.operationId),
+              TaskAttemptBaseReadIntendedEvent.make({
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                operation,
+                version: workflowJournalEventVersion
+              })
+            )
+            .pipe(Effect.andThen(onIntentRecorded))
+        )
+        const existing = journalRecordByKey(
+          yield* accepted.readAccepted(runId),
+          outcomeRecordKey(operation.operationId)
+        )?.event
+        if (existing?._tag === "TaskAttemptBaseObserved") return existing.observation
+        return yield* runInterruptibleBoundary(
+          interruptibleBoundary,
+          InterruptibleWorkflowBoundaryIntent.AuthorityRequest({ family: "Git", operationId: operation.operationId }),
+          interpreter.readTaskAttemptBase(operation),
+          (observation) =>
+            journal
+              .append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                TaskAttemptBaseObservedEvent.make({
+                  observation,
+                  occurrenceClassification: "NonActionOccurrence",
+                  operationId: operation.operationId,
+                  version: workflowJournalEventVersion
+                })
+              )
+              .pipe(Effect.as(observation))
+        )
+      })
+
       const readTaskWorkSpecification = journaledTaskWorkSpecificationRead(runId, interpreter, journal, accepted)
 
       const releaseTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.releaseTaskClaim")(function* (
@@ -441,6 +485,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         acquireTaskClaim,
         readTaskClaim,
         readTaskWorktree,
+        readTaskAttemptBase,
         readTargetLineage,
         readTrackerGraph: (...args) =>
           readTrackerGraph(...args).pipe(Effect.provideService(AcceptedJournalReader, accepted)),

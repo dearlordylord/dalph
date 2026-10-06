@@ -1,20 +1,6 @@
-/* eslint-disable max-lines -- The controlled six-task runtime keeps its shared journal and delivery fixtures co-located. */
 import {
-  AcceptedResultEvidenceManifest,
-  type AttemptId,
-  makeTaskWorkSpecification,
-  PlannedAttemptExecutor,
-  PlannedAttemptExecutorLifecycleObservation,
-  PlannedAttemptExecutorProjection,
-  PlannedAttemptExecutorReport,
-  plannedAttemptExecutorCorrelation,
-  PlannedTaskAttempt,
-  TaskBranchRef,
-  TaskExecutorLocator,
-  type TaskId,
-  WorktreeLocator
-} from "@dalph/contracts"
-import {
+  AttemptBasePolicy,
+  controlledTaskAttemptBaseLayer,
   AllocatedWorkflowRunId,
   attemptChoiceControlWithProvidedProtocolLayer,
   ClaimOwner,
@@ -69,6 +55,22 @@ import {
   type IntegratorRunCorrelation,
   DeliveryRuntimeObservationObserver
 } from "@dalph/orchestrator"
+/* eslint-disable max-lines -- The controlled six-task runtime keeps its shared journal and delivery fixtures co-located. */
+import {
+  AcceptedResultEvidenceManifest,
+  type AttemptId,
+  makeTaskWorkSpecification,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport,
+  plannedAttemptExecutorCorrelation,
+  PlannedTaskAttempt,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  type TaskId,
+  WorktreeLocator
+} from "@dalph/contracts"
 import { Context, Deferred, Effect, Layer, Queue, Ref, Stream, type Crypto, type Scope } from "effect"
 import { makeSixTaskGitAndEvidence } from "./six-task-finality-boundaries.js"
 import {
@@ -199,7 +201,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
           if (task === undefined) return yield* Effect.die("cannot plan an unknown controlled task")
           return PlannedTaskAttempt.make({
             attemptId: task.attemptId,
-            baseSha,
+            baseSha: request.baseSha,
             branch: TaskBranchRef.make(`refs/heads/${namespace}-${request.specification.taskId}`),
             executor: TaskExecutorLocator.make(`executor:${request.specification.taskId}`),
             runId,
@@ -217,6 +219,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     Layer.succeed(PlannedTaskAttemptPlanner, Context.get(planningContext, PlannedTaskAttemptPlanner))
   )
   const interpreter = workflowInterpreterLayer.pipe(
+    Layer.provide(controlledTaskAttemptBaseLayer),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(
@@ -227,10 +230,10 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
         Layer.succeed(TrackerMutation, Context.get(shared, TrackerMutation)),
         Layer.succeed(GitWorktree, Context.get(shared, GitWorktree)),
         Layer.succeed(GitTargetLineage, {
-          read: () =>
+          read: (plannedBaseSha) =>
             Ref.get(head).pipe(
               Effect.map((targetHeadSha) => ({
-                plannedBaseSha: baseSha,
+                plannedBaseSha,
                 targetHeadSha,
                 plannedBaseIsAncestorOfTargetHead: true
               }))
@@ -304,7 +307,10 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
         shell,
         noopJournalMaintenanceObservation,
         undefined,
-        remotePublicationTargetForTest
+        remotePublicationTargetForTest,
+        true,
+        undefined,
+        AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha })
       ).pipe(
         Layer.provide(journalStoreCapabilities(Layer.succeed(JournalStore, runtimeObservation.controlledJournal))),
         Layer.provide(Layer.succeed(CoordinatorOwnership, ownership)),

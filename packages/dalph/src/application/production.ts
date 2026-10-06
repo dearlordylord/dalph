@@ -1,15 +1,6 @@
-import { fileGitSenderCustodyLayer } from "./git-sender-custody.js"
-/* eslint-disable max-lines -- Production workflow assembly keeps its capability topology co-located for auditability. */
-import { NodeServices } from "@effect/platform-node"
 import {
-  type GitRepositoryLocator,
-  type IntegrationTarget,
-  type RemotePublicationTarget,
-  PlannedAttemptExecutor,
-  type PlannedAttemptExecutorLifecycleObservation,
-  RunId
-} from "@dalph/contracts"
-import {
+  nodeGitTaskAttemptBaseLayer,
+  type AttemptBasePolicy,
   type JournaledRunObservationSource,
   type AcceptedRunControlDirection,
   type ApplicationExitTraceEvent,
@@ -84,6 +75,17 @@ import {
   defaultJournalMaintenanceObservation,
   type AcceptedJournalReader
 } from "@dalph/orchestrator"
+import { fileGitSenderCustodyLayer } from "./git-sender-custody.js"
+/* eslint-disable max-lines -- Production workflow assembly keeps its capability topology co-located for auditability. */
+import { NodeServices } from "@effect/platform-node"
+import {
+  type GitRepositoryLocator,
+  type IntegrationTarget,
+  type RemotePublicationTarget,
+  PlannedAttemptExecutor,
+  type PlannedAttemptExecutorLifecycleObservation,
+  RunId
+} from "@dalph/contracts"
 import type { FileSystem } from "effect"
 import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect"
 
@@ -173,6 +175,8 @@ export type ProductionWorkflowApplicationExitBoundary =
 /** Optional production boundaries that advance one accepted result through delivery and finality. */
 // eslint-disable-next-line functional/no-mixed-types -- Production qualification groups typed service values and one typed reconstruction observation callback.
 export interface ProductionWorkflowRuntimeBoundaries {
+  /** Explicit Run-begin policy; absent historical policy never migrates on entry. */
+  readonly attemptBasePolicy?: AttemptBasePolicy
   /** Already-acquired repository owner shared with host discovery and SQLite. */
   readonly coordinatorOwnership?: CoordinatorOwnership["Service"]
   /** One explicit application Exit construction topology; host shells carry no ordinary observers. */
@@ -205,7 +209,12 @@ export interface ProductionWorkflowRuntimeBoundaries {
 }
 
 /** Names the concrete Git command method crossed by workflow worktree and lineage protocols. */
-export type ProductionWorkflowGitCommand = "run" | "runInWorktree" | "runBytesInWorktree"
+export type ProductionWorkflowGitCommand =
+  | "run"
+  | "runInWorktree"
+  | "runBytesInWorktree"
+  | "runBoundedInRepository"
+  | "runBoundedInWorktree"
 
 /** Qualification-only tap over the production workflow Git service; it cannot replace that service. */
 export type ProductionWorkflowGitCommandObserver = (
@@ -219,9 +228,27 @@ export interface ProductionRunReconstructionObservation {
   readonly taskWorkCapacity: TaskWorkCapacityControl["Service"]
 }
 
-const observedWorkflowGitCommand = (service: GitCommandService, observe: ProductionWorkflowGitCommandObserver) =>
-  GitCommand.of({
+const observedWorkflowGitCommand = (service: GitCommandService, observe: ProductionWorkflowGitCommandObserver) => {
+  const boundedRepository = service.runBoundedInRepository
+  const boundedWorktree = service.runBoundedInWorktree
+  return GitCommand.of({
     ...service,
+    ...(boundedRepository === undefined
+      ? {}
+      : {
+          runBoundedInRepository: (...args) =>
+            observe("runBoundedInRepository", { locator: args[0], args: args[1] }).pipe(
+              Effect.andThen(boundedRepository(...args))
+            )
+        }),
+    ...(boundedWorktree === undefined
+      ? {}
+      : {
+          runBoundedInWorktree: (...args) =>
+            observe("runBoundedInWorktree", { locator: args[0], args: args[1] }).pipe(
+              Effect.andThen(boundedWorktree(...args))
+            )
+        }),
     run: (...args) => observe("run", { locator: args[0], args: args[1] }).pipe(Effect.andThen(service.run(...args))),
     runInWorktree: (...args) =>
       observe("runInWorktree", { locator: args[0], args: args[1] }).pipe(
@@ -232,6 +259,7 @@ const observedWorkflowGitCommand = (service: GitCommandService, observe: Product
         Effect.andThen(service.runBytesInWorktree(...args))
       )
   })
+}
 
 /** Translate only the resolved working repository; separate integration targets keep their own Git authority. */
 export const productionTargetGitCommands = (
@@ -517,6 +545,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   const baseInterpreterLayer = workflowInterpreterLayer.pipe(
     Layer.provide(trackerMutationLayer),
     Layer.provide(gitTargetLineageLayer),
+    Layer.provide(nodeGitTaskAttemptBaseLayer.pipe(Layer.provide(workflowGitCommandLayer))),
     Layer.provide(gitWorktreeLayer)
   )
   const executorWithAcceptedEvidence =
@@ -617,7 +646,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           undefined,
           runtimeBoundaries.remotePublicationTarget,
           true,
-          { crypto, executor }
+          { crypto, executor },
+          runtimeBoundaries.attemptBasePolicy
         ).pipe(Layer.provide(journalLayer)),
         Layer.mergeAll(
           Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary),

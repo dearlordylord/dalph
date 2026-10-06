@@ -786,6 +786,7 @@ it("appends one canonical observation for each logical provider read", async () 
   const provider = Layer.succeed(
     WorkflowInterpreter,
     WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -916,6 +917,7 @@ it("a lost post-success graph response authorizes no dependant and resumes only 
   const provider = Layer.succeed(
     WorkflowInterpreter,
     WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unused"),
       readTaskWorktree: () => Effect.die("unused"),
@@ -1030,6 +1032,7 @@ it("an invalid post-success graph read keeps the focused success and B blocked w
   const provider = Layer.succeed(
     WorkflowInterpreter,
     WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unused"),
       readTaskWorktree: () => Effect.die("unused"),
@@ -1150,6 +1153,7 @@ it("fails replay with a typed error when recorded facts cannot reconstruct the p
   const provider = Layer.succeed(
     WorkflowInterpreter,
     WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -1221,6 +1225,7 @@ it("replays a focused read from its canonical journal observation without callin
     Effect.gen(function* () {
       const focusedReads = yield* Ref.make(0)
       return WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -1277,6 +1282,7 @@ effectIt.effect("reuses one acknowledged focused-read intent after a lost provid
     const provider = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unused"),
         readTaskWorktree: () => Effect.die("unused"),
@@ -1350,6 +1356,7 @@ it("keeps live and replayed target-A focused reads on target A across a Journal 
   const provider = Layer.succeed(
     WorkflowInterpreter,
     WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: () => Effect.die("unused"),
       readTaskClaim: () => Effect.die("unused"),
       readTaskWorktree: () => Effect.die("unused"),

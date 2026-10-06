@@ -1,3 +1,4 @@
+import type { AttemptBasePolicy } from "../workflow/protocols/task-attempt-planning/base.js"
 // @effect-diagnostics lazyEffect:off
 import { Context, Effect, Layer, Schema } from "effect"
 import { RunId, type RemotePublicationTarget } from "@dalph/contracts"
@@ -243,7 +244,8 @@ export interface JournalStoreService {
     runId: RunId,
     target: TrackerTarget,
     initialControlPolicy: InitialControlPolicy,
-    remotePublicationTarget: RemotePublicationTarget
+    remotePublicationTarget: RemotePublicationTarget,
+    attemptBasePolicy?: AttemptBasePolicy
   ) => Effect.Effect<JournalRecord, JournalStoreError | WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed>
   readonly append: (
     runId: RunId,

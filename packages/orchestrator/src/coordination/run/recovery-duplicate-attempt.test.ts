@@ -342,6 +342,7 @@ const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
     Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => failIfCalled("task tracker claim"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),

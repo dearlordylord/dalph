@@ -1,3 +1,4 @@
+import type { AttemptBasePolicy } from "../workflow/protocols/task-attempt-planning/base.js"
 /* eslint-disable functional/immutable-data -- Validation accumulates private diagnostics and graph reachability only. */
 import { type RemotePublicationTarget, type RunId, type TaskId } from "@dalph/contracts"
 import { Effect } from "effect"
@@ -44,9 +45,11 @@ export const makeWorkflowRunBeganRecord = (
   runId: RunId,
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
-  remotePublicationTarget: RemotePublicationTarget
+  remotePublicationTarget: RemotePublicationTarget,
+  attemptBasePolicy?: AttemptBasePolicy
 ): JournalRecord => ({
   event: WorkflowRunBeganEvent.make({
+    ...(attemptBasePolicy === undefined ? {} : { attemptBasePolicy }),
     initialControlPolicy,
     initiatedBy: { _tag: "DalphCoordinator" },
     occurrenceClassification: "InitiatedAction",
@@ -82,7 +85,8 @@ export const decideWorkflowRunBeginning = (
   runId: RunId,
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
-  remotePublicationTarget: RemotePublicationTarget
+  remotePublicationTarget: RemotePublicationTarget,
+  attemptBasePolicy?: AttemptBasePolicy
 ): LifecycleTransition<WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed> => {
   const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
   if (began !== undefined) {
@@ -95,7 +99,13 @@ export const decideWorkflowRunBeginning = (
   return first === undefined
     ? {
         _tag: "LifecycleTransitionAccepted",
-        record: makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTarget)
+        record: makeWorkflowRunBeganRecord(
+          runId,
+          target,
+          initialControlPolicy,
+          remotePublicationTarget,
+          attemptBasePolicy
+        )
       }
     : {
         _tag: "LifecycleTransitionRejected",

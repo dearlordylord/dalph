@@ -1049,6 +1049,7 @@ const makeCancellationDriverImplementation = () => {
   }
 
   const workflowInterpreterForSettlement = WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: () => Effect.die("cancellation conformance must not acquire a successor claim"),
     readTaskClaim: () =>
       Effect.succeed(

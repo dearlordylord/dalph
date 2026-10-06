@@ -73,6 +73,7 @@ const unused = () => Effect.die("unused")
 const provider = Layer.succeed(
   WorkflowInterpreter,
   WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: unused,
     readTaskClaim: unused,
     readTaskWorkSpecification: unused,
@@ -114,7 +115,12 @@ const repeatedUnchangedLineage = (count: number) => {
     revision: `fresh-attempt-lineage-repeated-revision-${count}`,
     tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
   })
-  const records: Array<JournalRecord> = []
+  const records: Array<JournalRecord> = [
+    makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest, {
+      _tag: "ExplicitFixedBase",
+      baseSha: attempt.baseSha
+    })
+  ]
   const append = (event: JournalRecord["event"], key: JournalRecord["key"]) =>
     records.push({ event, key, position: JournalPosition.make(records.length + 1), runId })
   append(
@@ -195,7 +201,10 @@ it.effect("rejects a fresh attempt plan before append when its exact predecessor
   }).pipe(
     Effect.provide(
       runtimeFor([
-        makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy, remotePublicationTargetForTest)
+        makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy, remotePublicationTargetForTest, {
+          _tag: "ExplicitFixedBase",
+          baseSha: plannedAttempt.baseSha
+        })
       ])
     )
   )
@@ -300,10 +309,9 @@ it.effect("refuses a focused specification outcome without its exact read intent
 
 it.effect("rejects executor responsibility before append when an ordinary plan lacks worktree-ready lineage", () => {
   const fixture = repeatedUnchangedLineage(1)
-  const priorRecords = fixture.records.map((record) => ({
-    ...record,
-    position: JournalPosition.make(record.position + 1)
-  }))
+  const priorRecords = fixture.records
+    .filter(({ event }) => event._tag !== "WorkflowRunBegan")
+    .map((record, index) => ({ ...record, position: JournalPosition.make(index + 2) }))
   const plan = {
     event: TaskAttemptPlannedEvent.make({ operation: fixture.operation, version: workflowJournalEventVersion }),
     key: attemptPlanRecordKey(fixture.operation.plannedAttempt.attemptId),
@@ -325,7 +333,10 @@ it.effect("rejects executor responsibility before append when an ordinary plan l
   }).pipe(
     Effect.provide(
       runtimeFor([
-        makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy, remotePublicationTargetForTest),
+        makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy, remotePublicationTargetForTest, {
+          _tag: "ExplicitFixedBase",
+          baseSha: plannedAttempt.baseSha
+        }),
         ...priorRecords,
         plan
       ])

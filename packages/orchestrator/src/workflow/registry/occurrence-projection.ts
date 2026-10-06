@@ -1,4 +1,9 @@
 import {
+  TaskAttemptBaseRetryRequestId,
+  TaskAttemptBaseRetrySubject
+} from "../protocols/task-attempt-planning/retry-data.js"
+import { TaskAttemptBaseObservation } from "../protocols/task-attempt-planning/base.js"
+import {
   PlannedAttemptExecutorWriterCustody,
   IntegrationTarget,
   AttemptId,
@@ -223,6 +228,37 @@ export const TaskTrackerFactsObserved = Schema.TaggedStruct("TaskTrackerFactsObs
 )
 export type TaskTrackerFactsObserved = typeof TaskTrackerFactsObserved.Type
 
+/** One explicit Operator direction authorizing fresh tracker checks after a settled Base refusal. */
+export const TaskAttemptBaseRetryRequested = Schema.TaggedStruct("TaskAttemptBaseRetryRequested", {
+  ...initiatedActionFields,
+  initiatedBy: WorkflowActor.cases.Operator,
+  requestId: TaskAttemptBaseRetryRequestId,
+  subject: TaskAttemptBaseRetrySubject,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type TaskAttemptBaseRetryRequested = typeof TaskAttemptBaseRetryRequested.Type
+
+/** Dalph owns one task-correlated Git qualification before attempt allocation. */
+export const TaskAttemptBaseReadInitiated = Schema.TaggedStruct("TaskAttemptBaseReadInitiated", {
+  ...initiatedActionFields,
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  operation: WorkflowOperation.cases.ReadTaskAttemptBase,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type TaskAttemptBaseReadInitiated = typeof TaskAttemptBaseReadInitiated.Type
+
+/** Git qualified or refused the Base through the named pre-plan read. */
+export const TaskAttemptBaseObserved = Schema.TaggedStruct("TaskAttemptBaseObserved", {
+  ...nonActionOccurrenceFields,
+  observation: TaskAttemptBaseObservation,
+  originatingActionOperationId: OperationId,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type TaskAttemptBaseObserved = typeof TaskAttemptBaseObserved.Type
+
 /** Dalph committed one exact planned-attempt Git read and owns its continuation. */
 export const GitReadInitiated = Schema.TaggedStruct("GitReadInitiated", {
   ...initiatedActionFields,
@@ -406,6 +442,9 @@ export type WorkflowOccurrence =
   | IntegrationResponsibilityBegan
   | IntegrationStarted
   | GitReadInitiated
+  | TaskAttemptBaseRetryRequested
+  | TaskAttemptBaseReadInitiated
+  | TaskAttemptBaseObserved
   | PlannedAttemptExecutorWorkReported
   | PlannedAttemptExecutorWorkResponsibilityBegan
   | PlannedAttemptReplaced
@@ -426,6 +465,9 @@ export const WorkflowOccurrence: Schema.Codec<WorkflowOccurrence, unknown, never
   IntegrationResponsibilityBegan,
   IntegrationStarted,
   GitReadInitiated,
+  TaskAttemptBaseRetryRequested,
+  TaskAttemptBaseReadInitiated,
+  TaskAttemptBaseObserved,
   PlannedAttemptExecutorWorkReported,
   PlannedAttemptExecutorWorkResponsibilityBegan,
   PlannedAttemptReplaced,
@@ -586,6 +628,7 @@ type OccurrenceRelationshipIndexes = {
   /** Every exact Restart application, retained with its journal position so a later occurrence cannot satisfy an earlier one. */
   readonly appliedRestartChoices: Map<string, Array<JournalPosition>>
   readonly executorResponsibilities: Map<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>
+  readonly baseReads: Map<string, IndexedRelationship<TaskAttemptBaseReadInitiated>>
   readonly gitReads: Map<string, IndexedRelationship<GitReadInitiated>>
   readonly integrationResponsibilities: Map<JournalPosition, IntegrationResponsibilityBegan>
   readonly trackerActions: Map<string, IndexedRelationship<TaskTrackerReadInitiated>>
@@ -594,6 +637,7 @@ type OccurrenceRelationshipIndexes = {
 const emptyOccurrenceRelationshipIndexes = (): OccurrenceRelationshipIndexes => ({
   appliedRestartChoices: new Map(),
   executorResponsibilities: new Map(),
+  baseReads: new Map(),
   gitReads: new Map(),
   integrationResponsibilities: new Map(),
   trackerActions: new Map()
@@ -756,6 +800,15 @@ const invalidNonRestartOutcomeRelationship = (
   index: number,
   indexes: OccurrenceRelationshipIndexes
 ) => {
+  if (occurrence._tag === "TaskAttemptBaseObserved") {
+    const action = indexes.baseReads.get(relationshipKey(occurrence.runId, occurrence.originatingActionOperationId))
+    return action !== undefined && action !== ambiguousRelationship && action.recordedAt < occurrence.recordedAt
+      ? undefined
+      : {
+          issue: `attempt Base observation must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
+          path: ["occurrences", index]
+        }
+  }
   if (occurrence._tag === "TaskTrackerFactsObserved") {
     return invalidTrackerRelationship(indexes.trackerActions, occurrence, index)
   }
@@ -821,7 +874,18 @@ const rememberIntegrationResponsibility = (
   return true
 }
 
+const rememberBaseRead = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean => {
+  if (occurrence._tag !== "TaskAttemptBaseReadInitiated") return false
+  rememberUniqueRelationship(
+    indexes.baseReads,
+    relationshipKey(occurrence.runId, occurrence.operation.operationId),
+    occurrence
+  )
+  return true
+}
+
 const rememberOriginatingAction = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean =>
+  rememberBaseRead(occurrence, indexes) ||
   rememberTrackerAction(occurrence, indexes) ||
   rememberExecutorResponsibility(occurrence, indexes) ||
   rememberRestartChoice(occurrence, indexes) ||
@@ -864,6 +928,9 @@ type ProjectedJournalEvent = Extract<
       | "IntegrationResponsibilityBegan"
       | "IntegrationStarted"
       | "GitReadIntentRecorded"
+      | "TaskAttemptBaseRetryRequested"
+      | "TaskAttemptBaseReadIntended"
+      | "TaskAttemptBaseObserved"
       | "PlannedAttemptWorktreeObserved"
       | "TargetLineageObserved"
       | "TaskWorkCapacityChanged"
@@ -3276,6 +3343,7 @@ const isGitObservationJournalEvent = (event: WorkflowJournalEvent): event is Git
 type ProjectionContext = {
   readonly occurrences: Array<WorkflowOccurrence>
   readonly trackerReadIntents: Map<string, TrackerReadIntentJournalEvent>
+  readonly baseReadIntents: Map<string, Extract<WorkflowJournalEvent, { readonly _tag: "TaskAttemptBaseReadIntended" }>>
   readonly gitReadIntents: Map<string, GitReadIntentJournalEvent>
   readonly executorResponsibilities: Set<string>
 }
@@ -3510,6 +3578,49 @@ const projectJournalRecord = (
   if (event._tag === "TaskTrackerReadIntentRecorded") {
     return Effect.succeed(projectTrackerReadIntent(record, event, context.trackerReadIntents))
   }
+  if (event._tag === "TaskAttemptBaseRetryRequested")
+    return Effect.succeed(
+      TaskAttemptBaseRetryRequested.make({
+        requestId: event.requestId,
+        subject: event.subject,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
+  if (event._tag === "TaskAttemptBaseReadIntended") {
+    context.baseReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
+    return Effect.succeed(
+      TaskAttemptBaseReadInitiated.make({
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: event.occurrenceClassification,
+        operation: event.operation,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
+  }
+  if (event._tag === "TaskAttemptBaseObserved") {
+    const intent = context.baseReadIntents.get(relationshipKey(record.runId, event.operationId))
+    if (intent === undefined)
+      return Effect.fail(
+        new GitOutcomeWithoutReadIntent({
+          operationId: event.operationId,
+          position: record.position,
+          runId: record.runId
+        })
+      )
+    return Effect.succeed(
+      TaskAttemptBaseObserved.make({
+        observation: event.observation,
+        occurrenceClassification: event.occurrenceClassification,
+        originatingActionOperationId: event.operationId,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
+  }
   if (event._tag === "GitReadIntentRecorded") {
     return Effect.succeed(projectGitReadIntent(record, event, context.gitReadIntents))
   }
@@ -3565,6 +3676,7 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
   const occurrences: Array<WorkflowOccurrence> = []
   const context: ProjectionContext = {
     executorResponsibilities: new Set<string>(),
+    baseReadIntents: new Map(),
     gitReadIntents: new Map<string, GitReadIntentJournalEvent>(),
     occurrences,
     trackerReadIntents: new Map<string, TrackerReadIntentJournalEvent>()

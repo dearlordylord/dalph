@@ -67,6 +67,7 @@ const interpreterWithRelease = (
   releaseTaskClaim: WorkflowInterpreterService["releaseTaskClaim"]
 ): WorkflowInterpreterService =>
   WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: unused,
     readTaskClaim: unused,
     readTaskWorkSpecification: unused,

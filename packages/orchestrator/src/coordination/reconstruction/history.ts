@@ -1,3 +1,5 @@
+import { taskAttemptBaseRetryRejection } from "../../workflow/protocols/task-attempt-planning/retry.js"
+import { freshAttemptBaseReadLineageWasAccepted } from "../admission/fresh-attempt-lineage.js"
 import { executorGuidanceEventProblem } from "../../workflow/protocols/executor-guidance/protocol.js"
 import { resultRecoveryReplacementProblem } from "../../workflow/protocols/result-recovery/replacement.js"
 import {
@@ -976,6 +978,30 @@ const validateRecord = (
   validateClaimRejection(record, runId, records, issues)
   validateTaskClaimRelease(record, records, (detail) => identityIssue(issues, runId, record.position, detail))
   validateTrackerObservation(record, runId, records, issues)
+  if (
+    record.event._tag === "TaskAttemptBaseReadIntended" &&
+    !freshAttemptBaseReadLineageWasAccepted(
+      isJournalRecordEvidence(records)
+        ? journalEvidenceBefore(records, record.position)
+        : records.filter((prior) => prior.position < record.position),
+      record.event.operation
+    )
+  ) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      "attempt Base read requires the pinned Run policy and exact acquired claim, post-claim graph, and specification lineage"
+    )
+  }
+  if (record.event._tag === "TaskAttemptBaseRetryRequested") {
+    const prior = isJournalRecordEvidence(records)
+      ? journalEvidenceBefore(records, record.position)
+      : records.filter((candidate) => candidate.position < record.position)
+    const rejection = taskAttemptBaseRetryRejection(prior, runId, record.event)
+    if (rejection !== undefined)
+      semanticIssue(issues, runId, record.position, `invalid explicit Base retry: ${rejection}`)
+  }
   next = validateReconfirmationReference(record, runId, next, issues)
   next = validateExecutorEvent(record, runId, records, next, issues)
   next = validateIntegrationHistoryRecord(

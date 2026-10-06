@@ -92,7 +92,8 @@ export const makeNormalTerminationSettledA = Effect.fn("NormalTermination.makeSe
             record.runId,
             record.event.target,
             record.event.initialControlPolicy,
-            remotePublicationTargetForTest
+            remotePublicationTargetForTest,
+            record.event.attemptBasePolicy
           )
           .pipe(Effect.orDie)
       else if (record.event._tag === "WorkflowRunTerminated")

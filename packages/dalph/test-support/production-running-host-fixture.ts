@@ -18,6 +18,7 @@ import {
 import { githubGraphqlBatchTestClient } from "../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import { GitCommitSha, RemotePublicationTarget, RemotePublicationEndpoint, RunId } from "@dalph/contracts"
 import {
+  AttemptBasePolicy,
   type GithubGraphqlReadThrottled,
   type GithubGraphqlRequestError,
   RunReactivationOwner,
@@ -333,7 +334,12 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
                     runId,
                     configuration.target,
                     InitialControlPolicy.make({ taskExecutionCapacity: configuration.taskWorkCapacity }),
-                    configuration.remotePublicationTarget
+                    configuration.remotePublicationTarget,
+                    AttemptBasePolicy.cases.QualifiedCurrentIntegrationHead.make({
+                      executionRepository: configuration.repository,
+                      integrationTarget: { repository: configuration.repository, ref: configuration.integrationRef },
+                      lineageAnchor: configuration.plannedAttemptBaseSha
+                    })
                   )
                   const ordinal = ControlDirectionApplicationOrdinal.make(1)
                   yield* store.append(

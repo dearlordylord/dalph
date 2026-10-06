@@ -92,6 +92,7 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
         Layer.succeed(
           WorkflowInterpreter,
           WorkflowInterpreter.of({
+            readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
             acquireTaskClaim: (operation) =>
               Effect.fail(
                 new TaskClaimConflict({
@@ -174,6 +175,7 @@ it.effect("recovers an unfinished exact claim intent after throttle and rereads 
     const provider = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: (requestedOperation) => acquireTaskClaimThrough(tracker, requestedOperation),
         readTaskClaim: unused,
         readTaskWorktree: () => Effect.die("unused worktree observation"),

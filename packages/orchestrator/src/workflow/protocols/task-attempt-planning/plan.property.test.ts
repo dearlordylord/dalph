@@ -43,8 +43,20 @@ it.effect("binds every exact attempt identity and resource locator", () =>
     const taskRevision = specification.fingerprint
 
     const planner = yield* PlannedTaskAttemptPlanner
-    const plan = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
-    const retryPlan = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
+    const plan = yield* planner.plan(
+      PlannedTaskAttemptPlanRequest.Fresh({
+        baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+        ordinal: PlannedTaskAttemptOrdinal.make(0),
+        specification
+      })
+    )
+    const retryPlan = yield* planner.plan(
+      PlannedTaskAttemptPlanRequest.Fresh({
+        baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+        ordinal: PlannedTaskAttemptOrdinal.make(1),
+        specification
+      })
+    )
 
     expect(plan).toEqual({
       attemptId: AttemptId.make("attempt:task-44:0"),
@@ -91,7 +103,13 @@ it.effect("keeps exact replacement Base SHA and ordinal in one indivisible plann
                 specification
               })
             )
-            const fresh = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
+            const fresh = yield* planner.plan(
+              PlannedTaskAttemptPlanRequest.Fresh({
+                baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+                ordinal: PlannedTaskAttemptOrdinal.make(selectedOrdinal + 1),
+                specification
+              })
+            )
             return [replacement, fresh] as const
           }).pipe(
             Effect.provide(
@@ -128,9 +146,15 @@ it("binds the focused task-work-specification fingerprint inside the planner", (
     const specification = makeTaskWorkSpecification({ body: "Exact body", taskId: task.id, title: "Exact title" })
     const planner = yield* PlannedTaskAttemptPlanner
 
-    expect((yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))).taskRevision).toBe(
-      specification.fingerprint
-    )
+    expect(
+      (yield* planner.plan(
+        PlannedTaskAttemptPlanRequest.Fresh({
+          baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+          ordinal: PlannedTaskAttemptOrdinal.make(0),
+          specification
+        })
+      )).taskRevision
+    ).toBe(specification.fingerprint)
   }).pipe(
     Effect.provide(
       deterministicPlannedTaskAttemptLayer({
@@ -259,8 +283,20 @@ it.effect("keeps replacement slot one distinct from an initial task-local B slot
     const a = makeTaskWorkSpecification({ taskId: TaskId.make("A"), title: "A", body: "A" })
     const bF1 = makeTaskWorkSpecification({ taskId: TaskId.make("B"), title: "B F1", body: "B F1" })
     const bF2 = makeTaskWorkSpecification({ taskId: TaskId.make("B"), title: "B F2", body: "B F2" })
-    yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: a }))
-    const original = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: bF1 }))
+    yield* planner.plan(
+      PlannedTaskAttemptPlanRequest.Fresh({
+        baseSha: GitCommitSha.make("1".repeat(40)),
+        ordinal: PlannedTaskAttemptOrdinal.make(0),
+        specification: a
+      })
+    )
+    const original = yield* planner.plan(
+      PlannedTaskAttemptPlanRequest.Fresh({
+        baseSha: GitCommitSha.make("1".repeat(40)),
+        ordinal: PlannedTaskAttemptOrdinal.make(0),
+        specification: bF1
+      })
+    )
     const request = PlannedTaskAttemptPlanRequest.ExactReplacement({
       baseSha: GitCommitSha.make("2".repeat(40)),
       ordinal: PlannedTaskAttemptOrdinal.make(1),
@@ -305,7 +341,13 @@ for (const order of [
       const planner = yield* PlannedTaskAttemptPlanner
       for (const task of order) {
         const specification = makeTaskWorkSpecification({ taskId: TaskId.make(task), title: task, body: task })
-        const planned = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification }))
+        const planned = yield* planner.plan(
+          PlannedTaskAttemptPlanRequest.Fresh({
+            baseSha: GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+            ordinal: PlannedTaskAttemptOrdinal.make(0),
+            specification
+          })
+        )
         expect(planned.attemptId).toBe(`attempt:${task}:0`)
         expect(planned.branch).toBe(`refs/heads/dalph/attempt-${task}-0`)
         expect(planned.worktree).toBe(`/worktrees/capstone/attempt-${task}-0`)

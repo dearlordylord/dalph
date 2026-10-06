@@ -399,7 +399,7 @@ const restartReadKeyOf = (record: JournalRecord): string | undefined => {
 }
 
 const completedReadOperationIdOf = ({ event }: JournalRecord): OperationId | undefined => {
-  if (event._tag === "TaskTrackerFactsObserved") return event.operationId
+  if (event._tag === "TaskTrackerFactsObserved" || event._tag === "TaskAttemptBaseObserved") return event.operationId
   if (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") {
     return event.operationId
   }
@@ -630,7 +630,9 @@ const appendOperationProgress = (indexes: EvidenceIndexes, record: JournalRecord
       : HashSet.add(indexes.completedReadOperationIds, completedReadOperationId)
   const event = record.event
   const withIntent =
-    (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") &&
+    (event._tag === "TaskAttemptBaseReadIntended" ||
+      event._tag === "GitReadIntentRecorded" ||
+      event._tag === "TaskTrackerReadIntentRecorded") &&
     !HashSet.has(completedReadOperationIds, event.operation.operationId)
       ? HashSet.add(indexes.pendingReadOperationIds, event.operation.operationId)
       : indexes.pendingReadOperationIds

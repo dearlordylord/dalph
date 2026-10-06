@@ -79,6 +79,8 @@ import {
   type CompletionTaskConfirmationReadOrdinal,
   type CompletionTaskFocusedReadPurpose,
   completionTaskFocusedReadOperationIdFor,
+  taskAttemptBaseRetryFactOperationId,
+  taskAttemptBaseReadOperationIdFor,
   type BranchCleanupAuthorization,
   type BranchCleanupMutationResult,
   type BranchCleanupObservation,
@@ -2438,6 +2440,15 @@ const renameRecordedCassetteEntry = (
           originatingActionOperationId: renamed(observationEntry.originatingActionOperationId, maps.operationIds),
           plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps)
         }),
+      TaskAttemptBaseRetryRequested: (entry) => ({
+        ...entry,
+        subject: {
+          ...entry.subject,
+          runId: renamed(entry.subject.runId, maps.runIds),
+          refusedReadOperationId: renamed(entry.subject.refusedReadOperationId, maps.operationIds)
+        }
+      }),
+      TaskAttemptBaseObserved: (entry) => ({ ...entry, operationId: renamed(entry.operationId, maps.operationIds) }),
       TaskClaimAcquired: (claimEntry) =>
         completeFields<typeof claimEntry>({
           _tag: "TaskClaimAcquired",
@@ -2511,6 +2522,26 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
   cassette: RecordedCassetteType,
   renaming: CassetteIdentityRenamingType
 ) {
+  const operationIds = new Map(identityRenamingMap<OperationId>(renaming.operationIds))
+  for (const entry of cassette.entries) {
+    if (entry._tag !== "TaskAttemptBaseRetryRequested") continue
+    for (const family of ["Graph", "Claim", "Specification"] as const) {
+      const id = taskAttemptBaseRetryFactOperationId(entry.requestId, family)
+      operationIds.set(id, id)
+    }
+  }
+  for (const entry of cassette.entries) {
+    if (entry._tag !== "TaskAttemptBaseReadIntended") continue
+    const predecessor = entry.operation.predecessorOperationIds[0]
+    if (predecessor === undefined) continue
+    operationIds.set(
+      entry.operation.operationId,
+      taskAttemptBaseReadOperationIdFor(
+        renamed(entry.operation.claimOperationId, operationIds),
+        renamed(predecessor, operationIds)
+      )
+    )
+  }
   const maps = completeFields<IdentityRenamingMaps>({
     attemptIds: identityRenamingMap<AttemptId>(renaming.attemptIds),
     claimTokens: identityRenamingMap<ClaimToken>(renaming.claimTokens),
@@ -2518,7 +2549,7 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
       renaming.integratorCandidateResourceLocators
     ),
     integratorSessionIds: identityRenamingMap<IntegratorSessionId>(renaming.integratorSessionIds),
-    operationIds: identityRenamingMap<OperationId>(renaming.operationIds),
+    operationIds,
     runIds: identityRenamingMap<RunId>(renaming.runIds),
     taskBranchRefs: identityRenamingMap<TaskBranchRef>(renaming.taskBranchRefs),
     worktreeLocators: identityRenamingMap<WorktreeLocator>(renaming.worktreeLocators)

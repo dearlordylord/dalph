@@ -785,6 +785,11 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
   }
 
   const gitReconciliationInvariants = [
+    "baseSelectionReadsRequireIntent",
+    "qualifiedBaseRequiresExactAuthority",
+    "basePlanUsesObservedHead",
+    "qualifiedSelectionIsNeverRetried",
+    "retryReadHasExplicitTrackerAuthority",
     "compatibleTargetAdvanceDoesNotConstrainAttempt",
     "incompatibleRewriteConstrainsOnlyAffectedAttempt",
     "gitConstraintPreservesIndependentEligibility",
@@ -835,6 +840,10 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
         ...gitReconciliationInvariants,
         "--witnesses",
         "compatibleAdvanceReached",
+        "qualifiedBaseSelectionReached",
+        "baseSelectionRefusedReached",
+        "explicitRetryPlanReached",
+        "basePlanPreservedAfterHeadAdvanceReached",
         "targetRewriteWaitReached",
         "lostWorktreeWaitReached",
         "registrationConflictWaitReached",

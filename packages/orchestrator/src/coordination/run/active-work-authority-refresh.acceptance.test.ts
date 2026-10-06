@@ -919,6 +919,7 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
           Ref.update(providerOperationIds, (current) => [...current, operationId]).pipe(Effect.as(value))
         const unused = () => Effect.die("ordinary read recovery used an unrelated interpreter method")
         const provider = WorkflowInterpreter.of({
+          readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
           acquireTaskClaim: unused,
           readTaskClaim: (operation) =>
             counted(operation.operationId, AuthoritativeTaskClaimObserved.make({ observation: exactClaim })),
@@ -1093,6 +1094,7 @@ it.effect("production delivery composition settles the exact pending specificati
       const acceptedReader = Context.get(context, AcceptedJournalReader)
       const unused = () => Effect.die("focused read recovery used an unrelated interpreter method")
       const provider = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimObserved.make({ observation: exactClaim })),
         readTaskWorktree: unused,
@@ -2663,7 +2665,7 @@ it.effect("accepts only complete fresh Continue facts without appending executio
         continueRejectedResult: (request, permission) =>
           Effect.gen(function* () {
             providerCalls += 1
-            expect(positionBinds).toBe(2)
+            expect(positionBinds).toBe(1)
             expect(request.plannedAttempt).toEqual(plannedAttempt)
             expect(permission.nonce).toBe(requestIdForProvider)
             const committed = yield* accepted.readAccepted(runId).pipe(Effect.orDie)
@@ -2686,7 +2688,7 @@ it.effect("accepts only complete fresh Continue facts without appending executio
           Effect.sync(() => {
             expect(attempt).toEqual(plannedAttempt)
             positionBinds += 1
-            if (positionBinds === 2) expect(isAcceptedExecutorCommandDelivery(receipt)).toBe(true)
+            expect(isAcceptedExecutorCommandDelivery(receipt)).toBe(true)
           }),
         withPlannedAttemptProtocol: protocols.withPermit
       }

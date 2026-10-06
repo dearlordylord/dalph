@@ -1,3 +1,4 @@
+import { PlannedTaskAttemptOrdinal } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import {
   WorktreeLocator,
   AttemptId,
@@ -2967,6 +2968,8 @@ it("orders all public proposal route and admission families deterministically", 
     taskId: fixture.taskId
   })
   const freshAttemptPlanStep = FreshWorkflowStep.RecordTaskAttemptPlan({
+    baseSha: fixture.plannedAttempt.baseSha,
+    ordinal: PlannedTaskAttemptOrdinal.make(0),
     claimOperationId: freshAttemptClaimOperationId,
     predecessorOperationId: freshAttemptPlan.operationId,
     specification,

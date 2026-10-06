@@ -199,7 +199,7 @@ const specificationFor = (tag: TaskTag) => makeTaskWorkSpecification({ body: tag
 const attemptFor = (tag: TaskTag): PlannedTaskAttempt =>
   PlannedTaskAttempt.make({
     attemptId: AttemptId.make(`fresh-task-admission-${tag}`),
-    baseSha: GitCommitSha.make(String(taskTags.indexOf(tag) + 1).repeat(40)),
+    baseSha: GitCommitSha.make("1".repeat(40)),
     branch: TaskBranchRef.make(`refs/heads/dalph/fresh-task-admission-${tag}`),
     executor: TaskExecutorLocator.make("executor:fresh-task-admission-mbt"),
     runId,
@@ -414,7 +414,10 @@ const makeDriverPrefixPreparation = () => {
 const prefixReaderFixture = (): ReadonlyArray<JournalRecord> => {
   const revision = RunPolicyRevision.make(initialRunPolicyRevision + 1)
   return [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget),
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget, {
+      _tag: "ExplicitFixedBase",
+      baseSha: GitCommitSha.make("1".repeat(40))
+    }),
     {
       event: TaskWorkCapacityChangedEvent.make({
         capacity: TaskWorkCapacity.make(2),
@@ -673,7 +676,10 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   const prefixReader = makeDriverPrefixPreparation()
   let process: "ProcessDown" | "ProcessUp" = "ProcessUp"
   let records: ReadonlyArray<JournalRecord> = [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget)
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget, {
+      _tag: "ExplicitFixedBase",
+      baseSha: GitCommitSha.make("1".repeat(40))
+    })
   ]
   let controller: DeliveryRuntimeAdmissionController | undefined
   let sequence = 1
@@ -1276,7 +1282,12 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         if (journalRuntime !== undefined) yield* journalRuntime.managed.disposeEffect
         process = "ProcessUp"
         prefixReader.reset()
-        records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget)]
+        records = [
+          makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget, {
+            _tag: "ExplicitFixedBase",
+            baseSha: GitCommitSha.make("1".repeat(40))
+          })
+        ]
         journalRuntime = acquireJournalRuntime(records)
         sequence = 1
         visiblePrefixLength = 1

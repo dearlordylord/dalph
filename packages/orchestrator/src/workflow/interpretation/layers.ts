@@ -8,6 +8,8 @@ import {
   PlannedWorktreeAbsent,
   runGitWorktreeReconciliation
 } from "../../authorities/git/worktree.js"
+import { GitTaskAttemptBase } from "../../authorities/git/task-attempt-base.js"
+import { TaskAttemptBaseObservation } from "../protocols/task-attempt-planning/base.js"
 import { GitTargetLineage } from "../../authorities/git/target-lineage.js"
 import {
   acquireTaskClaimThrough,
@@ -29,6 +31,7 @@ export const workflowInterpreterLayer = Layer.effect(
     const tracker = yield* TrackerMutation
     const gitWorktree = yield* GitWorktree
     const gitTargetLineage = yield* GitTargetLineage
+    const gitTaskAttemptBase = yield* GitTaskAttemptBase
     return WorkflowInterpreter.of({
       acquireTaskClaim: <IntentError = never>(
         operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
@@ -36,6 +39,7 @@ export const workflowInterpreterLayer = Layer.effect(
       ) => onIntentRecorded.pipe(Effect.andThen(acquireTaskClaimThrough(tracker, operation))),
       readTaskClaim: (operation) => observeTaskClaimThrough(tracker, operation),
       readTaskWorktree: (operation) => observePlannedAttemptWorktreeThrough(gitWorktree, operation),
+      readTaskAttemptBase: (operation) => gitTaskAttemptBase.read(operation.policy),
       readTargetLineage: (operation) => observeTargetLineageThrough(gitTargetLineage, operation),
       readTrackerGraph: (operation) => reader.read(operation.target),
       readTaskWorkSpecification: (operation) => reader.readTaskWorkSpecification(operation.target, operation.taskId),
@@ -58,11 +62,28 @@ export const controlledTargetLineageLayer = Layer.succeed(
   })
 )
 
+/** Controlled construction only accepts the explicitly recorded fixed Base. */
+export const controlledTaskAttemptBaseLayer = Layer.succeed(
+  GitTaskAttemptBase,
+  GitTaskAttemptBase.of({
+    read: (policy) =>
+      Effect.succeed(
+        policy._tag === "ExplicitFixedBase"
+          ? TaskAttemptBaseObservation.cases.Qualified.make({ baseSha: policy.baseSha })
+          : TaskAttemptBaseObservation.cases.Refused.make({
+              boundary: "TargetHead",
+              detail: "Qualified current-head policy requires a Git authority"
+            })
+      )
+  })
+)
+
 /** Controlled authority implementations installed at program initialization. */
 export const controlledWorkflowInterpreterLayer = workflowInterpreterLayer.pipe(
   Layer.provide(controlledTrackerMutationLayer),
   Layer.provide(gitWorktreeTestLayer(PlannedWorktreeAbsent.make({}))),
-  Layer.provide(controlledTargetLineageLayer)
+  Layer.provide(controlledTargetLineageLayer),
+  Layer.provide(controlledTaskAttemptBaseLayer)
 )
 
 /** Stable controlled interpreter used by tests that provide only tracker reads. */

@@ -186,6 +186,10 @@ export interface ProductionHostObservation {
     JournaledRunBootstrap["Service"]["operatorControl"],
     "applyResultRecoveryDirection" | "readResultRecoveryDirection"
   >
+  readonly taskAttemptBaseRetryControl?: Pick<
+    JournaledRunBootstrap["Service"]["operatorControl"],
+    "readTaskAttemptBaseRetryRequest"
+  >
   readonly remotePublicationControl?: Pick<
     JournaledRunBootstrap["Service"]["operatorControl"],
     "applyRemotePublicationResume" | "applyRemotePublicationBatchGrant"
@@ -1182,6 +1186,15 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           ),
           candidateAuthority,
           {
+            attemptBasePolicy: {
+              _tag: "QualifiedCurrentIntegrationHead",
+              lineageAnchor: configuration.plannedAttemptBaseSha,
+              integrationTarget: IntegrationTarget.make({
+                repository: configuration.repository,
+                ref: configuration.integrationRef
+              }),
+              executionRepository: configuration.repository
+            },
             acceptedResultEvidenceStore: evidence,
             completionTask,
             coordinatorOwnership: ownership,
@@ -1458,6 +1471,49 @@ export const withDecodedProductionRepositoryHost = <
               disposition
             }
           }
+          if (request.operation._tag === "RetryTaskAttemptBase") {
+            if (Option.isNone(bootstrap) || Option.isNone(owner))
+              return yield* Effect.fail<RunningHostError>({
+                _tag: "CommandFailed",
+                operation: "RetryTaskAttemptBase",
+                stage: "BeforeApplication",
+                causeTag: "RunOwnerUnavailable",
+                detail: "The Base retry Run owner is unavailable."
+              })
+            const applied = yield* bootstrap.value.operatorControl
+              .retryTaskAttemptBase(request.operation.retry)
+              .pipe(
+                Effect.mapError(
+                  (error): RunningHostError =>
+                    error._tag === "TaskAttemptBaseRetryRejected" ||
+                    error._tag === "SchemaError" ||
+                    error._tag === "ApplicationExiting" ||
+                    error._tag === "JournaledRunNotActive"
+                      ? {
+                          _tag: "CommandFailed",
+                          operation: "RetryTaskAttemptBase",
+                          stage: "BeforeApplication",
+                          causeTag: error._tag,
+                          detail: "The exact Base retry request was refused."
+                        }
+                      : {
+                          _tag: "CommandOutcomeUnknown",
+                          operation: "RetryTaskAttemptBase",
+                          requestId: request.requestId,
+                          phase: "AdmittedCompletionUnconfirmed",
+                          acceptedAt: null
+                        }
+                )
+              )
+            const currentControl = yield* readRunControl.pipe(Effect.result)
+            if (currentControl._tag === "Success" && currentControl.success.termination === null)
+              yield* owner.value.hint(RunReactivationHint.OperatorWake())
+            return {
+              _tag: "TaskAttemptBaseRetryRecorded" as const,
+              retry: { requestId: applied.requestId, subject: applied.subject },
+              acceptedAt: TraceCursor.make({ runId: applied.subject.runId, position: applied.acceptedAt })
+            }
+          }
           if (request.operation._tag === "ApplyResultRecoveryDirection") {
             if (Option.isNone(bootstrap) || Option.isNone(owner))
               return yield* Effect.fail<RunningHostError>({
@@ -1587,6 +1643,7 @@ export const withDecodedProductionRepositoryHost = <
         }),
         ...(Option.isSome(bootstrap)
           ? {
+              taskAttemptBaseRetryControl: bootstrap.value.operatorControl,
               remotePublicationControl: bootstrap.value.operatorControl,
               resultRecoveryControl: bootstrap.value.operatorControl
             }

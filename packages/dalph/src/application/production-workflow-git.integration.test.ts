@@ -3,7 +3,9 @@ import {
   GitCommand,
   GitCommonDirectoryTarget,
   GitTargetLineage,
+  GitTaskAttemptBase,
   nodeGitCommandLayer,
+  nodeGitTaskAttemptBaseLayer,
   nodeGitTargetLineageLayer
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
@@ -121,4 +123,68 @@ it.effect("ordinary Git composition preserves separate bare and unreadable targe
 )
 it.effect("observed Git composition preserves separate bare and unreadable targets", () =>
   proveSeparateTargets("Observed")
+)
+
+it.effect("qualifies the exact separate target head and refuses unavailable execution commits", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const git = yield* GitCommand
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-attempt-base-" })
+      const repository = `${directory}/source`
+      const anchor = yield* makeRepository(repository)
+      const bare = `${directory}/target.git`
+      expect((yield* git.runInWorktree(directory, ["clone", "--bare", repository, bare])).exitCode).toBe(0)
+      const layer = productionWorkflowGitCommandLayer(
+        GitCommonDirectoryTarget.make(`${repository}/.git`),
+        GitRepositoryLocator.make(repository),
+        undefined
+      )
+      const reader = yield* GitTaskAttemptBase.pipe(Effect.provide(nodeGitTaskAttemptBaseLayer), Effect.provide(layer))
+      const policy = {
+        _tag: "QualifiedCurrentIntegrationHead" as const,
+        executionRepository: GitRepositoryLocator.make(repository),
+        integrationTarget: IntegrationTarget.make({
+          repository: GitRepositoryLocator.make(bare),
+          ref: IntegrationTargetRef.make("refs/heads/master")
+        }),
+        lineageAnchor: anchor
+      }
+      // Target advances independently while the source retains its initial HEAD.
+      const targetWriter = `${directory}/target-writer`
+      expect((yield* git.runInWorktree(directory, ["clone", bare, targetWriter])).exitCode).toBe(0)
+      yield* git.runInWorktree(targetWriter, ["config", "user.email", "dalph@example.invalid"])
+      yield* git.runInWorktree(targetWriter, ["config", "user.name", "Dalph Test"])
+      yield* git.runInWorktree(targetWriter, ["commit", "--allow-empty", "-m", "prerequisite delivered"])
+      const selected = GitCommitSha.make((yield* git.runInWorktree(targetWriter, ["rev-parse", "HEAD"])).stdout.trim())
+      expect((yield* git.runInWorktree(targetWriter, ["push", "origin", "master"])).exitCode).toBe(0)
+      expect(yield* reader.read(policy)).toMatchObject({ _tag: "Refused", boundary: "ExecutionCommit" })
+      expect((yield* git.runInWorktree(repository, ["fetch", bare, "master"])).exitCode).toBe(0)
+      const observed = yield* reader.read(policy)
+      expect(observed).toEqual({ _tag: "Qualified", baseSha: selected })
+      const worktree = `${directory}/attempt`
+      expect((yield* git.runInWorktree(repository, ["worktree", "add", "--detach", worktree, selected])).exitCode).toBe(
+        0
+      )
+      expect((yield* git.runInWorktree(worktree, ["rev-parse", "HEAD"])).stdout.trim()).toBe(selected)
+      expect((yield* git.runInWorktree(repository, ["rev-parse", "HEAD"])).stdout.trim()).toBe(anchor)
+      expect(
+        yield* reader.read({
+          ...policy,
+          integrationTarget: { ...policy.integrationTarget, ref: IntegrationTargetRef.make("refs/heads/missing") }
+        })
+      ).toMatchObject({ _tag: "Refused", boundary: "TargetHead" })
+      const divergent = `${directory}/divergent`
+      const divergentHead = yield* makeRepository(divergent)
+      expect(yield* reader.read({ ...policy, lineageAnchor: divergentHead })).toMatchObject({
+        _tag: "Refused",
+        boundary: "AnchorAncestry"
+      })
+      // A later head does not mutate the previously accepted observation or initial worktree HEAD.
+      yield* git.runInWorktree(targetWriter, ["commit", "--allow-empty", "-m", "later head"])
+      yield* git.runInWorktree(targetWriter, ["push", "origin", "master"])
+      expect(observed).toEqual({ _tag: "Qualified", baseSha: selected })
+      expect((yield* git.runInWorktree(worktree, ["rev-parse", "HEAD"])).stdout.trim()).toBe(selected)
+    })
+  ).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
 )

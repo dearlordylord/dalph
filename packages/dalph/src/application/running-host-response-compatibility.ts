@@ -10,6 +10,7 @@ const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], Read
   ReadRunControl: ["RunPaused", "RunUnpaused", "RunTerminated"],
   ReadResultRecoveryDirection: ["ResultRecoveryDirectionRecorded", "ResultRecoveryDirectionNotRecorded"],
   ApplyResultRecoveryDirection: ["ResultRecoveryDirectionRecorded"],
+  RetryTaskAttemptBase: ["TaskAttemptBaseRetryRecorded"],
   SendExecutorGuidance: ["ExecutorGuidanceResult"],
   StartWork: ["WakeSubmitted"],
   Refresh: ["RefreshSubmitted"],
@@ -31,6 +32,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance"
   ],
   ReadFailed: [
@@ -57,6 +59,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance"
   ],
   CommandOutcomeUnknown: [
@@ -65,6 +68,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance"
   ],
   FrameTooLarge: [
@@ -77,6 +81,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -90,6 +95,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -103,6 +109,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -116,6 +123,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -129,6 +137,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -142,6 +151,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -155,6 +165,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -168,6 +179,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ],
@@ -181,6 +193,7 @@ const compatibleFailures: Readonly<
     "Unpause",
     "Refresh",
     "ApplyResultRecoveryDirection",
+    "RetryTaskAttemptBase",
     "SendExecutorGuidance",
     "ReadResultRecoveryDirection"
   ]

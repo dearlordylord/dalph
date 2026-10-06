@@ -1,4 +1,8 @@
-import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
+import {
+  ApplyTaskAttemptBaseRetryRequest,
+  ApplyResultRecoveryRequest,
+  ResultRecoveryRequestId
+} from "@dalph/orchestrator"
 import { Schema } from "effect"
 import { AttemptId, ExecutorGuidanceRequestId, RunId } from "@dalph/contracts"
 import { RefreshInterest, RunningHostCapacityArguments, RunningHostEnvelope } from "./running-host-contract.js"
@@ -17,6 +21,10 @@ const recoveryApplyInput = Schema.toJsonSchemaDocument(
   Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest }),
   { additionalProperties: false }
 )
+const baseRetryInput = Schema.toJsonSchemaDocument(
+  Schema.Struct({ runId: RunId, retry: ApplyTaskAttemptBaseRetryRequest }),
+  { additionalProperties: false }
+)
 const recoveryReadInput = Schema.toJsonSchemaDocument(
   Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId }),
   { additionalProperties: false }
@@ -31,6 +39,13 @@ const guidanceInput = Schema.toJsonSchemaDocument(ExecutorGuidanceToolArguments,
 export const CapacityToolArguments = Schema.Struct({ runId: RunId, ...RunningHostCapacityArguments.fields })
 const capacityInput = Schema.toJsonSchemaDocument(CapacityToolArguments, { additionalProperties: false })
 export const runningHostMcpTools = [
+  {
+    name: "dalph_retry_task_attempt_base",
+    description:
+      "Authorize fresh tracker checks after one settled Base refusal. Preserve the exact request identity; never automatically replay an uncertain submission.",
+    inputSchema: { ...baseRetryInput.schema, $defs: baseRetryInput.definitions },
+    outputSchema
+  },
   {
     name: "dalph_read_capacity",
     description: "Read the active Run capacity policy and revision; an inactive Run is not activated.",

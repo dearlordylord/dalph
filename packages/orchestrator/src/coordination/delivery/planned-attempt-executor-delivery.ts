@@ -94,9 +94,7 @@ export const executorReportFor = (
                       permit,
                       transition.plannedAttempt,
                       undefined,
-                      eligibility === undefined
-                        ? undefined
-                        : (receipt) => lease.bindPlannedAttemptPosition(transition.plannedAttempt, undefined, receipt)
+                      (receipt) => lease.bindPlannedAttemptPosition(transition.plannedAttempt, undefined, receipt)
                     )
                   )
                 )

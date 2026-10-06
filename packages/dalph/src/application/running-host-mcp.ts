@@ -1,4 +1,8 @@
-import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
+import {
+  ApplyTaskAttemptBaseRetryRequest,
+  ApplyResultRecoveryRequest,
+  ResultRecoveryRequestId
+} from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- The MCP stdio adapter owns only its process-local byte streams. */
 import { RunId } from "@dalph/contracts"
 import { Effect, FiberMap, Schema, Stream } from "effect"
@@ -187,13 +191,15 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
                 ? CapacityToolArguments
                 : call.success.name === "dalph_close_watch"
                   ? Schema.Struct({ runId: RunId, subscriptionId: SubscriptionId })
-                  : call.success.name === "dalph_apply_result_recovery"
-                    ? Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest })
-                    : call.success.name === "dalph_read_result_recovery"
-                      ? Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId })
-                      : call.success.name === "dalph_refresh"
-                        ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
-                        : ToolArguments
+                  : call.success.name === "dalph_retry_task_attempt_base"
+                    ? Schema.Struct({ runId: RunId, retry: ApplyTaskAttemptBaseRetryRequest })
+                    : call.success.name === "dalph_apply_result_recovery"
+                      ? Schema.Struct({ runId: RunId, recovery: ApplyResultRecoveryRequest })
+                      : call.success.name === "dalph_read_result_recovery"
+                        ? Schema.Struct({ runId: RunId, recoveryRequestId: ResultRecoveryRequestId })
+                        : call.success.name === "dalph_refresh"
+                          ? Schema.Struct({ runId: RunId, interest: RefreshInterest })
+                          : ToolArguments
           )(call.success.arguments, { onExcessProperty: "error" }).pipe(Effect.result)
           if (args._tag === "Failure")
             return yield* reject(

@@ -1,4 +1,6 @@
+import type { GitTaskAttemptBaseUnsettled } from "../../authorities/git/task-attempt-base.js"
 import { Context, Effect, Schema } from "effect"
+import type { TaskAttemptBaseObservation } from "../protocols/task-attempt-planning/base.js"
 import { TaskId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../authorities/coordinator-ownership/ownership.js"
 import type { TaskTrackerMutationThrottled } from "../../authorities/task-tracker/mutation-throttling.js"
@@ -109,6 +111,11 @@ export interface WorkflowInterpreterService {
     onIntentRecorded?: Effect.Effect<void>,
     interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) => Effect.Effect<PlannedAttemptWorktreeObservationResult, GitWorktreeReadFailure | JournalAppendError>
+  readonly readTaskAttemptBase: (
+    operation: typeof WorkflowOperation.cases.ReadTaskAttemptBase.Type,
+    onIntentRecorded?: Effect.Effect<void>,
+    interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
+  ) => Effect.Effect<TaskAttemptBaseObservation, JournalAppendError | GitTaskAttemptBaseUnsettled>
   readonly readTargetLineage: (
     operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type,
     onIntentRecorded?: Effect.Effect<void>,
@@ -165,6 +172,7 @@ export type WorkflowInterpreterServiceFailure =
   | EffectFunctionFailure<WorkflowInterpreterService["readTrackerGraph"]>
   | EffectFunctionFailure<WorkflowInterpreterService["readTaskClaim"]>
   | EffectFunctionFailure<WorkflowInterpreterService["readTaskWorktree"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["readTaskAttemptBase"]>
   | EffectFunctionFailure<WorkflowInterpreterService["readTargetLineage"]>
   | EffectFunctionFailure<WorkflowInterpreterService["releaseTaskClaim"]>
   | EffectFunctionFailure<WorkflowInterpreterService["readTaskWorkSpecification"]>

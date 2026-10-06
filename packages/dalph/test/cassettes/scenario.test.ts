@@ -1,3 +1,4 @@
+import { qualifiedBasePrefix, refusedBaseRetryPrefix } from "../../test-support/qualified-base-prefix.js"
 import {
   ExecutorGuidanceAdmittedEvent,
   ExecutorGuidanceDispatchIntendedEvent,
@@ -1205,14 +1206,14 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
           },
           {
             blockers: [
-              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:B:1" },
+              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:B:0" },
               {
                 _tag: "ProposedDeliveryAction",
                 proposal: {
                   _tag: "IdentityFreeWorkflowRoute",
-                  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:B:1" },
+                  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:B:0" },
                   proposalId:
-                    '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:B:1",null,"B"]',
+                    '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:B:0",null,"B"]',
                   taskId: "B"
                 }
               },
@@ -1222,8 +1223,8 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
                   _tag: "AdmittedDeliveryAction",
                   proposal: {
                     _tag: "FreshExecutorWorkflowRoute",
-                    attemptId: "attempt:B:1",
-                    proposalId: '["FreshExecutorWorkflowRoute","BeginPlannedAttemptExecutorWork","attempt:B:1","B"]',
+                    attemptId: "attempt:B:0",
+                    proposalId: '["FreshExecutorWorkflowRoute","BeginPlannedAttemptExecutorWork","attempt:B:0","B"]',
                     taskId: "B"
                   }
                 }
@@ -1231,7 +1232,7 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
             ],
             responsibility: {
               _tag: "PlannedAttemptExecutorWork",
-              attemptId: "attempt:B:1",
+              attemptId: "attempt:B:0",
               beganAt: 32,
               coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 37, pausedTaskId: "A" },
               taskId: "B"
@@ -1266,7 +1267,7 @@ it.effect("lets independent B use capacity only after paused A confirms suspensi
     const bResponsibilityAt = run.records.findIndex(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-        event.plannedAttempt.attemptId === "attempt:B:1"
+        event.plannedAttempt.attemptId === "attempt:B:0"
     )
 
     expect(aSuspendedAt).toBeGreaterThan(0)
@@ -1509,7 +1510,7 @@ it.effect("Alice sees current grouping facts add D to task A's Pause", () =>
     const dSafe = run.records.filter(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === "attempt:D:1" &&
+        event.report.correlation.attemptId === "attempt:D:0" &&
         event.report._tag === "ExecutorWorkSafelySuspended"
     )
     expect(taskPauseGroupingFactsAddedAuthoredCassette.name).toBe(
@@ -4182,17 +4183,17 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         ...read(changedGraph),
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
         { _tag: "TaskWorkSpecificationReadReturned", body: "Complete D.", taskId: "D", title: "Complete D" },
-        { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
-        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
+        { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:0", taskId: "D" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:0", taskId: "D" } },
         { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:1" },
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:0" },
           request: "Begin"
         },
         {
           _tag: "PlannedAttemptExecutorProjectionReturned",
-          report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:D:1", result: { _tag: "Completed" } }
+          report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:D:0", result: { _tag: "Completed" } }
         },
         {
           _tag: "ExpectedBehavior",
@@ -4719,7 +4720,7 @@ it.effect("retains both executing holders until terminal observations release co
           event.report._tag === "ExecutorWorkTerminal"
       )
     const aTerminalAt = terminalAt(AttemptId.make("attempt:A:0"))
-    const bTerminalAt = terminalAt(AttemptId.make("attempt:B:1"))
+    const bTerminalAt = terminalAt(AttemptId.make("attempt:B:0"))
     const aResponsibilityAt = responsibilityAt(TaskId.make("A"))
     const bResponsibilityAt = responsibilityAt(TaskId.make("B"))
     const cStartIntents = run.records.flatMap(({ event }, index) =>
@@ -7161,6 +7162,9 @@ it.effect(
         PlannedAttemptWorktreeObserved: true,
         TargetLineageObserved: true,
         TaskAttemptPlanned: true,
+        TaskAttemptBaseRetryRequested: true,
+        TaskAttemptBaseReadIntended: true,
+        TaskAttemptBaseObserved: true,
         TaskClaimAcquired: true,
         TaskClaimAcquisitionIntended: true,
         TaskClaimAcquisitionRejected: true,
@@ -7185,6 +7189,7 @@ it.effect(
       } satisfies Record<RecordedCassetteEntry["_tag"], true>
       const operationVariants = {
         AcquireTaskClaim: true,
+        ReadTaskAttemptBase: true,
         ReadCompletionTaskFacts: true,
         ReadTaskClaim: true,
         ReadTargetLineage: true,
@@ -7744,6 +7749,12 @@ it.effect(
           successorGeneration: firstFullRerunSuccessorGeneration
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
+      const qualifiedRecords = qualifiedBasePrefix(continuationRun.records)
+      const qualifiedRecorded = yield* projectRecordedCassette(qualifiedRecords)
+      expectRecordedRoundTrip(qualifiedRecords, qualifiedRecorded)
+      const retryRecords = refusedBaseRetryPrefix(continuationRun.records)
+      const retryRecorded = yield* projectRecordedCassette(retryRecords)
+      expectRecordedRoundTrip(retryRecords, retryRecorded)
       const automaticSuccessor = makeSuccessorPrefix()
       const automaticSuccessorAppend = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
         automaticSuccessor.input,
@@ -7777,7 +7788,9 @@ it.effect(
             ...automaticSuccessorEntries,
             ...quarantineEntries,
             ...recoveryEntries,
-            ...guidanceEntries
+            ...guidanceEntries,
+            ...qualifiedRecorded.entries,
+            ...retryRecorded.entries
           ]
             .map(({ _tag }) => _tag)
             .concat("WorkflowRunTerminated")
@@ -7799,7 +7812,7 @@ it.effect(
       )
       expect(
         new Set(
-          [...recorded.entries, ...completionEntries].flatMap((entry) =>
+          [...recorded.entries, ...completionEntries, ...qualifiedRecorded.entries].flatMap((entry) =>
             "operation" in entry ? [entry.operation._tag] : []
           )
         )

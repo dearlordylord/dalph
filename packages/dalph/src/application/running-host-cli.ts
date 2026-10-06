@@ -1,3 +1,4 @@
+import { makeRunningHostBaseRetryCommand } from "./running-host-cli-base-retry.js"
 import { makeRunningHostGuidanceCommand } from "./running-host-cli-guidance.js"
 import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This command owns only client stdout/stderr completion. */
@@ -320,9 +321,11 @@ export const makeRunningHostCommands = <E, R>(
           Effect.provide(outputLayer)
         )
     )
+  const retryBase = makeRunningHostBaseRetryCommand(outputLayer)
   const attach = Command.make("attach").pipe(
     Command.withSubcommands([
       guide,
+      retryBase,
       setCapacity,
       resultRecovery("apply"),
       resultRecovery("read"),

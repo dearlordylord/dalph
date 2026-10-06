@@ -158,4 +158,49 @@ module gitReconciliationTest {
       .then(acceptCompletionAcrossPrerequisiteRace)
       .expect(completionRacePreservesAcceptedCompletion and completionWarningIsDerivedOnly)
   }
+
+  run baseReadRequiresJournalIntentTest = init.then(callBaseSelectionRead(ExactBaseRead).fail())
+  run selectedBaseRequiresObservationTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(ExactBaseRead)).then(recordSelectedBasePlan.fail())
+  run selectedBaseRemainsOriginalAfterTargetAdvancesTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(ExactBaseRead)).then(advanceBaseTargetHead)
+    .then(acceptQualifiedBaseSelection).then(recordSelectedBasePlan)
+    .expect(and { baseSelectionReadsRequireIntent, qualifiedBaseRequiresExactAuthority,
+      basePlanUsesObservedHead, basePlanPreservedAfterHeadAdvanceReached })
+  run laterSelectionUsesLaterQualifiedHeadTest = init.then(advanceBaseTargetHead)
+    .then(recordBaseSelectionIntent).then(callBaseSelectionRead(ExactBaseRead))
+    .then(acceptQualifiedBaseSelection).then(recordSelectedBasePlan)
+    .expect(state.baseSelection == BasePlanRecorded({
+      observation: baseEvidenceFor(ExactBaseRead, Head2), plannedBase: Head2,
+    }))
+  run eachExactAuthorityFailureRefusesSelectionTest = {
+    nondet readCase = BASE_READ_CASES.exclude(Set(ExactBaseRead)).oneOf()
+    init.then(recordBaseSelectionIntent).then(callBaseSelectionRead(readCase)).then(refuseBaseSelection)
+      .expect(and { baseSelectionRefusedReached, qualifiedBaseRequiresExactAuthority,
+        state.baseSelection == BaseSelectionRefused(baseRefusalFor(baseEvidenceFor(readCase, Head1))) })
+      .then(recordSelectedBasePlan.fail())
+  }
+  run explicitRetryRevalidatesAllTrackerAuthorityTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(MissingExecutionObject)).then(refuseBaseSelection)
+    .then(automaticBaseRetryWake)
+    .then(requestExplicitBaseRetry)
+    .then(confirmRetryGraph)
+    .then(confirmRetryExactClaim)
+    .then(confirmRetryUnchangedSpecification).then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(ExactBaseRead)).then(acceptQualifiedBaseSelection)
+    .then(recordSelectedBasePlan)
+    .expect(basePlanUsesObservedHead)
+  run explicitRetryCannotSkipTrackerChecksTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(MissingExecutionObject)).then(refuseBaseSelection)
+    .then(requestExplicitBaseRetry).then(recordBaseSelectionIntent.fail())
+  run qualifiedSelectionCannotBeRetriedTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(ExactBaseRead)).then(acceptQualifiedBaseSelection)
+    .then(requestExplicitBaseRetry.fail())
+  run pendingReadCannotBeRetriedTest = init.then(recordBaseSelectionIntent)
+    .then(requestExplicitBaseRetry.fail())
+  run explicitRetryRequiresItsOwnIntentTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(MissingExecutionObject)).then(refuseBaseSelection)
+    .then(requestExplicitBaseRetry).then(confirmRetryGraph).then(confirmRetryExactClaim)
+    .then(confirmRetryUnchangedSpecification).expect(not(state.baseIntentAccepted))
+    .then(callBaseSelectionRead(ExactBaseRead).fail())
 }

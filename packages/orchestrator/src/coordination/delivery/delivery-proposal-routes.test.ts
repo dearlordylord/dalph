@@ -1,4 +1,5 @@
 import { unexpectedRemoteDeliveryLayer } from "../../../test/support/unexpected-remote-delivery.js"
+import { isAcceptedExecutorCommandDelivery } from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import {
@@ -1121,6 +1122,7 @@ effectIt.effect("executes cancellation settlement through suspension, abandonmen
       WorkflowInterpreter,
       Effect.succeed(
         WorkflowInterpreter.of({
+          readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
           acquireTaskClaim: () => Effect.die("unused claim acquisition"),
           readTaskClaim: (operation) => observeTaskClaimThrough(tracker, operation),
           readTaskWorktree: () => Effect.die("unused worktree read"),
@@ -4748,6 +4750,7 @@ describe("delivery proposal route matrix", () => {
       const recordRead = (name: string) => Ref.update(readOrder, (current) => [...current, name])
       const traceTags = yield* Ref.make<ReadonlyArray<string>>([])
       const interpreter = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => Effect.die("post-promotion finality does not acquire a task claim"),
         readTaskClaim: () =>
           recordRead("claim").pipe(
@@ -4919,7 +4922,7 @@ describe("delivery proposal route matrix", () => {
         )
       ).toMatchObject({ _tag: "ActionCompleted", proposalId: deletionProposal.id })
       expect(yield* Ref.get(interruptibleBoundaryEntries)).toBeGreaterThan(0)
-      expect((yield* harness.records).at(-1)?.event._tag).toBe("IntegrationFinalitySettled")
+      expect((yield* harness.records.pipe(Effect.orDie)).at(-1)?.event._tag).toBe("IntegrationFinalitySettled")
 
       const waitingHarness = yield* makeLiveJournalHarness(
         promotedFinalityHistory.promotedRecords,
@@ -5630,6 +5633,7 @@ describe("delivery proposal route matrix", () => {
         Effect.provideService(
           WorkflowInterpreter,
           WorkflowInterpreter.of({
+            readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
             acquireTaskClaim: () => Effect.die("unused claim acquisition"),
             readTaskClaim: () => Effect.die("unused claim read"),
             readTaskWorktree: () => Effect.die("unused worktree read"),
@@ -5707,6 +5711,7 @@ describe("delivery proposal route matrix", () => {
         Effect.provideService(
           WorkflowInterpreter,
           WorkflowInterpreter.of({
+            readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
             acquireTaskClaim: () => Effect.die("unused claim acquisition"),
             readTaskClaim: (operation) =>
               Ref.update(observedOperations, (operations) => [...operations, operation]).pipe(
@@ -5773,6 +5778,7 @@ describe("delivery proposal route matrix", () => {
           Effect.provideService(
             WorkflowInterpreter,
             WorkflowInterpreter.of({
+              readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
               acquireTaskClaim: () => Effect.die("unused claim acquisition"),
               readTaskClaim: () => Effect.die("unused claim read"),
               readTaskWorktree: () => Effect.die("unused worktree read"),
@@ -5811,6 +5817,7 @@ describe("delivery proposal route matrix", () => {
         Effect.provideService(
           WorkflowInterpreter,
           WorkflowInterpreter.of({
+            readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
             acquireTaskClaim: () => Effect.die("unused claim acquisition"),
             readTaskClaim: () => Effect.die("unused claim read"),
             readTaskWorktree: () => Effect.die("unused worktree read"),
@@ -7315,6 +7322,60 @@ describe("delivery proposal route matrix", () => {
     })
   )
 
+  effectIt.effect("binds ordinary Resume only with its durable command receipt", () =>
+    Effect.gen(function* () {
+      const fixture = continuationAuthorizationRecords()
+      const transition = RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
+        plannedAttempt,
+        witness: fixture.witness
+      })
+      const proposal = proposalsFor(transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing ordinary Resume proposal")
+      }
+      const harness = yield* makeLiveJournalHarness(fixture.records)
+      const controller = yield* makePlannedAttemptProtocolController()
+      let binds = 0
+      let contacts = 0
+      const result = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
+        ...inertLease,
+        bindPlannedAttemptPosition: (attempt, _responsibility, receipt) =>
+          Effect.gen(function* () {
+            expect(attempt).toEqual(plannedAttempt)
+            expect(isAcceptedExecutorCommandDelivery(receipt)).toBe(true)
+            expect((yield* harness.records.pipe(Effect.orDie)).at(-1)?.event).toMatchObject({
+              _tag: "PlannedAttemptExecutorCommandIntended",
+              command: "Resume"
+            })
+            binds += 1
+          }),
+        withPlannedAttemptProtocol: controller.withPermit
+      }).pipe(
+        (effect) => provideLiveJournal(effect, harness),
+        Effect.provideService(
+          PlannedAttemptExecutor,
+          PlannedAttemptExecutor.of({
+            begin: () => Effect.die("ordinary Resume must not Begin"),
+            observe: () => Effect.die("settled Resume must not Observe"),
+            requestSuspension: () => Effect.die("ordinary Resume must not Suspend"),
+            resume: () =>
+              Effect.sync(() => {
+                expect(binds).toBe(1)
+                contacts += 1
+                return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                  correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+                })
+              })
+          })
+        )
+      )
+      expect(result).toMatchObject({ _tag: "ExecutorReportPublished" })
+      expect(binds).toBe(1)
+      expect(contacts).toBe(1)
+    })
+  )
+
   effectIt.effect("cancels continuation authorization when a terminal choice wins before its append", () =>
     Effect.gen(function* () {
       const changedSpecification = makeTaskWorkSpecification({
@@ -7361,6 +7422,7 @@ describe("delivery proposal route matrix", () => {
       yield* Deferred.await(terminalEntered)
       const execution = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
         ...inertLease,
+        bindPlannedAttemptPosition: () => Effect.die("a terminal choice must prevent accepted Resume binding"),
         releasePlannedAttemptPosition: (released) => Ref.update(releasedPositions, (current) => [...current, released]),
         withPlannedAttemptProtocol: (exactCorrelation, effect) => controller.withPermit(exactCorrelation, effect)
       }).pipe(
@@ -7757,6 +7819,7 @@ describe("delivery proposal route matrix", () => {
         release: { claim: activeClaim, operationId: OperationId.make("adapter-interpreter-release") }
       }).release
       const interpreter = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => record("acquireTaskClaim", AuthoritativeTaskClaimAcquired.make({ claim: activeClaim })),
         readTaskClaim: () => record("readTaskClaim", AuthoritativeTaskClaimObserved.make({ observation: activeClaim })),
         readTaskWorktree: () =>

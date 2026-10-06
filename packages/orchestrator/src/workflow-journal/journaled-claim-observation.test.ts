@@ -65,6 +65,7 @@ it.effect("records one exact claim observation and replays it without another pr
           Ref.make(0).pipe(
             Effect.map((reads) =>
               WorkflowInterpreter.of({
+                readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
                 acquireTaskClaim: unused,
                 readTaskClaim: () =>
                   Ref.updateAndGet(reads, (count) => count + 1).pipe(

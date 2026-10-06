@@ -60,6 +60,7 @@ const unused = () => Effect.die("unused")
 
 const interpreterWith = (overrides: Partial<WorkflowInterpreterService>) =>
   WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: unused,
     readTaskClaim: unused,
     readTaskWorkSpecification: unused,

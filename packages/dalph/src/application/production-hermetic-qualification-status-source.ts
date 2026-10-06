@@ -185,6 +185,14 @@ const validateOwnedEntry = Effect.fn("HermeticQualification.validateOwnedEntry")
         return yield* sourceRejectedBecause("InvalidOperationIdentity")()
       return
     }
+    if (
+      route._tag === "FreshWorkflowRoute" &&
+      (route.step._tag === "ReadTaskAttemptBase" || route.step._tag === "ReadTaskAttemptBaseRetryFacts")
+    ) {
+      if (entry.owner.operationId !== route.step.operationId)
+        return yield* sourceRejectedBecause("InvalidOperationIdentity")()
+      return
+    }
     yield* validateWorkflowOperationId(entry.owner.operationId, context)
   }
 })

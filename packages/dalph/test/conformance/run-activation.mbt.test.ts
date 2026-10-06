@@ -1,3 +1,10 @@
+import { deriveFreshWorkflowEntryCapableTaskIds } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
+import {
+  AttemptBasePolicy,
+  TaskAttemptBaseObservation
+} from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/base.js"
+import { acceptedAttemptBasePolicy } from "../../../orchestrator/src/coordination/admission/fresh-attempt-lineage.js"
+import { taskAttemptBaseReadOperationIdFor } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/base-read-identity.js"
 /* eslint-disable max-lines -- One driver keeps the Run-entry action-to-production-seam map auditable. */
 import { it } from "@effect/vitest"
 import { isCoverageMode } from "../../test-support/vitest-mode.js"
@@ -6,6 +13,8 @@ import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTargetRef,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
@@ -121,6 +130,7 @@ import {
   PlannedTaskAttemptPlanner
 } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
 import {
+  WorkflowOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimReleaseOperation,
@@ -187,11 +197,60 @@ const AttemptIdVariant = Schema.Struct({
   tag: Schema.Literals(["AttemptA", "AttemptB", "AttemptC"]),
   value: Schema.Unknown
 })
+const BasePolicyVariant = Schema.Struct({
+  tag: Schema.Literals(["HistoricalPolicyUnspecified", "FixedBase", "QualifiedCurrentIntegrationHead"]),
+  value: Schema.Unknown
+})
+const policyKeyFromModel = (policy: typeof BasePolicyVariant.Type): string => {
+  if (policy.tag === "HistoricalPolicyUnspecified") return policy.tag
+  const value = policy.value
+  if (policy.tag === "FixedBase")
+    return `Fixed:${Schema.decodeUnknownSync(Schema.Struct({ tag: Schema.String }))(value).tag}`
+  const decoded = Schema.decodeUnknownSync(
+    Schema.Struct({
+      anchor: Schema.Struct({ tag: Schema.String }),
+      target: Schema.Struct({ tag: Schema.String }),
+      repository: Schema.Struct({ tag: Schema.String })
+    })
+  )(value)
+  return `Qualified:${decoded.anchor.tag}:${decoded.target.tag}:${decoded.repository.tag}`
+}
+const basePolicy1: AttemptBasePolicy = {
+  _tag: "QualifiedCurrentIntegrationHead",
+  lineageAnchor: GitCommitSha.make("1".repeat(40)),
+  integrationTarget: {
+    repository: GitRepositoryLocator.make("/base-target-1"),
+    ref: IntegrationTargetRef.make("refs/heads/master")
+  },
+  executionRepository: GitRepositoryLocator.make("/base-execution-1")
+}
+const basePolicy2: AttemptBasePolicy = {
+  _tag: "QualifiedCurrentIntegrationHead",
+  lineageAnchor: GitCommitSha.make("2".repeat(40)),
+  integrationTarget: {
+    repository: GitRepositoryLocator.make("/base-target-2"),
+    ref: IntegrationTargetRef.make("refs/heads/other")
+  },
+  executionRepository: GitRepositoryLocator.make("/base-execution-2")
+}
+const fixedBasePolicy: AttemptBasePolicy = { _tag: "ExplicitFixedBase", baseSha: GitCommitSha.make("1".repeat(40)) }
+const policyKey = (policy: AttemptBasePolicy | undefined): string =>
+  policy === undefined
+    ? "HistoricalPolicyUnspecified"
+    : Schema.toEquivalence(AttemptBasePolicy)(policy, fixedBasePolicy)
+      ? "Fixed:Base1"
+      : Schema.toEquivalence(AttemptBasePolicy)(policy, basePolicy1)
+        ? "Qualified:Base1:GitTarget1:ExecutionRepository1"
+        : Schema.toEquivalence(AttemptBasePolicy)(policy, basePolicy2)
+          ? "Qualified:Base2:GitTarget2:ExecutionRepository2"
+          : "ForeignPolicy"
+
 const EstablishedRunVariant = Schema.Union([
   Schema.Struct({ tag: Schema.Literal("NoEstablishedRun"), value: Schema.Unknown }),
   Schema.Struct({
     tag: Schema.Literal("ExactEstablishedRun"),
     value: Schema.Struct({
+      attemptBasePolicy: BasePolicyVariant,
       initialPolicy: Schema.Struct({ taskCapacity: CapacityVariant }),
       latestPolicy: Schema.Struct({ taskCapacity: CapacityVariant }),
       runId: RunIdVariant,
@@ -232,6 +291,7 @@ const SpecProjection = Schema.Struct({
       cancellationApplied: Schema.Boolean,
       terminationDisposition: TerminalDisposition
     }),
+    configuredBasePolicy: BasePolicyVariant,
     requestedRunId: RunIdVariant,
     requestedTarget: TargetVariant,
     trackerFinality: Schema.Struct({
@@ -442,6 +502,8 @@ interface ActivationCommand {
 let runActivationMbtScope: Scope.Scope | undefined
 
 interface DriverProjection {
+  readonly configuredBasePolicy: string
+  readonly establishedBasePolicy: string
   readonly activationsStarted: number
   readonly beginningAppends: number
   readonly cancellationAppends: number
@@ -481,6 +543,9 @@ interface DriverProjection {
 }
 
 const runActivationActions = {
+  selectHistoricalPolicyHistory: {},
+  changeBaseConfiguration: {},
+  selectFixedBaseConstruction: {},
   activateEstablishedRun: {},
   applyCancellation: {},
   admitIndependentTask: {},
@@ -519,6 +584,7 @@ const runActivationActions = {
 } as const
 
 const makeRunActivationDriverImplementation = () => {
+  let configuredBasePolicy: AttemptBasePolicy = basePolicy1
   let records: ReadonlyArray<JournalRecord> = []
   let otherRecords: ReadonlyArray<JournalRecord> = []
   let activationCommands: Queue.Queue<ActivationCommand> | undefined
@@ -587,9 +653,21 @@ const makeRunActivationDriverImplementation = () => {
     return record
   }
 
-  const begin = (eventRunId: RunId, eventTarget: TrackerTarget, policy: InitialControlPolicy): JournalRecord => {
+  const begin = (
+    eventRunId: RunId,
+    eventTarget: TrackerTarget,
+    policy: InitialControlPolicy,
+    attemptBasePolicy: AttemptBasePolicy | undefined = fixedBasePolicy
+  ): JournalRecord => {
     const selected = eventRunId === runId ? records : otherRecords
-    const decision = decideWorkflowRunBeginning(selected, eventRunId, eventTarget, policy, remotePublicationTarget)
+    const decision = decideWorkflowRunBeginning(
+      selected,
+      eventRunId,
+      eventTarget,
+      policy,
+      remotePublicationTarget,
+      attemptBasePolicy
+    )
     if (decision._tag !== "LifecycleTransitionAccepted") {
       expect.fail("Run activation fixture failed to begin")
     }
@@ -732,7 +810,8 @@ const makeRunActivationDriverImplementation = () => {
 
   const journal = JournalStore.of({
     append: (eventRunId, key, event) => Effect.sync(() => append(eventRunId, key, event)),
-    beginRun: (eventRunId, eventTarget, policy) => Effect.sync(() => begin(eventRunId, eventTarget, policy)),
+    beginRun: (eventRunId, eventTarget, policy, _publication, attemptBasePolicy) =>
+      Effect.sync(() => begin(eventRunId, eventTarget, policy, attemptBasePolicy)),
     read: (eventRunId) => Effect.succeed(eventRunId === runId ? records : otherRecords),
     readRunForRecovery: (eventRunId, eventTarget) =>
       readRecoverableRunBeginning(eventRunId === runId ? records : otherRecords, eventRunId, eventTarget),
@@ -794,6 +873,8 @@ const makeRunActivationDriverImplementation = () => {
       }).pipe(Effect.andThen(Effect.die("ambiguous command must reconcile before continuation")))
   })
   const interpreter = WorkflowInterpreter.of({
+    readTaskAttemptBase: () =>
+      Effect.succeed(TaskAttemptBaseObservation.cases.Qualified.make({ baseSha: attemptC.baseSha })),
     acquireTaskClaim: () => Effect.die("Run activation model does not acquire a tracker claim"),
     readTaskClaim: () => Effect.die("Run activation model does not read a tracker claim"),
     readTaskWorktree: () => Effect.die("Run activation model does not read Git"),
@@ -863,7 +944,10 @@ const makeRunActivationDriverImplementation = () => {
             yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
             noopJournalMaintenanceObservation,
             undefined,
-            remotePublicationTarget
+            remotePublicationTarget,
+            true,
+            undefined,
+            configuredBasePolicy
           ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
         )
         return yield* use(Context.get(context, JournaledRunBootstrap))
@@ -1131,10 +1215,30 @@ const makeRunActivationDriverImplementation = () => {
                     )
                   )
                 )
+                const pinnedBasePolicy = acceptedAttemptBasePolicy(records)
+                if (pinnedBasePolicy === undefined)
+                  return yield* Effect.die("historical policy forbids ordinary admission")
+                let planPredecessor = specificationOperation.operationId
+                if (pinnedBasePolicy._tag === "QualifiedCurrentIntegrationHead") {
+                  const read = WorkflowOperation.cases.ReadTaskAttemptBase.make({
+                    operationId: taskAttemptBaseReadOperationIdFor(
+                      claimOperation.acquisition.operationId,
+                      specificationOperation.operationId
+                    ),
+                    claimOperationId: claimOperation.acquisition.operationId,
+                    policy: pinnedBasePolicy,
+                    taskId: plannedAttempt.taskId,
+                    taskRevision: plannedAttempt.taskRevision,
+                    predecessorOperationIds: [specificationOperation.operationId]
+                  })
+                  const observed = yield* (yield* WorkflowInterpreter).readTaskAttemptBase(read)
+                  expect(observed).toEqual({ _tag: "Qualified", baseSha: plannedAttempt.baseSha })
+                  planPredecessor = read.operationId
+                }
                 const operation = makeTaskAttemptPlanOperation({
                   operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
                   plannedAttempt,
-                  predecessorOperationIds: [specificationOperation.operationId]
+                  predecessorOperationIds: [planPredecessor]
                 })
                 yield* journal.append(
                   runId,
@@ -1517,6 +1621,7 @@ const makeRunActivationDriverImplementation = () => {
         if (priorInterrupt !== undefined) yield* priorInterrupt
         const priorCommands = activationCommands
         if (priorCommands !== undefined) yield* Queue.shutdown(priorCommands)
+        configuredBasePolicy = basePolicy1
         records = []
         otherRecords = []
         activationCommands = undefined
@@ -1549,6 +1654,23 @@ const makeRunActivationDriverImplementation = () => {
         executorCommandCalls = 0
         executorProjectionCalls = 0
         setProcessIdle()
+      }),
+    selectHistoricalPolicyHistory: () =>
+      Effect.sync(() => {
+        selectExisting(true)
+        records = records.map((record) => {
+          if (record.event._tag !== "WorkflowRunBegan") return record
+          const { attemptBasePolicy: _policy, ...event } = record.event
+          return { ...record, event }
+        })
+      }),
+    changeBaseConfiguration: () =>
+      Effect.sync(() => {
+        configuredBasePolicy = basePolicy2
+      }),
+    selectFixedBaseConstruction: () =>
+      Effect.sync(() => {
+        configuredBasePolicy = fixedBasePolicy
       }),
     selectExactExistingHistory: () => Effect.sync(() => selectExisting(true)),
     selectAmbiguousExecutorHistory: () =>
@@ -1897,8 +2019,30 @@ const makeRunActivationDriverImplementation = () => {
         eventTags: records.map(({ event }) => event._tag),
         projectionCalls: executorProjectionCalls
       }),
+    getFreshEntryCount: () =>
+      Effect.sync(() => {
+        const reduced = reduceWorkflowJournalHistory(runId, records)
+        if (reduced._tag !== "ValidWorkflowJournalHistory") return expect.fail("policy fixture must reconstruct")
+        const state = reduced.runState
+        return deriveFreshWorkflowEntryCapableTaskIds(
+          {
+            acceptedAt: JournalPosition.make(records.length),
+            currentGraph: snapshotForFreshAttempt(attemptC),
+            currentGraphOperationId: OperationId.make("policy-entry-graph"),
+            pause: state.pause,
+            responsibility: state.responsibility,
+            runId,
+            runControlPolicy: Option.getOrThrow(state.controlPolicy),
+            workflowHistory: state.workflowHistory
+          },
+          target
+        ).size
+      }),
     getState: () =>
       Effect.succeed({
+        configuredBasePolicy: policyKey(configuredBasePolicy),
+        establishedBasePolicy:
+          establishedRunId === "NoEstablishedRun" ? "NoEstablishedRun" : policyKey(acceptedAttemptBasePolicy(records)),
         activationsStarted,
         beginningAppends,
         cancellationAppends,
@@ -2051,6 +2195,50 @@ it.effect("permits only one final tracker read in each unified Run activation", 
   )
 )
 
+it.effect("recovers an exact historical attempt while refusing fresh admission without a pinned Base policy", () =>
+  withRunActivationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectHistoricalPolicyHistory()
+      yield* driver.establishExistingHistory()
+      yield* driver.activateEstablishedRun()
+      expect((yield* driver.getState()).heldPosition).toBe("AttemptA")
+      expect((yield* driver.getState()).establishedBasePolicy).toBe("HistoricalPolicyUnspecified")
+      expect(yield* driver.getFreshEntryCount()).toBe(0)
+    })
+  )
+)
+
+it.effect("reopens the recorded qualified Base policy after configuration changes and a process crash", () =>
+  withRunActivationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.establishAbsentHistory()
+      yield* driver.changeBaseConfiguration()
+      yield* driver.crash()
+      yield* driver.establishExistingHistory()
+      const state = yield* driver.getState()
+      expect(state.configuredBasePolicy).toBe("Qualified:Base2:GitTarget2:ExecutionRepository2")
+      expect(state.establishedBasePolicy).toBe("Qualified:Base1:GitTarget1:ExecutionRepository1")
+      expect(state.beginningAppends).toBe(1)
+    })
+  )
+)
+
+it.effect("ordinary activation and process recovery never mint an operator Base retry", () =>
+  withRunActivationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.establishAbsentHistory()
+      yield* driver.activateEstablishedRun()
+      yield* driver.crash()
+      yield* driver.establishExistingHistory()
+      yield* driver.activateEstablishedRun()
+      expect((yield* driver.getExecutorProtocolEvidence()).eventTags).not.toContain("TaskAttemptBaseRetryRequested")
+    })
+  )
+)
+
 // Coverage keeps the ordinary production-seam tests; formal replay runs in the other modes.
 if (!isCoverageMode) {
   quintIt(
@@ -2080,6 +2268,11 @@ if (!isCoverageMode) {
           Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
             Effect.map(
               ({ state }): DriverProjection => ({
+                configuredBasePolicy: policyKeyFromModel(state.configuredBasePolicy),
+                establishedBasePolicy:
+                  state.process.establishedRun.tag === "NoEstablishedRun"
+                    ? "NoEstablishedRun"
+                    : policyKeyFromModel(state.process.establishedRun.value.attemptBasePolicy),
                 activationsStarted: Number(state.trace.activationsStarted),
                 beginningAppends: Number(state.trace.beginningAppends),
                 cancellationAppends: Number(state.trace.cancellationAppends),
@@ -2136,6 +2329,8 @@ if (!isCoverageMode) {
             Effect.orDie
           ),
         (spec, implementation) =>
+          spec.configuredBasePolicy === implementation.configuredBasePolicy &&
+          spec.establishedBasePolicy === implementation.establishedBasePolicy &&
           spec.activationsStarted === implementation.activationsStarted &&
           spec.beginningAppends === implementation.beginningAppends &&
           spec.cancellationAppends === implementation.cancellationAppends &&

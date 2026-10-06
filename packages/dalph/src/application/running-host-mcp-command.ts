@@ -1,4 +1,8 @@
-import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
+import {
+  ApplyTaskAttemptBaseRetryRequest,
+  ApplyResultRecoveryRequest,
+  ResultRecoveryRequestId
+} from "@dalph/orchestrator"
 import { ExecutorGuidanceRequestId, RunId } from "@dalph/contracts"
 import { NodeCrypto } from "@effect/platform-node"
 import { Crypto, Effect, Encoding, Schema } from "effect"
@@ -30,6 +34,12 @@ export const makeRunningHostMcpOperation = Effect.fn("RunningHostMcp.operation")
       guidanceRequestId: ExecutorGuidanceRequestId.make(identity),
       textBase64: Encoding.encodeBase64(new TextEncoder().encode(guidance.message))
     }
+  }
+  if (name === "dalph_retry_task_attempt_base") {
+    const args = yield* Schema.decodeUnknownEffect(
+      Schema.Struct({ runId: RunId, retry: ApplyTaskAttemptBaseRetryRequest })
+    )(input, { onExcessProperty: "error" })
+    return { _tag: "RetryTaskAttemptBase" as const, retry: args.retry }
   }
   if (name === "dalph_apply_result_recovery") {
     const args = yield* Schema.decodeUnknownEffect(

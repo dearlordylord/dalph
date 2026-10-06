@@ -1,3 +1,4 @@
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
@@ -645,7 +646,19 @@ const selectionFrameWith = (claimRecords: ReadonlyArray<JournalRecord>): Current
       runId: selectionRunId
     }
   ]
-  const records = [...graphRecords, ...claimRecords]
+  const records = [
+    makeWorkflowRunBeganRecord(
+      selectionRunId,
+      selectionTarget,
+      { taskExecutionCapacity: TaskWorkCapacity.make(1) },
+      remotePublicationTargetForTest,
+      { _tag: "ExplicitFixedBase", baseSha: plannedAttempt.baseSha }
+    ),
+    ...[...graphRecords, ...claimRecords].map((record) => ({
+      ...record,
+      position: JournalPosition.make(record.position + 1)
+    }))
+  ]
   return {
     acceptedAt: JournalPosition.make(Math.max(...records.map(({ position }) => position))),
     currentGraph: selectionGraphSnapshot,

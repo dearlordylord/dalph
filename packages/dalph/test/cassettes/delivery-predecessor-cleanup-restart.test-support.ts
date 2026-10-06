@@ -49,6 +49,7 @@ export const restartPredecessorCleanupAfterRemoval = (
       if (beginning.event._tag !== "WorkflowRunBegan") return yield* Effect.die("missing Run beginning")
       const target = beginning.event.target
       const initialPolicy = beginning.event.initialControlPolicy
+      const attemptBasePolicy = beginning.event.attemptBasePolicy
       const runId = beginning.runId
       const fileSystem = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -101,7 +102,7 @@ export const restartPredecessorCleanupAfterRemoval = (
       const prefixRecords = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+          yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest, attemptBasePolicy)
           for (const record of source.records.slice(1)) {
             if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated")
               return yield* Effect.die("cleanup source is not one unfinished Run")

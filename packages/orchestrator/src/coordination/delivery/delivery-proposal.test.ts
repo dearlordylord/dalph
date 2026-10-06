@@ -1,3 +1,8 @@
+import {
+  PlannedTaskAttemptOrdinal,
+  OperationIdAllocator,
+  PlannedTaskAttemptPlanner
+} from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { it } from "@effect/vitest"
 import {
@@ -32,7 +37,6 @@ import {
 } from "../../workflow/registry/operation.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
@@ -118,6 +122,8 @@ describe("deliveryProposalsOf", () => {
     const predecessorOperationId = OperationId.make("accepted-specification-read")
     const claimOperationId = OperationId.make("accepted-plan-claim")
     const step = FreshWorkflowStep.RecordTaskAttemptPlan({
+      baseSha: plannedAttempt.baseSha,
+      ordinal: PlannedTaskAttemptOrdinal.make(0),
       claimOperationId,
       predecessorOperationId,
       specification: makeTaskWorkSpecification({ body: "Implement A", taskId, title: "A" }),
@@ -178,6 +184,8 @@ describe("deliveryProposalsOf", () => {
       ),
       continuation(
         FreshWorkflowStep.RecordTaskAttemptPlan({
+          baseSha: plannedAttempt.baseSha,
+          ordinal: PlannedTaskAttemptOrdinal.make(0),
           claimOperationId,
           predecessorOperationId: claimOperationId,
           specification,
@@ -357,6 +365,8 @@ describe("deliveryProposalsOf", () => {
     const claimOperationId = OperationId.make("fresh-post-mint-claim")
     const predecessorOperationId = OperationId.make("fresh-post-mint-predecessor")
     const step = FreshWorkflowStep.RecordTaskAttemptPlan({
+      baseSha: plannedAttempt.baseSha,
+      ordinal: PlannedTaskAttemptOrdinal.make(0),
       claimOperationId,
       predecessorOperationId,
       specification: makeTaskWorkSpecification({ body: "original", taskId, title: "Original" }),

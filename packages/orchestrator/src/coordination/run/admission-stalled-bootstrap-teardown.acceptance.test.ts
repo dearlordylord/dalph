@@ -277,6 +277,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
         resume: () => Effect.die("the focused teardown does not resume work")
       })
       const interpreter = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => increment(counts, "tracker").pipe(Effect.andThen(Effect.die("unexpected claim"))),
         readTaskClaim: () => increment(counts, "tracker").pipe(Effect.andThen(Effect.die("unexpected claim read"))),
         readTaskWorktree: () => increment(counts, "git").pipe(Effect.andThen(Effect.die("unexpected Git read"))),

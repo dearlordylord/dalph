@@ -17,6 +17,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import {
+  type PlannedTaskAttemptOrdinal,
   GithubClaimOwner,
   defaultGithubGraphqlEndpoint,
   EvidenceStoreLocator,
@@ -24,13 +25,12 @@ import {
   GithubGraphqlEndpointLocator,
   GithubIssueTarget,
   JournalDatabaseLocator,
-  PlannedTaskAttemptOrdinal,
   PlannedTaskAttemptPlanner,
   type PlannedTaskAttemptError,
   type PlannedTaskAttemptPlanRequest,
   TaskWorkCapacity
 } from "@dalph/orchestrator"
-import { Effect, Layer, MutableList, Ref, Schema, SchemaIssue } from "effect"
+import { Effect, Layer, MutableList, Schema, SchemaIssue } from "effect"
 import { IntegratorCandidateWorktreeRoot, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
 import { ExecutorProfile, ExecutorProfileId } from "./executor-profile.js"
 import { ProductionRunReactivationInterval } from "./production.js"
@@ -153,6 +153,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   commonDirectory: CanonicalCommonDirectoryLocator,
   integrationRef: IntegrationTargetRef,
   remotePublicationTarget: RemotePublicationTarget,
+  /** Lineage anchor for qualified current-head selection; accepted attempt plans keep their exact Base. */
   plannedAttemptBaseSha: GitCommitSha,
   plannedAttemptExecutor: TaskExecutorLocator,
   executorProfiles: Schema.optionalKey(Schema.Array(ExecutorProfile)),
@@ -274,46 +275,37 @@ export const deriveProductionPlannedAttemptLocations = (
 }
 
 /**
- * Adapts the pure codec to the existing planner protocol. Fresh ordinals are
- * task-local; ExactReplacement consumes the protocol's exact Base SHA/slot.
+ * Adapts the pure codec to the existing planner protocol. Both request variants consume
+ * the exact selected Base SHA and durable task-local slot; replay is pure.
  */
 export const productionPlannedTaskAttemptLayer = (
-  configuration: Pick<
-    ProductionRepositoryHostConfiguration,
-    "plannedAttemptBaseSha" | "plannedAttemptExecutor" | "plannedAttemptWorktreeRoot"
-  >,
+  configuration: Pick<ProductionRepositoryHostConfiguration, "plannedAttemptExecutor" | "plannedAttemptWorktreeRoot">,
   runId: RunId
 ) =>
   Layer.effect(
     PlannedTaskAttemptPlanner,
-    Effect.gen(function* () {
-      const nextOrdinals = yield* Ref.make<ReadonlyMap<TaskId, number>>(new Map())
-      const plan = Effect.fn("ProductionPlannedTaskAttemptPlanner.plan")(function* (
-        request: PlannedTaskAttemptPlanRequest
-      ): Effect.fn.Return<PlannedTaskAttempt, PlannedTaskAttemptError> {
-        const taskId = request.specification.taskId
-        const ordinal = yield* Ref.modify(nextOrdinals, (current) => {
-          const selected = request._tag === "ExactReplacement" ? Number(request.ordinal) : (current.get(taskId) ?? 0)
-          return [
-            PlannedTaskAttemptOrdinal.make(selected),
-            new Map(current).set(taskId, Math.max(current.get(taskId) ?? 0, selected + 1))
-          ] as const
-        })
-        const locations = deriveProductionPlannedAttemptLocations(
-          configuration.plannedAttemptWorktreeRoot,
-          runId,
-          taskId,
-          ordinal
-        )
-        return PlannedTaskAttemptSchema.make({
-          ...locations,
-          baseSha: request._tag === "ExactReplacement" ? request.baseSha : configuration.plannedAttemptBaseSha,
-          executor: configuration.plannedAttemptExecutor,
-          runId,
-          taskId,
-          taskRevision: request.specification.fingerprint
-        })
-      })
+    Effect.sync(() => {
+      const plan = Effect.fn("ProductionPlannedTaskAttemptPlanner.plan")(
+        (request: PlannedTaskAttemptPlanRequest): Effect.Effect<PlannedTaskAttempt, PlannedTaskAttemptError> =>
+          Effect.sync(() => {
+            const taskId = request.specification.taskId
+            const ordinal = request.ordinal
+            const locations = deriveProductionPlannedAttemptLocations(
+              configuration.plannedAttemptWorktreeRoot,
+              runId,
+              taskId,
+              ordinal
+            )
+            return PlannedTaskAttemptSchema.make({
+              ...locations,
+              baseSha: request.baseSha,
+              executor: configuration.plannedAttemptExecutor,
+              runId,
+              taskId,
+              taskRevision: request.specification.fingerprint
+            })
+          })
+      )
       return PlannedTaskAttemptPlanner.of({ plan })
     })
   )

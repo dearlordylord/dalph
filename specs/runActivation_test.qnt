@@ -407,4 +407,27 @@ module runActivationTest {
         terminationRequiresExactFreshGraphEvidence,
       })
   }
+
+  run qualifiedPolicyPinnedAcrossConfigurationChangeAndRestartTest = init
+    .then(establishAbsentHistory).then(changeBaseConfiguration)
+    .expect(beginningPinsAttemptBasePolicy)
+    .then(crash).then(establishExistingHistory).then(activateEstablishedRun)
+    .expect(and { reopenedRunUsesRecordedAttemptBasePolicy, changedBaseConfigurationIgnoredReached,
+      establishedFacts(state.process.establishedRun).attemptBasePolicy == QUALIFIED_BASE_POLICY })
+
+  run historicalPolicyRetainsPlanButRefusesNewAdmissionTest = init
+    .then(selectHistoricalPolicyHistory).then(establishExistingHistory).then(activateEstablishedRun)
+    .expect(historicalPolicyRetainedAttemptRecoveredReached)
+    .then(settleRetainedAttempt).then(readInitialTrackerGraph)
+    .expect(and { historicalPolicyForbidsOrdinaryAdmission, reopenedRunUsesRecordedAttemptBasePolicy })
+    .then(admitIndependentTask.fail())
+
+  run explicitFixedBaseConstructionRemainsPinnedTest = init.then(selectFixedBaseConstruction)
+    .then(establishAbsentHistory).then(changeBaseConfiguration)
+    .expect(and { beginningPinsAttemptBasePolicy,
+      establishedFacts(state.process.establishedRun).attemptBasePolicy == FixedBase(Base1) })
+  run ordinaryActivationAndRecoveryDoNotAuthorizeBaseRetryTest = init
+    .then(establishAbsentHistory).then(activateEstablishedRun).then(crash)
+    .then(establishExistingHistory).then(activateEstablishedRun)
+    .expect(ordinaryActivationCannotMintBaseRetry)
 }

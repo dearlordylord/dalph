@@ -101,6 +101,7 @@ export const acceptedOperationIdsOf = (records: JournalHistorySource): HashSet.H
 }
 
 const completedReadOperationId = (event: JournalRecord["event"]): OperationId | undefined =>
+  event._tag === "TaskAttemptBaseObserved" ||
   event._tag === "TaskTrackerFactsObserved" ||
   event._tag === "PlannedAttemptWorktreeObserved" ||
   event._tag === "TargetLineageObserved" ||
@@ -114,7 +115,11 @@ export const pendingReadOperationIdsOf = (records: JournalHistorySource): HashSe
   let completed = HashSet.empty<OperationId>()
   let pending = HashSet.empty<OperationId>()
   for (const { event } of records) {
-    if (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") {
+    if (
+      event._tag === "TaskAttemptBaseReadIntended" ||
+      event._tag === "GitReadIntentRecorded" ||
+      event._tag === "TaskTrackerReadIntentRecorded"
+    ) {
       if (!HashSet.has(completed, event.operation.operationId)) {
         pending = HashSet.add(pending, event.operation.operationId)
       }

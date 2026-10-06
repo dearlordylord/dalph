@@ -874,6 +874,7 @@ it.effect("keeps admitted outer cleanup while its actual nested release intent i
             Layer.succeed(
               WorkflowInterpreter,
               WorkflowInterpreter.of({
+                readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
                 acquireTaskClaim: unusedAuthority,
                 readTrackerGraph: () => Effect.succeed(source.graphSnapshot),
                 readTargetLineage: unusedAuthority,
@@ -1196,6 +1197,7 @@ it.effect("keeps the original graph-read owner while its acknowledged intent adv
       if (snapshot._tag === "Invalid") return expect.fail("empty controlled graph must be valid")
       const unused = () => Effect.die("unrequested workflow boundary")
       const interpreter = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: unused,
         readTargetLineage: unused,
@@ -1368,6 +1370,7 @@ it.effect(
         const calls = yield* Ref.make<ReadonlyArray<OperationId>>([])
         const unused = () => Effect.die("unrequested workflow boundary")
         const outside = WorkflowInterpreter.of({
+          readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
           acquireTaskClaim: unused,
           readTrackerGraph: unused,
           readTargetLineage: unused,
@@ -7579,6 +7582,7 @@ it.effect("keeps B's admitted read while A completes and B moves up the current 
       )
       const unused = () => Effect.die("unrequested workflow boundary")
       const outside = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTrackerGraph: unused,
         readTaskWorktree: unused,

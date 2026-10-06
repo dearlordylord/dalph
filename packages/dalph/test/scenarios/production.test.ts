@@ -1,46 +1,5 @@
-import { interpretGithubGraphBatch } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import {
-  remotePublicationGitLayerForProductionTest,
-  remotePublicationTargetForTest
-} from "../../../orchestrator/test/support/direct-publication.js"
-import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
-import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
-import { projectRecordedCassette, verifyRecordedCassetteRoundTrip } from "../../src/cassettes/recorded.js"
-// @effect-diagnostics multipleEffectProvide:off
-import {
-  AttemptId,
-  AcceptedResult,
-  AcceptedResultEvidenceManifest,
-  EvidenceDigest,
-  EvidenceReference,
-  GitCommitSha,
-  GitRepositoryLocator,
-  IntegrationTarget,
-  IntegrationTargetRef,
-  makeTaskWorkSpecification,
-  type TaskWorkSpecification,
-  PlannedAttemptExecutor,
-  PlannedAttemptExecutorLifecycleObservation,
-  type PlannedAttemptExecutorLifecycleObservationService,
-  type PlannedAttemptExecutorService,
-  PlannedAttemptExecutorCommandFailure,
-  PlannedAttemptExecutorProjection,
-  PlannedAttemptExecutorReport,
-  type PlannedAttemptExecutorRequest,
-  PlannedTaskAttempt,
-  passiveLifecycleObservationPurpose,
-  plannedAttemptExecutorCorrelation,
-  plannedAttemptExecutorCorrelationKey,
-  RunId,
-  TaskBranchRef,
-  TaskExecutorLocator,
-  TaskId,
-  WorktreeLocator
-} from "@dalph/contracts"
-import { NodeServices } from "@effect/platform-node"
-import { sqliteJournalStoreLayer } from "../../../orchestrator/src/workflow-journal/adapters/sqlite-store.js"
-import { it } from "@effect/vitest"
-import {
+  AttemptBasePolicy,
   type CompletionTaskClaim,
   type GithubGraphqlRequest,
   ApplicationExitShell,
@@ -186,6 +145,48 @@ import {
   WorkflowTrace,
   unavailableIntegratorCandidateProviderAuthority
 } from "@dalph/orchestrator"
+import { interpretGithubGraphBatch } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
+import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
+import { projectRecordedCassette, verifyRecordedCassetteRoundTrip } from "../../src/cassettes/recorded.js"
+// @effect-diagnostics multipleEffectProvide:off
+import {
+  AttemptId,
+  AcceptedResult,
+  AcceptedResultEvidenceManifest,
+  EvidenceDigest,
+  EvidenceReference,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  makeTaskWorkSpecification,
+  type TaskWorkSpecification,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  type PlannedAttemptExecutorLifecycleObservationService,
+  type PlannedAttemptExecutorService,
+  PlannedAttemptExecutorCommandFailure,
+  PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorRequest,
+  PlannedTaskAttempt,
+  passiveLifecycleObservationPurpose,
+  plannedAttemptExecutorCorrelation,
+  plannedAttemptExecutorCorrelationKey,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  WorktreeLocator
+} from "@dalph/contracts"
+import { NodeServices } from "@effect/platform-node"
+import { sqliteJournalStoreLayer } from "../../../orchestrator/src/workflow-journal/adapters/sqlite-store.js"
+import { it } from "@effect/vitest"
 import {
   Cause,
   ConfigProvider,
@@ -421,7 +422,8 @@ const runFreshGithubInstructionVertical = (scenario: string, focusedBody: unknow
       unavailableIntegratorCandidateProviderAuthority,
       {
         remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
-        remotePublicationTarget: remotePublicationTargetForTest
+        remotePublicationTarget: remotePublicationTargetForTest,
+        attemptBasePolicy: AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha })
       }
     ).pipe(
       Layer.provide(githubTrackerGraphReaderLayer.pipe(Layer.provide(githubClientLayer))),
@@ -2644,7 +2646,8 @@ it.effect(absentHistoryApplicationScenario, () =>
         unavailableIntegratorCandidateProviderAuthority,
         {
           remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
-          remotePublicationTarget: remotePublicationTargetForTest
+          remotePublicationTarget: remotePublicationTargetForTest,
+          attemptBasePolicy: AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha })
         }
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -4050,7 +4053,13 @@ it.effect("retains remote delivery across Pause and Exit", () =>
           const journal = yield* JournalStore
           const began = publicationRecords[0]
           if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("publication fixture lacks Run begin")
-          yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
+          yield* journal.beginRun(
+            runId,
+            target,
+            began.event.initialControlPolicy,
+            began.event.remotePublicationTarget,
+            began.event.attemptBasePolicy
+          )
           for (const record of publicationRecords.slice(1)) {
             if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
               return yield* Effect.die("publication fixture contains an invalid Run lifecycle suffix")
@@ -4376,7 +4385,13 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         const journal = yield* JournalStore
         const began = resumedRecords[0]
         if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("resumed fixture lacks Run begin")
-        yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
+        yield* journal.beginRun(
+          runId,
+          target,
+          began.event.initialControlPolicy,
+          began.event.remotePublicationTarget,
+          began.event.attemptBasePolicy
+        )
         for (const record of resumedRecords.slice(1)) {
           if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
             return yield* Effect.die("resumed fixture contains an invalid Run lifecycle suffix")

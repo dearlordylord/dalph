@@ -1,5 +1,9 @@
 import { compatibleRunningHostResponse } from "./running-host-response-compatibility.js"
-import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
+import {
+  ApplyTaskAttemptBaseRetryRequest,
+  ApplyResultRecoveryRequest,
+  ResultRecoveryRequestId
+} from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This client allocates process-local request correlation only. */
 import { NodeCrypto, NodeHttpClient } from "@effect/platform-node"
 import { type RunId } from "@dalph/contracts"
@@ -153,6 +157,17 @@ const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (reques
         phase: "Response",
         reason: "ResponseCorrelationMismatch"
       })
+    if (
+      operation._tag === "RetryTaskAttemptBase" &&
+      (value._tag !== "TaskAttemptBaseRetryRecorded" ||
+        value.acceptedAt.runId !== request.runId ||
+        !Schema.toEquivalence(ApplyTaskAttemptBaseRetryRequest)(operation.retry, value.retry))
+    )
+      return yield* Effect.fail<RunningHostError>({
+        _tag: "TransportFailed",
+        phase: "Response",
+        reason: "ResponseCorrelationMismatch"
+      })
     const recoveryMatches =
       operation._tag === "ApplyResultRecoveryDirection"
         ? value._tag === "ResultRecoveryDirectionRecorded" &&
@@ -209,6 +224,7 @@ const failureAfterSubmission = (
         operation._tag === "Unpause" ||
         operation._tag === "Refresh" ||
         operation._tag === "ApplyResultRecoveryDirection" ||
+        operation._tag === "RetryTaskAttemptBase" ||
         operation._tag === "SendExecutorGuidance")
       ? {
           _tag: "CommandOutcomeUnknown",

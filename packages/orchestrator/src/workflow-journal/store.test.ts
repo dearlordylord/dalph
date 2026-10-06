@@ -7,7 +7,8 @@ import { Cause, ConfigProvider, Context, Deferred, Effect, FileSystem, Fiber, La
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
-import { GitCommitSha, RunId, TaskId } from "@dalph/contracts"
+import { GitCommitSha, GitRepositoryLocator, IntegrationTargetRef, RunId, TaskId } from "@dalph/contracts"
+import { AttemptBasePolicy } from "../workflow/protocols/task-attempt-planning/base.js"
 import {
   FixtureTarget,
   AcceptedJournalReader,
@@ -90,6 +91,40 @@ import {
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+
+for (const [name, layer] of [
+  ["memory", memoryJournalTestLayer],
+  ["sqlite", sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") })]
+] as const) {
+  it.effect(`${name} pins the new Run attempt-base policy and preserves missing-policy history`, () =>
+    Effect.gen(function* () {
+      const store = yield* JournalStore
+      const runId = RunId.make(`pinned-attempt-base:${name}`)
+      const target = FixtureTarget.make(`pinned-attempt-base:${name}`)
+      const selection = AttemptBasePolicy.cases.QualifiedCurrentIntegrationHead.make({
+        executionRepository: GitRepositoryLocator.make("/execution"),
+        integrationTarget: {
+          repository: GitRepositoryLocator.make("/target.git"),
+          ref: IntegrationTargetRef.make("refs/heads/master")
+        },
+        lineageAnchor: GitCommitSha.make("1".repeat(40))
+      })
+      const began = yield* store.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest, selection)
+      expect(began.event).toMatchObject({ _tag: "WorkflowRunBegan", attemptBasePolicy: selection })
+      const changedConfiguration = { ...selection, lineageAnchor: GitCommitSha.make("2".repeat(40)) }
+      expect(
+        yield* store
+          .beginRun(runId, target, initialPolicy, remotePublicationTargetForTest, changedConfiguration)
+          .pipe(Effect.result)
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "WorkflowRunAlreadyBegan" } })
+      expect((yield* store.readRunForRecovery(runId, target)).event).toEqual(began.event)
+      const historicalRun = RunId.make(`historical-attempt-base:${name}`)
+      const historical = yield* store.beginRun(historicalRun, target, initialPolicy, remotePublicationTargetForTest)
+      expect(historical.event).not.toHaveProperty("attemptBasePolicy")
+      expect((yield* store.readRunForRecovery(historicalRun, target)).event).toEqual(historical.event)
+    }).pipe(Effect.provide(layer))
+  )
+}
 
 it("classifies append ambiguity from typed journal failures without inspecting strings", () => {
   const expectedRunId = RunId.make("append-disposition-run")

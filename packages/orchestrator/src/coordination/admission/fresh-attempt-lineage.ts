@@ -1,5 +1,7 @@
+import { baseReadRetryAuthorityWasAccepted } from "./base-retry-lineage.js"
+import { acceptedAttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base-evidence.js"
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
-import { Option } from "effect"
+import { Option, Schema } from "effect"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { isDependencySatisfied, isTaskOpen } from "../../authorities/task-tracker/task.js"
 import {
@@ -11,7 +13,13 @@ import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  workflowRunBeganRecordKey
+} from "../../workflow-journal/record-key.js"
 import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
@@ -22,6 +30,8 @@ import {
   journalRecordsForAttemptKind,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
+
+export { acceptedAttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base-evidence.js"
 
 /** The latest fresh-workflow boundary whose exact accepted causal lineage must be present. */
 type FreshAttemptLineageBoundary = "Plan" | "WorktreeReady"
@@ -51,6 +61,8 @@ interface AcceptedFreshAttemptWorktreeLineage extends AcceptedFreshAttemptLineag
 }
 
 type AcceptedFreshAttemptLineage = AcceptedFreshAttemptPlanLineage | AcceptedFreshAttemptWorktreeLineage
+
+type FreshAttemptSubject = Pick<PlannedTaskAttempt, "runId" | "taskId" | "taskRevision">
 
 type TaskAttemptPlanOperation = Extract<WorkflowOperation, { readonly _tag: "RecordTaskAttemptPlan" }>
 type FactsObservedEvent = Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
@@ -116,7 +128,7 @@ const acceptedClaimIntent = (
 
 const isSpecificationOutcomeForPlan = (
   record: JournalRecord,
-  plannedAttempt: PlannedTaskAttempt,
+  plannedAttempt: FreshAttemptSubject,
   planPredecessors: ReadonlySet<OperationId>
 ): record is SpecificationOutcomeRecord => {
   const event = record.event
@@ -148,7 +160,7 @@ const isCompleteGraphOutcomeBefore = (
 const graphReadScopeMatches = (
   record: JournalRecord,
   operationId: OperationId,
-  plannedAttempt: PlannedTaskAttempt
+  plannedAttempt: FreshAttemptSubject
 ): boolean =>
   record.event._tag === "TaskTrackerReadIntentRecorded" &&
   record.event.operation._tag === "ReadTrackerGraph" &&
@@ -169,7 +181,7 @@ const graphReadChronologyMatches = (
   record.key === intentRecordKey(record.event.operation.operationId) &&
   record.event.operation.predecessorOperationIds.includes(claimOperationId)
 
-const taskWasEligibleAt = (
+export const taskWasEligibleAt = (
   records: JournalHistorySource,
   outcome: JournalRecord,
   taskId: PlannedTaskAttempt["taskId"]
@@ -218,11 +230,11 @@ const taskWasEligibleInRawObservation = (
   return Option.isSome(reconstructed) && reconstructed.value.eligibleTasks().some(({ id }) => id === taskId)
 }
 
-const acceptedPlanPredecessorLineage = (
+const acceptedAuthorityPredecessorLineage = (
   records: JournalHistorySource,
-  planOperation: TaskAttemptPlanOperation
+  planOperation: TaskAttemptPlanOperation | Extract<WorkflowOperation, { readonly _tag: "ReadTaskAttemptBase" }>,
+  plannedAttempt: FreshAttemptSubject
 ): AcceptedFreshAttemptLineageFields | undefined => {
-  const plannedAttempt = planOperation.plannedAttempt
   const recordsBeforePlan = records
   const planPredecessors = causalPredecessors(recordsBeforePlan, planOperation)
   const claimOutcome = exactlyOne(
@@ -298,11 +310,79 @@ const acceptedPlanPredecessorLineage = (
   }
 }
 
+const sameBasePolicy = Schema.toEquivalence(AttemptBasePolicy)
+
+/** A new pre-plan read must follow the exact acquired claim and focused specification. */
+export const freshAttemptBaseReadLineageWasAccepted = (
+  records: JournalHistorySource,
+  operation: Extract<WorkflowOperation, { readonly _tag: "ReadTaskAttemptBase" }>
+): boolean => {
+  const beginning = journalRecordByKey(records, workflowRunBeganRecordKey)
+  const policy = acceptedAttemptBasePolicy(records)
+  if (
+    beginning === undefined ||
+    policy?._tag !== "QualifiedCurrentIntegrationHead" ||
+    !sameBasePolicy(policy, operation.policy)
+  )
+    return false
+  if (!baseReadRetryAuthorityWasAccepted(records, operation)) return false
+  const lineage = acceptedAuthorityPredecessorLineage(records, operation, {
+    runId: beginning.runId,
+    taskId: operation.taskId,
+    taskRevision: operation.taskRevision
+  })
+  return (
+    lineage !== undefined &&
+    lineage.claimOperationId === operation.claimOperationId &&
+    operation.predecessorOperationIds.includes(lineage.specificationOperationId)
+  )
+}
+
+const acceptedPlanPredecessorLineage = (
+  records: JournalHistorySource,
+  operation: TaskAttemptPlanOperation,
+  allowHistorical: boolean
+): AcceptedFreshAttemptLineageFields | undefined => {
+  const lineage = acceptedAuthorityPredecessorLineage(records, operation, operation.plannedAttempt)
+  if (lineage === undefined) return undefined
+  const policy = acceptedAttemptBasePolicy(records)
+  if (policy === undefined) return allowHistorical ? lineage : undefined
+  if (policy._tag === "ExplicitFixedBase")
+    return operation.plannedAttempt.baseSha === policy.baseSha ? lineage : undefined
+  const reads = operation.predecessorOperationIds.flatMap((operationId) => {
+    const intent = journalRecordByKey(records, intentRecordKey(operationId))
+    const observed = journalRecordByKey(records, outcomeRecordKey(operationId))
+    if (
+      intent?.event._tag !== "TaskAttemptBaseReadIntended" ||
+      observed?.event._tag !== "TaskAttemptBaseObserved" ||
+      intent.position >= observed.position ||
+      observed.event.observation._tag !== "Qualified"
+    )
+      return []
+    const read = intent.event.operation
+    return read.taskId === operation.plannedAttempt.taskId &&
+      read.taskRevision === operation.plannedAttempt.taskRevision &&
+      read.claimOperationId === lineage.claimOperationId &&
+      observed.event.observation.baseSha === operation.plannedAttempt.baseSha &&
+      freshAttemptBaseReadLineageWasAccepted(records, read)
+      ? [read]
+      : []
+  })
+  return reads.length === 1 ? lineage : undefined
+}
+
 /** Whether an unrecorded fresh plan operation has every exact accepted predecessor required before append. */
 export const freshAttemptPlanPredecessorLineageWasAccepted = (
   records: JournalHistorySource,
   operation: TaskAttemptPlanOperation
-): boolean => acceptedPlanPredecessorLineage(records, operation) !== undefined
+): boolean => {
+  const existing = journalRecordByKey(records, attemptPlanRecordKey(operation.plannedAttempt.attemptId))?.event
+  const exactHistoricalReplay =
+    existing?._tag === "TaskAttemptPlanned" &&
+    existing.operation.operationId === operation.operationId &&
+    plannedTaskAttemptEquivalence(existing.operation.plannedAttempt, operation.plannedAttempt)
+  return acceptedPlanPredecessorLineage(records, operation, exactHistoricalReplay) !== undefined
+}
 
 const readyWorktreeForIntent = (
   records: JournalHistorySource,
@@ -375,7 +455,7 @@ export const acceptedFreshAttemptLineage = (
   )
     return undefined
   const recordsThroughPlan = evidenceThrough(runRecords, planRecord.position)
-  const plan = acceptedPlanPredecessorLineage(recordsThroughPlan, planRecord.event.operation)
+  const plan = acceptedPlanPredecessorLineage(recordsThroughPlan, planRecord.event.operation, true)
   if (plan === undefined) return undefined
   if (boundary === "Plan") return { _tag: "AcceptedFreshAttemptPlanLineage", ...plan }
   return acceptedWorktreeLineage(runRecords, plannedAttempt, plan)

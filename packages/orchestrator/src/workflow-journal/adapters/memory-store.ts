@@ -1,3 +1,4 @@
+import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import { type RemotePublicationTarget, type RunId } from "@dalph/contracts"
 import { Effect, Layer, Ref, Schema } from "effect"
 import { JournalPosition, type JournalRecordKey } from "../identity.js"
@@ -207,7 +208,8 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         runId: RunId,
         target: TrackerTarget,
         initialControlPolicy: InitialControlPolicy,
-        remotePublicationTarget: RemotePublicationTarget
+        remotePublicationTarget: RemotePublicationTarget,
+        attemptBasePolicy?: AttemptBasePolicy
       ) {
         const update = (
           current: MemoryJournalState
@@ -228,7 +230,8 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
             runId,
             target,
             initialControlPolicy,
-            remotePublicationTarget
+            remotePublicationTarget,
+            attemptBasePolicy
           )
           if (decision._tag === "LifecycleTransitionRejected") {
             return [Effect.fail(decision.failure), current]

@@ -1,3 +1,6 @@
+import { acceptedAttemptBasePolicy } from "../admission/fresh-attempt-lineage.js"
+import { OperationId } from "../../workflow/identity.js"
+import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
 /* eslint-disable functional/immutable-data -- Local reconstruction scratch is never persisted or exposed. */
 import {
@@ -19,13 +22,33 @@ import { TrackerReadRetryEvidence } from "../../authorities/task-tracker/graph-r
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { TrackerTaskDescriptor } from "../../authorities/task-tracker/task.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { journalRecordsOfKind, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import {
+  journalRecordByKey,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { TrackerGraphState } from "./relations.js"
 
 /** Transient descriptions of accepted history. These values authorize no action. */
 export const DeliveryDiagnostics = Schema.Struct({
   runId: RunId,
+  attemptBaseAdmission: Schema.optionalKey(
+    Schema.TaggedUnion({
+      HistoricalPolicyUnspecified: {},
+      QualificationRefused: {
+        refusals: Schema.Array(
+          Schema.Struct({
+            taskId: TaskId,
+            operationId: OperationId,
+            observedAt: JournalPosition,
+            boundary: Schema.Literals(["TargetHead", "AnchorAncestry", "ExecutionCommit"]),
+            detail: Schema.String
+          })
+        )
+      }
+    })
+  ),
   trackerWait: Schema.TaggedUnion({
     None: {},
     Throttled: { observedAt: JournalPosition, retry: TrackerReadRetryEvidence },
@@ -254,8 +277,28 @@ export const projectDeliveryDiagnostics = (
     }
   }
   const descriptors = graph?._tag === "GraphEstablished" ? graph.observation.snapshot.toWire().tasks : []
+  const refused = Array.from(journalRecordsOfKind(history, "TaskAttemptBaseReadIntended")).flatMap(({ event }) => {
+    if (event._tag !== "TaskAttemptBaseReadIntended") return []
+    const observed = journalRecordByKey(history, outcomeRecordKey(event.operation.operationId))
+    return observed?.event._tag === "TaskAttemptBaseObserved" && observed.event.observation._tag === "Refused"
+      ? [
+          {
+            taskId: event.operation.taskId,
+            operationId: event.operation.operationId,
+            observedAt: observed.position,
+            boundary: observed.event.observation.boundary,
+            detail: observed.event.observation.detail
+          }
+        ]
+      : []
+  })
   return {
     runId,
+    ...(acceptedAttemptBasePolicy(history) === undefined
+      ? { attemptBaseAdmission: { _tag: "HistoricalPolicyUnspecified" as const } }
+      : refused.length === 0
+        ? {}
+        : { attemptBaseAdmission: { _tag: "QualificationRefused" as const, refusals: refused } }),
     trackerWait,
     tasks: [...attempts.values()]
       .map((task): TaskDiagnostic => {

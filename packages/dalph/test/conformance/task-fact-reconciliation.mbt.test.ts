@@ -870,6 +870,7 @@ const makeTaskFactReconciliationDriver = (runtime: ScopedRef.ScopedRef<TaskFactR
           })
       })
       const baseInterpreter = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => Effect.die("claim acquisition is outside this adapter"),
         readTrackerGraph: (operation) => {
           if (operation.target !== target) {

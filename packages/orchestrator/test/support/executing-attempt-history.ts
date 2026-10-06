@@ -151,7 +151,10 @@ export const makeExecutingAttemptHistory = (input: ExecutingAttemptHistoryInput)
   const policy =
     input.initialControlPolicy ?? InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
   let records: ReadonlyArray<JournalRecord> = input.priorRecords ?? [
-    makeWorkflowRunBeganRecord(input.runId, input.trackerTarget, policy, acceptedIntegrationRemotePublicationTarget)
+    makeWorkflowRunBeganRecord(input.runId, input.trackerTarget, policy, acceptedIntegrationRemotePublicationTarget, {
+      _tag: "ExplicitFixedBase",
+      baseSha: input.plannedAttempt.baseSha
+    })
   ]
   const append = (event: JournalRecord["event"]): JournalRecord => {
     const next = appendRecord(input.runId, records, event)

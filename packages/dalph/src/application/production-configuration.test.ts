@@ -418,9 +418,27 @@ describe("production planned-attempt location codec", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const planner = yield* PlannedTaskAttemptPlanner
-        const a0 = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: taskA }))
-        const b0 = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: taskB }))
-        const a1 = yield* planner.plan(PlannedTaskAttemptPlanRequest.Fresh({ specification: taskA }))
+        const a0 = yield* planner.plan(
+          PlannedTaskAttemptPlanRequest.Fresh({
+            baseSha: configuration.plannedAttemptBaseSha,
+            ordinal: PlannedTaskAttemptOrdinal.make(0),
+            specification: taskA
+          })
+        )
+        const b0 = yield* planner.plan(
+          PlannedTaskAttemptPlanRequest.Fresh({
+            baseSha: configuration.plannedAttemptBaseSha,
+            ordinal: PlannedTaskAttemptOrdinal.make(0),
+            specification: taskB
+          })
+        )
+        const a1 = yield* planner.plan(
+          PlannedTaskAttemptPlanRequest.Fresh({
+            baseSha: configuration.plannedAttemptBaseSha,
+            ordinal: PlannedTaskAttemptOrdinal.make(1),
+            specification: taskA
+          })
+        )
         const replacement = yield* planner.plan(
           PlannedTaskAttemptPlanRequest.ExactReplacement({
             baseSha: replacementBase,
@@ -444,5 +462,41 @@ describe("production planned-attempt location codec", () => {
       ...deriveProductionPlannedAttemptLocations(root, runId, taskA.taskId, PlannedTaskAttemptOrdinal.make(7)),
       baseSha: replacementBase
     })
+  })
+
+  it("replays an acknowledged allocation across planner reconstruction using its selected head and durable ordinal", async () => {
+    const runId = RunId.make("run-head-replay")
+    const configuration = {
+      plannedAttemptExecutor: TaskExecutorLocator.make("codex:production"),
+      plannedAttemptWorktreeRoot: root
+    }
+    const specification = makeTaskWorkSpecification({
+      body: "Delivered prerequisites",
+      taskId: TaskId.make("D"),
+      title: "Evaluator"
+    })
+    const request = PlannedTaskAttemptPlanRequest.Fresh({
+      baseSha: GitCommitSha.make("c".repeat(40)),
+      ordinal: PlannedTaskAttemptOrdinal.make(3),
+      specification
+    })
+    const allocate = (selected: typeof request) =>
+      Effect.runPromise(
+        PlannedTaskAttemptPlanner.pipe(
+          Effect.flatMap((planner) => planner.plan(selected)),
+          Effect.provide(productionPlannedTaskAttemptLayer(configuration, runId))
+        )
+      )
+    const original = await allocate(request)
+    expect(await allocate(request)).toEqual(original)
+    const successor = await allocate({
+      ...request,
+      baseSha: GitCommitSha.make("d".repeat(40)),
+      ordinal: PlannedTaskAttemptOrdinal.make(4)
+    })
+    expect(original.baseSha).toBe(request.baseSha)
+    expect(successor.baseSha).not.toBe(original.baseSha)
+    expect(successor.attemptId).not.toBe(original.attemptId)
+    expect(successor.worktree).not.toBe(original.worktree)
   })
 })

@@ -343,6 +343,7 @@ const withJournaledTargetLineage = <A, E, R>(
     }
   }
   const interpreter = WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: unused,
     readTaskClaim: unused,
     readTaskWorktree: unused,

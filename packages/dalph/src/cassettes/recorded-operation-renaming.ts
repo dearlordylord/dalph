@@ -41,6 +41,12 @@ export const renameWorkflowOperation = (
 ): WorkflowOperation =>
   Match.value(operation).pipe(
     Match.tagsExhaustive({
+      ReadTaskAttemptBase: (operation) => ({
+        ...operation,
+        claimOperationId: renamed(operation.claimOperationId, maps.operationIds),
+        operationId: renamed(operation.operationId, maps.operationIds),
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+      }),
       AcquireTaskClaim: (operation) => ({
         ...operation,
         acquisition: {

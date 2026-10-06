@@ -58,6 +58,7 @@ const provider = Layer.effect(
   Effect.gen(function* () {
     const requests = yield* Ref.make(0)
     return WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: unused,
       readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -173,6 +174,7 @@ it.effect("recovers an unfinished exact release intent after throttle and reread
     const provider = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: unused,
         readTaskWorktree: () => Effect.die("unused worktree observation"),

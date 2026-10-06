@@ -926,6 +926,9 @@ const keyCheckedHistoricalEventTags = {
   RemoteBaselineObserved: true,
   RemoteBaselineReadIntended: true,
   TargetPromotionStale: true,
+  TaskAttemptBaseRetryRequested: true,
+  TaskAttemptBaseReadIntended: true,
+  TaskAttemptBaseObserved: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
   TaskClaimAcquisitionIntended: true,
@@ -1039,6 +1042,7 @@ const operationOfEvent = (event: WorkflowJournalEvent): WorkflowOperation | unde
     event._tag === "TaskTrackerReadIntentRecorded" ||
     event._tag === "TaskClaimAcquisitionIntended" ||
     event._tag === "TaskClaimReleaseIntended" ||
+    event._tag === "TaskAttemptBaseReadIntended" ||
     event._tag === "TaskAttemptPlanned" ||
     event._tag === "TaskWorktreeReconciliationIntended" ||
     event._tag === "GitReadIntentRecorded"
@@ -1397,6 +1401,7 @@ const nestedOperationReferencesOfFinalityEvent = (
 }
 
 const operationOccurrenceKinds = {
+  TaskAttemptBaseReadInitiated: true,
   GitReadInitiated: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquisitionInitiated: true,
@@ -1411,6 +1416,7 @@ const isOperationOccurrence = (occurrence: WorkflowOccurrenceValue): occurrence 
   Object.hasOwn(operationOccurrenceKinds, occurrence._tag)
 
 const observedOperationOccurrenceKinds = {
+  TaskAttemptBaseObserved: true,
   AttemptRestartAuthorityReadFailed: true,
   PlannedAttemptWorktreeObserved: true,
   StoppedAttemptClaimPreserved: true,
@@ -1499,14 +1505,16 @@ const operationIdsOfCancellationOccurrence = (
   occurrence._tag === "CancelledAttemptClaimNoReleaseObserved" ? [occurrence.observationOperationId] : undefined
 
 const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<OperationId> =>
-  operationIdsOfOperationOccurrence(occurrence) ??
-  operationIdsOfObservedOccurrence(occurrence) ??
-  operationIdsOfReplacementOccurrence(occurrence) ??
-  operationIdsOfHistoricalAttemptOccurrence(occurrence) ??
-  operationIdsOfFinalityOccurrence(occurrence) ??
-  operationIdsOfCleanupOccurrence(occurrence) ??
-  operationIdsOfCancellationOccurrence(occurrence) ??
-  []
+  occurrence._tag === "TaskAttemptBaseRetryRequested"
+    ? [occurrence.subject.refusedReadOperationId]
+    : (operationIdsOfOperationOccurrence(occurrence) ??
+      operationIdsOfObservedOccurrence(occurrence) ??
+      operationIdsOfReplacementOccurrence(occurrence) ??
+      operationIdsOfHistoricalAttemptOccurrence(occurrence) ??
+      operationIdsOfFinalityOccurrence(occurrence) ??
+      operationIdsOfCleanupOccurrence(occurrence) ??
+      operationIdsOfCancellationOccurrence(occurrence) ??
+      [])
 
 const taskIdsOfObservation = (observation: TaskTrackerFactsObservation): ReadonlyArray<TaskId> => {
   switch (observation._tag) {
@@ -1527,7 +1535,11 @@ const taskIdsOfObservation = (observation: TaskTrackerFactsObservation): Readonl
 }
 
 const taskIdsOfObservationOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined =>
-  occurrence._tag === "TaskTrackerFactsObserved" ? taskIdsOfObservation(occurrence.evidence) : undefined
+  occurrence._tag === "TaskAttemptBaseReadInitiated"
+    ? [occurrence.operation.taskId]
+    : occurrence._tag === "TaskTrackerFactsObserved"
+      ? taskIdsOfObservation(occurrence.evidence)
+      : undefined
 
 const taskIdsOfDirectPlannedAttemptOccurrence = (
   occurrence: WorkflowOccurrenceValue
@@ -1703,6 +1715,7 @@ const taskIdsOfHistoricalFinality = (occurrence: WorkflowOccurrenceValue): Reado
 const taskIdsOfControlDispositionOccurrence = (
   occurrence: WorkflowOccurrenceValue
 ): ReadonlyArray<TaskId> | undefined => {
+  if (occurrence._tag === "TaskAttemptBaseRetryRequested") return [occurrence.subject.taskId]
   if (
     occurrence._tag === "CancelledAttemptImplementationAbandoned" ||
     occurrence._tag === "CancelledAttemptClaimNoReleaseObserved"

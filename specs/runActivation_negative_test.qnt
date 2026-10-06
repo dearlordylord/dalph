@@ -770,4 +770,27 @@ module runActivationNegativeTest {
       .then(admitAfterCancellation)
       .expect(not(cancellationClosesForwardAdmission))
   }
+
+  action silentlyAdoptChangedBaseConfiguration: bool = all {
+    state.process.establishmentSource == ExistingHistoryReduced,
+    state' = { ...state, process: { ...state.process, establishedRun: ExactEstablishedRun({
+      ...establishedFacts(state.process.establishedRun), attemptBasePolicy: state.configuredBasePolicy,
+    }) } },
+  }
+  action admitWithMissingHistoricalPolicy: bool = all {
+    establishedFacts(state.process.establishedRun).attemptBasePolicy == HistoricalPolicyUnspecified,
+    state' = { ...state, process: { ...state.process, independentTaskAdmitted: true } },
+  }
+  run silentBasePolicyMigrationTurnsInvariantRedTest = init.then(selectHistoricalPolicyHistory)
+    .then(changeBaseConfiguration).then(establishExistingHistory).then(silentlyAdoptChangedBaseConfiguration)
+    .expect(not(reopenedRunUsesRecordedAttemptBasePolicy))
+  run missingPolicyAdmissionTurnsInvariantRedTest = init.then(selectHistoricalPolicyHistory)
+    .then(establishExistingHistory).then(activateEstablishedRun).then(admitWithMissingHistoricalPolicy)
+    .expect(not(historicalPolicyForbidsOrdinaryAdmission))
+  action inventOperatorRetryOnActivation: bool = all {
+    state' = { ...state, trace: { ...state.trace, baseRetryDirectionIssued: true } },
+  }
+  run ordinaryActivationRetryAuthorityMutationIsDetectedTest = init
+    .then(establishAbsentHistory).then(activateEstablishedRun)
+    .then(inventOperatorRetryOnActivation).expect(not(ordinaryActivationCannotMintBaseRetry))
 }

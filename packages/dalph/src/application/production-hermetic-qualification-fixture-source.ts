@@ -393,7 +393,7 @@ export const validateSessionCorrelation = Effect.fn("HermeticQualification.valid
   const expected = integratorCorrelationFor({
     responsibility,
     targetLineage: TargetLineageObservation.make({
-      plannedBaseSha: context.configuration.plannedAttemptBaseSha,
+      plannedBaseSha: session.plannedAttempt.baseSha,
       targetHeadSha: session.expectedTargetHead,
       plannedBaseIsAncestorOfTargetHead: true
     }),

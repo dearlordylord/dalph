@@ -38,6 +38,7 @@ Git history.
 - [Stabilize each Run above delivery](stabilize-each-run.md)
 - [Reactivate incomplete Runs from non-authoritative hints](reactivate-incomplete-runs.md)
 - [Admit independent work while preserving an exact retained attempt](independent-work-retained-priority.md)
+- [Fix each new ordinary attempt at the qualified integration head](qualified-current-head-attempt.md)
 - [Preserve bounded admission until executor-work handoff](preserve-bounded-fresh-admission.md)
 - [Refresh and traverse complete task pipelines](refresh-complete-task-pipelines.md)
 - [Distinguish intermediate tracker edits from incomplete reads](intermediate-tracker-edits.md)

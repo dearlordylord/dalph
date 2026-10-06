@@ -1,22 +1,10 @@
-import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import {
-  EvidenceDigest,
-  EvidenceReference,
-  AttemptId,
-  GitCommitSha,
-  GitRepositoryLocator,
-  IntegrationTarget,
-  plannedAttemptExecutorCorrelation,
-  RunId,
-  RemotePublicationEndpoint,
-  RemotePublicationBranchRef,
-  RemotePublicationTarget,
-  TaskId,
-  makeTaskWorkSpecification,
-  type TaskWorkSpecification
-} from "@dalph/contracts"
-import { NodeServices } from "@effect/platform-node"
-import {
+  taskAttemptBaseReadOperationIdFor,
+  taskAttemptBaseRetryFactOperationId,
+  makeTrackerGraphObservationOperation,
+  AttemptBasePolicy,
+  exportWorkflowHistoryRecords,
+  PlannedTaskAttemptOrdinal,
   ActiveTaskClaim,
   boundedParallelTicketsOf,
   ClaimOwner,
@@ -173,6 +161,34 @@ import {
   type WorkflowOccurrence,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
+import { makeExecutingAttemptHistory } from "../../../orchestrator/test/support/executing-attempt-history.js"
+import { qualifiedBasePrefix, refusedBaseRetryPrefix } from "../../test-support/qualified-base-prefix.js"
+import {
+  CassetteIdentityRenaming,
+  foldRecordedCassette,
+  invertCassetteIdentityRenaming,
+  projectRecordedCassette,
+  renameRecordedCassette
+} from "../cassettes/index.js"
+import { qualificationContextWithBaseSelections } from "./production-hermetic-qualification-base-source.js"
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
+import {
+  EvidenceDigest,
+  EvidenceReference,
+  AttemptId,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  plannedAttemptExecutorCorrelation,
+  RunId,
+  RemotePublicationEndpoint,
+  RemotePublicationBranchRef,
+  RemotePublicationTarget,
+  TaskId,
+  makeTaskWorkSpecification,
+  type TaskWorkSpecification
+} from "@dalph/contracts"
+import { NodeServices } from "@effect/platform-node"
 import { makeFreshTaskAdmissionTestBasis } from "../../../orchestrator/test/support/fresh-task-admission.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/test/journaled-graph-observation.js"
 import { ticketOwnerSnapshotForTest } from "../../../orchestrator/test/support/delivery-runtime-live-owner.js"
@@ -571,7 +587,28 @@ const routeFixtures = (
     {
       _tag: "FreshWorkflowRoute",
       step: {
+        _tag: "ReadTaskAttemptBase",
+        task,
+        claimOperationId: operationId,
+        predecessorOperationId: operationId,
+        specification: context.specification,
+        operationId: taskAttemptBaseReadOperationIdFor(operationId, operationId),
+        policy: AttemptBasePolicy.cases.QualifiedCurrentIntegrationHead.make({
+          executionRepository: context.configuration.repository,
+          integrationTarget: {
+            repository: context.configuration.repository,
+            ref: context.configuration.integrationRef
+          },
+          lineageAnchor: context.configuration.plannedAttemptBaseSha
+        })
+      }
+    },
+    {
+      _tag: "FreshWorkflowRoute",
+      step: {
         _tag: "RecordTaskAttemptPlan",
+        baseSha: context.configuration.plannedAttemptBaseSha,
+        ordinal: PlannedTaskAttemptOrdinal.make(0),
         task,
         predecessorOperationId: operationId,
         claimOperationId: operationId,
@@ -1224,7 +1261,13 @@ const proposalForRoute = (
         ...base,
         route: { ...route, step },
         id,
-        actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } }
+        actionIdentity: {
+          _tag: "FreshOperationIdRequired",
+          source:
+            step._tag === "ReadTaskAttemptBase" || step._tag === "ReadTaskAttemptBaseRetryFacts"
+              ? { _tag: "Preserve", operationId: step.operationId }
+              : { _tag: "Allocate" }
+        }
       }
     }
     case "RecoveredNewActionRoute":
@@ -1479,6 +1522,198 @@ const controlledRegistrationServer = async () => {
 }
 
 describe("qualification original source boundary", () => {
+  it("authorizes a selected head only from its accepted claim/specification/Git chronology", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const selected = GitCommitSha.make("d".repeat(40))
+    const plannedAttempt = { ...qualificationPlannedAttemptFor(context), baseSha: selected }
+    const history = makeExecutingAttemptHistory({
+      runId,
+      trackerTarget: configuration.target,
+      plannedAttempt,
+      taskSpecification: context.specification,
+      activeClaim: ActiveTaskClaim.make({
+        operationId: OperationId.make("01990a72-38c0-7000-8000-000000000101"),
+        owner: configuration.claimOwner,
+        taskId: context.taskId,
+        token: ClaimToken.make("01990a72-38c0-7000-8000-000000000102")
+      })
+    })
+    const records = qualifiedBasePrefix(
+      history.records,
+      AttemptBasePolicy.cases.QualifiedCurrentIntegrationHead.make({
+        executionRepository: configuration.repository,
+        integrationTarget: { repository: configuration.repository, ref: configuration.integrationRef },
+        lineageAnchor: configuration.plannedAttemptBaseSha
+      })
+    )
+    const recorded = await Effect.runPromise(projectRecordedCassette(records))
+    const rootIds = [
+      ...new Set(
+        recorded.entries.flatMap((entry) => {
+          if (!("operation" in entry) || entry.operation._tag === "ReadTaskAttemptBase") return []
+          return "operationId" in entry.operation
+            ? [entry.operation.operationId]
+            : "acquisition" in entry.operation
+              ? [entry.operation.acquisition.operationId]
+              : []
+        })
+      )
+    ]
+    const renaming = CassetteIdentityRenaming.make({
+      attemptIds: [],
+      claimTokens: [],
+      integratorCandidateResourceLocators: [],
+      integratorSessionIds: [],
+      runIds: [],
+      taskBranchRefs: [],
+      worktreeLocators: [],
+      operationIds: rootIds.map((from, index) => ({
+        from,
+        to: OperationId.make(`01990a72-38c0-7000-8000-${String(index + 200).padStart(12, "0")}`)
+      }))
+    })
+    const renamed = await Effect.runPromise(renameRecordedCassette(recorded, renaming))
+    expect(await Effect.runPromise(renameRecordedCassette(renamed, invertCassetteIdentityRenaming(renaming)))).toEqual(
+      recorded
+    )
+    const folded = foldRecordedCassette(renamed)
+    if (folded._tag !== "ValidWorkflowJournalHistory") return expect.fail("qualified fixture must fold")
+    const acceptedRecords = exportWorkflowHistoryRecords(folded.runState.workflowHistory)
+    const snapshot = await Effect.runPromise(
+      makeTraceReader({ read: () => Effect.succeed(acceptedRecords) }).readAt(
+        TraceCursor.make({ runId, position: JournalPosition.make(acceptedRecords.length) })
+      )
+    )
+    const acceptedContext = await Effect.runPromise(qualificationContextWithBaseSelections(snapshot, context))
+    expect(acceptedContext.acceptedBaseSelections).toEqual([{ taskId: context.taskId, baseSha: selected }])
+    expect(await Effect.runPromise(validatePlannedAttempt(plannedAttempt, acceptedContext))).toEqual(plannedAttempt)
+    expect(
+      await Effect.runPromise(
+        validatePlannedAttempt(
+          { ...plannedAttempt, baseSha: configuration.plannedAttemptBaseSha },
+          acceptedContext
+        ).pipe(Effect.flip)
+      )
+    ).toMatchObject({ _tag: "HermeticQualificationSourceRejected" })
+  })
+
+  it("authorizes retry fact identities only from the accepted refusal and exact operator request", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const history = makeExecutingAttemptHistory({
+      runId,
+      trackerTarget: configuration.target,
+      plannedAttempt: qualificationPlannedAttemptFor(context),
+      taskSpecification: context.specification,
+      activeClaim: ActiveTaskClaim.make({
+        operationId: OperationId.make("01990a72-38c0-7000-8000-000000000101"),
+        owner: configuration.claimOwner,
+        taskId: context.taskId,
+        token: ClaimToken.make("01990a72-38c0-7000-8000-000000000102")
+      })
+    })
+    const records = refusedBaseRetryPrefix(
+      history.records,
+      AttemptBasePolicy.cases.QualifiedCurrentIntegrationHead.make({
+        executionRepository: configuration.repository,
+        integrationTarget: { repository: configuration.repository, ref: configuration.integrationRef },
+        lineageAnchor: configuration.plannedAttemptBaseSha
+      })
+    )
+    const cassette = await Effect.runPromise(projectRecordedCassette(records))
+    const rootIds = [
+      ...new Set(
+        cassette.entries.flatMap((entry) =>
+          !("operation" in entry) || entry.operation._tag === "ReadTaskAttemptBase"
+            ? []
+            : "operationId" in entry.operation
+              ? [entry.operation.operationId]
+              : "acquisition" in entry.operation
+                ? [entry.operation.acquisition.operationId]
+                : []
+        )
+      )
+    ]
+    const renamed = await Effect.runPromise(
+      renameRecordedCassette(
+        cassette,
+        CassetteIdentityRenaming.make({
+          attemptIds: [],
+          claimTokens: [],
+          integratorCandidateResourceLocators: [],
+          integratorSessionIds: [],
+          runIds: [],
+          taskBranchRefs: [],
+          worktreeLocators: [],
+          operationIds: rootIds.map((from, index) => ({
+            from,
+            to: OperationId.make(`01990a72-38c0-7000-8000-${String(index + 600).padStart(12, "0")}`)
+          }))
+        })
+      )
+    )
+    const folded = foldRecordedCassette(renamed)
+    if (folded._tag !== "ValidWorkflowJournalHistory")
+      return expect.fail("requires a valid refused and authorized retry prefix")
+    const acceptedRecords = exportWorkflowHistoryRecords(folded.runState.workflowHistory)
+    const snapshot = await Effect.runPromise(
+      makeTraceReader({ read: () => Effect.succeed(acceptedRecords) }).readAt(
+        TraceCursor.make({ runId, position: JournalPosition.make(acceptedRecords.length) })
+      )
+    )
+    const accepted = await Effect.runPromise(qualificationContextWithBaseSelections(snapshot, context))
+    const authorization = accepted.acceptedBaseRetries[0]
+    if (authorization === undefined) return expect.fail("requires one accepted operator retry")
+    const task = TrackerTask.make({
+      id: context.taskId,
+      lifecycle: { _tag: "Open" },
+      parentTaskId: null,
+      prerequisiteIds: []
+    })
+    const operationId = taskAttemptBaseRetryFactOperationId(authorization.request.requestId, "Graph")
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      operationId,
+      configuration.target,
+      [authorization.claimOperationId],
+      [task.id]
+    )
+    const step = {
+      _tag: "ReadTaskAttemptBaseRetryFacts" as const,
+      task,
+      operation,
+      operationId,
+      claimOperationId: authorization.claimOperationId,
+      predecessorOperationId: authorization.claimOperationId
+    }
+    expect(await Effect.runPromise(validateFreshStep(step, accepted))).toEqual(step)
+    const proposal = proposalForRoute({ _tag: "FreshWorkflowRoute", step }, accepted)
+    await Effect.runPromise(validateProposal(proposal, accepted))
+    for (const counterfeit of [
+      { ...step, claimOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000999") },
+      { ...step, predecessorOperationId: operationId }
+    ])
+      expect(await Effect.runPromise(validateFreshStep(counterfeit, accepted).pipe(Effect.flip))).toMatchObject({
+        _tag: "HermeticQualificationSourceRejected"
+      })
+    expect(await Effect.runPromise(validateFreshStep(step, context).pipe(Effect.flip))).toMatchObject({
+      _tag: "HermeticQualificationSourceRejected"
+    })
+    expect(
+      await Effect.runPromise(
+        validateProposal(
+          {
+            ...proposal,
+            route: { _tag: "FreshWorkflowRoute", step },
+            actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } }
+          },
+          accepted
+        ).pipe(Effect.flip)
+      )
+    ).toMatchObject({ _tag: "HermeticQualificationSourceRejected" })
+  })
+
   it("binds both exact fixture tasks while rejecting foreign attempt and specification identities", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
@@ -1998,7 +2233,7 @@ describe("qualification original source boundary", () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
     const { context, routes } = routeFixtures(originalContext)
-    expect(routes).toHaveLength(31)
+    expect(routes).toHaveLength(32)
     expect(new Set(routes.map((route) => route._tag)).size).toBe(6)
     for (const route of routes) {
       const proposal = proposalForRoute(route, context)

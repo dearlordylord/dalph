@@ -1,3 +1,4 @@
+import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { Cause, Config, Effect, Exit, HashMap, Layer, Option, Ref, Semaphore } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
@@ -157,7 +158,8 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           runId: RunId,
           target: TrackerTarget,
           initialControlPolicy: InitialControlPolicy,
-          remotePublicationTarget: RemotePublicationTarget
+          remotePublicationTarget: RemotePublicationTarget,
+          attemptBasePolicy?: AttemptBasePolicy
         ) {
           return yield* serialization.withPermit(
             Effect.gen(function* () {
@@ -167,7 +169,8 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
                 runId,
                 target,
                 initialControlPolicy,
-                remotePublicationTarget
+                remotePublicationTarget,
+                attemptBasePolicy
               )
               if (decision._tag === "LifecycleTransitionRejected") {
                 return yield* decision.failure

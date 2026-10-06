@@ -2,6 +2,7 @@ import { coherentWire, RunningHostSnapshot, RunningHostInspectionSnapshot } from
 import { LocalHostAddress } from "./running-host-address.js"
 import { AttemptId, ExecutorGuidanceRequestId, ExecutorGuidanceTransmission, RunId, TaskId } from "@dalph/contracts"
 import {
+  ApplyTaskAttemptBaseRetryRequest,
   ApplyResultRecoveryRequest,
   ResultRecoveryRequestId,
   ControlDirectionApplicationOrdinal,
@@ -95,6 +96,7 @@ const Operation = Schema.TaggedUnion({
   SetCapacity: RunningHostCapacityArguments.fields,
   ReadResultRecoveryDirection: { recoveryRequestId: ResultRecoveryRequestId },
   ApplyResultRecoveryDirection: { recovery: ApplyResultRecoveryRequest },
+  RetryTaskAttemptBase: { retry: ApplyTaskAttemptBaseRetryRequest },
   SendExecutorGuidance: {
     attemptId: AttemptId,
     guidanceRequestId: ExecutorGuidanceRequestId,
@@ -111,6 +113,7 @@ const CommandOperation = Schema.Literals([
   "Unpause",
   "Refresh",
   "ApplyResultRecoveryDirection",
+  "RetryTaskAttemptBase",
   "SendExecutorGuidance"
 ])
 const requestFields = { hostInstanceId: HostInstanceId, requestId: RequestId, runId: RunId, operation: Operation }
@@ -126,6 +129,7 @@ export type RunningHostCommandRequest = Omit<RunningHostRequest, "operation"> & 
         | "Unpause"
         | "Refresh"
         | "ApplyResultRecoveryDirection"
+        | "RetryTaskAttemptBase"
         | "SendExecutorGuidance"
         | "SetCapacity"
     }
@@ -250,6 +254,10 @@ const Value = Schema.Union([
     recovery: ApplyResultRecoveryRequest,
     acceptedAt: TraceCursor
   }),
+  Schema.TaggedStruct("TaskAttemptBaseRetryRecorded", {
+    retry: ApplyTaskAttemptBaseRetryRequest,
+    acceptedAt: TraceCursor
+  }),
   Schema.TaggedStruct("ResultRecoveryDirectionNotRecorded", { recoveryRequestId: ResultRecoveryRequestId }),
   Schema.TaggedStruct("ExecutorGuidanceResult", {
     guidanceRequestId: ExecutorGuidanceRequestId,
@@ -270,6 +278,7 @@ export type RunningHostCommandValue = Extract<
       | "UnpauseApplied"
       | "RefreshSubmitted"
       | "ResultRecoveryDirectionRecorded"
+      | "TaskAttemptBaseRetryRecorded"
       | "ExecutorGuidanceResult"
       | "CapacityApplied"
   }

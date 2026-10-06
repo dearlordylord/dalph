@@ -532,4 +532,50 @@ module freshTaskAdmissionTest {
         occupiedCount(state) == 3,
       })
   }
+
+  run qualifiedSpecification = init.then(selectQualifiedBasePolicy)
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(callClaimProviderFor(TaskA)).then(acceptOwnedClaimFor(TaskA))
+    .then(acceptPostClaimGraphFor(TaskA)).then(readFocusedSpecificationFor(TaskA))
+
+  run qualifiedPlanRequiresIntentReadAndObservationTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA))
+    .then(acceptQualifiedBaseFor(TaskA)).then(recordAttemptPlanFor(TaskA))
+    .expect(and { baseReadsRequireAcceptedIntent, qualifiedPlansRequireObservedBase,
+      state.admission.get(TaskA) == selectedPlan(state, TaskA), occupiedCount(state) == 1 })
+
+  run selectedBaseSurvivesHeadAdvanceAndRepeatedCrashTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA))
+    .then(advanceBaseHeadFor(TaskA)).then(acceptQualifiedBaseFor(TaskA))
+    .then(crash).then(recover).then(crash).then(recover)
+    .then(recordAttemptPlanFor(TaskA)).then(crash).then(recover)
+    .then(recordWorktreeIntentFor(TaskA)).then(callWorktreeBoundaryFor(TaskA)).then(acceptWorktreeReadyFor(TaskA))
+    .expect(and { state.selectedBase.get(TaskA) == BaseA, state.currentBaseHead.get(TaskA) == BaseB,
+      state.admission.get(TaskA) == selectedWorktreeReady(state, TaskA),
+      qualifiedPlansRequireObservedBase, qualifiedPlanLineageUsesSelectedBase })
+
+  run pendingBaseReadReusesIdentityAfterCrashTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(crash).then(recover)
+    .expect(state.admission.get(TaskA) == FreshTaskCommitted(BaseReadIntentRecorded(baseReadIdentityFor(TaskA))))
+    .then(advanceBaseHeadFor(TaskA)).then(callBaseReadFor(TaskA))
+    .then(acceptQualifiedBaseFor(TaskA)).then(recordAttemptPlanFor(TaskA))
+    .expect(and { state.selectedBase.get(TaskA) == BaseB, baseReadsRequireAcceptedIntent,
+      qualifiedPlanLineageUsesSelectedBase, occupiedCount(state) == 1 })
+
+  run historicalPolicyRefusesOrdinaryEntryTest = init.then(selectHistoricalBasePolicy)
+    .expect(historicalPolicyCannotAdmitFresh).then(reserveFreshEntryFor(TaskA).fail())
+
+  run qualifiedPlanBeforeSelectionIsDisabledTest = qualifiedSpecification.then(recordAttemptPlanFor(TaskA).fail())
+  run qualifiedReadBeforeIntentIsDisabledTest = qualifiedSpecification.then(callBaseReadFor(TaskA).fail())
+  run qualifiedPlanBeforeObservationIsDisabledTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(recordAttemptPlanFor(TaskA).fail())
+  run refusedBaseRetryRetainsCapacityAcrossCrashesTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(refuseBaseFor(TaskA))
+    .then(crash).then(recover).then(requestExplicitBaseRetryFor(TaskA))
+    .then(crash).then(recover).then(acceptBaseRetryTrackerFactsFor(TaskA))
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(acceptQualifiedBaseFor(TaskA))
+    .then(recordAttemptPlanFor(TaskA)).expect(and { occupiedCount(state) == 1, qualifiedPlansRequireObservedBase })
+  run refusedBaseDoesNotRetryWithoutDirectionTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(refuseBaseFor(TaskA))
+    .then(crash).then(recover).then(recordBaseReadIntentFor(TaskA).fail())
 }

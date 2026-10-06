@@ -1,11 +1,14 @@
+import { TaskAttemptBaseRetryRequestId } from "../protocols/task-attempt-planning/retry-data.js"
 import { Schema } from "effect"
-import { type IntegrationTarget, type TaskId } from "@dalph/contracts"
-import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { AttemptBasePolicy } from "../protocols/task-attempt-planning/base.js"
 import {
+  TaskRevision,
   IntegrationTarget as IntegrationTargetSchema,
   PlannedTaskAttempt,
   TaskId as TaskIdSchema
 } from "@dalph/contracts"
+import { type IntegrationTarget, type TaskId } from "@dalph/contracts"
+import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { OperationId } from "../identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
@@ -190,6 +193,17 @@ const RecordTaskAttemptPlanOperation = Schema.TaggedStruct("RecordTaskAttemptPla
   predecessorOperationIds: CausalPredecessorOperationIds
 }).check(Schema.makeFilter(withoutSelfPredecessor))
 
+/** Task-correlated Git read preceding allocation of a complete planned attempt. */
+const ReadTaskAttemptBaseOperation = Schema.TaggedStruct("ReadTaskAttemptBase", {
+  retryRequestId: Schema.optionalKey(TaskAttemptBaseRetryRequestId),
+  claimOperationId: OperationId,
+  operationId: OperationId,
+  policy: AttemptBasePolicy,
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  taskId: TaskIdSchema,
+  taskRevision: TaskRevision
+}).check(Schema.makeFilter(withoutSelfPredecessor))
+
 const ReconcileTaskWorktreeOperation = Schema.TaggedStruct("ReconcileTaskWorktree", {
   operationId: OperationId,
   plannedAttempt: PlannedTaskAttempt,
@@ -224,6 +238,7 @@ export const WorkflowOperation = Object.assign(
     AcquireTaskClaimOperation,
     ReleaseTaskClaimOperation,
     RecordTaskAttemptPlanOperation,
+    ReadTaskAttemptBaseOperation,
     ReconcileTaskWorktreeOperation,
     ReadTaskWorktreeOperation,
     ReadTargetLineageOperation
@@ -233,6 +248,7 @@ export const WorkflowOperation = Object.assign(
       AcquireTaskClaim: AcquireTaskClaimOperation,
       ReleaseTaskClaim: ReleaseTaskClaimOperation,
       RecordTaskAttemptPlan: RecordTaskAttemptPlanOperation,
+      ReadTaskAttemptBase: ReadTaskAttemptBaseOperation,
       ReconcileTaskWorktree: ReconcileTaskWorktreeOperation,
       ReadCompletionTaskFacts: ReadCompletionTaskFactsOperation,
       ReadTaskClaim: ReadTaskClaimOperation,

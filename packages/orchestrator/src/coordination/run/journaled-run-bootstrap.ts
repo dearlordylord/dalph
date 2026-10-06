@@ -1,3 +1,8 @@
+import {
+  applyTaskAttemptBaseRetry,
+  readTaskAttemptBaseRetryRequest
+} from "../../workflow/protocols/task-attempt-planning/retry.js"
+import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import { executorReportProvesStoppedWriters } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { JournalTerminationQualification } from "./journal-termination-qualification.js"
 import {
@@ -370,7 +375,8 @@ export const journaledRunBootstrapLayer = (
   remotePublicationTarget: RemotePublicationTarget,
   /** Low-level bootstrap fixtures may disable the production admission record while isolating another protocol. */
   admitRemotePublication = true,
-  guidance?: { readonly crypto: Crypto.Crypto; readonly executor: PlannedAttemptExecutorService }
+  guidance?: { readonly crypto: Crypto.Crypto; readonly executor: PlannedAttemptExecutorService },
+  attemptBasePolicy?: AttemptBasePolicy
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -963,7 +969,13 @@ export const journaledRunBootstrapLayer = (
                       yield* observeProducedWrite(
                         `begin:${runId}`,
                         "begin",
-                        lifecycle.beginRun(runId, target, initialControlPolicy, remotePublicationTarget)
+                        lifecycle.beginRun(
+                          runId,
+                          target,
+                          initialControlPolicy,
+                          remotePublicationTarget,
+                          attemptBasePolicy
+                        )
                       ).pipe(
                         Effect.catch((beginFailure) =>
                           lifecycle.readRunForRecovery(runId, target).pipe(
@@ -1248,6 +1260,22 @@ export const journaledRunBootstrapLayer = (
               if (holder._tag !== "Established" || holder.executorGuidance === undefined)
                 return yield* new JournaledRunNotActive()
               return yield* holder.executorGuidance.send(input)
+            })
+          ),
+        readTaskAttemptBaseRetryRequest: (input) =>
+          withJournalControl(
+            Effect.gen(function* () {
+              const holder = yield* Ref.get(processJournal)
+              if (holder._tag !== "Established") return yield* new JournaledRunNotActive()
+              return yield* readTaskAttemptBaseRetryRequest(holder.journal, expectedRunId, input)
+            })
+          ),
+        retryTaskAttemptBase: (input) =>
+          withJournalControl(
+            Effect.gen(function* () {
+              const holder = yield* Ref.get(processJournal)
+              if (holder._tag !== "Established") return yield* new JournaledRunNotActive()
+              return yield* applyTaskAttemptBaseRetry(holder.journal, expectedRunId, input)
             })
           ),
         applyResultRecoveryDirection: (input) =>

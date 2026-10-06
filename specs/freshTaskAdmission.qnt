@@ -14,6 +14,9 @@ module freshTaskAdmission {
   type ClaimId = ClaimA | ClaimB | ClaimC | ClaimD | ClaimE
   type SpecificationRevision = SpecificationA | SpecificationB | SpecificationC | SpecificationD | SpecificationE
   type BaseSha = BaseA | BaseB | BaseC | BaseD | BaseE
+  type AttemptBasePolicy = FixedBase | QualifiedCurrentIntegrationHead | HistoricalPolicyUnspecified
+  // Each task has one exact read operation in this finite ordinary-attempt slice.
+  type BaseReadIdentity = { task: TaskId, claim: ClaimId, revision: SpecificationRevision }
   type WorktreeOperationId = WorktreeOperationA | WorktreeOperationB | WorktreeOperationC | WorktreeOperationD | WorktreeOperationE
   type WorktreeLocator = WorktreeA | WorktreeB | WorktreeC | WorktreeD | WorktreeE
 
@@ -25,6 +28,12 @@ module freshTaskAdmission {
     | ClaimOwned(ClaimId)
     | PostClaimGraphKnown(ClaimId)
     | SpecificationKnown({ claimId: ClaimId, revision: SpecificationRevision })
+    | BaseReadIntentRecorded(BaseReadIdentity)
+    | BaseReadCalled({ identity: BaseReadIdentity, selectedHead: BaseSha })
+    | BaseRefused(BaseReadIdentity)
+    | BaseRetryRequested(BaseReadIdentity)
+    | BaseRetryTrackerFactsKnown(BaseReadIdentity)
+    | BaseQualified({ identity: BaseReadIdentity, selectedHead: BaseSha })
     | AttemptPlanned({ claimId: ClaimId, attemptId: AttemptId, baseSha: BaseSha })
     | WorktreeIntentRecorded({
         attemptId: AttemptId,
@@ -95,6 +104,10 @@ module freshTaskAdmission {
     claimCalled: TaskFlags,
     claimOwned: TaskFlags,
     specificationRead: TaskFlags,
+    baseReadCalled: TaskFlags,
+    baseReadHadIntent: TaskFlags,
+    baseObserved: TaskFlags,
+    observedBase: TaskId -> BaseSha,
     planRecorded: TaskFlags,
     worktreeCalled: TaskFlags,
     worktreeReadyAccepted: TaskId -> WorktreeReadyEvidence,
@@ -111,6 +124,10 @@ module freshTaskAdmission {
 
   type State = {
     capacity: int,
+    basePolicy: AttemptBasePolicy,
+    currentBaseHead: TaskId -> BaseSha,
+    selectedBase: TaskId -> BaseSha,
+    baseObservationAccepted: TaskFlags,
     process: ProcessState,
     // These current graph facts are inputs, not admission authority.
     graphCandidate: TaskFlags,
@@ -217,11 +234,34 @@ module freshTaskAdmission {
       attemptId: attemptFor(task), baseSha: baseFor(task), locator: worktreeFor(task),
     }))
 
+  pure def selectedPlan(s: State, task: TaskId): TaskAdmissionState =
+    FreshTaskCommitted(AttemptPlanned({ claimId: claimFor(task), attemptId: attemptFor(task), baseSha: s.selectedBase.get(task) }))
+  pure def selectedWorktreeIntent(s: State, task: TaskId): TaskAdmissionState =
+    FreshTaskCommitted(WorktreeIntentRecorded({
+      attemptId: attemptFor(task), baseSha: s.selectedBase.get(task),
+      operationId: worktreeOperationFor(task), locator: worktreeFor(task),
+    }))
+  pure def selectedWorktreeCalled(s: State, task: TaskId): TaskAdmissionState =
+    FreshTaskCommitted(WorktreeRequestCalled({
+      attemptId: attemptFor(task), baseSha: s.selectedBase.get(task),
+      operationId: worktreeOperationFor(task), locator: worktreeFor(task),
+    }))
+  pure def selectedWorktreeReady(s: State, task: TaskId): TaskAdmissionState =
+    FreshTaskCommitted(WorktreeReady({
+      attemptId: attemptFor(task), baseSha: s.selectedBase.get(task), locator: worktreeFor(task),
+    }))
+
   pure def isOccupied(admission: TaskAdmissionState): bool = admission != Unoccupied
   pure def commitmentOwnsClaim(stage: FreshCommitmentStage): bool = match stage {
     | ClaimOwned(_) => true
     | PostClaimGraphKnown(_) => true
     | SpecificationKnown(_) => true
+    | BaseRefused(_) => true
+    | BaseRetryRequested(_) => true
+    | BaseRetryTrackerFactsKnown(_) => true
+    | BaseReadIntentRecorded(_) => true
+    | BaseReadCalled(_) => true
+    | BaseQualified(_) => true
     | AttemptPlanned(_) => true
     | WorktreeIntentRecorded(_) => true
     | WorktreeRequestCalled(_) => true
@@ -261,6 +301,7 @@ module freshTaskAdmission {
   }
   pure def freshEntryCapable(s: State, task: TaskId): bool = and {
     s.graphCandidate.get(task),
+    s.basePolicy != HistoricalPolicyUnspecified,
     s.freshEntryConstraint.get(task) == FreshEntryUnconstrained,
     s.admission.get(task) == Unoccupied,
     noExistingResponsibility(s.existingResponsibility.get(task)),
@@ -294,20 +335,23 @@ module freshTaskAdmission {
   }
   pure def recoveredAdmission(s: State, task: TaskId): TaskAdmissionState =
     if (and {
-      s.admission.get(task) == exactWorktreeReady(task),
+      s.admission.get(task) == selectedWorktreeReady(s, task),
       s.journalResponsibilityPresent.get(task),
     }) ExactAttemptHeld(attemptFor(task))
     else match s.admission.get(task) {
       | FreshEntryReserved =>
           if (s.journalClaimIntentPresent.get(task)) currentClaimIntent(s, task) else Unoccupied
       | ExistingResponsibilityReserved(_) => Unoccupied
-      | FreshTaskCommitted(stage) => FreshTaskCommitted(stage)
+      | FreshTaskCommitted(stage) => match stage {
+          | BaseReadCalled(read) => FreshTaskCommitted(BaseReadIntentRecorded(read.identity))
+          | _ => FreshTaskCommitted(stage)
+        }
       | ExactAttemptHeld(attempt) => ExactAttemptHeld(attempt)
       | Unoccupied => Unoccupied
     }
   pure def crashExistingResponsibility(s: State, task: TaskId): ExistingResponsibility =
     if (and {
-      s.admission.get(task) == exactWorktreeReady(task),
+      s.admission.get(task) == selectedWorktreeReady(s, task),
       s.journalResponsibilityPresent.get(task),
     })
       RetainedNotReadyResponsibility(attemptFor(task))
@@ -326,6 +370,10 @@ module freshTaskAdmission {
   action init: bool = {
     state' = {
       capacity: 3,
+      basePolicy: FixedBase,
+      currentBaseHead: TASKS.mapBy(task => baseFor(task)),
+      selectedBase: TASKS.mapBy(task => baseFor(task)),
+      baseObservationAccepted: flags(false),
       process: ProcessUp,
       graphCandidate: flags(true),
       freshEntryConstraint: TASKS.mapBy(task => FreshEntryUnconstrained),
@@ -347,6 +395,8 @@ module freshTaskAdmission {
       trace: {
         entered: flags(false), admissionCapacity: numbers(0), admissionOrdinal: numbers(0),
         claimIntentAccepted: flags(false), claimCalled: flags(false), claimOwned: flags(false),
+        baseReadCalled: flags(false), baseReadHadIntent: flags(false), baseObserved: flags(false),
+        observedBase: TASKS.mapBy(task => baseFor(task)),
         specificationRead: flags(false), planRecorded: flags(false), worktreeCalled: flags(false),
         worktreeReadyAccepted: noWorktreeReadyEvidence,
         responsibilityBegan: flags(false),
@@ -538,12 +588,100 @@ module freshTaskAdmission {
       },
     }
   }
+  pure def baseReadIdentityFor(task: TaskId): BaseReadIdentity = {
+    task: task, claim: claimFor(task), revision: specificationFor(task),
+  }
+
+  action selectQualifiedBasePolicy: bool = all {
+    state.process == ProcessUp,
+    state.basePolicy == FixedBase,
+    not(TASKS.exists(task => state.trace.entered.get(task))),
+    state' = { ...state, basePolicy: QualifiedCurrentIntegrationHead },
+  }
+  action selectHistoricalBasePolicy: bool = all {
+    state.process == ProcessUp,
+    state.basePolicy == FixedBase,
+    not(TASKS.exists(task => state.trace.entered.get(task))),
+    state' = { ...state, basePolicy: HistoricalPolicyUnspecified },
+  }
+  action recordBaseReadIntentFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.basePolicy == QualifiedCurrentIntegrationHead,
+    or { state.admission.get(task) == exactSpecification(task), state.admission.get(task) == FreshTaskCommitted(BaseRetryTrackerFactsKnown(baseReadIdentityFor(task))) },
+    state' = { ...state, admission: state.admission.put(task,
+      FreshTaskCommitted(BaseReadIntentRecorded(baseReadIdentityFor(task)))) },
+  }
+  action callBaseReadFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == FreshTaskCommitted(BaseReadIntentRecorded(baseReadIdentityFor(task))),
+    state' = {
+      ...state,
+      admission: state.admission.put(task, FreshTaskCommitted(BaseReadCalled({
+        identity: baseReadIdentityFor(task), selectedHead: state.currentBaseHead.get(task),
+      }))),
+      trace: { ...state.trace,
+        baseReadCalled: state.trace.baseReadCalled.put(task, true),
+        baseReadHadIntent: state.trace.baseReadHadIntent.put(task,
+          state.admission.get(task) == FreshTaskCommitted(BaseReadIntentRecorded(baseReadIdentityFor(task)))),
+      },
+    },
+  }
+  // Git qualification is supplied by gitReconciliation, not inferred from the SHA.
+  action acceptQualifiedBaseFor(task: TaskId): bool = {
+    nondet selectedHead = Set(BaseA, BaseB, BaseC, BaseD, BaseE).oneOf()
+    all {
+      state.process == ProcessUp,
+      state.admission.get(task) == FreshTaskCommitted(BaseReadCalled({ identity: baseReadIdentityFor(task), selectedHead: selectedHead })),
+      state' = {
+        ...state,
+        selectedBase: state.selectedBase.put(task, selectedHead),
+        baseObservationAccepted: state.baseObservationAccepted.put(task, true),
+        admission: state.admission.put(task, FreshTaskCommitted(BaseQualified({ identity: baseReadIdentityFor(task), selectedHead: selectedHead }))),
+        trace: { ...state.trace, baseObserved: state.trace.baseObserved.put(task, true),
+          observedBase: state.trace.observedBase.put(task, selectedHead) },
+      },
+    }
+  }
+  action refuseBaseFor(task: TaskId): bool = {
+    nondet selectedHead = Set(BaseA, BaseB, BaseC, BaseD, BaseE).oneOf()
+    all {
+      state.process == ProcessUp,
+      state.admission.get(task) == FreshTaskCommitted(BaseReadCalled({ identity: baseReadIdentityFor(task), selectedHead: selectedHead })),
+      state' = { ...state, admission: state.admission.put(task, FreshTaskCommitted(BaseRefused(baseReadIdentityFor(task)))) },
+    }
+  }
+  action requestExplicitBaseRetryFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == FreshTaskCommitted(BaseRefused(baseReadIdentityFor(task))),
+    state' = { ...state, admission: state.admission.put(task, FreshTaskCommitted(BaseRetryRequested(baseReadIdentityFor(task)))) },
+  }
+  // Detailed graph→claim→spec checks are supplied by gitReconciliation; these stages retain capacity.
+  action acceptBaseRetryTrackerFactsFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == FreshTaskCommitted(BaseRetryRequested(baseReadIdentityFor(task))),
+    state' = { ...state, admission: state.admission.put(task, FreshTaskCommitted(BaseRetryTrackerFactsKnown(baseReadIdentityFor(task)))) },
+  }
+  action advanceBaseHeadFor(task: TaskId): bool = all {
+    state.basePolicy == QualifiedCurrentIntegrationHead,
+    state.currentBaseHead.get(task) == baseFor(task),
+    state' = { ...state, currentBaseHead: state.currentBaseHead.put(task,
+      if (baseFor(task) == BaseA) BaseB else BaseA) },
+  }
+
   action recordAttemptPlanFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactSpecification(task),
+      or {
+        and { state.basePolicy == FixedBase, state.admission.get(task) == exactSpecification(task) },
+        and { state.basePolicy == QualifiedCurrentIntegrationHead,
+          state.baseObservationAccepted.get(task),
+          state.admission.get(task) == FreshTaskCommitted(BaseQualified({
+            identity: baseReadIdentityFor(task), selectedHead: state.selectedBase.get(task),
+          })),
+        },
+      },
       state' = {
-        ...state, admission: state.admission.put(task, exactPlan(task)),
+        ...state, admission: state.admission.put(task, selectedPlan(state, task)),
         trace: { ...state.trace, planRecorded: state.trace.planRecorded.put(task, true) },
       },
     }
@@ -551,17 +689,17 @@ module freshTaskAdmission {
   action recordWorktreeIntentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactPlan(task),
-      state' = { ...state, admission: state.admission.put(task, exactWorktreeIntent(task)) },
+      state.admission.get(task) == selectedPlan(state, task),
+      state' = { ...state, admission: state.admission.put(task, selectedWorktreeIntent(state, task)) },
     }
   }
   action callWorktreeBoundaryFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactWorktreeIntent(task),
+      state.admission.get(task) == selectedWorktreeIntent(state, task),
       state' = {
         ...state,
-        admission: state.admission.put(task, exactWorktreeCalled(task)),
+        admission: state.admission.put(task, selectedWorktreeCalled(state, task)),
         trace: { ...state.trace, worktreeCalled: state.trace.worktreeCalled.put(task, true) },
       },
     }
@@ -569,17 +707,17 @@ module freshTaskAdmission {
   action acceptWorktreeReadyFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactWorktreeCalled(task),
+      state.admission.get(task) == selectedWorktreeCalled(state, task),
       state' = {
         ...state,
-        admission: state.admission.put(task, exactWorktreeReady(task)),
+        admission: state.admission.put(task, selectedWorktreeReady(state, task)),
         trace: {
           ...state.trace,
           worktreeReadyAccepted: state.trace.worktreeReadyAccepted.put(
             task,
             AcceptedExactWorktreeReady({
               attemptId: attemptFor(task),
-              baseSha: baseFor(task),
+              baseSha: state.selectedBase.get(task),
               locator: worktreeFor(task),
             }))
         },
@@ -592,11 +730,12 @@ module freshTaskAdmission {
   // by production scenario tests, not represented as no-op adapter calls.
   action projectAcceptedWorktreeReadyFor(task: TaskId): bool = {
     all {
+      state.basePolicy == FixedBase,
       state.process == ProcessUp,
       state.admission.get(task) == currentClaimIntent(state, task),
       state' = {
         ...state,
-        admission: state.admission.put(task, exactWorktreeReady(task)),
+        admission: state.admission.put(task, selectedWorktreeReady(state, task)),
         trace: {
           ...state.trace,
           claimCalled: state.trace.claimCalled.put(task, true),
@@ -608,7 +747,7 @@ module freshTaskAdmission {
             task,
             AcceptedExactWorktreeReady({
               attemptId: attemptFor(task),
-              baseSha: baseFor(task),
+              baseSha: state.selectedBase.get(task),
               locator: worktreeFor(task),
             })
           ),
@@ -635,7 +774,7 @@ module freshTaskAdmission {
   action loseExecutorResponsibilityAppendResponseFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactWorktreeReady(task),
+      state.admission.get(task) == selectedWorktreeReady(state, task),
       not(state.ambiguousResponsibilityAppend.get(task)),
       state' = {
         ...state,
@@ -647,7 +786,7 @@ module freshTaskAdmission {
   action loseAcceptedExecutorResponsibilityAppendResponseFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactWorktreeReady(task),
+      state.admission.get(task) == selectedWorktreeReady(state, task),
       not(state.ambiguousResponsibilityAppend.get(task)),
       state' = {
         ...state,
@@ -666,7 +805,7 @@ module freshTaskAdmission {
   action observeExecutorResponsibilityAppendPresentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactWorktreeReady(task),
+      state.admission.get(task) == selectedWorktreeReady(state, task),
       state.ambiguousResponsibilityAppend.get(task),
       state.journalResponsibilityPresent.get(task),
       state' = {
@@ -682,7 +821,7 @@ module freshTaskAdmission {
   action observeExecutorResponsibilityAppendAbsentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactWorktreeReady(task),
+      state.admission.get(task) == selectedWorktreeReady(state, task),
       state.ambiguousResponsibilityAppend.get(task),
       not(state.journalResponsibilityPresent.get(task)),
       state' = {
@@ -695,7 +834,7 @@ module freshTaskAdmission {
   action handoffToExecutorResponsibilityFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
-      state.admission.get(task) == exactWorktreeReady(task),
+      state.admission.get(task) == selectedWorktreeReady(state, task),
       not(state.ambiguousResponsibilityAppend.get(task)),
       not(state.journalResponsibilityPresent.get(task)),
       state' = {
@@ -1002,12 +1141,38 @@ module freshTaskAdmission {
   val ownedClaimsRequireClaimCalls = TASKS.forall(task => not(state.trace.claimOwned.get(task)) or state.trace.claimCalled.get(task))
   val specificationsRequireOwnedClaims = TASKS.forall(task => not(state.trace.specificationRead.get(task)) or state.trace.claimOwned.get(task))
   val plansRequireSpecifications = TASKS.forall(task => not(state.trace.planRecorded.get(task)) or state.trace.specificationRead.get(task))
+  val baseReadsRequireAcceptedIntent = TASKS.forall(task =>
+    not(state.trace.baseReadCalled.get(task)) or state.trace.baseReadHadIntent.get(task))
+  val qualifiedPlansRequireObservedBase = TASKS.forall(task =>
+    state.basePolicy != QualifiedCurrentIntegrationHead or not(state.trace.planRecorded.get(task)) or and {
+      state.baseObservationAccepted.get(task), state.trace.baseObserved.get(task),
+      state.selectedBase.get(task) == state.trace.observedBase.get(task),
+    })
+  val qualifiedPlanLineageUsesSelectedBase = TASKS.forall(task => match state.admission.get(task) {
+    | FreshTaskCommitted(stage) => match stage {
+        | AttemptPlanned(plan) => plan.baseSha == state.selectedBase.get(task)
+        | WorktreeIntentRecorded(worktree) => worktree.baseSha == state.selectedBase.get(task)
+        | WorktreeRequestCalled(worktree) => worktree.baseSha == state.selectedBase.get(task)
+        | WorktreeReady(worktree) => worktree.baseSha == state.selectedBase.get(task)
+        | _ => true
+      }
+    | _ => true
+  })
+  val historicalPolicyCannotAdmitFresh = state.basePolicy != HistoricalPolicyUnspecified or
+    not(TASKS.exists(task => state.trace.entered.get(task)))
+  val baseReadIntentReached = TASKS.exists(task =>
+    state.admission.get(task) == FreshTaskCommitted(BaseReadIntentRecorded(baseReadIdentityFor(task))))
+  val qualifiedBaseReached = TASKS.exists(task => state.baseObservationAccepted.get(task))
+  val selectedBaseSurvivedHeadAdvanceReached = TASKS.exists(task => and {
+    state.baseObservationAccepted.get(task), state.selectedBase.get(task) != state.currentBaseHead.get(task),
+    state.trace.planRecorded.get(task),
+  })
   val worktreeCallsRequirePlans = TASKS.forall(task => not(state.trace.worktreeCalled.get(task)) or state.trace.planRecorded.get(task))
   val responsibilitiesRequireAcceptedExactWorktreeReady = TASKS.forall(task =>
     not(state.trace.responsibilityBegan.get(task)) or
       state.trace.worktreeReadyAccepted.get(task) == AcceptedExactWorktreeReady({
         attemptId: attemptFor(task),
-        baseSha: baseFor(task),
+        baseSha: state.selectedBase.get(task),
         locator: worktreeFor(task),
       })
   )
@@ -1016,7 +1181,7 @@ module freshTaskAdmission {
       state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
       state.admission.get(task) == ExistingResponsibilityReserved(attemptFor(task)),
       and {
-        state.admission.get(task) == exactWorktreeReady(task),
+        state.admission.get(task) == selectedWorktreeReady(state, task),
         state.journalResponsibilityPresent.get(task),
         state.ambiguousResponsibilityAppend.get(task),
       },
@@ -1024,7 +1189,7 @@ module freshTaskAdmission {
     }
   )
   val ambiguousResponsibilityAppendRetainsCommitment = TASKS.forall(task =>
-    not(state.ambiguousResponsibilityAppend.get(task)) or state.admission.get(task) == exactWorktreeReady(task)
+    not(state.ambiguousResponsibilityAppend.get(task)) or state.admission.get(task) == selectedWorktreeReady(state, task)
   )
   val ambiguityRequiresReconciliationBeforeReappend = and {
     not(state.trace.blindClaimIntentReappend),
@@ -1046,10 +1211,14 @@ module freshTaskAdmission {
     state.admission.get(task) == exactClaimOwned(task),
     state.admission.get(task) == exactPostClaimGraph(task),
     state.admission.get(task) == exactSpecification(task),
-    state.admission.get(task) == exactPlan(task),
-    state.admission.get(task) == exactWorktreeIntent(task),
-    state.admission.get(task) == exactWorktreeCalled(task),
-    state.admission.get(task) == exactWorktreeReady(task),
+    state.admission.get(task) == FreshTaskCommitted(BaseReadIntentRecorded(baseReadIdentityFor(task))),
+    Set(BaseA, BaseB, BaseC, BaseD, BaseE).exists(selectedHead =>
+      state.admission.get(task) == FreshTaskCommitted(BaseReadCalled({ identity: baseReadIdentityFor(task), selectedHead: selectedHead }))),
+    state.admission.get(task) == FreshTaskCommitted(BaseQualified({ identity: baseReadIdentityFor(task), selectedHead: state.selectedBase.get(task) })),
+    state.admission.get(task) == selectedPlan(state, task),
+    state.admission.get(task) == selectedWorktreeIntent(state, task),
+    state.admission.get(task) == selectedWorktreeCalled(state, task),
+    state.admission.get(task) == selectedWorktreeReady(state, task),
   })
   val existingResponsibilityInputIsExactlyCorrelated = TASKS.forall(task => and {
     or {
@@ -1147,9 +1316,9 @@ module freshTaskAdmission {
   val claimIntentReached = TASKS.exists(task => state.admission.get(task) == exactClaimIntent(task))
   val claimOwnedReached = TASKS.exists(task => state.admission.get(task) == exactClaimOwned(task))
   val specificationReached = TASKS.exists(task => state.admission.get(task) == exactSpecification(task))
-  val planReached = TASKS.exists(task => state.admission.get(task) == exactPlan(task))
-  val worktreeIntentReached = TASKS.exists(task => state.admission.get(task) == exactWorktreeIntent(task))
-  val worktreeReadyReached = TASKS.exists(task => state.admission.get(task) == exactWorktreeReady(task))
+  val planReached = TASKS.exists(task => state.admission.get(task) == selectedPlan(state, task))
+  val worktreeIntentReached = TASKS.exists(task => state.admission.get(task) == selectedWorktreeIntent(state, task))
+  val worktreeReadyReached = TASKS.exists(task => state.admission.get(task) == selectedWorktreeReady(state, task))
   val executorResponsibilityReached = TASKS.exists(task => state.admission.get(task) == ExactAttemptHeld(attemptFor(task)))
   val conclusiveRejectionReached = TASKS.exists(task => state.trace.preOwnershipRejected.get(task))
   val foreignConstraintClearedReached = TASKS.exists(task => and {
@@ -1180,6 +1349,14 @@ module freshTaskAdmission {
   val contractionReached = state.capacity == 1
 
   action step: bool = any {
+    selectQualifiedBasePolicy, selectHistoricalBasePolicy,
+    { nondet task = TASKS.oneOf() recordBaseReadIntentFor(task) },
+    { nondet task = TASKS.oneOf() callBaseReadFor(task) },
+    { nondet task = TASKS.oneOf() acceptQualifiedBaseFor(task) },
+    { nondet task = TASKS.oneOf() refuseBaseFor(task) },
+    { nondet task = TASKS.oneOf() requestExplicitBaseRetryFor(task) },
+    { nondet task = TASKS.oneOf() acceptBaseRetryTrackerFactsFor(task) },
+    { nondet task = TASKS.oneOf() advanceBaseHeadFor(task) },
     { nondet task = TASKS.oneOf() observeLifecycleClosureFor(task) },
     { nondet task = TASKS.oneOf() observeLifecycleReopenFor(task) },
     { nondet task = TASKS.oneOf() acceptSafeReportFor(task) },
@@ -1211,6 +1388,7 @@ module freshTaskAdmission {
     reserveFreshEntryFor(TaskA), recordClaimIntentFor(TaskA),
     callClaimProviderFor(TaskA), acceptOwnedClaimFor(TaskA),
     acceptPostClaimGraphFor(TaskA), readFocusedSpecificationFor(TaskA),
+    recordBaseReadIntentFor(TaskA), callBaseReadFor(TaskA), acceptQualifiedBaseFor(TaskA),
     recordAttemptPlanFor(TaskA), recordWorktreeIntentFor(TaskA),
     callWorktreeBoundaryFor(TaskA), acceptWorktreeReadyFor(TaskA),
     handoffToExecutorResponsibilityFor(TaskA),

@@ -1,4 +1,7 @@
-import type { PlannedTaskAttempt, TaskWorkSpecification } from "@dalph/contracts"
+import type { TaskAttemptBaseRetryRequestId } from "../../workflow/protocols/task-attempt-planning/retry-data.js"
+import type { GitCommitSha, PlannedTaskAttempt, TaskWorkSpecification } from "@dalph/contracts"
+import type { PlannedTaskAttemptOrdinal } from "../../workflow/protocols/task-attempt-planning/ordinal.js"
+import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import { Data, Schema } from "effect"
 import type { Task } from "../../authorities/task-tracker/task.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -30,7 +33,28 @@ export type FreshWorkflowStep = Data.TaggedEnum<{
     readonly predecessorOperationId: OperationId
     readonly task: Task
   }
+  ReadTaskAttemptBaseRetryFacts: {
+    readonly claimOperationId: OperationId
+    readonly operationId: OperationId
+    readonly predecessorOperationId: OperationId
+    readonly operation: Extract<
+      WorkflowOperation,
+      { readonly _tag: "ReadTrackerGraph" | "ReadTaskClaim" | "ReadTaskWorkSpecification" }
+    >
+    readonly task: Task
+  }
+  ReadTaskAttemptBase: {
+    readonly retryRequestId?: TaskAttemptBaseRetryRequestId
+    readonly claimOperationId: OperationId
+    readonly operationId: OperationId
+    readonly policy: AttemptBasePolicy
+    readonly predecessorOperationId: OperationId
+    readonly specification: TaskWorkSpecification
+    readonly task: Task
+  }
   RecordTaskAttemptPlan: {
+    readonly baseSha: GitCommitSha
+    readonly ordinal: PlannedTaskAttemptOrdinal
     /** Exact fresh claim operation whose durable commitment authorizes this continuation. */
     readonly claimOperationId: OperationId
     readonly predecessorOperationId: OperationId
@@ -68,6 +92,8 @@ const freshWorkflowStepTags = [
   "ReadPostClaimGraph",
   "ReadRejectedTaskClaim",
   "ReadTaskWorkSpecification",
+  "ReadTaskAttemptBase",
+  "ReadTaskAttemptBaseRetryFacts",
   "RecordTaskAttemptPlan",
   "ReconcileTaskWorktree",
   "BeginPlannedAttemptExecutorWork",

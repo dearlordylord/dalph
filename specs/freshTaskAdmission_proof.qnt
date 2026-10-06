@@ -364,6 +364,9 @@ module freshTaskAdmissionCapacityProof {
 }
 
 module freshTaskAdmissionAmbiguityProof {
+  type BasePolicy = FixedBase | QualifiedCurrentIntegrationHead
+  type BaseHead = InitialHead | AdvancedHead
+  type BaseEvidence = NoBaseEvidence | ExactBaseEvidence(BaseHead)
   type Presence = Absent | Present
   type Process = Up | Down
   type ClaimAuthority = ClaimAbsent | ExactClaim | ForeignClaim | ClaimUnreadable
@@ -388,6 +391,12 @@ module freshTaskAdmissionAmbiguityProof {
     | ClaimOwned
     | PostClaimGraphKnown
     | SpecificationKnown
+    | BaseReadIntentRecorded
+    | BaseRefused
+    | BaseRetryRequested
+    | BaseRetryTrackerFactsKnown
+    | BaseReadCalled(BaseHead)
+    | BaseSelected(BaseHead)
     | AttemptPlanned(ExactLineage)
     | WorktreeIntentRecorded(ExactLineage)
     | WorktreeRequestCalled(WorktreeAuthority)
@@ -412,6 +421,10 @@ module freshTaskAdmissionAmbiguityProof {
     | ClaimOwnedEvent
     | PostClaimGraphAccepted
     | SpecificationAccepted
+    | BaseIntentAccepted
+    | BaseReadRequested
+    | BaseObserved
+    | HeadAdvanced
     | PlanAccepted
     | WorktreeIntentAccepted
     | WorktreeCalled
@@ -431,6 +444,12 @@ module freshTaskAdmissionAmbiguityProof {
 
   type State = {
     stage: ContinuityStage,
+    basePolicy: BasePolicy,
+    targetHead: BaseHead,
+    selection: BaseEvidence,
+    planBase: BaseEvidence,
+    baseIntentAccepted: bool,
+    baseCalledWithoutIntent: bool,
     process: Process,
     journalIntent: Presence,
     journalResponsibility: Presence,
@@ -468,6 +487,12 @@ module freshTaskAdmissionAmbiguityProof {
     | ClaimOwned => true
     | PostClaimGraphKnown => true
     | SpecificationKnown => true
+    | BaseRefused => true
+    | BaseRetryRequested => true
+    | BaseRetryTrackerFactsKnown => true
+    | BaseReadIntentRecorded => true
+    | BaseReadCalled(_) => true
+    | BaseSelected(_) => true
     | AttemptPlanned(_) => true
     | WorktreeIntentRecorded(_) => true
     | WorktreeRequestCalled(_) => true
@@ -587,6 +612,12 @@ module freshTaskAdmissionAmbiguityProof {
   action init: bool = all {
     state' = {
       stage: Candidate,
+      basePolicy: FixedBase,
+      targetHead: InitialHead,
+      selection: NoBaseEvidence,
+      planBase: NoBaseEvidence,
+      baseIntentAccepted: false,
+      baseCalledWithoutIntent: false,
       process: Up,
       journalIntent: Absent,
       journalResponsibility: Absent,
@@ -699,10 +730,78 @@ module freshTaskAdmissionAmbiguityProof {
     state' = { ...state, stage: SpecificationKnown, lastEvent: SpecificationAccepted },
   }
 
+  action selectQualifiedBasePolicy: bool = all {
+    state.stage == Candidate,
+    state.basePolicy == FixedBase,
+    state.journalIntent == Absent,
+    state' = { ...state, basePolicy: QualifiedCurrentIntegrationHead },
+  }
+  action appendBaseIntent: bool = all {
+    state.process == Up,
+    state.basePolicy == QualifiedCurrentIntegrationHead,
+    Set(SpecificationKnown, BaseRetryTrackerFactsKnown).contains(state.stage),
+    state' = { ...state, stage: BaseReadIntentRecorded, baseIntentAccepted: true, lastEvent: BaseIntentAccepted },
+  }
+  action callBaseRead: bool = all {
+    state.process == Up,
+    state.stage == BaseReadIntentRecorded,
+    state' = { ...state, stage: BaseReadCalled(state.targetHead),
+      baseCalledWithoutIntent: not(state.baseIntentAccepted), lastEvent: BaseReadRequested },
+  }
+  action acceptBaseObservation: bool = {
+    nondet selectedHead = Set(InitialHead, AdvancedHead).oneOf()
+    all {
+      state.process == Up,
+      state.stage == BaseReadCalled(selectedHead),
+      state' = { ...state, stage: BaseSelected(selectedHead),
+        selection: ExactBaseEvidence(selectedHead), lastEvent: BaseObserved },
+    }
+  }
+  action refuseBaseObservation: bool = {
+    nondet selectedHead = Set(InitialHead, AdvancedHead).oneOf()
+    all { state.process == Up, state.stage == BaseReadCalled(selectedHead),
+      state' = { ...state, stage: BaseRefused }, }
+  }
+  action requestExplicitBaseRetry: bool = all {
+    state.process == Up, state.stage == BaseRefused,
+    state' = { ...state, stage: BaseRetryRequested, baseIntentAccepted: false },
+  }
+  // The exact graph/claim/spec sequence is owned by gitReconciliation;
+  // this continuity projection proves all retry stages retain the same position.
+  action confirmBaseRetryTrackerFacts: bool = all {
+    state.process == Up, state.stage == BaseRetryRequested,
+    state' = { ...state, stage: BaseRetryTrackerFactsKnown },
+  }
+  action advanceTargetHead: bool = all {
+    state.basePolicy == QualifiedCurrentIntegrationHead,
+    state.targetHead == InitialHead,
+    state' = { ...state, targetHead: AdvancedHead, lastEvent: HeadAdvanced },
+  }
+  val baseReadRequiresIntent = not(state.baseCalledWithoutIntent)
+  val planUsesRecordedBase = state.basePolicy != QualifiedCurrentIntegrationHead or state.planBase == NoBaseEvidence or and {
+    state.selection != NoBaseEvidence, state.planBase == state.selection,
+  }
+  val qualifiedPlanRequiresSelection = state.basePolicy != QualifiedCurrentIntegrationHead or
+    state.lastEvent != PlanAccepted or state.planBase != NoBaseEvidence
+  val qualifiedSelectionReached = state.selection != NoBaseEvidence
+  val baseSelectionPreservedAfterCrashReached = and { state.recoveredOnce, state.selection != NoBaseEvidence }
+  val plannedOriginalHeadAfterAdvanceReached = and {
+    state.targetHead == AdvancedHead, state.planBase == ExactBaseEvidence(InitialHead),
+  }
+
   action acceptPlan: bool = all {
     state.process == Up,
-    state.stage == SpecificationKnown,
-    state' = { ...state, stage: AttemptPlanned(LineageA), lastEvent: PlanAccepted },
+    or {
+      and { state.basePolicy == FixedBase, state.stage == SpecificationKnown },
+      and { state.basePolicy == QualifiedCurrentIntegrationHead,
+        Set(InitialHead, AdvancedHead).exists(selectedHead => and {
+          state.stage == BaseSelected(selectedHead), state.selection == ExactBaseEvidence(selectedHead),
+        }),
+      },
+    },
+    state' = { ...state, stage: AttemptPlanned(LineageA),
+      planBase: if (state.basePolicy == FixedBase) ExactBaseEvidence(InitialHead) else state.selection,
+      lastEvent: PlanAccepted },
   }
 
   action appendWorktreeIntent: bool = all {
@@ -836,7 +935,10 @@ module freshTaskAdmissionAmbiguityProof {
     state.process == Down,
     state' = {
       ...state,
-      stage: if (state.stage == EntryReserved) Candidate else state.stage,
+      stage: if (state.stage == EntryReserved) Candidate else match state.stage {
+        | BaseReadCalled(_) => BaseReadIntentRecorded
+        | _ => state.stage
+      },
       process: Up,
       recoveredOnce: true,
       lastEvent: ProcessRecovered,
@@ -848,6 +950,8 @@ module freshTaskAdmissionAmbiguityProof {
     nondet claim = Set(ClaimAbsent, ExactClaim, ForeignClaim, ClaimUnreadable).oneOf()
     nondet worktree = Set(WorktreeAbsent, ExactWorktree, WorktreeConflict, WorktreeUnreadable).oneOf()
     any {
+      selectQualifiedBasePolicy, appendBaseIntent, callBaseRead, acceptBaseObservation, advanceTargetHead,
+      refuseBaseObservation, requestExplicitBaseRetry, confirmBaseRetryTrackerFacts,
       reserve,
       beginClaimIntentAppend(presence),
       appendIntent,

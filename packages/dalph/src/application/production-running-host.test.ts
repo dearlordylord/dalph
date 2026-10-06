@@ -9,6 +9,9 @@ import { Context, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Ref,
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import {
+  ApplyTaskAttemptBaseRetryRequest,
+  OperationId,
+  taskAttemptBaseRetryFactOperationId,
   JournalStore,
   GithubGraphqlReadThrottled,
   GithubGraphqlRequestError,
@@ -20,11 +23,19 @@ import {
 } from "@dalph/orchestrator"
 import { withDecodedProductionRepositoryHost, type ProductionRunningHostObservation } from "./production-host.js"
 import { LocalHostAddress, RunningHostDescriptor, RunningHostEnvelope } from "./running-host-contract.js"
+import { callRunningHost } from "./running-host-client.js"
 import { serveRunningHost } from "./running-host-http.js"
 import { makeRunningHostFixture, runningHostFixtureLayer } from "../../test-support/production-running-host-fixture.js"
 
 import { projectRuntimeCause } from "./runtime-diagnostic.js"
-import { projectRecordedCassette, verifyRecordedCassetteRoundTrip } from "../cassettes/recorded.js"
+import {
+  foldRecordedCassette,
+  projectRecordedCassette,
+  verifyRecordedCassetteRoundTrip
+} from "../cassettes/recorded.js"
+
+import { CassetteIdentityRenaming } from "../cassettes/recorded-domain.js"
+import { invertCassetteIdentityRenaming, renameRecordedCassette } from "../cassettes/recorded-renaming.js"
 
 class RunningHostFixtureError extends Schema.TaggedError<RunningHostFixtureError>()("RunningHostFixtureError", {
   boundary: Schema.String,
@@ -941,6 +952,158 @@ it.live.each(["ResponseDeadline", "Unavailable"] as const)(
                 completionClaimCount: 0
               })
               expect((yield* observation.readRunControl).termination).toBeNull()
+            }),
+          "Run",
+          "Listening"
+        )
+      })
+    ).pipe(Effect.provide(runningHostFixtureLayer)),
+  60000
+)
+
+it.live(
+  "an operator retries one refused Base through the production host after repairing the exact integration ref",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeRunningHostFixture(builtEntry)
+        const git = yield* GitCommand
+        const removed = yield* git.runInWorktree(fixture.configuration.repository, [
+          "update-ref",
+          "-d",
+          fixture.configuration.integrationRef,
+          fixture.configuration.plannedAttemptBaseSha
+        ])
+        expect(removed.exitCode, removed.stderr).toBe(0)
+        const address = yield* freeAddress
+        yield* withDecodedProductionRepositoryHost(
+          fixture.configuration,
+          fixture.graph,
+          (observation) =>
+            Effect.gen(function* () {
+              yield* serveRunningHost(address, observation)
+              const refusedTrace = yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const history = yield* attachCurrentSignal(observation.acceptedHistory)
+                  const view = yield* observation.traceReader.readAt(history.current)
+                  const hasRefusal = (snapshot: typeof view) =>
+                    snapshot.items.some(
+                      ({ occurrence }) =>
+                        occurrence._tag === "TaskAttemptBaseObserved" && occurrence.observation._tag === "Refused"
+                    )
+                  if (hasRefusal(view)) return view
+                  return Option.getOrThrow(
+                    yield* history.changes.pipe(
+                      Stream.mapEffect((cursor) => observation.traceReader.readAt(cursor)),
+                      Stream.filter(hasRefusal),
+                      Stream.runHead
+                    )
+                  )
+                })
+              ).pipe(Effect.timeout("20 seconds"))
+              const refusal = refusedTrace.items.find(
+                ({ occurrence }) =>
+                  occurrence._tag === "TaskAttemptBaseObserved" && occurrence.observation._tag === "Refused"
+              )?.occurrence
+              if (refusal?._tag !== "TaskAttemptBaseObserved") return expect.fail("requires the actual settled refusal")
+              const read = refusedTrace.items.find(
+                ({ occurrence }) =>
+                  occurrence._tag === "TaskAttemptBaseReadInitiated" &&
+                  occurrence.operation.operationId === refusal.originatingActionOperationId
+              )?.occurrence
+              if (read?._tag !== "TaskAttemptBaseReadInitiated") return expect.fail("requires the exact refused read")
+              const runId = observation.selection.runId
+              expect((yield* fixture.readHistory(runId)).some(({ event }) => event._tag === "TaskAttemptPlanned")).toBe(
+                false
+              )
+              yield* fixture.releaseObservationCut
+              const repaired = yield* git.runInWorktree(fixture.configuration.repository, [
+                "update-ref",
+                fixture.configuration.integrationRef,
+                fixture.configuration.plannedAttemptBaseSha
+              ])
+              expect(repaired.exitCode, repaired.stderr).toBe(0)
+              const retry = yield* Schema.decodeUnknownEffect(ApplyTaskAttemptBaseRetryRequest)({
+                requestId: "production-base-retry",
+                subject: { runId, taskId: read.operation.taskId, refusedReadOperationId: read.operation.operationId }
+              })
+              const submitted = yield* callRunningHost(address, runId, { _tag: "RetryTaskAttemptBase", retry })
+              expect(submitted.result).toMatchObject({
+                _tag: "Success",
+                value: { _tag: "TaskAttemptBaseRetryRecorded", retry }
+              })
+              yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
+              const replayed = yield* callRunningHost(address, runId, { _tag: "RetryTaskAttemptBase", retry })
+              expect(replayed.result).toEqual(submitted.result)
+              const records = yield* fixture.readHistory(runId)
+              expect(records.filter(({ event }) => event._tag === "TaskAttemptBaseRetryRequested")).toHaveLength(1)
+              expect(records.filter(({ event }) => event._tag === "TaskAttemptBaseReadIntended")).toHaveLength(2)
+              expect(records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+              expect(records.filter(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toHaveLength(1)
+              const plan = records.find(({ event }) => event._tag === "TaskAttemptPlanned")?.event
+              if (plan?._tag !== "TaskAttemptPlanned") return expect.fail("requires one exact successor plan")
+              expect(plan.operation.plannedAttempt.baseSha).toBe(fixture.configuration.plannedAttemptBaseSha)
+              const trace = yield* observation.traceReader.readAt(yield* observation.acceptedHistory.get)
+              const occurrence = trace.items.find(
+                ({ occurrence }) => occurrence._tag === "TaskAttemptBaseRetryRequested"
+              )
+              expect(occurrence?.taskIds).toEqual([read.operation.taskId])
+              expect(occurrence?.operationIds).toEqual([read.operation.operationId])
+              const cassette = yield* projectRecordedCassette(records)
+              const checkpoints = verifyRecordedCassetteRoundTrip(records, cassette)
+              expect(checkpoints.length).toBeGreaterThan(0)
+              expect(
+                checkpoints.every(
+                  (checkpoint) =>
+                    checkpoint.operationalStateEquivalent &&
+                    checkpoint.workflowHistoryEquivalent &&
+                    checkpoint.pureSelectionEquivalent
+                )
+              ).toBe(true)
+              const renamedIds = [
+                read.operation.claimOperationId,
+                ...(["Graph", "Claim", "Specification"] as const).map((family) =>
+                  taskAttemptBaseRetryFactOperationId(retry.requestId, family)
+                )
+              ]
+              const renaming = CassetteIdentityRenaming.make({
+                attemptIds: [],
+                claimTokens: [],
+                integratorCandidateResourceLocators: [],
+                integratorSessionIds: [],
+                runIds: [],
+                taskBranchRefs: [],
+                worktreeLocators: [],
+                operationIds: renamedIds.map((from, index) => ({
+                  from,
+                  to: OperationId.make(`01990a72-38c0-7000-8000-${String(index + 900).padStart(12, "0")}`)
+                }))
+              })
+              const renamed = yield* renameRecordedCassette(cassette, renaming)
+              expect(foldRecordedCassette(renamed)._tag).toBe("ValidWorkflowJournalHistory")
+              expect(yield* renameRecordedCassette(renamed, invertCassetteIdentityRenaming(renaming))).toEqual(cassette)
+              yield* fixture.release
+              expect((yield* observation.runTermination.await.pipe(Effect.timeout("20 seconds"))).disposition).toBe(
+                "Completed"
+              )
+              const completedHistory = yield* fixture.readHistory(runId)
+              const completedTrackerCalls = yield* Ref.get(fixture.trackerCalls)
+              const completedGitCalls = yield* Ref.get(fixture.gitCalls)
+              expect((yield* callRunningHost(address, runId, { _tag: "RetryTaskAttemptBase", retry })).result).toEqual(
+                submitted.result
+              )
+              const newRetry = yield* Schema.decodeUnknownEffect(ApplyTaskAttemptBaseRetryRequest)({
+                ...retry,
+                requestId: "new-after-completion"
+              })
+              expect(
+                (yield* callRunningHost(address, runId, { _tag: "RetryTaskAttemptBase", retry: newRetry })).result
+              ).toMatchObject({ _tag: "Failure", error: { _tag: "RunClosed" } })
+              expect(yield* fixture.readHistory(runId)).toEqual(completedHistory)
+              expect(yield* Ref.get(fixture.trackerCalls)).toBe(completedTrackerCalls)
+              expect(yield* Ref.get(fixture.gitCalls)).toBe(completedGitCalls)
+              expect((yield* observation.commandAdmission.snapshot).registeredOwnerCount).toBe(0)
+              expect(yield* Ref.get(fixture.failures)).toEqual([])
             }),
           "Run",
           "Listening"

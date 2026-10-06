@@ -1,3 +1,7 @@
+import type {
+  applyTaskAttemptBaseRetry,
+  readTaskAttemptBaseRetryRequest
+} from "../../workflow/protocols/task-attempt-planning/retry.js"
 import type { ExecutorGuidanceControlService } from "../../workflow/protocols/executor-guidance/control.js"
 import type { ResultRecoveryControlService } from "../../workflow/protocols/result-recovery/control.js"
 /* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
@@ -277,6 +281,18 @@ export interface JournaledRunBootstrapService {
     ) => Effect.Effect<
       Effect.Success<ReturnType<ExecutorGuidanceControlService["send"]>>,
       Effect.Error<ReturnType<ExecutorGuidanceControlService["send"]>> | ApplicationExiting | JournaledRunNotActive
+    >
+    readonly readTaskAttemptBaseRetryRequest: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<typeof readTaskAttemptBaseRetryRequest>>,
+      Effect.Error<ReturnType<typeof readTaskAttemptBaseRetryRequest>> | ApplicationExiting | JournaledRunNotActive
+    >
+    readonly retryTaskAttemptBase: (
+      input: unknown
+    ) => Effect.Effect<
+      Effect.Success<ReturnType<typeof applyTaskAttemptBaseRetry>>,
+      Effect.Error<ReturnType<typeof applyTaskAttemptBaseRetry>> | ApplicationExiting | JournaledRunNotActive
     >
     readonly applyResultRecoveryDirection: (
       input: unknown

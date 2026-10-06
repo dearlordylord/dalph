@@ -97,7 +97,7 @@ it.effect("consumes each idle-boundary process death once before installing the 
         ...restart.slice(restartReconfirmationItemOffset),
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: startingCassette.startingFacts.trackerGraph },
-        ...startingCassette.startingFacts.taskWorkSpecifications.flatMap((specification, index) => [
+        ...startingCassette.startingFacts.taskWorkSpecifications.flatMap((specification) => [
           { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: specification.taskId } },
           { _tag: "TaskWorkSpecificationReadReturned", ...specification },
           { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: specification.taskId } },
@@ -107,7 +107,7 @@ it.effect("consumes each idle-boundary process death once before installing the 
             operation: {
               _tag: "ReadTaskWorktree",
               taskId: specification.taskId,
-              attemptId: `attempt:${specification.taskId}:${index}`
+              attemptId: `attempt:${specification.taskId}:0`
             }
           },
           {
@@ -115,7 +115,7 @@ it.effect("consumes each idle-boundary process death once before installing the 
             operation: {
               _tag: "ReadTargetLineage",
               taskId: specification.taskId,
-              attemptId: `attempt:${specification.taskId}:${index}`
+              attemptId: `attempt:${specification.taskId}:0`
             }
           }
         ]),

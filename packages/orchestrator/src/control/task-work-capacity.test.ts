@@ -520,6 +520,7 @@ it.effect("restart reconstructs three unfinished task positions without an admis
       Effect.provideService(
         WorkflowInterpreter,
         WorkflowInterpreter.of({
+          readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
           acquireTaskClaim: () => Effect.die("restart construction does not call the tracker"),
           readTaskClaim: () => Effect.die("unexpected task claim read"),
           readTaskWorktree: () => Effect.die("unused worktree observation"),

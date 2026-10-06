@@ -2050,6 +2050,7 @@ it.effect("releases only the freshly confirmed exact claim after Stop", () =>
     const base = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unusedBoundary,
         readTaskClaim: () =>
           Ref.update(claimReads, (count) => count + 1).pipe(
@@ -2121,6 +2122,7 @@ it.effect("retries the same stopped-claim release after reconstruction confirms 
     const base = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unusedBoundary,
         readTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimObserved.make({ observation: exactClaim })),
         readTaskWorktree: unusedBoundary,
@@ -2237,6 +2239,7 @@ it.effect("stops implementation without mutating an absent or foreign claim", ()
     const base = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unusedBoundary,
         readTaskClaim: () =>
           Ref.updateAndGet(reads, (count) => count + 1).pipe(

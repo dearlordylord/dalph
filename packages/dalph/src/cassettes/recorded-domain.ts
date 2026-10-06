@@ -1,22 +1,7 @@
 import {
-  ExecutorGuidanceRequestId,
-  ExecutorGuidanceTarget,
-  ExecutorGuidanceTransmission,
-  PlannedAttemptExecutorWriterCustody,
-  AcceptedResult,
-  AttemptId,
-  GitCommitSha,
-  IntegrationTarget,
-  PlannedAttemptExecutorReport,
-  PlannedAttemptResultRecoveryAuthorization,
-  PlannedTaskAttempt,
-  RemotePublicationTarget,
-  RunId,
-  TaskId,
-  TaskBranchRef,
-  WorktreeLocator
-} from "@dalph/contracts"
-import {
+  ApplyTaskAttemptBaseRetryRequest,
+  AttemptBasePolicy,
+  TaskAttemptBaseObservation,
   ExecutorGuidanceMetadata,
   ResultRecoveryDirection,
   ResultRecoveryRequestId,
@@ -121,6 +106,24 @@ import {
   RemoteBaselineObservation,
   LocalTargetCatchUpResult
 } from "@dalph/orchestrator"
+import {
+  ExecutorGuidanceRequestId,
+  ExecutorGuidanceTarget,
+  ExecutorGuidanceTransmission,
+  PlannedAttemptExecutorWriterCustody,
+  AcceptedResult,
+  AttemptId,
+  GitCommitSha,
+  IntegrationTarget,
+  PlannedAttemptExecutorReport,
+  PlannedAttemptResultRecoveryAuthorization,
+  PlannedTaskAttempt,
+  RemotePublicationTarget,
+  RunId,
+  TaskId,
+  TaskBranchRef,
+  WorktreeLocator
+} from "@dalph/contracts"
 /* eslint-disable max-lines -- The versioned recorded-cassette schema stays one exhaustive compatibility boundary. */
 import { Schema } from "effect"
 
@@ -136,6 +139,21 @@ const nonActionOccurrence = { occurrenceClassification: Schema.Literal("NonActio
  * not belong to this boundary.
  */
 export const RecordedCassetteEntry = Schema.TaggedUnion({
+  TaskAttemptBaseRetryRequested: {
+    ...ApplyTaskAttemptBaseRetryRequest.fields,
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  },
+  TaskAttemptBaseReadIntended: {
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operation: WorkflowOperation.cases.ReadTaskAttemptBase
+  },
+  TaskAttemptBaseObserved: {
+    observation: TaskAttemptBaseObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId
+  },
   /** Worktree cleanup preserves the exact owner, locator, disposition, and fresh Git evidence. */
   WorktreeCleanupAuthorized: {
     authorization: WorktreeCleanupAuthorization,
@@ -790,6 +808,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     revision: RunPolicyRevision
   },
   WorkflowRunBegan: {
+    attemptBasePolicy: Schema.optional(AttemptBasePolicy),
     ...initiatedByCoordinator,
     initialControlPolicy: InitialControlPolicy,
     remotePublicationTarget: RemotePublicationTarget,

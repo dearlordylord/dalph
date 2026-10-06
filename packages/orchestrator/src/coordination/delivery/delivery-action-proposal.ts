@@ -338,6 +338,8 @@ const proposalNeedsFreshCommitment = (proposal: DeliveryActionProposal): boolean
   if (route._tag !== "FreshWorkflowRoute") return false
   return (
     route.step._tag === "ReadPostClaimGraph" ||
+    route.step._tag === "ReadTaskAttemptBase" ||
+    route.step._tag === "ReadTaskAttemptBaseRetryFacts" ||
     route.step._tag === "ReadTaskWorkSpecification" ||
     route.step._tag === "RecordTaskAttemptPlan" ||
     route.step._tag === "ReconcileTaskWorktree"
@@ -464,6 +466,8 @@ type FreshCommittedContinuationOperationStep = Extract<
     readonly _tag:
       | "ReadPostClaimGraph"
       | "ReadTaskWorkSpecification"
+      | "ReadTaskAttemptBaseRetryFacts"
+      | "ReadTaskAttemptBase"
       | "RecordTaskAttemptPlan"
       | "ReconcileTaskWorktree"
   }
@@ -575,6 +579,8 @@ const freshContinuationSnapshotOf = (
         taskId: step.task.id
       })
     : step._tag === "ReadPostClaimGraph" ||
+        step._tag === "ReadTaskAttemptBase" ||
+        step._tag === "ReadTaskAttemptBaseRetryFacts" ||
         step._tag === "ReadTaskWorkSpecification" ||
         step._tag === "RecordTaskAttemptPlan" ||
         step._tag === "ReconcileTaskWorktree"
@@ -632,6 +638,8 @@ const continuationClaimOperationId = (step: FreshCommitmentBoundContinuationPair
   switch (step._tag) {
     case "ReadPostClaimGraph":
       return step.claimOperation.acquisition.operationId
+    case "ReadTaskAttemptBaseRetryFacts":
+    case "ReadTaskAttemptBase":
     case "ReadTaskWorkSpecification":
     case "RecordTaskAttemptPlan":
     case "ReconcileTaskWorktree":

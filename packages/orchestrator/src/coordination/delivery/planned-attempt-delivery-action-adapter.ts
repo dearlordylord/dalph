@@ -186,9 +186,6 @@ const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTrans
   eligibility: SafeContinuationRevalidationEligibility | undefined
 ) {
   const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-  if (transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts") {
-    yield* lease.bindPlannedAttemptPosition(transition.plannedAttempt)
-  }
   const result = yield* executorReportFor(transition, correlation, lease, eligibility)
   const report = result.report
   if (executorReportProvesStoppedWriters(report)) {

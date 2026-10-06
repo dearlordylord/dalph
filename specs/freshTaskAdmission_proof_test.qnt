@@ -276,4 +276,30 @@ module freshTaskAdmissionAmbiguityProofTest {
       .then(appendResponsibility).then(releaseHeld).then(authorizeOutside)
       .expect(and { state.stage == HeldReleased, outsideEnteredReached, outsideAuthorizationRequiresDisposition })
   }
+
+  run qualifiedSpecification = init.then(selectQualifiedBasePolicy).then(reserve).then(appendIntent)
+    .then(callClaim(ExactClaim)).then(observeClaimAuthority)
+    .then(acceptPostClaimGraph).then(acceptSpecification)
+  run qualifiedBaseReadRequiresIntentTest = qualifiedSpecification.then(callBaseRead.fail())
+  run qualifiedPlanRequiresObservationTest = qualifiedSpecification.then(acceptPlan.fail())
+  run qualifiedObservedBaseSurvivesHeadAdvanceAndCrashTest = qualifiedSpecification
+    .then(appendBaseIntent).then(callBaseRead).then(advanceTargetHead).then(acceptBaseObservation)
+    .then(crash).then(recover).then(acceptPlan)
+    .expect(and { baseReadRequiresIntent, planUsesRecordedBase, qualifiedPlanRequiresSelection,
+      plannedOriginalHeadAfterAdvanceReached, baseSelectionPreservedAfterCrashReached })
+  run pendingBaseReadRetainsIntentAcrossCrashTest = qualifiedSpecification
+    .then(appendBaseIntent).then(callBaseRead).then(crash).then(recover)
+    .expect(state.stage == BaseReadIntentRecorded)
+    .then(advanceTargetHead).then(callBaseRead).then(acceptBaseObservation).then(acceptPlan)
+    .expect(and { state.planBase == ExactBaseEvidence(AdvancedHead), selectedOccupies(state.stage),
+      baseReadRequiresIntent, planUsesRecordedBase })
+  run explicitBaseRetryPreservesCommitmentAcrossEveryCrashTest = qualifiedSpecification
+    .then(appendBaseIntent).then(callBaseRead).then(refuseBaseObservation)
+    .then(crash).then(recover).expect(selectedOccupies(state.stage))
+    .then(requestExplicitBaseRetry).then(crash).then(recover)
+    .expect(and { selectedOccupies(state.stage), processLossDoesNotRelease })
+    .then(confirmBaseRetryTrackerFacts).then(crash).then(recover)
+    .expect(and { selectedOccupies(state.stage), postOwnershipConstraintDoesNotRelease })
+    .then(appendBaseIntent).then(callBaseRead).then(acceptBaseObservation).then(acceptPlan)
+    .expect(and { selectedOccupies(state.stage), planUsesRecordedBase })
 }

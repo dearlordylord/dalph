@@ -101,7 +101,12 @@ const capacity = TaskWorkCapacity.make(3)
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: capacity })
 const productionJournalLayer = () =>
   liveJournalTestLayer({
-    records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+    records: [
+      makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest, {
+        _tag: "ExplicitFixedBase",
+        baseSha: GitCommitSha.make("1".repeat(40))
+      })
+    ],
     runId,
     target
   })

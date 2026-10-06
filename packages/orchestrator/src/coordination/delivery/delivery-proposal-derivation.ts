@@ -345,7 +345,15 @@ function freshProposalOf(
     return freshDerivedProposalOf(proposal, continuation, context.runId)
   }
   const route: FreshOperationRoute = { _tag: "FreshWorkflowRoute", step: fresh.step }
-  const proposal = { ...proposalBase(context, route), actionIdentity: freshOperationIdentity(), route }
+  const actionIdentity = freshOperationIdentity()
+  const proposal = {
+    ...proposalBase(context, route),
+    actionIdentity:
+      fresh.step._tag === "ReadTaskAttemptBase" || fresh.step._tag === "ReadTaskAttemptBaseRetryFacts"
+        ? { ...actionIdentity, source: { _tag: "Preserve" as const, operationId: fresh.step.operationId } }
+        : actionIdentity,
+    route
+  }
   return freshDerivedProposalOf(proposal, continuation, context.runId)
 }
 

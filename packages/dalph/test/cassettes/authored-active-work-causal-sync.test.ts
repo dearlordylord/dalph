@@ -1502,10 +1502,10 @@ it.effect("keeps requested executor projections ordered even in a causal tracker
   })
 )
 
-it.effect("coalesces notification and timer hints then retains B1 until its exact safe report", () =>
+it.effect("coalesces notification and timer hints then retains B's first attempt until its exact safe report", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(activeWorkF2SafelySuspendsAuthoredCassette)
-    const bAttemptId = AttemptId.make("attempt:B:1")
+    const bAttemptId = AttemptId.make("attempt:B:0")
     const bReports = run.records.flatMap(({ event, position }) =>
       event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === bAttemptId
         ? [{ position, report: event.report._tag }]

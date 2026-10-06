@@ -349,6 +349,7 @@ const currentGraph = Option.getOrThrow(
 const currentFactsProviderLayer = Layer.succeed(
   WorkflowInterpreter,
   WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: () => Effect.die("unused"),
     readTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimObserved.make({ observation: taskClaim })),
     readTaskWorktree: () =>
@@ -721,6 +722,7 @@ it.effect("continues an exact planned attempt through the executor protocol", ()
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -2935,6 +2937,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),

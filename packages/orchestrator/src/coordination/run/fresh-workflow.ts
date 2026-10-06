@@ -1,4 +1,7 @@
+import { baseRetryWorkflowStep } from "./base-retry-workflow.js"
+import { taskAttemptBaseReadOperationIdFor } from "../../workflow/protocols/task-attempt-planning/base-read-identity.js"
 /* eslint-disable max-lines -- Fresh selection reconstructs one journaled workflow and its complete eligibility relation together. */
+import { PlannedTaskAttemptOrdinal } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { Option } from "effect"
 import {
   TaskWorkSpecification,
@@ -40,7 +43,7 @@ import {
 } from "../../workflow/causal-history.js"
 import { rejectedFreshTaskClaimDisposition as rejectedClaim } from "./rejected-fresh-task-claim.js"
 import { projectFreshTaskCommitments } from "../admission/fresh-task-admission-projection.js"
-import { acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
+import { acceptedAttemptBasePolicy, acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
 import {
   authorizeReplacementContinuationStep,
   replacementContinuationAuthorityFrom,
@@ -305,6 +308,10 @@ const journaledStepFor = (
     )
   }
 
+  if (acceptedAttemptBasePolicy(records) === undefined) return undefined
+  const retry = baseRetryWorkflowStep(records, task)
+  if (retry !== undefined) return retry.step
+
   const specification = taskRecords.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
@@ -331,15 +338,57 @@ const journaledStepFor = (
     ) {
       return undefined
     }
-    return FreshWorkflowStep.RecordTaskAttemptPlan({
-      claimOperationId: commitment.operation.acquisition.operationId,
+    const policy = acceptedAttemptBasePolicy(records)
+    if (policy === undefined) return undefined
+    const workSpecification = {
+      body: specification.observation.factFamily.body,
+      fingerprint: specification.observation.factFamily.fingerprint,
+      taskId: specification.observation.factFamily.taskId,
+      title: specification.observation.factFamily.title
+    }
+    const claimOperationId = commitment.operation.acquisition.operationId
+    const ordinal = PlannedTaskAttemptOrdinal.make(
+      recordedTaskAttemptPlans(records).filter((plan) => plan.plannedAttempt.taskId === task.id).length
+    )
+    if (policy._tag === "ExplicitFixedBase")
+      return FreshWorkflowStep.RecordTaskAttemptPlan({
+        baseSha: policy.baseSha,
+        ordinal,
+        claimOperationId,
+        predecessorOperationId: specification.operationId,
+        specification: workSpecification,
+        task
+      })
+    const intent = taskRecords.findLast(
+      ({ event }) =>
+        event._tag === "TaskAttemptBaseReadIntended" &&
+        event.operation.claimOperationId === claimOperationId &&
+        event.operation.taskRevision === workSpecification.fingerprint &&
+        event.operation.predecessorOperationIds.includes(specification.operationId)
+    )?.event
+    if (intent?._tag === "TaskAttemptBaseReadIntended") {
+      const outcome = journalRecordByKey(records, outcomeRecordKey(intent.operation.operationId))?.event
+      if (outcome?._tag === "TaskAttemptBaseObserved")
+        return outcome.observation._tag === "Refused"
+          ? undefined
+          : FreshWorkflowStep.RecordTaskAttemptPlan({
+              baseSha: outcome.observation.baseSha,
+              ordinal,
+              claimOperationId,
+              predecessorOperationId: intent.operation.operationId,
+              specification: workSpecification,
+              task
+            })
+    }
+    return FreshWorkflowStep.ReadTaskAttemptBase({
+      claimOperationId,
+      operationId:
+        intent?._tag === "TaskAttemptBaseReadIntended"
+          ? intent.operation.operationId
+          : taskAttemptBaseReadOperationIdFor(claimOperationId, specification.operationId),
+      policy,
       predecessorOperationId: specification.operationId,
-      specification: {
-        body: specification.observation.factFamily.body,
-        fingerprint: specification.observation.factFamily.fingerprint,
-        taskId: specification.observation.factFamily.taskId,
-        title: specification.observation.factFamily.title
-      },
+      specification: workSpecification,
       task
     })
   }
@@ -497,7 +546,8 @@ export const deriveFreshWorkflowEntryCapableTaskIds = (
   immutableRunTarget: TrackerTarget,
   recoveredAttemptIds: ReadonlySet<AttemptId> = new Set()
 ): ReadonlySet<TaskId> => {
-  if (frame.pause.run._tag === "RunPaused") return new Set()
+  if (frame.pause.run._tag === "RunPaused" || acceptedAttemptBasePolicy(frame.workflowHistory.evidence) === undefined)
+    return new Set()
   const { completeGraphObserved, immutableRunTargetKey, pauseCoveredTaskIds, records, responsibleTaskIds } =
     freshWorkflowEligibilityContext(frame, recoveredAttemptIds, immutableRunTarget)
   return new Set(

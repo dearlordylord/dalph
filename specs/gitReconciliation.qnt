@@ -3,6 +3,72 @@
 // qualifies its exact ordered parents, and ref mutation remains at its own
 // boundary; this model records the authority and preservation decisions.
 module gitReconciliation {
+  // Pre-plan Git selection is separate from later immutable-attempt lineage checks.
+  type BaseHead = Head1 | Head2
+  type BaseAnchor = Anchor1 | Anchor2
+  type BaseTarget = BaseTarget1 | BaseTarget2
+  type BaseExecutionRepository = ExecutionRepository1 | ExecutionRepository2
+  type BaseReadCase =
+    | ExactBaseRead | MissingBaseTarget | UnreadableBaseTarget | ForeignBaseTarget
+    | WrongBaseAnchor | DivergentBaseHead | ForeignExecutionRepository
+    | MissingExecutionObject | UnreadableExecutionObject
+  type BaseRefObservation = TargetMissing | TargetUnreadable | TargetResolved
+  type BaseReadEvidence = {
+    target: BaseTarget,
+    anchor: BaseAnchor,
+    executionRepository: BaseExecutionRepository,
+    targetHead: BaseHead,
+    refObservation: BaseRefObservation,
+    anchorIsAncestor: bool,
+    objectReadable: bool,
+    commitAvailable: bool,
+  }
+  type BaseRefusal =
+    | MissingTargetRefusal | UnreadableTargetRefusal | ForeignTargetRefusal
+    | WrongAnchorRefusal | DivergentHeadRefusal | ForeignExecutionRepositoryRefusal
+    | MissingObjectRefusal | UnreadableObjectRefusal
+  type BaseSelectionStage =
+    | NoBaseSelection
+    | BaseSelectionIntentRecorded
+    | BaseSelectionReadCalled(BaseReadEvidence)
+    | QualifiedBaseObserved(BaseReadEvidence)
+    | BaseSelectionRefused(BaseRefusal)
+    | BaseRetryRequested
+    | BaseRetryGraphConfirmed
+    | BaseRetryClaimConfirmed
+    | BaseRetrySpecificationConfirmed
+    | BasePlanRecorded({ observation: BaseReadEvidence, plannedBase: BaseHead })
+
+  pure def baseEvidenceFor(readCase: BaseReadCase, selectedHead: BaseHead): BaseReadEvidence = {
+    target: if (readCase == ForeignBaseTarget) BaseTarget2 else BaseTarget1,
+    anchor: if (readCase == WrongBaseAnchor) Anchor2 else Anchor1,
+    executionRepository: if (readCase == ForeignExecutionRepository) ExecutionRepository2 else ExecutionRepository1,
+    targetHead: selectedHead,
+    refObservation: if (readCase == MissingBaseTarget) TargetMissing
+      else if (readCase == UnreadableBaseTarget) TargetUnreadable else TargetResolved,
+    anchorIsAncestor: readCase != DivergentBaseHead,
+    objectReadable: readCase != UnreadableExecutionObject,
+    commitAvailable: readCase != MissingExecutionObject,
+  }
+  pure val BASE_READ_CASES = Set(ExactBaseRead, MissingBaseTarget, UnreadableBaseTarget,
+    ForeignBaseTarget, WrongBaseAnchor, DivergentBaseHead, ForeignExecutionRepository,
+    MissingExecutionObject, UnreadableExecutionObject)
+  pure def baseEvidenceQualifies(evidence: BaseReadEvidence): bool = and {
+    evidence.target == BaseTarget1, evidence.anchor == Anchor1,
+    evidence.executionRepository == ExecutionRepository1,
+    evidence.refObservation == TargetResolved, evidence.anchorIsAncestor,
+    evidence.objectReadable, evidence.commitAvailable,
+  }
+  pure def baseRefusalFor(evidence: BaseReadEvidence): BaseRefusal =
+    if (evidence.target != BaseTarget1) ForeignTargetRefusal
+    else if (evidence.anchor != Anchor1) WrongAnchorRefusal
+    else if (evidence.executionRepository != ExecutionRepository1) ForeignExecutionRepositoryRefusal
+    else if (evidence.refObservation == TargetMissing) MissingTargetRefusal
+    else if (evidence.refObservation == TargetUnreadable) UnreadableTargetRefusal
+    else if (not(evidence.anchorIsAncestor)) DivergentHeadRefusal
+    else if (not(evidence.objectReadable)) UnreadableObjectRefusal
+    else MissingObjectRefusal
+
   type AttemptStatus = Executing | SafelySuspended
   type GitConstraint =
     | NoGitConstraint
@@ -25,6 +91,14 @@ module gitReconciliation {
   type TrackerBlocker = NoTrackerBlocker | BeforePromotionBlocker | AfterPromotionBlocker | IncompleteTrackerFacts
 
   type State = {
+    baseSelection: BaseSelectionStage,
+    currentBaseHead: BaseHead,
+    baseIntentAccepted: bool,
+    baseQualifiedEver: bool,
+    baseRetryRequestAccepted: bool,
+    baseRetryFactsConfirmed: bool,
+    successorBaseRead: bool,
+    baseReadCalledWithoutIntent: bool,
     status: AttemptStatus,
     constraint: GitConstraint,
     decision: Decision,
@@ -62,6 +136,14 @@ module gitReconciliation {
 
   action init: bool = all {
     state' = {
+      baseSelection: NoBaseSelection,
+      currentBaseHead: Head1,
+      baseIntentAccepted: false,
+      baseQualifiedEver: false,
+      baseRetryRequestAccepted: false,
+      baseRetryFactsConfirmed: false,
+      successorBaseRead: false,
+      baseReadCalledWithoutIntent: false,
       status: Executing,
       constraint: NoGitConstraint,
       decision: ContinueAttempt,
@@ -94,6 +176,113 @@ module gitReconciliation {
       completionWarning: false,
       reintegrationAuthorized: false,
     }
+  }
+
+  action recordBaseSelectionIntent: bool = all {
+    or { state.baseSelection == NoBaseSelection, state.baseSelection == BaseRetrySpecificationConfirmed },
+    state' = { ...state, baseSelection: BaseSelectionIntentRecorded, baseIntentAccepted: true, successorBaseRead: state.baseSelection != NoBaseSelection },
+  }
+  // Only a named explicit request can leave a settled refusal; ordinary wake stutters.
+  action requestExplicitBaseRetry: bool = all {
+    match state.baseSelection { | BaseSelectionRefused(_) => true | _ => false },
+    state' = { ...state, baseSelection: BaseRetryRequested, baseIntentAccepted: false, baseRetryRequestAccepted: true, baseRetryFactsConfirmed: false, successorBaseRead: false },
+  }
+  action confirmRetryGraph: bool = all {
+    state.baseSelection == BaseRetryRequested,
+    state' = { ...state, baseSelection: BaseRetryGraphConfirmed },
+  }
+  action confirmRetryExactClaim: bool = all {
+    state.baseSelection == BaseRetryGraphConfirmed,
+    state' = { ...state, baseSelection: BaseRetryClaimConfirmed },
+  }
+  action confirmRetryUnchangedSpecification: bool = all {
+    state.baseSelection == BaseRetryClaimConfirmed,
+    state' = { ...state, baseSelection: BaseRetrySpecificationConfirmed, baseRetryFactsConfirmed: true },
+  }
+  action automaticBaseRetryWake: bool = state' = state
+
+  action callBaseSelectionRead(readCase: BaseReadCase): bool = all {
+    state.baseSelection == BaseSelectionIntentRecorded,
+    state' = { ...state, baseSelection: BaseSelectionReadCalled(baseEvidenceFor(readCase, state.currentBaseHead)),
+      baseReadCalledWithoutIntent: not(state.baseIntentAccepted) },
+  }
+  action acceptQualifiedBaseSelection: bool = {
+    nondet selectedHead = Set(Head1, Head2).oneOf()
+    nondet readCase = BASE_READ_CASES.oneOf()
+    val evidence = baseEvidenceFor(readCase, selectedHead)
+    all {
+      state.baseSelection == BaseSelectionReadCalled(evidence),
+      baseEvidenceQualifies(evidence),
+      state' = { ...state, baseSelection: QualifiedBaseObserved(evidence), baseQualifiedEver: true },
+    }
+  }
+  action refuseBaseSelection: bool = {
+    nondet selectedHead = Set(Head1, Head2).oneOf()
+    nondet readCase = BASE_READ_CASES.oneOf()
+    val evidence = baseEvidenceFor(readCase, selectedHead)
+    all {
+      state.baseSelection == BaseSelectionReadCalled(evidence),
+      not(baseEvidenceQualifies(evidence)),
+      state' = { ...state, baseSelection: BaseSelectionRefused(baseRefusalFor(evidence)) },
+    }
+  }
+  action advanceBaseTargetHead: bool = all {
+    state.currentBaseHead == Head1,
+    state' = { ...state, currentBaseHead: Head2 },
+  }
+  action recordSelectedBasePlan: bool = {
+    nondet selectedHead = Set(Head1, Head2).oneOf()
+    val evidence = baseEvidenceFor(ExactBaseRead, selectedHead)
+    all {
+      state.baseSelection == QualifiedBaseObserved(evidence),
+      state' = { ...state, baseSelection: BasePlanRecorded({ observation: evidence, plannedBase: selectedHead }) },
+    }
+  }
+  val qualifiedSelectionIsNeverRetried: bool = not(state.baseQualifiedEver) or match state.baseSelection {
+    | QualifiedBaseObserved(_) => true | BasePlanRecorded(_) => true | _ => false
+  }
+  val retryReadHasExplicitTrackerAuthority: bool = not(state.successorBaseRead) or
+    (state.baseRetryRequestAccepted and state.baseRetryFactsConfirmed)
+  val explicitRetryPlanReached: bool = state.successorBaseRead and match state.baseSelection {
+    | BasePlanRecorded(_) => true | _ => false
+  }
+  action unsafeRetryQualifiedBase: bool = all {
+    state.baseQualifiedEver,
+    state' = { ...state, baseSelection: BaseSelectionIntentRecorded },
+  }
+  action unsafeRetryWithoutTrackerFacts: bool = all {
+    state.baseSelection == BaseRetryRequested,
+    state' = { ...state, baseSelection: BaseSelectionIntentRecorded, successorBaseRead: true },
+  }
+  val baseSelectionReadsRequireIntent: bool = not(state.baseReadCalledWithoutIntent)
+  // Independent requirement: do not call baseEvidenceQualifies from this law.
+  val qualifiedBaseRequiresExactAuthority: bool = match state.baseSelection {
+    | QualifiedBaseObserved(evidence) => and {
+        evidence.target == BaseTarget1, evidence.anchor == Anchor1,
+        evidence.executionRepository == ExecutionRepository1, evidence.refObservation == TargetResolved,
+        evidence.anchorIsAncestor, evidence.objectReadable, evidence.commitAvailable,
+      }
+    | BasePlanRecorded(plan) => and {
+        plan.observation.target == BaseTarget1, plan.observation.anchor == Anchor1,
+        plan.observation.executionRepository == ExecutionRepository1,
+        plan.observation.refObservation == TargetResolved, plan.observation.anchorIsAncestor,
+        plan.observation.objectReadable, plan.observation.commitAvailable,
+      }
+    | _ => true
+  }
+  val basePlanUsesObservedHead: bool = match state.baseSelection {
+    | BasePlanRecorded(plan) => plan.plannedBase == plan.observation.targetHead
+    | _ => true
+  }
+  val qualifiedBaseSelectionReached: bool = match state.baseSelection {
+    | QualifiedBaseObserved(_) => true | _ => false
+  }
+  val baseSelectionRefusedReached: bool = match state.baseSelection {
+    | BaseSelectionRefused(_) => true | _ => false
+  }
+  val basePlanPreservedAfterHeadAdvanceReached: bool = match state.baseSelection {
+    | BasePlanRecorded(plan) => plan.plannedBase != state.currentBaseHead
+    | _ => false
   }
 
   action observePrePromotionDependencyBlocker: bool = all {
@@ -557,7 +746,25 @@ module gitReconciliation {
   // changes after a blocker, or outer-Integrator session succession. The
   // complete pure-Quint profile below retains those issue #138 projection
   // actions for their invariants, witnesses, and negative controls.
+  // Executable pre-plan adapter slice: later promotion/session state stutters.
+  action baseSelectionStep: bool = any {
+    recordBaseSelectionIntent,
+    { nondet readCase = BASE_READ_CASES.oneOf() callBaseSelectionRead(readCase) },
+    acceptQualifiedBaseSelection, refuseBaseSelection, advanceBaseTargetHead, recordSelectedBasePlan,
+  }
+
+  action baseRetryStep: bool = any {
+    recordBaseSelectionIntent,
+    { nondet readCase = Set(ExactBaseRead, MissingBaseTarget, UnreadableBaseTarget, DivergentBaseHead, MissingExecutionObject, UnreadableExecutionObject).oneOf() callBaseSelectionRead(readCase) },
+    acceptQualifiedBaseSelection, refuseBaseSelection, advanceBaseTargetHead, recordSelectedBasePlan,
+    requestExplicitBaseRetry, confirmRetryGraph, confirmRetryExactClaim, confirmRetryUnchangedSpecification, automaticBaseRetryWake,
+  }
+
   action gitReconciliationStep: bool = any {
+    requestExplicitBaseRetry, confirmRetryGraph, confirmRetryExactClaim, confirmRetryUnchangedSpecification, automaticBaseRetryWake,
+    recordBaseSelectionIntent,
+    { nondet readCase = BASE_READ_CASES.oneOf() callBaseSelectionRead(readCase) },
+    acceptQualifiedBaseSelection, refuseBaseSelection, advanceBaseTargetHead, recordSelectedBasePlan,
     step,
     observeFreshTargetAfterPrePromotionBlocker,
     clearPrePromotionDependencyBlocker,

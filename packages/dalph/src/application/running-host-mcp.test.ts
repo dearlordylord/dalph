@@ -163,6 +163,7 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       capabilities: { tools: {}, resources: {} }
     })
     expect(replies[1].result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "dalph_retry_task_attempt_base",
       "dalph_read_capacity",
       "dalph_set_capacity",
       "dalph_guide_executor",

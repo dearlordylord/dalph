@@ -127,6 +127,7 @@ const configuration = {
     endpoint: "git@github.com:dearlordylord/dalph.git",
     branch: "refs/heads/master"
   },
+  // Lineage anchor; each new ordinary attempt selects the qualified current integration head.
   plannedAttemptBaseSha: env.DALPH_BASE_SHA,
   plannedAttemptExecutor: "executor:codex/dogfood",
   executorProfiles: [{

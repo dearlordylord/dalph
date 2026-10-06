@@ -1,10 +1,5 @@
 import {
-  remotePublicationGitLayerForProductionTest,
-  remotePublicationTargetForTest
-} from "../../../orchestrator/test/support/direct-publication.js"
-import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
-import { it } from "@effect/vitest"
-import {
+  AttemptBasePolicy,
   IntegratorCallFailure,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
@@ -91,6 +86,12 @@ import {
   type AcceptedRunReactivationObservers,
   AcceptedRunFactPublication
 } from "@dalph/orchestrator"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
+import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
+import { it } from "@effect/vitest"
 import {
   AcceptedResult,
   EvidenceReference,
@@ -242,6 +243,8 @@ it.effect("reports activation failures and stops repeated integration calls afte
           applyRemotePublicationResume: () => Effect.die("unused"),
           applyRunCancellation: () => Effect.die("unused"),
           applyIntegrationQuarantineDirection: () => Effect.die("unused"),
+          retryTaskAttemptBase: () => Effect.die("unused"),
+          readTaskAttemptBaseRetryRequest: () => Effect.die("unused"),
           applyResultRecoveryDirection: () => Effect.die("unused"),
           readResultRecoveryDirection: () => Effect.die("unused"),
           applyAttemptChoice: () => Effect.die("unused"),
@@ -366,6 +369,8 @@ const makeTerminalBootstrap = (
       applyRemotePublicationResume: () => Effect.die("unused"),
       applyRunCancellation: () => Effect.die("unused"),
       applyIntegrationQuarantineDirection: () => Effect.die("unused"),
+      retryTaskAttemptBase: () => Effect.die("unused"),
+      readTaskAttemptBaseRetryRequest: () => Effect.die("unused"),
       applyResultRecoveryDirection: () => Effect.die("unused"),
       readResultRecoveryDirection: () => Effect.die("unused"),
       applyAttemptChoice: () => Effect.die("unused"),
@@ -567,6 +572,8 @@ it.effect("production composition wires current-first tracker notifications and 
           applyRemotePublicationResume: () => Effect.die("unused"),
           applyRunCancellation: () => Effect.die("unused"),
           applyIntegrationQuarantineDirection: () => Effect.die("unused"),
+          retryTaskAttemptBase: () => Effect.die("unused"),
+          readTaskAttemptBaseRetryRequest: () => Effect.die("unused"),
           applyResultRecoveryDirection: () => Effect.die("unused"),
           readResultRecoveryDirection: () => Effect.die("unused"),
           applyAttemptChoice: () => Effect.die("unused"),
@@ -969,7 +976,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           const storageContext = yield* Layer.build(seedJournalLayer)
           const storage = Context.get(storageContext, JournalStore)
           const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: seedCapacity })
-          yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+          yield* storage.beginRun(
+            runId,
+            target,
+            initialPolicy,
+            remotePublicationTargetForTest,
+            // The unrelated historical B plan intentionally predates policy pinning; no new work is admitted in that case.
+            gitMode === "LineageRewrite" && constrainedTaskId === independentTaskId
+              ? undefined
+              : AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha })
+          )
           const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
           if (initial._tag === "InvalidWorkflowJournalHistory") {
             return yield* Effect.die(`production refresh seed is invalid: ${JSON.stringify(initial.issues)}`)
@@ -2462,7 +2478,10 @@ it.effect(
           {
             journalStoreLayer: Layer.succeedContext(journalContext),
             remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
-            remotePublicationTarget: remotePublicationTargetForTest
+            remotePublicationTarget: remotePublicationTargetForTest,
+            attemptBasePolicy: AttemptBasePolicy.cases.ExplicitFixedBase.make({
+              baseSha: GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+            })
           }
         ).pipe(
           Layer.provide(Layer.succeed(TrackerGraphReader, trackerGraphReader)),

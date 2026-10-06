@@ -51,6 +51,7 @@ const testInterpreter = (
   readTargetLineage: WorkflowInterpreterService["readTargetLineage"] = unused
 ) =>
   WorkflowInterpreter.of({
+    readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
     acquireTaskClaim: unused,
     readTaskClaim: unused,
     readTargetLineage,

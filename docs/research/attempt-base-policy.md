@@ -1,12 +1,14 @@
 # Fixed versus current integration-head Base: experiment #439
 
-Dalph currently plans an ordinary task attempt from the configured Base. This note establishes that contract before a disposable Git experiment compares it with fixing the current integration head for each new ordinary attempt. It changes no production policy, runtime, journal schema, or acknowledged attempt.
+This note records the fixed-Base contract at the source revision below. The maintainer accepted qualified current integration-head selection for new ordinary attempts, and explicit operator retry after a settled refusal, on 2026-10-06. The current governing behavior is [qualified current-head attempts](../scenarios/qualified-current-head-attempt.md); the comparison and recommendations below remain historical evidence.
+
+At the inspected revision, Dalph planned an ordinary task attempt from the configured Base. This note establishes that contract before a disposable Git experiment compares it with fixing the current integration head for each new ordinary attempt. It changes no production policy, runtime, journal schema, or acknowledged attempt.
 
 Source revision: `41e85aaf3df180da7b1cd68256166324437529ca`, inspected 2026-10-05. The accepted [experiment #439](https://github.com/dearlordylord/dalph/issues/439) authorizes comparison first; it explicitly withholds approval for a production Base-policy change. The issue's reference to manual prerequisite merges in a historical report motivates the question but is not evidence of incorrect behavior on this revision.
 
 The research boundary is primary local source, scenarios and existing test definitions. Reading a test identifies its verification owner; it does not claim that test passed in this experiment. The source findings are independent of the experimental observations below.
 
-## Existing contract
+## Contract at the inspected revision
 
 | Boundary | What the current implementation or accepted contract establishes | Primary owner |
 | --- | --- | --- |

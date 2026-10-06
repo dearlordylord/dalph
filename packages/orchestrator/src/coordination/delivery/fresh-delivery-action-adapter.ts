@@ -8,6 +8,7 @@ import {
 } from "../../presentation/tracker-workflow-trace.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import {
+  WorkflowOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
@@ -139,6 +140,44 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
         ])
         yield* trace.emit(OperationSelected.make({ operation }))
         yield* interpreter.readTaskWorkSpecification(
+          operation,
+          lease.recordIntent(action.operationId),
+          interruptibleBoundaryOf(lease)
+        )
+        return deliveryActionCompleted(action.proposal.id)
+      }),
+    ReadTaskAttemptBaseRetryFacts: (step) =>
+      Effect.gen(function* () {
+        const operation = step.operation
+        yield* trace.emit(OperationSelected.make({ operation }))
+        if (operation._tag === "ReadTrackerGraph") yield* executeTrackerGraphRead(operation, lease)
+        else if (operation._tag === "ReadTaskClaim")
+          yield* interpreter.readTaskClaim(
+            operation,
+            lease.recordIntent(operation.operationId),
+            interruptibleBoundaryOf(lease)
+          )
+        else
+          yield* interpreter.readTaskWorkSpecification(
+            operation,
+            lease.recordIntent(operation.operationId),
+            interruptibleBoundaryOf(lease)
+          )
+        return deliveryActionCompleted(action.proposal.id)
+      }),
+    ReadTaskAttemptBase: (step) =>
+      Effect.gen(function* () {
+        const operation = WorkflowOperation.cases.ReadTaskAttemptBase.make({
+          claimOperationId: step.claimOperationId,
+          operationId: action.operationId,
+          policy: step.policy,
+          ...(step.retryRequestId === undefined ? {} : { retryRequestId: step.retryRequestId }),
+          predecessorOperationIds: [step.predecessorOperationId],
+          taskId: step.task.id,
+          taskRevision: step.specification.fingerprint
+        })
+        yield* trace.emit(OperationSelected.make({ operation }))
+        yield* interpreter.readTaskAttemptBase(
           operation,
           lease.recordIntent(action.operationId),
           interruptibleBoundaryOf(lease)

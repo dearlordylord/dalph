@@ -151,6 +151,7 @@ it.effect("replays only the exact recorded claim-release intent", () => {
     )
     const released = yield* Ref.make<ReadonlyArray<OperationId>>([])
     const interpreter = WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: unused,
       readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -206,6 +207,7 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
     )
     const interpreter = WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: (operation) =>
         journal
           .append(
@@ -390,6 +392,7 @@ it.effect("keeps recovered executor work stopped when no tracker target can auth
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -539,6 +542,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -624,6 +628,7 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -850,6 +855,7 @@ it.effect(
       const provider = Layer.succeed(
         WorkflowInterpreter,
         WorkflowInterpreter.of({
+          readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
           acquireTaskClaim: unused,
           readTaskClaim: () =>
             Ref.update(claimReads, (count) => count + 1).pipe(
@@ -1592,6 +1598,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -1727,6 +1734,7 @@ it.effect("replays the exact durable claim and worktree intents", () => {
     )
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const interpreter = WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: (operation) =>
         Ref.update(calls, (current) => [...current, `claim:${operation.acquisition.operationId}`]).pipe(
           Effect.as(

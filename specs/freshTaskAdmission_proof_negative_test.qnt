@@ -347,4 +347,27 @@ module freshTaskAdmissionAmbiguityProofNegativeTest {
       .then(handoffForeignReadyEvidence)
       .expect(not(responsibilityRequiresExactReadyWorktreeEvidence))
   }
+
+  run qualifiedSpecification = init.then(selectQualifiedBasePolicy).then(reserve).then(appendIntent)
+    .then(callClaim(ExactClaim)).then(observeClaimAuthority)
+    .then(acceptPostClaimGraph).then(acceptSpecification)
+  action readBaseBeforeIntent: bool = all {
+    state.stage == SpecificationKnown,
+    state' = { ...state, stage: BaseReadCalled(InitialHead), baseCalledWithoutIntent: true },
+  }
+  action acceptPlanWithoutBase: bool = all {
+    state.stage == SpecificationKnown,
+    state' = { ...state, stage: AttemptPlanned(LineageA), lastEvent: PlanAccepted },
+  }
+  action rewritePlanBase: bool = all {
+    state.planBase == ExactBaseEvidence(InitialHead),
+    state' = { ...state, planBase: ExactBaseEvidence(AdvancedHead) },
+  }
+  run baseReadWithoutIntentIsDetectedTest = qualifiedSpecification.then(readBaseBeforeIntent)
+    .expect(not(baseReadRequiresIntent))
+  run qualifiedPlanWithoutObservationIsDetectedTest = qualifiedSpecification.then(acceptPlanWithoutBase)
+    .expect(not(qualifiedPlanRequiresSelection))
+  run changedBaseAfterSelectionIsDetectedTest = qualifiedSpecification.then(appendBaseIntent)
+    .then(callBaseRead).then(acceptBaseObservation).then(acceptPlan).then(advanceTargetHead).then(rewritePlanBase)
+    .expect(not(planUsesRecordedBase))
 }

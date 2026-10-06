@@ -1,3 +1,4 @@
+import { TaskAttemptBaseRetryRequestedEvent } from "../protocols/task-attempt-planning/retry-data.js"
 import {
   ExecutorGuidanceAdmittedEvent,
   ExecutorGuidanceDispatchIntendedEvent,
@@ -9,6 +10,7 @@ import {
   ResultRecoveryContinueAuthorizedEvent
 } from "../protocols/result-recovery/events.js"
 import { Schema } from "effect"
+import { AttemptBasePolicy, TaskAttemptBaseObservation } from "../protocols/task-attempt-planning/base.js"
 import { PlannedTaskAttempt, RemotePublicationTarget } from "@dalph/contracts"
 import { ControlDirectionAppliedEvent } from "../protocols/control-direction-application/events.js"
 import { TaskClaimReacquisitionDirectedEvent } from "../protocols/task-claim-reacquisition/events.js"
@@ -94,6 +96,7 @@ const ResponsibilityJournalEvent = Schema.Union([
  * first record for the Run and is created only by Run establishment.
  */
 export const WorkflowRunBeganEvent = Schema.TaggedStruct("WorkflowRunBegan", {
+  attemptBasePolicy: Schema.optional(AttemptBasePolicy),
   initialControlPolicy: InitialControlPolicy,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
@@ -207,6 +210,20 @@ export const TargetLineageObservedEvent = Schema.TaggedStruct("TargetLineageObse
   version: Schema.Literal(workflowJournalEventVersion)
 })
 
+export const TaskAttemptBaseReadIntendedEvent = Schema.TaggedStruct("TaskAttemptBaseReadIntended", {
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  operation: WorkflowOperationSchema.cases.ReadTaskAttemptBase,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
+export const TaskAttemptBaseObservedEvent = Schema.TaggedStruct("TaskAttemptBaseObserved", {
+  observation: TaskAttemptBaseObservation,
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  operationId: OperationId,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+
 /** Closed semantic event vocabulary accepted by the workflow journal. */
 export const WorkflowJournalEvent = Schema.Union([
   WorkflowRunBeganEvent,
@@ -237,6 +254,9 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
   TaskAttemptPlannedEvent,
+  TaskAttemptBaseReadIntendedEvent,
+  TaskAttemptBaseObservedEvent,
+  TaskAttemptBaseRetryRequestedEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorktreeReadyEvent,
   GitReadIntentRecordedEvent,

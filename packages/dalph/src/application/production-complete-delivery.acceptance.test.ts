@@ -220,7 +220,24 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                       }
                     }
                   })
-                  expect(planned.baseSha).toBe(fixture.configuration.plannedAttemptBaseSha)
+                  const planRecord = records.find(
+                    ({ event }) =>
+                      event._tag === "TaskAttemptPlanned" &&
+                      event.operation.plannedAttempt.attemptId === planned.attemptId
+                  )
+                  if (planRecord?.event._tag !== "TaskAttemptPlanned")
+                    return expect.fail("requires the immutable plan record")
+                  const selectedBase = records.find(
+                    ({ event }) =>
+                      event._tag === "TaskAttemptBaseObserved" &&
+                      planRecord.event._tag === "TaskAttemptPlanned" &&
+                      planRecord.event.operation.predecessorOperationIds.includes(event.operationId)
+                  )
+                  expect(selectedBase).toMatchObject({
+                    event: { observation: { _tag: "Qualified", baseSha: planned.baseSha } }
+                  })
+                  if (selectedBase === undefined) return expect.fail("requires the accepted Base selection")
+                  expect(selectedBase.position).toBeLessThan(planRecord.position)
                   expect(yield* fs.exists(planned.worktree)).toBe(false)
                   expect(
                     (yield* git.runInWorktree(fixture.configuration.repository, [

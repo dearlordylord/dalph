@@ -1427,6 +1427,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         runId
       }
       const interpreter = WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: () => Effect.die("startup authority reread must not reach task claiming"),
         readTaskClaim: () => Effect.die("unexpected task claim read"),
         readTaskWorktree: () => Effect.die("unused worktree observation"),
@@ -3216,6 +3217,9 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     TargetPromotionStale: true,
     TargetPromotionSucceeded: true,
     TaskAttemptPlanned: true,
+    TaskAttemptBaseReadInitiated: true,
+    TaskAttemptBaseRetryRequested: true,
+    TaskAttemptBaseObserved: true,
     TaskClaimAcquired: true,
     TaskClaimAcquisitionInitiated: true,
     TaskClaimReleased: true,
@@ -3234,7 +3238,7 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(68)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(71)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })
 

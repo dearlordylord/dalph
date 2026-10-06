@@ -58,7 +58,11 @@ export const materializeDeliveryAction = Effect.fn("DeliveryRuntime.materializeA
     _tag: "FreshAttemptAction" as const,
     operationId: yield* allocator.allocate(),
     plannedAttempt: yield* planner.plan(
-      PlannedTaskAttemptPlanRequest.Fresh({ specification: proposal.route.step.specification })
+      PlannedTaskAttemptPlanRequest.Fresh({
+        baseSha: proposal.route.step.baseSha,
+        ordinal: proposal.route.step.ordinal,
+        specification: proposal.route.step.specification
+      })
     ),
     proposal
   }

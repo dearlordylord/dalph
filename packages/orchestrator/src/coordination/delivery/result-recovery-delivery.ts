@@ -32,7 +32,6 @@ export const deliverResultRecoveryContinue = Effect.fn("DeliveryAction.resultRec
       detail: "delivery requires the exact authorized attempt plan"
     })
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  yield* lease.bindPlannedAttemptPosition(plannedAttempt)
   return yield* lease.withPlannedAttemptProtocol(correlation, (permit) =>
     executeResultRecoveryContinueWithPermit(permit, requestId, (receipt) =>
       lease.bindPlannedAttemptPosition(plannedAttempt, undefined, receipt)

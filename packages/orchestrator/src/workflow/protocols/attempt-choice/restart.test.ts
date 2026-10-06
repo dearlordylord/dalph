@@ -619,6 +619,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
     const base = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: () =>
           options.claim === "Unreadable"
@@ -1088,6 +1089,7 @@ it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and 
     const base = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: () => Effect.succeed({ _tag: "AuthoritativeTaskClaimObserved", observation: exactClaim }),
         readTaskWorktree: () =>

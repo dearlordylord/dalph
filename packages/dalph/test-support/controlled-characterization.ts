@@ -1,26 +1,6 @@
 import {
-  remoteBaselineGitLayerForTest,
-  remotePublicationGitLayerForTest,
-  remotePublicationTargetForTest
-} from "../../orchestrator/test/support/direct-publication.js"
-/* eslint-disable max-lines -- One scoped driver keeps the chronological DS-01 through DS-11 handoffs auditable. */
-import {
-  AcceptedResult,
-  EvidenceDigest,
-  EvidenceReference,
-  PlannedAttemptExecutor,
-  PlannedAttemptExecutorLifecycleObservation,
-  PlannedAttemptExecutorProjection,
-  PlannedAttemptExecutorReport,
-  passiveLifecycleObservationPurpose,
-  type PlannedTaskAttempt,
-  type RunId,
-  plannedAttemptExecutorCorrelation,
-  plannedAttemptExecutorCorrelationKey,
-  samePlannedAttemptExecutorReport,
-  type PlannedAttemptExecutorRequest
-} from "@dalph/contracts"
-import {
+  AttemptBasePolicy,
+  controlledTaskAttemptBaseLayer,
   AllocatedWorkflowRunId,
   AttemptChoiceRequestId,
   ApplicationExitShell,
@@ -82,6 +62,28 @@ import {
   type RunReactivationOwnerOptions,
   type TraceItem
 } from "@dalph/orchestrator"
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../orchestrator/test/support/direct-publication.js"
+/* eslint-disable max-lines -- One scoped driver keeps the chronological DS-01 through DS-11 handoffs auditable. */
+import {
+  AcceptedResult,
+  EvidenceDigest,
+  EvidenceReference,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport,
+  passiveLifecycleObservationPurpose,
+  type PlannedTaskAttempt,
+  type RunId,
+  plannedAttemptExecutorCorrelation,
+  plannedAttemptExecutorCorrelationKey,
+  samePlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorRequest
+} from "@dalph/contracts"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Scope, Stream } from "effect"
 import type { AcceptedPlannedAttemptExecutorProgress } from "../../orchestrator/src/coordination/frontier/fresh-facts.js"
 import { controlledDeliveryCharacterization as scenario } from "./controlled-characterization-catalog.js"
@@ -836,9 +838,9 @@ const runControlledStartupCharacterizationFor = (
                     })
                   )
                 ),
-              beginRun: (runId, target, policy) =>
+              beginRun: (runId, target, policy, publication, basePolicy) =>
                 baseSharedJournal
-                  .beginRun(runId, target, policy, remotePublicationTargetForTest)
+                  .beginRun(runId, target, policy, publication, basePolicy)
                   .pipe(
                     Effect.tap((record) =>
                       recordOccurrence({
@@ -1232,6 +1234,7 @@ const runControlledStartupCharacterizationFor = (
           })
       })
       const ordinaryInterpreterLayer = workflowInterpreterLayer.pipe(
+        Layer.provide(controlledTaskAttemptBaseLayer),
         Layer.provide(Layer.merge(trackerGraphReaderLayer, trackerMutationLayer)),
         Layer.provide(gitWorktreeLayer),
         Layer.provide(gitTargetLineageLayer)
@@ -1294,7 +1297,10 @@ const runControlledStartupCharacterizationFor = (
         applicationExit,
         noopJournalMaintenanceObservation,
         undefined,
-        remotePublicationTargetForTest
+        remotePublicationTargetForTest,
+        true,
+        undefined,
+        AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha: scenario.baseSha })
       ).pipe(
         Layer.provide(journalLayer),
         Layer.provide(Layer.succeed(CoordinatorOwnership, coordinatorOwnership)),

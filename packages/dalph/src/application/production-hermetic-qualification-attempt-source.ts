@@ -6,6 +6,7 @@ import {
   type RunId
 } from "@dalph/contracts"
 import {
+  type ApplyTaskAttemptBaseRetryRequest,
   decodeFreshWorkflowRunIdForDiagnostics,
   githubTaskIdFor,
   PlannedTaskAttemptOrdinal,
@@ -32,6 +33,9 @@ const qualificationSourceDiagnosticTags = Schema.Literals([
   // Journal occurrences and their nested events.
   "GitReadInitiated",
   "TaskAttemptPlanned",
+  "TaskAttemptBaseRetryRequested",
+  "TaskAttemptBaseReadInitiated",
+  "TaskAttemptBaseObserved",
   "TaskClaimAcquisitionInitiated",
   "TaskClaimAcquired",
   "TaskTrackerReadInitiated",
@@ -95,6 +99,8 @@ const qualificationSourceDiagnosticTags = Schema.Literals([
   "AcquireTaskClaim",
   "ReadPostClaimGraph",
   "ReadTaskWorkSpecification",
+  "ReadTaskAttemptBaseRetryFacts",
+  "ReadTaskAttemptBase",
   "RecordTaskAttemptPlan",
   "ReconcileTaskWorktree",
   "BeginPlannedAttemptExecutorWork",
@@ -194,6 +200,16 @@ const workflowOperationUuidVersion = 7
 const workflowOperationUuid = Schema.String.check(Schema.isUUID(workflowOperationUuidVersion))
 export const strictSource = { onExcessProperty: "error", reportInput: false } as const
 export type QualificationContext = {
+  /** Exact operator authorizations from the owning accepted-history view. */
+  readonly acceptedBaseRetries?: ReadonlyArray<{
+    readonly request: ApplyTaskAttemptBaseRetryRequest
+    readonly claimOperationId: OperationId
+  }>
+  /** Exact selections from the owning accepted-history view, never from a proposed plan. */
+  readonly acceptedBaseSelections?: ReadonlyArray<{
+    readonly taskId: TaskWorkSpecification["taskId"]
+    readonly baseSha: PlannedTaskAttempt["baseSha"]
+  }>
   readonly configuration: ProductionRepositoryHostConfiguration
   readonly runId: RunId
   readonly taskId: ReturnType<typeof githubTaskIdFor>
@@ -254,7 +270,9 @@ export const qualificationPlannedAttemptFor = (
       taskId,
       PlannedTaskAttemptOrdinal.make(0)
     ),
-    baseSha: context.configuration.plannedAttemptBaseSha,
+    baseSha:
+      context.acceptedBaseSelections?.find((selection) => selection.taskId === taskId)?.baseSha ??
+      context.configuration.plannedAttemptBaseSha,
     executor: productionExecutorLocator(context.configuration),
     runId: context.runId,
     taskId,

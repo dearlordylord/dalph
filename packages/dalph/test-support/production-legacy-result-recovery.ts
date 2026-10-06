@@ -121,7 +121,8 @@ export const seedProductionHistoricalFailure = Effect.fn("LegacyResultRecoveryFi
         plannedAttempt.runId,
         beginning.target,
         beginning.initialControlPolicy,
-        beginning.remotePublicationTarget
+        beginning.remotePublicationTarget,
+        beginning.attemptBasePolicy
       )
       for (const record of prefix.slice(1)) {
         if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated")

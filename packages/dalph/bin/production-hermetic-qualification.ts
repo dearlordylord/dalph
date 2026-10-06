@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { NodeServices } from "@effect/platform-node"
-import { type DeliveryRuntimeObservationState, type TraceCursor, nodeGitCommandLayer } from "@dalph/orchestrator"
+import { type DeliveryRuntimeObservationState, TraceCursor, nodeGitCommandLayer } from "@dalph/orchestrator"
 import { Config, Effect, Layer, Option, Schema, Stream } from "effect"
 import { makeProductionCliApplicationFromHost, makeProductionCliHostRunner } from "../src/application/live-cli.js"
 import { runDalphNodeMain } from "../src/application/node-main.js"
@@ -67,7 +67,19 @@ const application = Effect.gen(function* () {
             yield* registerHermeticExpectedRecord(endpoint, scope, selected.registration).pipe(Effect.orDie)
             const runId = observation.selection.runId
             const checkedState = (state: DeliveryRuntimeObservationState) =>
-              validateHermeticQualificationStatus(manifest, configuration, state, runId).pipe(
+              Effect.gen(function* () {
+                const acceptedAt =
+                  state._tag === "Ready"
+                    ? state.evaluation.acceptedAt
+                    : state._tag === "Closed"
+                      ? state.final?.evaluation.acceptedAt
+                      : undefined
+                const snapshot =
+                  acceptedAt == null
+                    ? undefined
+                    : yield* observation.traceReader.readAt(TraceCursor.make({ runId, position: acceptedAt }))
+                return yield* validateHermeticQualificationStatus(manifest, configuration, state, runId, snapshot)
+              }).pipe(
                 Effect.flatMap((checked) => registerHermeticExpectedRecord(endpoint, scope, checked.registration)),
                 Effect.as(state),
                 Effect.orDie

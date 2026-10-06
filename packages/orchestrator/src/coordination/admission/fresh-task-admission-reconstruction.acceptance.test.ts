@@ -145,7 +145,10 @@ const recordsFrom = (rows: ReadonlyArray<EventRow>): ReadonlyArray<JournalRecord
   rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 1), runId }))
 
 const baseRows: ReadonlyArray<EventRow> = [
-  makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
+  makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest, {
+    _tag: "ExplicitFixedBase",
+    baseSha: plannedAttempt.baseSha
+  }),
   { event: taskTrackerReadIntent(graphOperation), key: intentRecordKey(graphOperation.operationId) },
   {
     event: taskTrackerFactsObservedEvent(

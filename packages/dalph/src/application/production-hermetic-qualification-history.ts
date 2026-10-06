@@ -1,3 +1,4 @@
+import { qualificationContextWithBaseSelections } from "./production-hermetic-qualification-base-source.js"
 /* eslint-disable max-lines -- Qualification checks keep the exact historical-source allowlist auditable in one module. */
 
 import {
@@ -57,6 +58,8 @@ import {
 const controlledOccurrenceTag = Schema.Literals([
   "GitReadInitiated",
   "TaskAttemptPlanned",
+  "TaskAttemptBaseReadInitiated",
+  "TaskAttemptBaseObserved",
   "TaskClaimAcquisitionInitiated",
   "TaskClaimAcquired",
   "TaskTrackerReadInitiated",
@@ -680,9 +683,13 @@ export const validateHermeticQualificationHistoricalSource: (
   yield* Effect.forEach(original.relationships.processLocalResourceSerializations, (relationship) =>
     validateTarget(relationship.target, context)
   )
-  const derivedOperationIds = yield* historicalDerivedOperationIds(original, context)
+  const selectedContext = yield* qualificationContextWithBaseSelections(original, context)
+  const derivedOperationIds = [
+    ...selectedContext.derivedOperationIds,
+    ...(yield* historicalDerivedOperationIds(original, selectedContext))
+  ]
   yield* Effect.forEach(original.items, (item) =>
-    validateOccurrence(item.occurrence, original, { ...context, derivedOperationIds }).pipe(
+    validateOccurrence(item.occurrence, original, { ...selectedContext, derivedOperationIds }).pipe(
       Effect.mapError(sourceRejectedAt(occurrenceDiagnosticTag(item.occurrence)))
     )
   )

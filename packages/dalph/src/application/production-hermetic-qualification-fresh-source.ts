@@ -1,4 +1,14 @@
-import { JournalPosition, PlannedAttemptExecutorReportOrdinal, type DeliveryActionProposal } from "@dalph/orchestrator"
+import {
+  AttemptBasePolicy,
+  WorkflowOperation,
+  taskAttemptBaseRetryFactOperationId,
+  JournalPosition,
+  PlannedTaskAttemptOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  taskAttemptBaseReadOperationIdFor,
+  type DeliveryActionProposal
+} from "@dalph/orchestrator"
+import { GitCommitSha } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import {
   sourceRejected,
@@ -8,10 +18,12 @@ import {
   validateClaimOperation,
   validateSpecification,
   validatePlannedAttempt,
+  validateWorkflowOperationId,
+  qualificationPlannedAttemptFor,
   type HermeticQualificationSourceRejected,
   type QualificationContext
 } from "./production-hermetic-qualification-attempt-source.js"
-import { validateTask } from "./production-hermetic-qualification-fixture-source.js"
+import { validateOperation, validateTask } from "./production-hermetic-qualification-fixture-source.js"
 
 const acceptedProgress = Schema.TaggedUnion({
   ExecutorResponsibilityBegan: { acceptedAt: JournalPosition },
@@ -79,15 +91,109 @@ const validateFreshOperationStep = Effect.fn("HermeticQualification.validateFres
         task
       }
     case "RecordTaskAttemptPlan":
-      yield* validateOperationId(step.predecessorOperationId)
+      yield* validateWorkflowOperationId(step.predecessorOperationId, context)
+      if (step.baseSha !== qualificationPlannedAttemptFor(context, task.id).baseSha || step.ordinal !== 0)
+        return yield* sourceRejectedBecause("PlannedAttemptMismatch")()
       yield* validateOperationId(step.claimOperationId)
       return {
         _tag: step._tag,
+        baseSha: yield* Schema.decodeUnknownEffect(GitCommitSha)(step.baseSha).pipe(
+          Effect.mapError(sourceRejectedBecause("InvalidPlannedAttempt"))
+        ),
+        ordinal: yield* Schema.decodeUnknownEffect(PlannedTaskAttemptOrdinal)(step.ordinal).pipe(
+          Effect.mapError(sourceRejectedBecause("InvalidPlannedAttempt"))
+        ),
         predecessorOperationId: step.predecessorOperationId,
         claimOperationId: step.claimOperationId,
         specification: yield* validateSpecification(step.specification, context),
         task
       }
+    case "ReadTaskAttemptBaseRetryFacts": {
+      const operation = yield* Schema.decodeUnknownEffect(
+        WorkflowOperation,
+        strictSource
+      )(step.operation).pipe(Effect.mapError(sourceRejected))
+      if (
+        operation._tag !== "ReadTrackerGraph" &&
+        operation._tag !== "ReadTaskClaim" &&
+        operation._tag !== "ReadTaskWorkSpecification"
+      )
+        return yield* sourceRejected()
+      const family =
+        operation._tag === "ReadTrackerGraph" ? "Graph" : operation._tag === "ReadTaskClaim" ? "Claim" : "Specification"
+      const retry = context.acceptedBaseRetries?.find(
+        ({ claimOperationId, request }) =>
+          request.subject.taskId === task.id &&
+          claimOperationId === step.claimOperationId &&
+          taskAttemptBaseRetryFactOperationId(request.requestId, family) === step.operationId
+      )
+      if (
+        retry === undefined ||
+        operation.operationId !== step.operationId ||
+        operation.predecessorOperationIds.length !== 1 ||
+        operation.predecessorOperationIds[0] !== step.predecessorOperationId
+      )
+        return yield* sourceRejected()
+      const expectedPredecessor =
+        family === "Graph"
+          ? retry.claimOperationId
+          : taskAttemptBaseRetryFactOperationId(retry.request.requestId, family === "Claim" ? "Graph" : "Claim")
+      if (
+        step.predecessorOperationId !== expectedPredecessor ||
+        (operation._tag === "ReadTrackerGraph"
+          ? operation.cause._tag !== "WorkflowEstablishment" ||
+            operation.readShape.explicitlyCoveredTaskIds.length !== 1 ||
+            operation.readShape.explicitlyCoveredTaskIds[0] !== task.id
+          : operation.taskId !== task.id)
+      )
+        return yield* sourceRejected()
+      yield* validateOperationId(step.claimOperationId)
+      yield* validateOperation(operation, context)
+      return {
+        _tag: step._tag,
+        operation,
+        operationId: step.operationId,
+        claimOperationId: step.claimOperationId,
+        predecessorOperationId: step.predecessorOperationId,
+        task
+      }
+    }
+    case "ReadTaskAttemptBase": {
+      if (step.specification.taskId !== task.id) return yield* sourceRejectedBecause("SpecificationMismatch")()
+      yield* validateWorkflowOperationId(step.predecessorOperationId, context)
+      yield* validateOperationId(step.claimOperationId)
+      if (
+        step.retryRequestId !== undefined &&
+        !context.acceptedBaseRetries?.some(
+          ({ claimOperationId, request }) =>
+            request.requestId === step.retryRequestId &&
+            request.subject.taskId === task.id &&
+            claimOperationId === step.claimOperationId
+        )
+      )
+        return yield* sourceRejected()
+      if (step.operationId !== taskAttemptBaseReadOperationIdFor(step.claimOperationId, step.predecessorOperationId))
+        return yield* sourceRejected()
+      const policy = yield* Schema.decodeUnknownEffect(AttemptBasePolicy)(step.policy).pipe(
+        Effect.mapError(sourceRejectedBecause("InvalidPlannedAttempt"))
+      )
+      const expected = AttemptBasePolicy.cases.QualifiedCurrentIntegrationHead.make({
+        executionRepository: context.configuration.repository,
+        integrationTarget: { repository: context.configuration.repository, ref: context.configuration.integrationRef },
+        lineageAnchor: context.configuration.plannedAttemptBaseSha
+      })
+      if (!Schema.toEquivalence(AttemptBasePolicy)(policy, expected)) return yield* sourceRejected()
+      return {
+        _tag: step._tag,
+        policy,
+        ...(step.retryRequestId === undefined ? {} : { retryRequestId: step.retryRequestId }),
+        task,
+        operationId: step.operationId,
+        claimOperationId: step.claimOperationId,
+        predecessorOperationId: step.predecessorOperationId,
+        specification: yield* validateSpecification(step.specification, context)
+      }
+    }
     case "ReconcileTaskWorktree":
       yield* validateOperationId(step.predecessorOperationId)
       yield* validateOperationId(step.claimOperationId)

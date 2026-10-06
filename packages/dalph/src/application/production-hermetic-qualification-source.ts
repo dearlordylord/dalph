@@ -11,6 +11,7 @@ import {
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
 import { validateHermeticQualificationHistoricalSource } from "./production-hermetic-qualification-history.js"
+import { qualificationContextWithBaseSelections } from "./production-hermetic-qualification-base-source.js"
 import {
   applicationExitDispositionRecord,
   currentDeliveryStatusRecord,
@@ -60,12 +61,17 @@ export const validateHermeticQualificationStatus = Effect.fn("HermeticQualificat
   manifest: HermeticFixtureManifest,
   configuration: ProductionRepositoryHostConfiguration,
   state: DeliveryRuntimeObservationState,
-  selectedRunId: RunId
+  selectedRunId: RunId,
+  acceptedHistory?: TraceAtCursor
 ): Effect.fn.Return<
   { readonly status: CurrentDeliveryStatus; readonly registration: ValidatedHermeticRecordToken },
   HermeticQualificationSourceRejected
 > {
-  const context = yield* contextFor(manifest, configuration, selectedRunId)
+  const initialContext = yield* contextFor(manifest, configuration, selectedRunId)
+  const context =
+    acceptedHistory === undefined
+      ? initialContext
+      : yield* qualificationContextWithBaseSelections(acceptedHistory, initialContext)
   const status = yield* validateHermeticQualificationCurrentSource(state, context)
   return { status, registration: yield* validatedRecordToken(currentDeliveryStatusRecord(status)) }
 })

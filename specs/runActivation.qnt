@@ -9,6 +9,20 @@ module runActivation {
   type TaskId = TaskA | TaskB | TaskC
   type AttemptId = AttemptA | AttemptB | AttemptC
 
+  type BaseSha = Base1 | Base2
+  type GitTarget = GitTarget1 | GitTarget2
+  type ExecutionRepository = ExecutionRepository1 | ExecutionRepository2
+  type AttemptBasePolicy =
+    | HistoricalPolicyUnspecified
+    | FixedBase(BaseSha)
+    | QualifiedCurrentIntegrationHead({ anchor: BaseSha, target: GitTarget, repository: ExecutionRepository })
+  pure val QUALIFIED_BASE_POLICY: AttemptBasePolicy = QualifiedCurrentIntegrationHead({
+    anchor: Base1, target: GitTarget1, repository: ExecutionRepository1,
+  })
+  pure val CHANGED_BASE_CONFIGURATION: AttemptBasePolicy = QualifiedCurrentIntegrationHead({
+    anchor: Base2, target: GitTarget2, repository: ExecutionRepository2,
+  })
+
   type PolicyRevision = PolicyRevision0 | PolicyRevision1
   type TaskCapacity = Capacity1 | Capacity2
   type ControlPolicy = { revision: PolicyRevision, taskCapacity: TaskCapacity }
@@ -65,6 +79,7 @@ module runActivation {
     runId: RunId,
     target: TrackerTarget,
     initialPolicy: ControlPolicy,
+    attemptBasePolicy: AttemptBasePolicy,
     latestPolicy: ControlPolicy,
     retainedAttempt: RetainedAttempt,
     otherRetainedAttempt: RetainedAttempt,
@@ -235,7 +250,10 @@ module runActivation {
   // proposal. It makes forbidden duplicate evaluation, append, activation, and
   // boundary calls directly measurable across a modeled process crash.
   type TraceEvidence = {
+    // Activation and crash recovery never create an explicit operator Base-retry direction.
+    baseRetryDirectionIssued: bool,
     initialPolicyEvaluations: int,
+    beginningBasePolicy: AttemptBasePolicy,
     beginningAppends: int,
     // Calls entering the termination boundary, independently of durable commits.
     terminationAppendAttempts: int,
@@ -262,6 +280,7 @@ module runActivation {
     requestedRunId: RunId,
     requestedTarget: TrackerTarget,
     lazyInitialPolicy: ControlPolicy,
+    configuredBasePolicy: AttemptBasePolicy,
     durable: DurableState,
     trackerFinality: TrackerFinalityFacts,
     process: ProcessState,
@@ -307,6 +326,7 @@ module runActivation {
     runId: R1,
     target: Target1,
     initialPolicy: INITIAL_POLICY,
+    attemptBasePolicy: FixedBase(Base1),
     latestPolicy: INITIAL_POLICY,
     retainedAttempt: NoRetainedAttempt,
     otherRetainedAttempt: NoRetainedAttempt,
@@ -316,6 +336,7 @@ module runActivation {
     runId: R1,
     target: Target1,
     initialPolicy: INITIAL_POLICY,
+    attemptBasePolicy: FixedBase(Base1),
     latestPolicy: LATEST_POLICY,
     retainedAttempt: ExactRetainedAttempt(RETAINED_ATTEMPT_A),
     otherRetainedAttempt: NoRetainedAttempt,
@@ -329,6 +350,7 @@ module runActivation {
     runId: R1,
     target: Target1,
     initialPolicy: INITIAL_POLICY,
+    attemptBasePolicy: FixedBase(Base1),
     latestPolicy: CONTRACTED_POLICY,
     retainedAttempt: ExactRetainedAttempt(RETAINED_ATTEMPT_A),
     otherRetainedAttempt: ExactRetainedAttempt(RETAINED_ATTEMPT_B),
@@ -338,6 +360,7 @@ module runActivation {
     runId: R1,
     target: Target2,
     initialPolicy: INITIAL_POLICY,
+    attemptBasePolicy: FixedBase(Base1),
     latestPolicy: LATEST_POLICY,
     retainedAttempt: NoRetainedAttempt,
     otherRetainedAttempt: NoRetainedAttempt,
@@ -347,6 +370,7 @@ module runActivation {
     runId: R2,
     target: Target2,
     initialPolicy: INITIAL_POLICY,
+    attemptBasePolicy: FixedBase(Base1),
     latestPolicy: LATEST_POLICY,
     retainedAttempt: NoRetainedAttempt,
     otherRetainedAttempt: NoRetainedAttempt,
@@ -474,12 +498,36 @@ module runActivation {
     otherPositionsValue(state.process.otherHeldPosition)
       < taskCapacityValue(establishedFacts(state.process.establishedRun).latestPolicy.taskCapacity),
     not(state.process.independentTaskAdmitted),
+    establishedFacts(state.process.establishedRun).attemptBasePolicy != HistoricalPolicyUnspecified,
     not(state.durable.independentTaskSettled),
     not(state.durable.cancellationApplied),
     not(state.trackerFinality.targetSettled),
     taskCapacityValue(establishedFacts(state.process.establishedRun).latestPolicy.taskCapacity) >= 1,
     exactRequestedUnfinished(state.durable.history, state.requestedRunId, state.requestedTarget),
   }
+
+  val beginningPinsAttemptBasePolicy: bool =
+    state.process.establishmentSource != BeginningAppended or
+      establishedFacts(state.process.establishedRun).attemptBasePolicy == state.trace.beginningBasePolicy
+  val reopenedRunUsesRecordedAttemptBasePolicy: bool =
+    state.process.establishmentSource != ExistingHistoryReduced or
+      establishedFacts(state.process.establishedRun).attemptBasePolicy
+        == acceptedHistoryFacts(state.durable.history).attemptBasePolicy
+  val historicalPolicyForbidsOrdinaryAdmission: bool =
+    not(state.process.independentTaskAdmitted) or
+      establishedFacts(state.process.establishedRun).attemptBasePolicy != HistoricalPolicyUnspecified
+  val changedBaseConfigurationIgnoredReached: bool = and {
+    state.configuredBasePolicy == CHANGED_BASE_CONFIGURATION,
+    state.process.establishmentSource == ExistingHistoryReduced,
+    establishedFacts(state.process.establishedRun).attemptBasePolicy != CHANGED_BASE_CONFIGURATION,
+  }
+  val historicalPolicyRetainedAttemptRecoveredReached: bool = and {
+    state.process.phase == ActivatingRun,
+    establishedFacts(state.process.establishedRun).attemptBasePolicy == HistoricalPolicyUnspecified,
+    state.process.heldPosition == ExactTaskPosition(RETAINED_ATTEMPT_A),
+  }
+
+  val ordinaryActivationCannotMintBaseRetry: bool = not(state.trace.baseRetryDirectionIssued)
 
   val oneBeginningPerRun: bool = state.trace.beginningAppends <= 1
 
@@ -782,6 +830,7 @@ module runActivation {
       requestedRunId: R1,
       requestedTarget: Target1,
       lazyInitialPolicy: INITIAL_POLICY,
+      configuredBasePolicy: QUALIFIED_BASE_POLICY,
       durable: {
         history: EmptyHistory,
         independentTaskSettled: false,
@@ -818,7 +867,9 @@ module runActivation {
         entryFailure: NoEntryFailure,
       },
       trace: {
+        baseRetryDirectionIssued: false,
         initialPolicyEvaluations: 0,
+        beginningBasePolicy: HistoricalPolicyUnspecified,
         beginningAppends: 0,
         terminationAppendAttempts: 0,
         terminationAppends: 0,
@@ -833,6 +884,27 @@ module runActivation {
         historyAtProcessLoss: EmptyHistory,
       },
     },
+  }
+
+  action selectHistoricalPolicyHistory: bool = all {
+    fixtureMayChange,
+    state' = {
+      ...state,
+      durable: { ...state.durable, history: OneUnfinishedHistory({
+        ...EXISTING_FACTS, attemptBasePolicy: HistoricalPolicyUnspecified,
+      }) },
+      trackerFinality: { ...state.trackerFinality, responsibilitiesSettled: false },
+    },
+  }
+  action changeBaseConfiguration: bool = all {
+    state.configuredBasePolicy != CHANGED_BASE_CONFIGURATION,
+    state' = { ...state, configuredBasePolicy: CHANGED_BASE_CONFIGURATION },
+  }
+  action selectFixedBaseConstruction: bool = all {
+    state.process.phase == EntryIdle,
+    state.durable.history == EmptyHistory,
+    state.configuredBasePolicy == QUALIFIED_BASE_POLICY,
+    state' = { ...state, configuredBasePolicy: FixedBase(Base1) },
   }
 
   action selectExactExistingHistory: bool = all {
@@ -1006,6 +1078,7 @@ module runActivation {
           runId: state.requestedRunId,
           target: state.requestedTarget,
           initialPolicy: state.lazyInitialPolicy,
+          attemptBasePolicy: state.configuredBasePolicy,
           latestPolicy: state.lazyInitialPolicy,
           retainedAttempt: NoRetainedAttempt,
           otherRetainedAttempt: NoRetainedAttempt,
@@ -1018,6 +1091,7 @@ module runActivation {
           runId: state.requestedRunId,
           target: state.requestedTarget,
           initialPolicy: state.lazyInitialPolicy,
+          attemptBasePolicy: state.configuredBasePolicy,
           latestPolicy: state.lazyInitialPolicy,
           retainedAttempt: NoRetainedAttempt,
           otherRetainedAttempt: NoRetainedAttempt,
@@ -1029,6 +1103,7 @@ module runActivation {
       trace: {
         ...state.trace,
         initialPolicyEvaluations: state.trace.initialPolicyEvaluations + 1,
+        beginningBasePolicy: state.configuredBasePolicy,
         beginningAppends: state.trace.beginningAppends + 1,
       },
     },
@@ -1423,6 +1498,7 @@ module runActivation {
   }
 
   action step: bool = any {
+    selectHistoricalPolicyHistory, changeBaseConfiguration, selectFixedBaseConstruction,
     selectExactExistingHistory,
     selectContractedExactExistingHistory,
     selectMismatchedExistingHistory,

@@ -1,42 +1,5 @@
-/* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
 import {
-  Cause,
-  Chunk,
-  Context,
-  type Crypto,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Match,
-  MutableList,
-  Option,
-  Queue,
-  Ref,
-  Scope,
-  type Result,
-  Schema,
-  Semaphore,
-  Stream,
-  SubscriptionRef
-} from "effect"
-import {
-  AcceptedResultEvidenceManifest,
-  type AttemptId,
-  GitCommitSha,
-  type IntegrationTarget,
-  PlannedAttemptExecutorReport,
-  type PlannedTaskAttempt,
-  RemotePublicationBranchRef,
-  RemotePublicationEndpoint,
-  RemotePublicationTarget,
-  type RunId,
-  type TaskId,
-  type TaskRevision
-} from "@dalph/contracts"
-import {
+  controlledTaskAttemptBaseLayer,
   ApplicationExitShell,
   type AcceptedJournalReader,
   ApplyIntegrationQuarantineDirectionRequest,
@@ -140,6 +103,44 @@ import {
   RemoteBaselineGit,
   TestGitTargetLineage
 } from "@dalph/orchestrator"
+/* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
+import {
+  Cause,
+  Chunk,
+  Context,
+  type Crypto,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Match,
+  MutableList,
+  Option,
+  Queue,
+  Ref,
+  Scope,
+  type Result,
+  Schema,
+  Semaphore,
+  Stream,
+  SubscriptionRef
+} from "effect"
+import {
+  AcceptedResultEvidenceManifest,
+  type AttemptId,
+  GitCommitSha,
+  type IntegrationTarget,
+  PlannedAttemptExecutorReport,
+  type PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
+  type RunId,
+  type TaskId,
+  type TaskRevision
+} from "@dalph/contracts"
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
   AuthoredDeliveryProposalId,
@@ -999,6 +1000,8 @@ const proposalActionLabels = {
   ReadRejectedTaskClaim: "Check whether a previously rejected task claim is still foreign",
   ReadTargetLineage: "Read current target lineage from Git",
   ReadTaskClaim: "Read the current task claim from the tracker",
+  ReadTaskAttemptBaseRetryFacts: "Recheck tracker facts after an explicit Base retry request",
+  ReadTaskAttemptBase: "Read the qualified Base commit from Git before planning",
   ReadTaskWorkSpecification: "Read the task's work instructions from the tracker",
   ReadTaskWorktree: "Check the exact Git worktree after restart",
   ReadTrackerGraph: "Read the current tracker graph after restart",
@@ -2349,6 +2352,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
       const trackerLayer = controlledTrackerGraphReaderLayer(cursor)
       const ordinaryInterpreterLayer = workflowInterpreterLayer.pipe(
+        Layer.provide(controlledTaskAttemptBaseLayer),
         Layer.provide(Layer.merge(trackerLayer, trackerMutationLayer)),
         Layer.provide(gitWorktreeLayer),
         Layer.provide(Layer.succeed(GitTargetLineage, authoredGitTargetLineage))
@@ -2592,7 +2596,10 @@ const runAuthoredScenarioCassetteWith = (request: {
           applicationExit,
           noopJournalMaintenanceObservation,
           operatorControlGraphReadBoundary,
-          authoredCassetteRemotePublicationTarget
+          authoredCassetteRemotePublicationTarget,
+          true,
+          undefined,
+          { _tag: "ExplicitFixedBase", baseSha: command.baseSha }
         ).pipe(
           Layer.provide(journalLayer),
           Layer.provide(coordinatorOwnershipLayer),

@@ -53,6 +53,17 @@ result.
    P. Changed or conflicting authority enters its accepted wait or
    reconciliation behavior.
 
+Admission reserves P's process-local task-work position before entering the
+protocol. That reservation transfers to accepted execution authority only
+after the exact Resume intent is durable, using its accepted command receipt,
+and before contacting the executor. Authorization alone cannot transfer it.
+A stale authorization or a terminal choice winning before the intent contacts
+no executor and creates no accepted execution-position binding. A crash after
+intent reconciles that exact command through the existing executor protocol.
+Acceptance tests: `binds ordinary Resume only with its durable command receipt`
+and `cancels continuation authorization when a terminal choice wins before its append`
+in `delivery-proposal-routes.test.ts`.
+
 If Dalph crashes after step 2, restart reconstructs the applied direction and
 continues with whichever fresh reads remain missing. It does not require a new
 P or infer that a lost response means the direction was not applied. Exact

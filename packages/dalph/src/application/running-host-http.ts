@@ -1,6 +1,7 @@
+import { TraceCursor } from "@dalph/orchestrator"
+import { readRecordedBaseRetryReceipt } from "./running-host-base-retry-receipt.js"
 import { readRunningHostCapacity } from "./running-host-capacity.js"
 import { integrationActivationReadFailure } from "./running-host-activation-failure.js"
-import { TraceCursor } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { NodeCrypto } from "@effect/platform-node"
@@ -190,6 +191,7 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       request.operation._tag === "Unpause" ||
       request.operation._tag === "Refresh" ||
       request.operation._tag === "ApplyResultRecoveryDirection" ||
+      request.operation._tag === "RetryTaskAttemptBase" ||
       request.operation._tag === "SendExecutorGuidance"
     ) {
       const commandOperation = request.operation._tag
@@ -204,8 +206,11 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
           })
         )
       )
-      if (control.termination !== null)
+      if (control.termination !== null) {
+        const receipt = yield* readRecordedBaseRetryReceipt(observation.taskAttemptBaseRetryControl, request)
+        if (Option.isSome(receipt)) return runningHostSuccessEnvelope(request, receipt.value)
         return yield* Effect.fail<RunningHostError>({ _tag: "RunClosed", runId: request.runId, ...control.termination })
+      }
       if (Option.isSome(yield* observation.activationFailure))
         return yield* Effect.fail<RunningHostError>({
           _tag: "CommandFailed",

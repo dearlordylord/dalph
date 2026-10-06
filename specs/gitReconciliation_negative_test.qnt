@@ -188,4 +188,47 @@ module gitReconciliationNegativeTest {
       .then(restorePromotionAuthorizationAfterAmbiguousRead)
       .expect(not(ambiguousTargetNeverPromotes))
   }
+
+  action readSelectionWithoutIntent: bool = all {
+    state.baseSelection == NoBaseSelection,
+    state' = { ...state, baseSelection: BaseSelectionReadCalled(baseEvidenceFor(ExactBaseRead, Head1)),
+      baseReadCalledWithoutIntent: true },
+  }
+  action acceptUnqualifiedSelection(readCase: BaseReadCase): bool = all {
+    state.baseSelection == BaseSelectionReadCalled(baseEvidenceFor(readCase, Head1)),
+    state' = { ...state, baseSelection: QualifiedBaseObserved(baseEvidenceFor(readCase, Head1)) },
+  }
+  action replaceSelectedHeadAtPlanning: bool = all {
+    state.baseSelection == QualifiedBaseObserved(baseEvidenceFor(ExactBaseRead, Head1)),
+    state' = { ...state, baseSelection: BasePlanRecorded({
+      observation: baseEvidenceFor(ExactBaseRead, Head1), plannedBase: Head2,
+    }) },
+  }
+  run missingBaseIntentTurnsInvariantRedTest = init.then(readSelectionWithoutIntent)
+    .expect(not(baseSelectionReadsRequireIntent))
+  run eachUnqualifiedAuthorityTurnsInvariantRedTest = {
+    nondet readCase = BASE_READ_CASES.exclude(Set(ExactBaseRead)).oneOf()
+    init.then(recordBaseSelectionIntent).then(callBaseSelectionRead(readCase)).then(acceptUnqualifiedSelection(readCase))
+      .expect(not(qualifiedBaseRequiresExactAuthority))
+  }
+  run rewrittenSelectedHeadTurnsInvariantRedTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(ExactBaseRead)).then(acceptQualifiedBaseSelection).then(advanceBaseTargetHead)
+    .then(replaceSelectedHeadAtPlanning).expect(not(basePlanUsesObservedHead))
+  run retryingQualifiedSelectionBreaksImmutabilityTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(ExactBaseRead)).then(acceptQualifiedBaseSelection)
+    .then(unsafeRetryQualifiedBase).expect(not(qualifiedSelectionIsNeverRetried))
+  run retryBeforeTrackerConfirmationBreaksAuthorityTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(MissingExecutionObject)).then(refuseBaseSelection)
+    .then(requestExplicitBaseRetry).then(unsafeRetryWithoutTrackerFacts)
+    .expect(not(retryReadHasExplicitTrackerAuthority))
+  action callSuccessorWithoutNewIntent: bool = all {
+    state.baseSelection == BaseRetrySpecificationConfirmed,
+    state' = { ...state, baseSelection: BaseSelectionReadCalled(baseEvidenceFor(ExactBaseRead, Head1)),
+      baseReadCalledWithoutIntent: not(state.baseIntentAccepted) },
+  }
+  run successorReadWithoutOwnIntentIsDetectedTest = init.then(recordBaseSelectionIntent)
+    .then(callBaseSelectionRead(MissingExecutionObject)).then(refuseBaseSelection)
+    .then(requestExplicitBaseRetry).then(confirmRetryGraph).then(confirmRetryExactClaim)
+    .then(confirmRetryUnchangedSpecification).then(callSuccessorWithoutNewIntent)
+    .expect(not(baseSelectionReadsRequireIntent))
 }

@@ -438,6 +438,7 @@ it.effect(
       Effect.provideService(
         WorkflowInterpreter,
         WorkflowInterpreter.of({
+          readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
           acquireTaskClaim: unused,
           readTaskClaim: unused,
           readTaskWorktree: unused,
@@ -671,6 +672,7 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
     const unavailablePlanner = yield* runTaskClaimReacquisition({
       execution: { recordIntent: () => Effect.die("an unavailable planner must not bind intent") },
       interpreter: WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: unused,
         readTaskWorktree: unused,
@@ -698,6 +700,7 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
     }
     const boundIntentIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
     const reacquisitionInterpreter = WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: (operation, onIntentRecorded = Effect.void) =>
         Effect.gen(function* () {
           yield* journal.append(
@@ -925,6 +928,7 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: unused,
         readTaskWorktree: () => Effect.die("unused worktree observation"),

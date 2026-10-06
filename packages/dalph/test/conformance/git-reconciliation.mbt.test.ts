@@ -1,3 +1,41 @@
+import { Journal as RunJournal } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { Task, TrackerRevision } from "../../../orchestrator/src/authorities/task-tracker/task.js"
+import { baseRetryWorkflowStep } from "../../../orchestrator/src/coordination/run/base-retry-workflow.js"
+import { applyTaskAttemptBaseRetry } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/retry.js"
+import { TaskAttemptBaseRetryRequestId } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/retry-data.js"
+import {
+  taskTrackerReadIntent,
+  TaskAttemptBaseReadIntendedEvent,
+  TaskAttemptBaseObservedEvent,
+  TaskAttemptPlannedEvent
+} from "../../../orchestrator/src/workflow/registry/event.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import { GitCommand, GitCommandInvocationFailure } from "../../../orchestrator/src/authorities/git/command.js"
+import {
+  GitTaskAttemptBase,
+  nodeGitTaskAttemptBaseLayer
+} from "../../../orchestrator/src/authorities/git/task-attempt-base.js"
+import type {
+  AttemptBasePolicy,
+  TaskAttemptBaseObservation
+} from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/base.js"
+import { taskAttemptBaseReadOperationIdFor } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/base-read-identity.js"
+import {
+  freshAttemptBaseReadLineageWasAccepted,
+  freshAttemptPlanPredecessorLineageWasAccepted
+} from "../../../orchestrator/src/coordination/admission/fresh-attempt-lineage.js"
+import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
+import {
+  intentRecordKey,
+  outcomeRecordKey,
+  attemptPlanRecordKey
+} from "../../../orchestrator/src/workflow-journal/record-key.js"
+import { journalRecordByKey } from "../../../orchestrator/src/workflow-journal/record-evidence.js"
 import { expect, it } from "@effect/vitest"
 import { defineDriver, quintRun, stateCheck } from "@firfi/quint-connect/effect"
 import {
@@ -51,7 +89,11 @@ import {
   acquireStartedIntegrationTarget,
   releaseStartedIntegrationTarget
 } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
-import { makeTrackerGraphObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
+import {
+  WorkflowOperation,
+  makeTaskAttemptPlanOperation,
+  makeTrackerGraphObservationOperation
+} from "../../../orchestrator/src/workflow/registry/operation.js"
 import { latestReconstructedTaskGraph } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
 import { reconstructRunState } from "../../../orchestrator/src/coordination/reconstruction/reduce.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
@@ -905,4 +947,506 @@ it.effect(
       )
     }),
   { timeout: 30_000 }
+)
+
+/** Selection replay has no attempt/worktree until an exact qualified observation is accepted. */
+const makeBaseSelectionTrace = Effect.gen(function* () {
+  const specification = makeTaskWorkSpecification({
+    taskId: plannedAttempt.taskId,
+    title: "Base selection",
+    body: "Base selection"
+  })
+  const attempt = PlannedTaskAttempt.make({ ...plannedAttempt, taskRevision: specification.fingerprint })
+  const target = FixtureTarget.make("base-selection-model")
+  const policy: AttemptBasePolicy = {
+    _tag: "QualifiedCurrentIntegrationHead",
+    lineageAnchor: base,
+    integrationTarget: {
+      repository: GitRepositoryLocator.make("/base-model-target.git"),
+      ref: IntegrationTargetRef.make("refs/heads/master")
+    },
+    executionRepository: GitRepositoryLocator.make("/base-model-execution")
+  }
+  const fixture = makeAcceptedIntegrationHistory({
+    plannedAttempt: attempt,
+    runId: attempt.runId,
+    taskSpecification: specification,
+    trackerTarget: target,
+    integrationTarget: policy.integrationTarget,
+    targetHeadSha: base,
+    acceptedResult: AcceptedResult.make({
+      commit: candidate,
+      evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("9".repeat(64)) })
+    }),
+    activeClaim: ActiveTaskClaim.make({
+      operationId: OperationId.make("base-model-claim"),
+      owner: ClaimOwner.make("base-model"),
+      token: ClaimToken.make("base-model-token"),
+      taskId: attempt.taskId
+    })
+  })
+  const records = fixture.records
+    .slice(
+      0,
+      fixture.records.findIndex(({ event }) => event._tag === "TaskAttemptPlanned")
+    )
+    .map((record) =>
+      record.event._tag === "WorkflowRunBegan"
+        ? { ...record, event: { ...record.event, attemptBasePolicy: policy } }
+        : record
+    )
+  const context = yield* Layer.build(liveJournalTestLayer({ records, runId: attempt.runId, target }))
+  const journal = Context.get(context, InRunJournal)
+  const accepted = Context.get(context, AcceptedJournalReader)
+  let operation: typeof WorkflowOperation.cases.ReadTaskAttemptBase.Type =
+    WorkflowOperation.cases.ReadTaskAttemptBase.make({
+      operationId: taskAttemptBaseReadOperationIdFor(
+        fixture.activeClaim.operationId,
+        fixture.specificationOperation.operationId
+      ),
+      claimOperationId: fixture.activeClaim.operationId,
+      taskId: attempt.taskId,
+      taskRevision: attempt.taskRevision,
+      predecessorOperationIds: [fixture.specificationOperation.operationId],
+      policy
+    })
+  let stage = "NoBaseSelection"
+  let head = base
+  let observedHead: GitCommitSha | undefined
+  let result: TaskAttemptBaseObservation | undefined
+  let refusal = "None"
+  let intentAccepted = false
+  const commandCalls: Array<{ repository: string; args: ReadonlyArray<string> }> = []
+  const modelTask = Task.make({
+    id: attempt.taskId,
+    lifecycle: { _tag: "Open" },
+    parentTaskId: null,
+    prerequisiteIds: []
+  })
+  const projected = projectTrackerSnapshot({ revision: TrackerRevision.make("retry-model"), tasks: [modelTask] })
+  const retryGraph = Option.getOrThrow(projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none())
+  const confirmRetryFact = (expected: string, nextStage: string) =>
+    Effect.gen(function* () {
+      const before = yield* accepted.readAccepted(attempt.runId)
+      const next = baseRetryWorkflowStep(before, modelTask)?.step
+      if (next?._tag !== "ReadTaskAttemptBaseRetryFacts" || next.operation._tag !== expected)
+        return yield* Effect.die("retry lacks its exact next tracker operation")
+      const read = next.operation
+      yield* journal.append(attempt.runId, intentRecordKey(read.operationId), taskTrackerReadIntent(read))
+      const facts =
+        read._tag === "ReadTrackerGraph"
+          ? makeCompleteTaskTrackerFactsObserved(read, retryGraph)
+          : read._tag === "ReadTaskClaim"
+            ? makeFocusedTaskClaimFactsObserved(read, fixture.activeClaim)
+            : makeFocusedTaskWorkSpecificationFactsObserved(read, specification)
+      yield* journal.append(
+        attempt.runId,
+        outcomeRecordKey(read.operationId),
+        taskTrackerFactsObservedEvent(read.operationId, facts)
+      )
+      stage = nextStage
+      if (read._tag === "ReadTaskWorkSpecification") {
+        const nextRead = baseRetryWorkflowStep(yield* accepted.readAccepted(attempt.runId), modelTask)?.step
+        if (nextRead?._tag !== "ReadTaskAttemptBase")
+          return yield* Effect.die("retry tracker facts did not authorize successor")
+        operation = WorkflowOperation.cases.ReadTaskAttemptBase.make({
+          operationId: nextRead.operationId,
+          claimOperationId: nextRead.claimOperationId,
+          policy: nextRead.policy,
+          predecessorOperationIds: [nextRead.predecessorOperationId],
+          taskId: attempt.taskId,
+          taskRevision: specification.fingerprint,
+          ...(nextRead.retryRequestId === undefined ? {} : { retryRequestId: nextRead.retryRequestId })
+        })
+        result = undefined
+        observedHead = undefined
+      }
+    }).pipe(Effect.orDie)
+  return {
+    requestExplicitBaseRetry: () =>
+      applyTaskAttemptBaseRetry(Context.get(context, RunJournal), attempt.runId, {
+        requestId: TaskAttemptBaseRetryRequestId.make(`retry:${operation.operationId}`),
+        subject: { runId: attempt.runId, taskId: attempt.taskId, refusedReadOperationId: operation.operationId }
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            stage = "BaseRetryRequested"
+            intentAccepted = false
+          })
+        ),
+        Effect.asVoid,
+        Effect.orDie
+      ),
+    confirmRetryGraph: () => confirmRetryFact("ReadTrackerGraph", "BaseRetryGraphConfirmed"),
+    confirmRetryExactClaim: () => confirmRetryFact("ReadTaskClaim", "BaseRetryClaimConfirmed"),
+    confirmRetryUnchangedSpecification: () =>
+      confirmRetryFact("ReadTaskWorkSpecification", "BaseRetrySpecificationConfirmed"),
+    automaticBaseRetryWake: () => Effect.void,
+    recordBaseSelectionIntent: () =>
+      journal
+        .append(
+          attempt.runId,
+          intentRecordKey(operation.operationId),
+          TaskAttemptBaseReadIntendedEvent.make({
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            operation,
+            version: workflowJournalEventVersion
+          })
+        )
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              stage = "BaseSelectionIntentRecorded"
+              intentAccepted = true
+            })
+          ),
+          Effect.asVoid,
+          Effect.orDie
+        ),
+    callBaseSelectionRead: (readCase: string) =>
+      Effect.gen(function* () {
+        const evidence = yield* accepted.readAccepted(attempt.runId)
+        expect(intentAccepted).toBe(true)
+        const changedPolicy =
+          readCase === "ForeignBaseTarget"
+            ? {
+                ...policy,
+                integrationTarget: {
+                  ...policy.integrationTarget,
+                  repository: GitRepositoryLocator.make("/foreign-target")
+                }
+              }
+            : readCase === "WrongBaseAnchor"
+              ? { ...policy, lineageAnchor: rewritten }
+              : readCase === "ForeignExecutionRepository"
+                ? { ...policy, executionRepository: GitRepositoryLocator.make("/foreign-execution") }
+                : policy
+        if (!freshAttemptBaseReadLineageWasAccepted(evidence, { ...operation, policy: changedPolicy })) {
+          // Rejected proposal policy never reaches Git. The model's logical refusal abstracts this earlier guard.
+          refusal =
+            readCase === "ForeignBaseTarget"
+              ? "ForeignTargetRefusal"
+              : readCase === "WrongBaseAnchor"
+                ? "WrongAnchorRefusal"
+                : "ForeignExecutionRepositoryRefusal"
+          expect(commandCalls).toHaveLength(0)
+        } else {
+          const selectedHead = head
+          const run = (repository: string, args: ReadonlyArray<string>) =>
+            Effect.gen(function* () {
+              commandCalls.push({ repository, args })
+              if (args[0] === "rev-parse") {
+                expect(repository).toBe(policy.integrationTarget.repository)
+                expect(args).toEqual(["rev-parse", "--verify", "--quiet", `${policy.integrationTarget.ref}^{commit}`])
+                if (readCase === "UnreadableBaseTarget")
+                  return yield* new GitCommandInvocationFailure({ detail: "unreadable target" })
+                return { stdout: selectedHead, stderr: "", exitCode: readCase === "MissingBaseTarget" ? 1 : 0 }
+              }
+              if (args[0] === "merge-base") {
+                expect(repository).toBe(policy.integrationTarget.repository)
+                expect(args).toEqual(["merge-base", "--is-ancestor", base, selectedHead])
+                return { stdout: "", stderr: "", exitCode: readCase === "DivergentBaseHead" ? 1 : 0 }
+              }
+              expect(repository).toBe(policy.executionRepository)
+              expect(args).toEqual(["cat-file", "-e", `${selectedHead}^{commit}`])
+              if (readCase === "UnreadableExecutionObject")
+                return yield* new GitCommandInvocationFailure({ detail: "unreadable object" })
+              return { stdout: "", stderr: "", exitCode: readCase === "MissingExecutionObject" ? 1 : 0 }
+            })
+          result = yield* GitTaskAttemptBase.pipe(
+            Effect.flatMap((reader) => reader.read(policy)),
+            Effect.provide(nodeGitTaskAttemptBaseLayer),
+            Effect.provide(
+              Layer.succeed(
+                GitCommand,
+                GitCommand.of({
+                  runBoundedInRepository: run,
+                  runBoundedInWorktree: run,
+                  run: () => Effect.die("unbounded Base read"),
+                  runInWorktree: () => Effect.die("unbounded Base read"),
+                  runBytesInWorktree: () => Effect.die("no bytes")
+                })
+              )
+            )
+          )
+          expect(result._tag).toBe(readCase === "ExactBaseRead" ? "Qualified" : "Refused")
+          if (result._tag === "Refused")
+            expect(result.boundary).toBe(
+              readCase === "MissingBaseTarget" || readCase === "UnreadableBaseTarget"
+                ? "TargetHead"
+                : readCase === "DivergentBaseHead"
+                  ? "AnchorAncestry"
+                  : "ExecutionCommit"
+            )
+          observedHead = result._tag === "Qualified" ? result.baseSha : undefined
+          refusal =
+            readCase === "MissingBaseTarget"
+              ? "MissingTargetRefusal"
+              : readCase === "UnreadableBaseTarget"
+                ? "UnreadableTargetRefusal"
+                : readCase === "DivergentBaseHead"
+                  ? "DivergentHeadRefusal"
+                  : readCase === "MissingExecutionObject"
+                    ? "MissingObjectRefusal"
+                    : "UnreadableObjectRefusal"
+        }
+        stage = "BaseSelectionReadCalled"
+      }).pipe(Effect.orDie),
+    acceptQualifiedBaseSelection: () =>
+      Effect.gen(function* () {
+        if (result?._tag !== "Qualified") return yield* Effect.die("qualification requires actual Git evidence")
+        yield* journal.append(
+          attempt.runId,
+          outcomeRecordKey(operation.operationId),
+          TaskAttemptBaseObservedEvent.make({
+            observation: result,
+            occurrenceClassification: "NonActionOccurrence",
+            operationId: operation.operationId,
+            version: workflowJournalEventVersion
+          })
+        )
+        stage = "QualifiedBaseObserved"
+      }).pipe(Effect.orDie),
+    refuseBaseSelection: () =>
+      Effect.gen(function* () {
+        if (result?._tag === "Qualified") return yield* Effect.die("qualified evidence cannot be refused")
+        if (result !== undefined)
+          yield* journal.append(
+            attempt.runId,
+            outcomeRecordKey(operation.operationId),
+            TaskAttemptBaseObservedEvent.make({
+              observation: result,
+              occurrenceClassification: "NonActionOccurrence",
+              operationId: operation.operationId,
+              version: workflowJournalEventVersion
+            })
+          )
+        stage = "BaseSelectionRefused"
+      }).pipe(Effect.orDie),
+    advanceBaseTargetHead: () =>
+      Effect.sync(() => {
+        head = advanced
+      }),
+    recordSelectedBasePlan: () =>
+      Effect.gen(function* () {
+        const evidence = yield* accepted.readAccepted(attempt.runId)
+        const observation = journalRecordByKey(evidence, outcomeRecordKey(operation.operationId))?.event
+        if (observation?._tag !== "TaskAttemptBaseObserved" || observation.observation._tag !== "Qualified")
+          return yield* Effect.die("no selected Base")
+        const plan = makeTaskAttemptPlanOperation({
+          operationId: OperationId.make("base-selection-plan"),
+          predecessorOperationIds: [operation.operationId],
+          plannedAttempt: { ...attempt, baseSha: observation.observation.baseSha }
+        })
+        expect(freshAttemptPlanPredecessorLineageWasAccepted(evidence, plan)).toBe(true)
+        yield* journal.append(
+          attempt.runId,
+          attemptPlanRecordKey(attempt.attemptId),
+          TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+        )
+        expect(plan.plannedAttempt.baseSha).toBe(observedHead)
+        stage = "BasePlanRecorded"
+      }).pipe(Effect.orDie),
+    getState: () =>
+      Effect.succeed({
+        stage,
+        head: head === base ? "Head1" : "Head2",
+        intentAccepted,
+        selectedHead: observedHead === undefined ? "None" : observedHead === base ? "Head1" : "Head2",
+        refusal: stage === "BaseSelectionRefused" ? refusal : "None"
+      })
+  }
+})
+
+const baseSelectionDriver = {
+  create: () =>
+    Effect.gen(function* () {
+      const runtime = yield* ScopedRef.fromAcquire(
+        Effect.succeed(Option.none<Effect.Success<typeof makeBaseSelectionTrace>>())
+      )
+      const current = () => Option.getOrThrow(ScopedRef.getUnsafe(runtime))
+      return yield* defineDriver(
+        {
+          init: {},
+          requestExplicitBaseRetry: {},
+          confirmRetryGraph: {},
+          confirmRetryExactClaim: {},
+          confirmRetryUnchangedSpecification: {},
+          automaticBaseRetryWake: {},
+          recordBaseSelectionIntent: {},
+          callBaseSelectionRead: { readCase: Schema.Unknown },
+          acceptQualifiedBaseSelection: {},
+          refuseBaseSelection: {},
+          advanceBaseTargetHead: {},
+          recordSelectedBasePlan: {}
+        },
+        () => ({
+          init: () => ScopedRef.set(runtime, makeBaseSelectionTrace.pipe(Effect.map(Option.some))),
+          requestExplicitBaseRetry: () => current().requestExplicitBaseRetry(),
+          confirmRetryGraph: () => current().confirmRetryGraph(),
+          confirmRetryExactClaim: () => current().confirmRetryExactClaim(),
+          confirmRetryUnchangedSpecification: () => current().confirmRetryUnchangedSpecification(),
+          automaticBaseRetryWake: () => current().automaticBaseRetryWake(),
+          recordBaseSelectionIntent: () => current().recordBaseSelectionIntent(),
+          callBaseSelectionRead: ({ readCase }) => current().callBaseSelectionRead(variantTag(readCase)),
+          acceptQualifiedBaseSelection: () => current().acceptQualifiedBaseSelection(),
+          refuseBaseSelection: () => current().refuseBaseSelection(),
+          advanceBaseTargetHead: () => current().advanceBaseTargetHead(),
+          recordSelectedBasePlan: () => current().recordSelectedBasePlan(),
+          getState: () => current().getState()
+        })
+      ).create()
+    })
+}
+const BaseSelectionProjection = Schema.Struct({
+  state: Schema.Struct({
+    baseSelection: Schema.Struct({ tag: Schema.String, value: Schema.Unknown }),
+    currentBaseHead: Schema.Struct({ tag: Schema.String }),
+    baseIntentAccepted: Schema.Boolean
+  })
+})
+it.effect(
+  "replays explicit Base retry and fresh tracker authority through exact Git and journal boundaries",
+  () =>
+    quintRun({
+      backend: "typescript",
+      driverFactory: baseSelectionDriver,
+      spec: "specs/gitReconciliation.qnt",
+      step: "baseRetryStep",
+      maxSteps: 12,
+      nTraces: 5,
+      seed: "439",
+      stateCheck: stateCheck(
+        (raw) =>
+          Schema.decodeUnknownEffect(BaseSelectionProjection)(raw).pipe(
+            Effect.map(({ state }) => {
+              const stage = state.baseSelection.tag
+              const value = state.baseSelection.value
+              const evidence =
+                stage === "BasePlanRecorded"
+                  ? Schema.decodeUnknownSync(Schema.Struct({ observation: Schema.Unknown }))(value).observation
+                  : value
+              const selected =
+                stage === "QualifiedBaseObserved" || stage === "BasePlanRecorded" || stage === "BaseSelectionReadCalled"
+                  ? Schema.decodeUnknownSync(
+                      Schema.Struct({
+                        targetHead: Schema.Struct({ tag: Schema.String }),
+                        refObservation: Schema.Struct({ tag: Schema.String }),
+                        anchorIsAncestor: Schema.Boolean,
+                        objectReadable: Schema.Boolean,
+                        commitAvailable: Schema.Boolean,
+                        target: Schema.Struct({ tag: Schema.String }),
+                        anchor: Schema.Struct({ tag: Schema.String }),
+                        executionRepository: Schema.Struct({ tag: Schema.String })
+                      })
+                    )(evidence)
+                  : undefined
+              const qualified =
+                selected !== undefined &&
+                selected.target.tag === "BaseTarget1" &&
+                selected.anchor.tag === "Anchor1" &&
+                selected.executionRepository.tag === "ExecutionRepository1" &&
+                selected.refObservation.tag === "TargetResolved" &&
+                selected.anchorIsAncestor &&
+                selected.objectReadable &&
+                selected.commitAvailable
+              return {
+                stage,
+                head: state.currentBaseHead.tag,
+                intentAccepted: state.baseIntentAccepted,
+                selectedHead: qualified ? selected.targetHead.tag : "None",
+                refusal: stage === "BaseSelectionRefused" ? variantTag(value) : "None"
+              }
+            }),
+            Effect.orDie
+          ),
+        (spec, implementation) => JSON.stringify(spec) === JSON.stringify(implementation)
+      )
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "replays pre-plan Base qualification through exact Git commands and accepted journal lineage",
+  () =>
+    quintRun({
+      backend: "typescript",
+      driverFactory: baseSelectionDriver,
+      spec: "specs/gitReconciliation.qnt",
+      step: "baseSelectionStep",
+      maxSteps: 8,
+      nTraces: 60,
+      seed: "439",
+      stateCheck: stateCheck(
+        (raw) =>
+          Schema.decodeUnknownEffect(BaseSelectionProjection)(raw).pipe(
+            Effect.map(({ state }) => {
+              const stage = state.baseSelection.tag
+              const value = state.baseSelection.value
+              const evidence =
+                stage === "BasePlanRecorded"
+                  ? Schema.decodeUnknownSync(Schema.Struct({ observation: Schema.Unknown }))(value).observation
+                  : value
+              const selected =
+                stage === "QualifiedBaseObserved" || stage === "BasePlanRecorded" || stage === "BaseSelectionReadCalled"
+                  ? Schema.decodeUnknownSync(
+                      Schema.Struct({
+                        targetHead: Schema.Struct({ tag: Schema.String }),
+                        refObservation: Schema.Struct({ tag: Schema.String }),
+                        anchorIsAncestor: Schema.Boolean,
+                        objectReadable: Schema.Boolean,
+                        commitAvailable: Schema.Boolean,
+                        target: Schema.Struct({ tag: Schema.String }),
+                        anchor: Schema.Struct({ tag: Schema.String }),
+                        executionRepository: Schema.Struct({ tag: Schema.String })
+                      })
+                    )(evidence)
+                  : undefined
+              const qualified =
+                selected !== undefined &&
+                selected.target.tag === "BaseTarget1" &&
+                selected.anchor.tag === "Anchor1" &&
+                selected.executionRepository.tag === "ExecutionRepository1" &&
+                selected.refObservation.tag === "TargetResolved" &&
+                selected.anchorIsAncestor &&
+                selected.objectReadable &&
+                selected.commitAvailable
+              return {
+                stage,
+                head: state.currentBaseHead.tag,
+                intentAccepted: state.baseIntentAccepted,
+                selectedHead: qualified ? selected.targetHead.tag : "None",
+                refusal: stage === "BaseSelectionRefused" ? variantTag(value) : "None"
+              }
+            }),
+            Effect.orDie
+          ),
+        (spec, implementation) => JSON.stringify(spec) === JSON.stringify(implementation)
+      )
+    }),
+  { timeout: 30_000 }
+)
+
+it.effect("an explicit Base retry rereads tracker authority and plans exactly the successor Git head", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const driver = yield* makeBaseSelectionTrace
+      yield* driver.recordBaseSelectionIntent()
+      yield* driver.callBaseSelectionRead("MissingExecutionObject")
+      yield* driver.refuseBaseSelection()
+      yield* driver.automaticBaseRetryWake()
+      expect((yield* driver.getState()).stage).toBe("BaseSelectionRefused")
+      yield* driver.requestExplicitBaseRetry()
+      yield* driver.confirmRetryGraph()
+      yield* driver.confirmRetryExactClaim()
+      yield* driver.confirmRetryUnchangedSpecification()
+      yield* driver.advanceBaseTargetHead()
+      yield* driver.recordBaseSelectionIntent()
+      yield* driver.callBaseSelectionRead("ExactBaseRead")
+      yield* driver.acceptQualifiedBaseSelection()
+      yield* driver.recordSelectedBasePlan()
+      expect(yield* driver.getState()).toMatchObject({ stage: "BasePlanRecorded", selectedHead: "Head2" })
+    })
+  )
 )

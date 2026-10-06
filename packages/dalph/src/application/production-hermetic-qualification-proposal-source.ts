@@ -454,7 +454,20 @@ export const validateProposal = Effect.fn("HermeticQualification.validateProposa
     return yield* sourceRejectedBecause("ProposalSubjectMismatch")()
   if (proposal.waitsForLiveOperationId !== null)
     yield* validateWorkflowOperationId(proposal.waitsForLiveOperationId, context)
-  yield* validateProposalIdentitySource(proposal.actionIdentity, context)
+  const identityContext =
+    expected._tag === "FreshWorkflowRoute" &&
+    (expected.step._tag === "ReadTaskAttemptBase" || expected.step._tag === "ReadTaskAttemptBaseRetryFacts")
+      ? { ...context, derivedOperationIds: [...context.derivedOperationIds, expected.step.operationId] }
+      : context
+  if (
+    expected._tag === "FreshWorkflowRoute" &&
+    (expected.step._tag === "ReadTaskAttemptBase" || expected.step._tag === "ReadTaskAttemptBaseRetryFacts") &&
+    (proposal.actionIdentity._tag !== "FreshOperationIdRequired" ||
+      proposal.actionIdentity.source._tag !== "Preserve" ||
+      proposal.actionIdentity.source.operationId !== expected.step.operationId)
+  )
+    return yield* sourceRejectedBecause("InvalidProposalIdentitySource")()
+  yield* validateProposalIdentitySource(proposal.actionIdentity, identityContext)
 })
 
 const validateProposalIdentitySource = Effect.fn("HermeticQualification.validateProposalIdentitySource")(function* (

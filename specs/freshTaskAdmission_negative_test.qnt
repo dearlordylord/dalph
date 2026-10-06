@@ -407,4 +407,40 @@ module freshTaskAdmissionNegativeTest {
   run outOfRangeCapacityTurnsInvariantRedTest = {
     init.then(leaveFiniteCapacityRange).expect(not(modelStateIsFiniteAndClosed))
   }
+
+  run qualifiedSpecification = init.then(selectQualifiedBasePolicy)
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(callClaimProviderFor(TaskA)).then(acceptOwnedClaimFor(TaskA))
+    .then(acceptPostClaimGraphFor(TaskA)).then(readFocusedSpecificationFor(TaskA))
+
+  action readBaseWithoutIntent: bool = all {
+    state.admission.get(TaskA) == exactSpecification(TaskA),
+    state' = { ...state, trace: { ...state.trace, baseReadCalled: state.trace.baseReadCalled.put(TaskA, true) } },
+  }
+  action planWithoutQualifiedBase: bool = all {
+    state.admission.get(TaskA) == exactSpecification(TaskA),
+    state' = { ...state, admission: state.admission.put(TaskA, selectedPlan(state, TaskA)),
+      trace: { ...state.trace, planRecorded: state.trace.planRecorded.put(TaskA, true) } },
+  }
+  action replaceObservedBaseWithCurrentHead: bool = all {
+    state.baseObservationAccepted.get(TaskA),
+    state' = { ...state, selectedBase: state.selectedBase.put(TaskA, state.currentBaseHead.get(TaskA)) },
+  }
+  action planAtForeignBase: bool = all {
+    state.baseObservationAccepted.get(TaskA),
+    state' = { ...state, admission: state.admission.put(TaskA, FreshTaskCommitted(AttemptPlanned({
+      claimId: ClaimA, attemptId: AttemptA, baseSha: BaseB,
+    }))) },
+  }
+  run readBeforeIntentTurnsInvariantRedTest = qualifiedSpecification.then(readBaseWithoutIntent)
+    .expect(not(baseReadsRequireAcceptedIntent))
+  run planWithoutSelectionTurnsInvariantRedTest = qualifiedSpecification.then(planWithoutQualifiedBase)
+    .expect(not(qualifiedPlansRequireObservedBase))
+  run rereadAfterSelectionTurnsInvariantRedTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(acceptQualifiedBaseFor(TaskA))
+    .then(recordAttemptPlanFor(TaskA)).then(advanceBaseHeadFor(TaskA)).then(replaceObservedBaseWithCurrentHead)
+    .expect(not(qualifiedPlansRequireObservedBase))
+  run foreignPlanBaseTurnsInvariantRedTest = qualifiedSpecification
+    .then(recordBaseReadIntentFor(TaskA)).then(callBaseReadFor(TaskA)).then(acceptQualifiedBaseFor(TaskA))
+    .then(planAtForeignBase).expect(not(qualifiedPlanLineageUsesSelectedBase))
 }

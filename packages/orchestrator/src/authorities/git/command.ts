@@ -67,6 +67,12 @@ export interface GitCommandService {
     timeout: Duration.Input,
     subject?: GitCommandCustodySubject
   ) => Effect.Effect<GitCommandResult, GitCommandBoundedFailure>
+  /** Bounded read in an exact worktree root, using Git's -C locator semantics. */
+  readonly runBoundedInWorktree?: (
+    worktree: string,
+    args: ReadonlyArray<string>,
+    timeout: Duration.Input
+  ) => Effect.Effect<GitCommandResult, GitCommandBoundedFailure>
   readonly prepareSenderCustody?: (
     subject: GitCommandCustodySubject
   ) => Effect.Effect<void, GitCommandSenderStopUnproven>
@@ -383,6 +389,7 @@ export const nodeGitCommandLayer = Layer.effect(
       runBytesInWorktree: Effect.fn("GitCommand.Node.runBytesInWorktree")(function* (worktree, args, environment) {
         return yield* runBytesCommand(["-C", worktree, ...args], environment)
       }),
+      runBoundedInWorktree: (worktree, args, timeout) => runBoundedCommand(["-C", worktree, ...args], timeout),
       prepareSenderCustody: (subject) =>
         Option.isNone(senderCustody)
           ? Effect.fail(new GitCommandSenderStopUnproven())

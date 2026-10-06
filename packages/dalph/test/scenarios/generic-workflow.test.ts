@@ -107,6 +107,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
   const base = Layer.succeed(
     WorkflowInterpreter,
     WorkflowInterpreter.of({
+      readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
       acquireTaskClaim: (operation) =>
         Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim: ActiveTaskClaim.make(operation.acquisition) })),
       readTaskClaim: () => Effect.die("unexpected task claim read"),

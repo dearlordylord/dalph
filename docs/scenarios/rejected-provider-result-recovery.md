@@ -41,6 +41,20 @@ through the same stopped-writer boundary. The controlled tests in
 uncertainty, live/contradictory refusal and a stalled-read deadline. The existing
 native fresh-process Continue scenario proves composition with actual startup.
 
+After a stopped rejection has released capacity, Continue reserves the exact
+attempt's position during delivery admission, before recording its command.
+Dalph retains that reservation through relation publication and does not bind
+it as accepted responsibility before the command append. Only the exact accepted command
+receipt, or accepted-history reconstruction of that command, transfers it to
+held responsibility. A crash before the intent releases only the temporary
+reservation; a crash after the intent retains custody until reconciliation.
+Forbidden: treating an ordinary pre-command bind as an accepted handoff,
+losing the position between append and executor call, or accepting another
+attempt's receipt. The exact result-recovery authorization/execution test in
+`active-work-authority-refresh.acceptance.test.ts` requires every position bind
+to carry a registered accepted command receipt before the provider call. The
+public Continue/Restart production test owns the complete running composition.
+
 ## S5 — Alice Restarts from fresh authority while keeping the predecessor
 
 Alice requests Restart of the retained rejection, or of a historical Failed with unknown reason. Dalph reconciles exact old custody, current tracker specification/lifecycle/dependencies/claim and current Git Base H2, records distinct replacement authorization and plans P2 with its exact new W2 from H2. W1/candidate remain reference material. Lost append/response reconciliation reuses the recorded P2 rather than allocating P3. Alice sees predecessor and successor and their distinct Base/worktree facts. Unknown historical Failed offers Restart only; no Continue or retrospective acceptance changes its seal. Forbidden: stale Base, lost reference, replacement before old writer proof, new authority inferred from old terminal-invalidated choice. Acceptance seams: existing fresh-F2/K1/W1/H2 restart and ambiguous replacement tests extended to rejection and legacy unknown reason, public action availability.

@@ -59,6 +59,7 @@ it.effect("records the authored tracker interruption and ordinary replay cassett
     const provider = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
+        readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
         acquireTaskClaim: unused,
         readTaskClaim: unused,
         readTaskWorkSpecification: unused,

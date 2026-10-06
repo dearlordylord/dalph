@@ -1284,6 +1284,7 @@ it.effect(
               }
               const currentGraph = projectedCurrentGraph.snapshot
               const boundaryInterpreter = WorkflowInterpreter.of({
+                readTaskAttemptBase: () => Effect.die("this fixture does not select a task-attempt Base read"),
                 acquireTaskClaim: () => Effect.die("direction-only restart must not acquire a claim"),
                 readTaskClaim: (operation) =>
                   Effect.sync(() => {
