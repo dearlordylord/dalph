@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "779c9acd1aea38edd3c71becd1a72dee66827516caf1cae874cfd98e97ea7a11",
+  "digest": "67dd64346aa5be834d4a8cf28641e7effe1926517baff32fd6dd53cd64d4cb21",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -242,7 +242,9 @@
     "packages/orchestrator/src/presentation/tracker-workflow-trace.ts",
     "packages/orchestrator/src/workflow-journal/accepted-prefix.ts",
     "packages/orchestrator/src/workflow-journal/accepted-reader.ts",
+    "packages/orchestrator/src/workflow-journal/adapters/gzip-payload.ts",
     "packages/orchestrator/src/workflow-journal/adapters/memory-store.ts",
+    "packages/orchestrator/src/workflow-journal/adapters/sqlite-event-codec.ts",
     "packages/orchestrator/src/workflow-journal/adapters/sqlite-storage-checkpoint.ts",
     "packages/orchestrator/src/workflow-journal/adapters/sqlite-store-errors.ts",
     "packages/orchestrator/src/workflow-journal/adapters/sqlite-store-migration.ts",

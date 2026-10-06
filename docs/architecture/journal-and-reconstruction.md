@@ -126,6 +126,25 @@ journal. Storage representation changes do not advance semantic event versions
 or add cross-row references. Retirement still verifies exact stored bytes.
 See [the accepted compaction scenarios](../scenarios/compact-journal-payloads.md).
 
+Within one exclusive SQLite store ownership interval, ordinary `read` reuses
+its last successfully decoded immutable ordered snapshot while transactional
+Hot/Cold membership still agrees. Appends invalidate that read snapshot without
+copying the entire array; the separate keyed append checkpoint keeps warm
+append cost constant. Lifecycle calls, retirement, failures, recovery and
+scans/audits invalidate the applicable snapshots. Reopening and recovery
+always decode actual rows; caches never survive ownership loss.
+
+The SQLite adapter can wrap full or compact JSON in `DalphJournalGzipPayloadV1`.
+Each row has an independent gzip stream, exact decoded length, SHA-256 and
+canonical Base64. Encoding considers 1 KiB–1 MiB payloads only and retains plain
+storage when the complete envelope is larger. Larger events remain plain.
+Bounded asynchronous decode checks length, digest and strict UTF-8 before the
+common event codec, schema and reducer. Memory and cassette interpretation use
+the common event codec directly. This is a storage format change, not a semantic
+event version or schema-column migration. Existing full/compact rows remain
+readable; malformed compressed rows fail closed without plain fallback.
+See [read/gzip scenarios](../scenarios/journal-read-cache-and-gzip.md).
+
 Journal storage, decoding, and reduction are separate seams:
 
 1. Hot discovery returns Hot rows in canonical order; an explicit full audit

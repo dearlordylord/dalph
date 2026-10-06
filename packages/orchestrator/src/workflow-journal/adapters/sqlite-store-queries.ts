@@ -4,7 +4,10 @@ import { Effect, HashMap, Result, Schema } from "effect"
 import type * as SqlError from "effect/unstable/sql/SqlError"
 import { RunId } from "@dalph/contracts"
 import { JournalEventKind, JournalEventVersion } from "../../workflow/kernel/event.js"
-import { decodeJournalEvent, encodeJournalEvent } from "../event-codec.js"
+import {
+  decodeSqliteJournalEvent as decodeJournalEvent,
+  encodeSqliteJournalEvent as encodeJournalEvent
+} from "./sqlite-event-codec.js"
 import { type JournalPartition, JournalPosition, JournalRecordKey } from "../identity.js"
 import { decideJournalPartitionHistory } from "../partition-history.js"
 import { JournalBoundaryDecodeIssue, type JournalAudit } from "../recovery-model.js"

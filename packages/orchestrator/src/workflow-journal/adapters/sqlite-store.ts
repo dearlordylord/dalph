@@ -5,7 +5,8 @@ import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import type { RemotePublicationTarget, RunId } from "@dalph/contracts"
 import { JournalDatabaseLocator, JournalPosition, type JournalRecordKey } from "../identity.js"
-import { encodeJournalEvent, equalJournalEvents } from "../event-codec.js"
+import { equalJournalEvents } from "../event-codec.js"
+import { encodeSqliteJournalEvent as encodeJournalEvent } from "./sqlite-event-codec.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
   decideWorkflowRunBeginning,
@@ -31,7 +32,8 @@ import { makeSqliteTerminalHistoryRetirement } from "./sqlite-store-retirement.j
 import {
   appendSqliteStorageCheckpoint,
   type SqliteHotStorageCheckpoint,
-  type SqliteStorageCheckpoint
+  type SqliteStorageCheckpoint,
+  type SqlitePartitionSnapshot
 } from "./sqlite-storage-checkpoint.js"
 
 interface SqliteJournalStoreConfig {
@@ -139,8 +141,13 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         } = queries
         const serialization = yield* Semaphore.make(1)
         const checkpoints = yield* Ref.make(HashMap.empty<RunId, SqliteStorageCheckpoint>())
-        const invalidate = (runId: RunId) => Ref.update(checkpoints, HashMap.remove(runId))
-        const invalidateAll = Ref.set(checkpoints, HashMap.empty())
+        const readSnapshots = yield* Ref.make(HashMap.empty<RunId, SqlitePartitionSnapshot>())
+        const invalidateRead = (runId: RunId) => Ref.update(readSnapshots, HashMap.remove(runId))
+        const invalidate = (runId: RunId) =>
+          Ref.update(checkpoints, HashMap.remove(runId)).pipe(Effect.andThen(invalidateRead(runId)))
+        const invalidateAll = Ref.set(checkpoints, HashMap.empty()).pipe(
+          Effect.andThen(Ref.set(readSnapshots, HashMap.empty()))
+        )
         const publish = (checkpoint: SqliteStorageCheckpoint) =>
           Ref.update(checkpoints, HashMap.set(checkpoint.runId, checkpoint))
 
@@ -217,6 +224,7 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
               sql.withTransaction,
               Effect.tap(() => testConfig?.afterAppendCommit?.() ?? Effect.void),
               Effect.tap(({ checkpoint }) => publish(checkpoint)),
+              Effect.ensuring(invalidateRead(runId)),
               Effect.map(({ record }) => record),
               Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)),
               Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.append", cause))
@@ -226,9 +234,19 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
 
         const read = Effect.fn("JournalStore.Sqlite.read")(function* (runId: RunId) {
           return yield* serialization.withPermit(
-            loadRunSnapshot(runId, "JournalStore.read").pipe(
+            Effect.gen(function* () {
+              const partition = yield* locateRunPartition(runId, "JournalStore.read")
+              const cached = HashMap.get(yield* Ref.get(readSnapshots), runId)
+              return Option.isSome(cached) && cached.value.checkpoint.partition === partition
+                ? cached.value
+                : yield* loadRunSnapshotForPartition(partition, runId, "JournalStore.read")
+            }).pipe(
               sql.withTransaction,
-              Effect.tap(({ checkpoint }) => publish(checkpoint)),
+              Effect.tap((snapshot) =>
+                publish(snapshot.checkpoint).pipe(
+                  Effect.andThen(Ref.update(readSnapshots, HashMap.set(runId, snapshot)))
+                )
+              ),
               Effect.map(({ records }) => records),
               Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)),
               Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.read", cause))
@@ -248,7 +266,10 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
               )
               yield* publish(snapshot.checkpoint)
               return yield* readRecoverableRunBeginning(snapshot.records, runId, target)
-            }).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)))
+            }).pipe(
+              Effect.ensuring(invalidateRead(runId)),
+              Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void))
+            )
           )
         })
 

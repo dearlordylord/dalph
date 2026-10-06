@@ -20,6 +20,8 @@ export const constants = {
 
 export const randomUUID = (): string => globalThis.crypto.randomUUID()
 export const createHash = unavailable
+export const gzipSync = unavailable
+export const gunzip = unavailable
 export const execFile = unavailable
 export const promisify = (_function: unknown) => unavailable
 export const readdir = unavailable
