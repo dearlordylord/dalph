@@ -835,3 +835,15 @@ These adapters reuse the existing revisioned policy and admission controller;
 no scheduling action, workflow event or Quint model changes. Existing capacity
 and application-Exit laws retain ownership. Qualification results belong to the
 exact candidate's handoff, not this maintained test mapping.
+
+
+## Intermediate tracker edits (#373)
+
+[The S7 chronology and test mapping](intermediate-tracker-edits.md) distinguishes
+complete authored D before a later E blocker from missing-page, missing-blocker,
+contradictory and unreadable provider evidence. Its production fixture uses
+independent timer discovery, real Git/SQLite, actual CLI/MCP snapshot children,
+and recorded cassette replay. Later blocker authoring preserves executing
+attempt responsibility; safely suspended work still requires clear prerequisites
+before resumption. Stale inspection remains explicitly process-local and cannot
+replace unavailable current workflow graph authority.

@@ -6759,3 +6759,49 @@ it("builds active-refresh facts with no optional activation baseline", () => {
   expect(facts).toHaveLength(1)
   expect(facts[0]).toMatchObject({ _tag: "PlannedAttemptExecutorFreshFacts", responsibility: coverageResponsibility })
 })
+
+it("later blocker authoring retains Running work and still prevents resuming safely suspended work", () => {
+  const prerequisiteTaskId = TaskId.make("later-authored-prerequisite")
+  const graph = validSnapshot({
+    revision: "later-authored-blocker",
+    tasks: [
+      {
+        id: coverageAttempt.taskId,
+        lifecycle: { _tag: "Open" },
+        parentTaskId: null,
+        prerequisiteIds: [prerequisiteTaskId]
+      },
+      { id: prerequisiteTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+  const observation = makeCompleteTaskTrackerFactsObserved(coverageGraphOperation, graph)
+  for (const report of [
+    PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+    }),
+    PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+    })
+  ]) {
+    const records = [
+      ...coveragePlanRecords(),
+      executorReport(5, report),
+      coverageRecord(6, taskTrackerReadIntent(coverageGraphOperation)),
+      coverageRecord(7, taskTrackerFactsObservedEvent(coverageGraphOperation.operationId, observation))
+    ]
+    const [facts] = deriveJournalResponsibilityFacts(
+      { ...coverageRunState(records, [coverageResponsibility]), graphKnowledge: { taskTrackerFacts: [observation] } },
+      Option.none(),
+      Option.none(),
+      coverageTarget
+    )
+    expect(facts).toMatchObject({
+      _tag: "PlannedAttemptExecutorFreshFacts",
+      responsibility: coverageResponsibility,
+      disposition:
+        report._tag === "ExecutorWorkExecuting"
+          ? { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 5 } }
+          : { _tag: "TaskDependencyConstraint", prerequisiteTaskIds: [prerequisiteTaskId] }
+    })
+  }
+})

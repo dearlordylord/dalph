@@ -207,7 +207,10 @@ export interface ProductionWorkflowRuntimeBoundaries {
 export type ProductionWorkflowGitCommand = "run" | "runInWorktree" | "runBytesInWorktree"
 
 /** Qualification-only tap over the production workflow Git service; it cannot replace that service. */
-export type ProductionWorkflowGitCommandObserver = (operation: ProductionWorkflowGitCommand) => Effect.Effect<void>
+export type ProductionWorkflowGitCommandObserver = (
+  operation: ProductionWorkflowGitCommand,
+  invocation: { readonly locator: string; readonly args: ReadonlyArray<string> }
+) => Effect.Effect<void>
 
 /** Services assembled from one validated journal prefix for qualification. */
 export interface ProductionRunReconstructionObservation {
@@ -218,10 +221,15 @@ export interface ProductionRunReconstructionObservation {
 const observedWorkflowGitCommand = (service: GitCommandService, observe: ProductionWorkflowGitCommandObserver) =>
   GitCommand.of({
     ...service,
-    run: (...args) => observe("run").pipe(Effect.andThen(service.run(...args))),
-    runInWorktree: (...args) => observe("runInWorktree").pipe(Effect.andThen(service.runInWorktree(...args))),
+    run: (...args) => observe("run", { locator: args[0], args: args[1] }).pipe(Effect.andThen(service.run(...args))),
+    runInWorktree: (...args) =>
+      observe("runInWorktree", { locator: args[0], args: args[1] }).pipe(
+        Effect.andThen(service.runInWorktree(...args))
+      ),
     runBytesInWorktree: (...args) =>
-      observe("runBytesInWorktree").pipe(Effect.andThen(service.runBytesInWorktree(...args)))
+      observe("runBytesInWorktree", { locator: args[0], args: args[1] }).pipe(
+        Effect.andThen(service.runBytesInWorktree(...args))
+      )
   })
 
 /** Translate only the resolved working repository; separate integration targets keep their own Git authority. */

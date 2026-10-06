@@ -1972,12 +1972,12 @@ export const deriveJournalResponsibilityFacts = (
       }
       const prerequisiteTaskIds = unfinishedPrerequisiteTaskIds(responsibility.plannedAttempt.taskId, attemptTaskGraph)
       const [firstPrerequisiteTaskId, ...remainingPrerequisiteTaskIds] = prerequisiteTaskIds
-      if (firstPrerequisiteTaskId !== undefined) {
-        return safelySuspended
-          ? ResponsibilityDisposition.TaskDependencyConstraint({
-              prerequisiteTaskIds: [firstPrerequisiteTaskId, ...remainingPrerequisiteTaskIds]
-            })
-          : suspensionRequested()
+      // Later blocker authoring constrains admission and resumption, but does
+      // not stop an executing attempt or surrender its exact responsibility.
+      if (firstPrerequisiteTaskId !== undefined && safelySuspended) {
+        return ResponsibilityDisposition.TaskDependencyConstraint({
+          prerequisiteTaskIds: [firstPrerequisiteTaskId, ...remainingPrerequisiteTaskIds]
+        })
       }
       return externalSuccessDisposition()
     }

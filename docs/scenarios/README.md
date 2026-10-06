@@ -40,6 +40,7 @@ Git history.
 - [Admit independent work while preserving an exact retained attempt](independent-work-retained-priority.md)
 - [Preserve bounded admission until executor-work handoff](preserve-bounded-fresh-admission.md)
 - [Refresh and traverse complete task pipelines](refresh-complete-task-pipelines.md)
+- [Distinguish intermediate tracker edits from incomplete reads](intermediate-tracker-edits.md)
 - [Resize task admission without stopping current work](resize-task-admission.md)
 - [Localize one task's conflict while an independent task continues](localize-task-conflicts.md)
 - [Observe a requested Pause reach its safe boundaries](observe-pause-progress.md)

@@ -50,37 +50,39 @@ it.effect("coalesces manual reads and owns one thirty-second refresh", () =>
   }).pipe(Effect.scoped)
 )
 
-it.effect("retains the last complete graph on failed refresh and reports initial failure as unavailable", () =>
-  Effect.gen(function* () {
-    const graph = yield* snapshot
-    const failing = yield* Ref.make(true)
-    const reader: TrackerGraphReader["Service"] = {
-      read: () =>
-        Ref.get(failing).pipe(
-          Effect.flatMap((fail) =>
-            fail
-              ? Effect.fail(new TrackerReadError({ operation: "TrackerGraphReader.decode", detail: "incomplete" }))
-              : Effect.succeed(graph)
-          )
-        ),
-      readTaskWorkSpecification: unused
-    }
-    const owner = yield* makeRunningHostInspection(reader, target)
-    yield* Stream.runHead(owner.changes.pipe(Stream.filter((state) => state._tag === "Unavailable")))
-    expect((yield* owner.current)._tag).toBe("Unavailable")
-    yield* Ref.set(failing, false)
-    yield* owner.refresh
-    const complete = yield* owner.current
-    expect(complete._tag).toBe("Ready")
-    yield* Ref.set(failing, true)
-    yield* owner.refresh
-    const stale = yield* owner.current
-    expect(stale._tag).toBe("Stale")
-    if (stale._tag === "Stale" && complete._tag === "Ready") expect(stale.value).toEqual(complete.value)
-    yield* Ref.set(failing, false)
-    yield* owner.refresh
-    expect((yield* owner.current)._tag).toBe("Ready")
-  }).pipe(Effect.scoped)
+it.effect(
+  "scheduled inspection marks its process-local retained graph stale and reports initial failure as unavailable",
+  () =>
+    Effect.gen(function* () {
+      const graph = yield* snapshot
+      const failing = yield* Ref.make(true)
+      const reader: TrackerGraphReader["Service"] = {
+        read: () =>
+          Ref.get(failing).pipe(
+            Effect.flatMap((fail) =>
+              fail
+                ? Effect.fail(new TrackerReadError({ operation: "TrackerGraphReader.decode", detail: "incomplete" }))
+                : Effect.succeed(graph)
+            )
+          ),
+        readTaskWorkSpecification: unused
+      }
+      const owner = yield* makeRunningHostInspection(reader, target)
+      yield* Stream.runHead(owner.changes.pipe(Stream.filter((state) => state._tag === "Unavailable")))
+      expect((yield* owner.current)._tag).toBe("Unavailable")
+      yield* Ref.set(failing, false)
+      yield* TestClock.adjust("30 seconds")
+      const complete = yield* owner.current
+      expect(complete._tag).toBe("Ready")
+      yield* Ref.set(failing, true)
+      yield* TestClock.adjust("30 seconds")
+      const stale = yield* owner.current
+      expect(stale._tag).toBe("Stale")
+      if (stale._tag === "Stale" && complete._tag === "Ready") expect(stale.value).toEqual(complete.value)
+      yield* Ref.set(failing, false)
+      yield* TestClock.adjust("30 seconds")
+      expect((yield* owner.current)._tag).toBe("Ready")
+    }).pipe(Effect.scoped)
 )
 
 it.effect("a disconnected observer does not cancel the host read, and Exit stops its writers", () =>

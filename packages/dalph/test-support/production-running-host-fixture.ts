@@ -1,3 +1,4 @@
+import { makeRunningHostTrackerEdits } from "./production-running-host-tracker-edits.js"
 import { runningHostProviderBody } from "./production-running-host-fixture-request.js"
 import {
   attachControlledResultCompletions,
@@ -65,6 +66,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   discovery?: {
     readonly startupIncludesE?: boolean
     readonly independentB?: boolean
+    readonly authoredIntermediateD?: boolean
     readonly onExecutorTurnStarted?: () => Effect.Effect<void>
     readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
     readonly onRootGraphRead?: () => Effect.Effect<void>
@@ -184,6 +186,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         ),
     startTurn: (...args) =>
       provider.codex.startTurn(...args).pipe(
+        Effect.tap(() => Ref.update(trackerEdits.observationOrder, (all) => [...all, "ExecutorBegin"])),
         Effect.tap(() => discovery?.onExecutorTurnStarted?.() ?? Effect.void),
         Effect.tap(() => Deferred.succeed(turnEntered, undefined)),
         Effect.flatMap((turn) =>
@@ -200,76 +203,34 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
       : GithubIssueNodeId.make("running-host-B")
   const childC = GithubIssueNodeId.make("running-host-C")
   const childE = GithubIssueNodeId.make("running-host-E")
-  const includesE = yield* Ref.make(discovery?.startupIncludesE === true)
+  const trackerEdits = yield* makeRunningHostTrackerEdits(
+    rootNode,
+    childB,
+    childC,
+    childE,
+    includeBlockedChildren,
+    discovery
+  )
   const nodeIds = [rootNode, childB, childC, childE]
   const taskIds = nodeIds.map((node) => githubTaskIdFor(hermeticQualificationTrackerIdentity.repositoryNodeId, node))
   const trackerCalls = yield* Ref.make(0)
   const gitCalls = yield* Ref.make(0)
+  const gitInvocations = yield* Ref.make<
+    ReadonlyArray<{ readonly locator: string; readonly args: ReadonlyArray<string> }>
+  >([])
   const exitCalls = yield* Ref.make(0)
   const exitEvents = yield* Ref.make<ReadonlyArray<unknown>>([])
   const graphReadFailure = yield* Ref.make<GithubGraphqlReadThrottled | GithubGraphqlRequestError | null>(null)
   const github = githubGraphqlBatchTestClient((request: GithubGraphqlRequest) =>
     Effect.gen(function* () {
       yield* Ref.update(trackerCalls, (count) => count + 1)
+      yield* Ref.update(trackerEdits.observationOrder, (all) => [
+        ...all,
+        `${request._tag}:${"issueNodeId" in request ? request.issueNodeId : "root"}`
+      ])
       yield* failControlledGraphRead(request, graphReadFailure)
-      const connection = (field: "subIssues" | "blockedBy", ids: ReadonlyArray<GithubIssueNodeId>) => ({
-        body: {
-          data: {
-            node: {
-              __typename: "Issue",
-              id: "issueNodeId" in request ? request.issueNodeId : rootNode,
-              [field]: { nodes: ids.map((id) => ({ id })), pageInfo: { endCursor: null, hasNextPage: false } }
-            }
-          }
-        }
-      })
-      if (request._tag === "ReadSubIssues") {
-        if (request.issueNodeId === rootNode && discovery?.onRootGraphRead !== undefined)
-          yield* discovery.onRootGraphRead()
-        return connection(
-          "subIssues",
-          includeBlockedChildren && request.issueNodeId === rootNode
-            ? [childB, childC, ...((yield* Ref.get(includesE)) ? [childE] : [])]
-            : []
-        )
-      }
-      if (includeBlockedChildren && request._tag === "ReadBlockedBy")
-        return connection(
-          "blockedBy",
-          request.issueNodeId === childC
-            ? [rootNode, childB, ...((yield* Ref.get(includesE)) ? [childE] : [])]
-            : request.issueNodeId === childE
-              ? [rootNode]
-              : []
-        )
-      if (
-        includeBlockedChildren &&
-        request._tag === "ReadIssue" &&
-        request.issueNodeId !== rootNode &&
-        !(discovery?.independentB === true && request.issueNodeId === childB)
-      )
-        return {
-          body: {
-            data: {
-              node: {
-                __typename: "Issue",
-                id: request.issueNodeId,
-                parent: { id: rootNode },
-                repository: { id: hermeticQualificationTrackerIdentity.repositoryNodeId },
-                state: "OPEN",
-                stateReason: null
-              }
-            }
-          }
-        }
-      if (
-        includeBlockedChildren &&
-        request._tag === "ReadTaskWorkSpecification" &&
-        request.issueNodeId !== rootNode &&
-        !(discovery?.independentB === true && request.issueNodeId === childB)
-      ) {
-        return yield* Effect.die("blocked child must not reach a work-specification read")
-      }
+      const authored = yield* trackerEdits.respond(request)
+      if (authored !== undefined) return authored
       return yield* provider.github(runningHostProviderBody(request)).pipe(
         Effect.orDie,
         Effect.flatMap((response) =>
@@ -298,7 +259,10 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         Effect.andThen(discovery?.onActivationIdle?.() ?? Effect.void),
         Effect.asVoid
       ),
-    workflowGitCommandObserver: () => Ref.update(gitCalls, (count) => count + 1),
+    workflowGitCommandObserver: (_method, invocation) =>
+      Ref.update(gitCalls, (count) => count + 1).pipe(
+        Effect.andThen(Ref.update(gitInvocations, (all) => [...all, invocation]))
+      ),
     applicationExitRequestObserver: () => Ref.update(exitCalls, (count) => count + 1),
     applicationExitTraceObserver: (event) => Ref.update(exitEvents, (events) => [...events, event]),
     onActivationFailure: (failure) => Ref.update(failures, (all) => [...all, failure]),
@@ -389,7 +353,10 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     setGraphReadFailure: (failure: GithubGraphqlReadThrottled | GithubGraphqlRequestError | null) =>
       Ref.set(graphReadFailure, failure),
     taskIds,
-    authorE: Ref.set(includesE, true),
+    observationOrder: trackerEdits.observationOrder,
+    authorD: trackerEdits.authorD,
+    authorE: trackerEdits.authorE,
+    setIncompleteEvidence: trackerEdits.setIncompleteEvidence,
     bootstrap: Deferred.await(bootstrapReady),
     readHistory: (runId: RunId) => Deferred.await(pausedStore).pipe(Effect.flatMap((store) => store.read(runId))),
     readPausedHistory: Deferred.await(pausedStore).pipe(
@@ -404,6 +371,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     failures,
     trackerCalls,
     gitCalls,
+    gitInvocations,
     exitCalls,
     exitEvents,
     turnEntered,
