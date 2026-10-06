@@ -117,6 +117,15 @@ storage state and is also corruption. A failed immediate or startup
 maintenance attempt emits typed `JournalMaintenanceObservation`; there is no
 timer retry loop.
 
+SQLite payloads may use the explicitly tagged `DalphJournalCompactPayloadV1`
+representation. The storage codec stores equal completion-claim and planned-
+attempt copies once inside the same row, restores their full structure before
+Effect Schema decoding, and leaves contradictory present copies untouched.
+Untagged current full rows remain readable for the existing operator-owned
+journal. Storage representation changes do not advance semantic event versions
+or add cross-row references. Retirement still verifies exact stored bytes.
+See [the accepted compaction scenarios](../scenarios/compact-journal-payloads.md).
+
 Journal storage, decoding, and reduction are separate seams:
 
 1. Hot discovery returns Hot rows in canonical order; an explicit full audit

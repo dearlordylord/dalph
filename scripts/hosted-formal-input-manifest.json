@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "a0e1af59e014e397c546233f61edb8539d69ea565249b1c641ac2f691c811007",
+  "digest": "779c9acd1aea38edd3c71becd1a72dee66827516caf1cae874cfd98e97ea7a11",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -274,6 +274,7 @@
     "packages/orchestrator/src/workflow-journal/settled-completion-claim-replacement.ts",
     "packages/orchestrator/src/workflow-journal/specification-divergence.ts",
     "packages/orchestrator/src/workflow-journal/stop-request-disposition.ts",
+    "packages/orchestrator/src/workflow-journal/storage-payload.ts",
     "packages/orchestrator/src/workflow-journal/store.ts",
     "packages/orchestrator/src/workflow-journal/termination-preconditions.ts",
     "packages/orchestrator/src/workflow-journal/workflow-finality-premise-changes.ts",

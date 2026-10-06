@@ -1,8 +1,9 @@
 import { Effect, Schema } from "effect"
 import { JournalEventKind, JournalEventVersion, workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { WorkflowJournalEvent } from "../workflow/registry/event.js"
+import { decodeJournalStoragePayload, encodeJournalStoragePayload } from "./storage-payload.js"
 
-const CurrentPayload = Schema.Record(Schema.String, Schema.Unknown)
+const CurrentPayload = Schema.Record(Schema.String, Schema.Json)
 
 const legacyCancelledAttemptImplementationEventKind =
   "CancelledAttemptImplementationResponsibilityRelinquished" as const
@@ -27,7 +28,7 @@ const decodePayload = (
   payloadJson: string,
   kind: JournalEventKind,
   version: JournalEventVersion
-): Effect.Effect<Record<string, unknown>, JournalEventDecodeIssue> =>
+): Effect.Effect<Schema.JsonObject, JournalEventDecodeIssue> =>
   Effect.try({
     try: (): unknown => JSON.parse(payloadJson),
     catch: (cause) => new JournalEventDecodeIssue({ detail: String(cause), kind, version })
@@ -44,7 +45,12 @@ const decodePayload = (
  * Decodes one current immutable payload into the current semantic event.
  */
 export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(function* (encoded: EncodedJournalEvent) {
-  const payload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
+  const storedPayload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
+  const payload = yield* decodeJournalStoragePayload(encoded.kind, storedPayload).pipe(
+    Effect.mapError(
+      (cause) => new JournalEventDecodeIssue({ detail: String(cause), kind: encoded.kind, version: encoded.version })
+    )
+  )
   const normalizedKind =
     encoded.kind === legacyCancelledAttemptImplementationEventKind
       ? cancelledAttemptImplementationAbandonedEventKind
@@ -73,7 +79,10 @@ export const encodeJournalEvent = (event: WorkflowJournalEvent): EncodedJournalE
   const { _tag, version, ...payload } = encoded
   return EncodedJournalEvent.make({
     kind: JournalEventKind.make(_tag),
-    payloadJson: JSON.stringify(payload),
+    payloadJson: encodeJournalStoragePayload(
+      JournalEventKind.make(_tag),
+      Schema.decodeUnknownSync(Schema.fromJsonString(CurrentPayload))(JSON.stringify(payload))
+    ),
     version: JournalEventVersion.make(version)
   })
 }
