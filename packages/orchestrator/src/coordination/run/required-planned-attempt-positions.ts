@@ -1,6 +1,7 @@
 import type { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import {
+  executorReportProvesStoppedWriters,
   latestAcceptedPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
@@ -17,7 +18,7 @@ export interface RequiredPlannedAttemptPosition {
 
 /**
  * Derives the positions Dalph must recreate from accepted journal history.
- * A safe or terminal executor report releases the position only until a later
+ * An executor report proving stopped writers releases the position until a later
  * command makes that exact attempt unresolved again.
  */
 export const requiredPlannedAttemptPositionsOf = (
@@ -38,9 +39,7 @@ export const requiredPlannedAttemptPositionsOf = (
     const unsettledCommandExists = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt) !== undefined
     if (
       abandoned ||
-      (evidence !== undefined &&
-        !unsettledCommandExists &&
-        (evidence.report._tag === "ExecutorWorkSafelySuspended" || evidence.report._tag === "ExecutorWorkTerminal"))
+      (evidence !== undefined && !unsettledCommandExists && executorReportProvesStoppedWriters(evidence.report))
     ) {
       return []
     }

@@ -21,6 +21,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -36,6 +37,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { InitialControlPolicy, initialRunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { requiredPlannedAttemptPositionsOf } from "./required-planned-attempt-positions.js"
 import { isSafeContinuationRevalidationEligibility } from "../frontier/fresh-facts.js"
 import { UntrackedWorktreePath, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
@@ -3435,6 +3437,47 @@ effectIt.effect("lets durable Run cancellation override an unreadable executor p
   })
 )
 
+it.each(["Stopped", "Unresolved"] as const)(
+  "cancels a %s rejected result without inventing stopped evidence",
+  (custody) => {
+    const rejected = executorReport(
+      5,
+      PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+        correlation: plannedAttemptExecutorCorrelation(coverageAttempt),
+        reason: "ResultEnvelopeInvalid",
+        recoveryCause: "CorrectionExhausted",
+        responseCount: PlannedAttemptResultResponseCount.make(3),
+        custody: { _tag: custody }
+      })
+    )
+    const cancellation = coverageRecord(
+      6,
+      RunCancellationAppliedEvent.make({
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    const state = coverageRunState([...coveragePlanRecords(), rejected, cancellation], [coverageResponsibility])
+    const [facts] = deriveJournalResponsibilityFacts(state)
+    expect(requiredPlannedAttemptPositionsOf(state)).toHaveLength(custody === "Stopped" ? 0 : 1)
+    expect(facts).toMatchObject({
+      disposition: {
+        _tag:
+          custody === "Stopped" ? "CancelledAttemptAbandonmentRequired" : "PlannedAttemptExecutorSuspensionRequested"
+      }
+    })
+    if (facts === undefined) return expect.fail("missing cancellation facts")
+    expect(
+      deriveRunnableFrontier({
+        freshEligibleTasks: [],
+        responsibility: { entries: [coverageResponsibility] },
+        responsibilityFacts: [facts]
+      }).transitions.map(({ _tag }) => _tag)
+    ).toEqual([custody === "Stopped" ? "AbandonCancelledAttemptImplementation" : "SuspendPlannedAttemptExecutorWork"])
+  }
+)
+
 it("failed terminal executor work still abandons after Run cancellation", () => {
   const cancellationPosition = JournalPosition.make(6)
   const terminal = executorReport(
@@ -3729,6 +3772,33 @@ it("derives cancellation abandonment, exact claim release, and typed no-release 
       makeFocusedTaskClaimFactsObserved(retryClaimRead, coverageClaim)
     )
   )
+  for (const observation of [{ _tag: "UnclaimedTask" as const, taskId: coverageAttempt.taskId }, foreignClaim]) {
+    const [pendingReleaseFacts] = deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [
+          ...coveragePlanRecords(),
+          cancellation,
+          safeReport,
+          abandoned,
+          coverageRecord(9, taskTrackerReadIntent(claimRead)),
+          exactObservation,
+          releaseIntent,
+          coverageRecord(12, taskTrackerReadIntent(retryClaimRead)),
+          coverageRecord(
+            13,
+            taskTrackerFactsObservedEvent(
+              retryClaimRead.operationId,
+              makeFocusedTaskClaimFactsObserved(retryClaimRead, observation)
+            )
+          )
+        ],
+        [coverageResponsibility]
+      )
+    )
+    expect(pendingReleaseFacts).toMatchObject({
+      disposition: { _tag: "CancelledAttemptClaimReleaseRetryRequired", operation: releaseFacts.disposition.operation }
+    })
+  }
   const retryReadWithoutReleasePredecessor = makeTaskClaimObservationOperation(
     OperationId.make("cancelled-attempt-claim-release-missing-predecessor"),
     coverageTarget,

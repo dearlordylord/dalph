@@ -5,6 +5,7 @@ import {
   GitCommitSha,
   makeTaskWorkSpecification,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -533,9 +534,9 @@ it("rejects missing, nonlatest, and superseded cancellation proof", () => {
     ])
   expect(
     invalidProof({ _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(3) })
-  ).toContain("cancelled-attempt abandonment requires current safe or terminal executor evidence")
+  ).toContain("cancelled-attempt abandonment requires current stopped-writer executor evidence")
   expect(invalidProof({ _tag: "AcceptedReport", reportOrdinal })).toContain(
-    "cancelled-attempt abandonment requires current safe or terminal executor evidence"
+    "cancelled-attempt abandonment requires current stopped-writer executor evidence"
   )
 
   const supersedingCommand: JournalRecord = {
@@ -571,7 +572,7 @@ it("rejects missing, nonlatest, and superseded cancellation proof", () => {
   })
   expect(
     historyDetailsFor([...supersededRecords.slice(0, -1), { ...shiftedAbandonment, event: shiftedEvent }])
-  ).toContain("cancelled-attempt abandonment requires current safe or terminal executor evidence")
+  ).toContain("cancelled-attempt abandonment requires current stopped-writer executor evidence")
 })
 
 it("rejects a abandonment with the wrong authorized claim or a duplicate abandonment", () => {
@@ -738,6 +739,26 @@ it("rejects each independent cancellation settlement foundation mismatch", () =>
   expect(invalidDetailsFor(contradictoryReleaseIntent, [...baseRecords, contradictoryReleaseIntent])).toContain(
     "cancelled-attempt claim release contradicts its authorized claim"
   )
+})
+
+it.each(["Stopped", "Unresolved"] as const)("accepts only %s rejected reports as cancellation proof", (custody) => {
+  const rejected = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+    correlation: safelySuspendedReport.correlation,
+    reason: "ResultEnvelopeInvalid",
+    recoveryCause: "CorrectionExhausted",
+    responseCount: PlannedAttemptResultResponseCount.make(3),
+    custody: { _tag: custody }
+  })
+  const records = baseRecords.map((record) =>
+    record.event._tag === "PlannedAttemptExecutorWorkReported" && record.event.ordinal === laterReportOrdinal
+      ? { ...record, event: PlannedAttemptExecutorWorkReportedEvent.make({ ...record.event, report: rejected }) }
+      : record
+  )
+  const abandoned = records.at(-1)
+  if (abandoned === undefined) return expect.fail("missing abandonment")
+  const details = invalidDetailsFor(abandoned, records)
+  if (custody === "Stopped") expect(details).toEqual([])
+  else expect(details).toContain("cancelled-attempt abandonment requires current stopped-writer executor evidence")
 })
 
 it("accepts a safe executor proof observed before cancellation", () => {

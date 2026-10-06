@@ -15,6 +15,7 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  PlannedAttemptResultResponseCount,
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorRequest,
   passiveLifecycleObservationPurpose,
@@ -91,7 +92,11 @@ import {
   WorkflowInterpreter,
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
-import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
+import {
+  AuthoritativeTaskClaimReleased,
+  runTaskClaimReleaseProtocol
+} from "../../workflow/protocols/task-claim-release/protocol.js"
+import { runJournaledTaskClaimRelease } from "../../workflow/protocols/task-claim-release/journaled.js"
 import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { TaskAttemptPlanRecordAcknowledged } from "../../workflow/protocols/task-attempt-planning/record.js"
 import { InRunJournal, JournalStore, type JournalRecord } from "../../workflow-journal/store.js"
@@ -124,6 +129,7 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimReleaseIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
@@ -676,6 +682,102 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
         version: workflowJournalEventVersion
       })
     )
+    const pendingHarness = yield* makeLiveJournalHarness(yield* harness.records)
+    const initialRead = makeTaskClaimObservationOperation(
+      OperationId.make("route-matrix-pending-release-initial-read"),
+      target,
+      taskId,
+      [activeClaim.operationId]
+    )
+    yield* pendingHarness.journal.append(
+      runId,
+      intentRecordKey(initialRead.operationId),
+      taskTrackerReadIntent(initialRead)
+    )
+    yield* pendingHarness.journal.append(
+      runId,
+      outcomeRecordKey(initialRead.operationId),
+      taskTrackerFactsObservedEvent(
+        initialRead.operationId,
+        makeFocusedTaskClaimFactsObserved(initialRead, activeClaim)
+      )
+    )
+    const pendingRelease = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+        cancellationAppliedAt: cancellation.position,
+        implementationAbandonedAt: abandoned.position,
+        observationOperationId: initialRead.operationId
+      }),
+      predecessorOperationIds: [activeClaim.operationId, initialRead.operationId],
+      release: { claim: activeClaim, operationId: OperationId.make("route-matrix-pending-release") }
+    })
+    yield* pendingHarness.journal.append(
+      runId,
+      intentRecordKey(pendingRelease.release.operationId),
+      TaskClaimReleaseIntendedEvent.make({ operation: pendingRelease, version: workflowJournalEventVersion })
+    )
+    const absentRead = makeTaskClaimObservationOperation(
+      OperationId.make("route-matrix-pending-release-absent-read"),
+      target,
+      taskId,
+      [activeClaim.operationId, pendingRelease.release.operationId]
+    )
+    yield* pendingHarness.journal.append(
+      runId,
+      intentRecordKey(absentRead.operationId),
+      taskTrackerReadIntent(absentRead)
+    )
+    yield* pendingHarness.journal.append(
+      runId,
+      outcomeRecordKey(absentRead.operationId),
+      taskTrackerFactsObservedEvent(
+        absentRead.operationId,
+        makeFocusedTaskClaimFactsObserved(absentRead, UnclaimedTask.make({ taskId }))
+      )
+    )
+    const beforeStaleProposal = yield* pendingHarness.records
+    const staleTransition = RunnableFrontierTransition.RecordCancelledAttemptClaimNoRelease({
+      observationOperationId: absentRead.operationId,
+      plannedAttempt
+    })
+    const staleProposal = proposalsFor(staleTransition).proposals[0]
+    if (staleProposal === undefined || !isIdentityFreeProposal(staleProposal))
+      return yield* Effect.die("missing stale cancellation no-release proposal")
+    yield* executePlannedAttemptTransition(
+      { _tag: "IdentityFreeAction", proposal: staleProposal },
+      staleTransition,
+      inertLease
+    ).pipe(
+      (effect) => provideLiveJournal(effect, pendingHarness),
+      Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
+    )
+    expect(yield* pendingHarness.records).toEqual(beforeStaleProposal)
+    expect(reduceWorkflowJournalHistory(runId, yield* pendingHarness.records)._tag).toBe("ValidWorkflowJournalHistory")
+
+    const reconciliationReads = yield* Ref.make(0)
+    const reconcileRelease = runJournaledTaskClaimRelease(
+      runId,
+      pendingRelease,
+      runTaskClaimReleaseProtocol(
+        {
+          readTaskClaim: () =>
+            Ref.update(reconciliationReads, (count) => count + 1).pipe(Effect.as(UnclaimedTask.make({ taskId }))),
+          releaseTaskClaim: () => Effect.die("absence reconciliation must not send another tracker mutation")
+        },
+        pendingRelease.release
+      )
+    ).pipe((effect) => provideLiveJournal(effect, pendingHarness))
+    expect((yield* reconcileRelease).release).toEqual(pendingRelease.release)
+    expect((yield* reconcileRelease).release).toEqual(pendingRelease.release)
+    const reconciledRecords = yield* pendingHarness.records
+    expect(reconciledRecords.filter(({ event }) => event._tag === "TaskClaimReleaseIntended")).toHaveLength(1)
+    expect(reconciledRecords.filter(({ event }) => event._tag === "TaskClaimReleased")).toHaveLength(1)
+    expect(
+      reconciledRecords.filter(({ event }) => event._tag === "CancelledAttemptClaimNoReleaseObserved")
+    ).toHaveLength(0)
+    expect(yield* Ref.get(reconciliationReads)).toBe(1)
+    expect(reduceWorkflowJournalHistory(runId, reconciledRecords)._tag).toBe("ValidWorkflowJournalHistory")
+
     const observationOperation = makeTaskClaimObservationOperation(
       OperationId.make("route-matrix-cancelled-claim-read"),
       target,
@@ -709,6 +811,40 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
     if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
       return yield* Effect.die("missing cancellation no-release proposal")
     }
+    const interveningRead = makeTaskClaimObservationOperation(
+      OperationId.make("route-matrix-cancelled-claim-intervening-read"),
+      target,
+      TaskId.make("unrelated-task"),
+      []
+    )
+    const advancingJournal: Journal["Service"] = {
+      ...harness.coordinatedJournal,
+      appendIfAcceptedPrefixCurrent: (...args) =>
+        Effect.gen(function* () {
+          yield* harness.journal.append(
+            runId,
+            intentRecordKey(interveningRead.operationId),
+            taskTrackerReadIntent(interveningRead)
+          )
+          return yield* harness.coordinatedJournal.appendIfAcceptedPrefixCurrent(...args)
+        })
+    }
+    const advancedResult = yield* executePlannedAttemptTransition(
+      { _tag: "IdentityFreeAction", proposal },
+      transition,
+      inertLease
+    ).pipe(
+      (effect) => provideLiveJournal(effect, harness, harness.journal, advancingJournal),
+      Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
+    )
+    expect(advancedResult).toMatchObject({
+      _tag: "ActionDeferred",
+      reason: "CancelledAttemptClaimFactsAdvanced",
+      proposalId: proposal.id
+    })
+    expect(
+      (yield* harness.records).filter(({ event }) => event._tag === "CancelledAttemptClaimNoReleaseObserved")
+    ).toHaveLength(0)
     const result = yield* executePlannedAttemptTransition(
       { _tag: "IdentityFreeAction", proposal },
       transition,
@@ -1159,6 +1295,74 @@ effectIt.effect("executes cancellation settlement through suspension, abandonmen
         )
     ).toBe(true)
     expect(reduceWorkflowJournalHistory(runId, replayedRecords)._tag).toBe("ValidWorkflowJournalHistory")
+  })
+)
+
+effectIt.effect("abandons a stopped rejected result through the Journal without calling the executor", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeLiveJournalHarness(acceptedExecutingHistory.records)
+    const rejectedOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+    const rejected = PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+      correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+      reason: "ResultEnvelopeInvalid",
+      recoveryCause: "CorrectionExhausted",
+      responseCount: PlannedAttemptResultResponseCount.make(3),
+      custody: { _tag: "Stopped" }
+    })
+    const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+    yield* harness.journal.append(
+      runId,
+      plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: rejected }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: observationOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* harness.journal.append(
+      runId,
+      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, rejectedOrdinal),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: rejectedOrdinal,
+        report: rejected,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* harness.journal.append(
+      runId,
+      runCancellationAppliedRecordKey,
+      RunCancellationAppliedEvent.make({
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    const transition = RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
+      plannedAttempt,
+      proof: { _tag: "AcceptedReport", reportOrdinal: rejectedOrdinal }
+    })
+    const proposal = proposalsFor(transition).proposals[0]
+    if (proposal === undefined || !isIdentityFreeProposal(proposal))
+      return yield* Effect.die("missing abandonment proposal")
+    const before = yield* harness.records
+    const protocol = yield* makePlannedAttemptProtocolController()
+    const lease: DeliveryActionExecutionLease = {
+      ...inertLease,
+      withPlannedAttemptProtocol: (correlation, effect) => protocol.withPermit(correlation, effect)
+    }
+    const execute = executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, lease).pipe(
+      (effect) => provideLiveJournal(effect, harness),
+      Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
+    )
+    yield* execute
+    yield* execute
+    const after = yield* harness.records
+    expect(after.slice(before.length).map(({ event }) => event._tag)).toEqual([
+      "CancelledAttemptImplementationAbandoned"
+    ])
+    expect(reduceWorkflowJournalHistory(runId, after)._tag).toBe("ValidWorkflowJournalHistory")
   })
 )
 
@@ -5816,7 +6020,7 @@ describe("delivery proposal route matrix", () => {
     )
   )
 
-  const assertPassiveFinalProjection = (kind: "Safe" | "Terminal") =>
+  const assertPassiveFinalProjection = (kind: "Safe" | "Terminal" | "RejectedStopped" | "RejectedUnresolved") =>
     Effect.gen(function* () {
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
       const testCase =
@@ -5834,10 +6038,27 @@ describe("delivery proposal route matrix", () => {
                 plannedAttempt
               })
             }
-          : {
-              report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
-              transition: RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
-            }
+          : kind === "RejectedStopped" || kind === "RejectedUnresolved"
+            ? {
+                report: PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+                  correlation,
+                  reason: "ResultEnvelopeInvalid",
+                  recoveryCause: "CorrectionExhausted",
+                  responseCount: PlannedAttemptResultResponseCount.make(3),
+                  custody: { _tag: kind === "RejectedStopped" ? "Stopped" : "Unresolved" }
+                }),
+                transition: RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+                  acceptedProgress: {
+                    _tag: "ExecutorReportAccepted",
+                    ordinal: PlannedAttemptExecutorReportOrdinal.make(1)
+                  },
+                  plannedAttempt
+                })
+              }
+            : {
+                report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+                transition: RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
+              }
 
       const proposal = proposalsFor(testCase.transition).proposals[0]
       if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
@@ -5919,10 +6140,15 @@ describe("delivery proposal route matrix", () => {
         report: testCase.report
       })
       expect(yield* Ref.get(appends)).toBe(2)
-      expect(yield* Ref.get(releases)).toBe(1)
-      expect(yield* Ref.get(releaseDispositions)).toEqual(["Released"])
-      expect((yield* admission.snapshot).positions.size).toBe(0)
+      expect(yield* Ref.get(releases)).toBe(kind === "RejectedUnresolved" ? 0 : 1)
+      expect(yield* Ref.get(releaseDispositions)).toEqual(kind === "RejectedUnresolved" ? [] : ["Released"])
+      expect((yield* admission.snapshot).positions.size).toBe(kind === "RejectedUnresolved" ? 1 : 0)
     })
+
+  effectIt.effect.each(["RejectedStopped", "RejectedUnresolved"] as const)(
+    "passive delivery observation %s releases capacity only for stopped writers",
+    (kind) => assertPassiveFinalProjection(kind)
+  )
 
   effectIt.effect("observes live terminal executor change once and releases the exact position", () =>
     assertPassiveFinalProjection("Terminal")

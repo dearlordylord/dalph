@@ -83,11 +83,100 @@ cancellation` in `recovery-activation.test.ts` checks the disposition and
 frontier transition; the existing exact-claim cancellation tests above own
 the subsequent release and retry boundaries.
 
+## Alice cancels after a rejected result has stopped its writers
+
+This refinement preserves the cancellation chronology above and the stopped
+custody boundary in [rejected-result recovery](rejected-provider-result-recovery.md#s3--dalph-returns-an-exhausted-or-expired-cycle-to-alice-with-exact-custody).
+It is accepted under the maintainer's instruction to repair the reproduced
+cancellation defect while preserving the existing disposition and claim rules.
+
+Run R retains exact claim C and attempt P's worktree W. The executor has
+reported `ExecutorWorkResultRejected` with `Stopped` custody; no integration
+was admitted and no later executor command supersedes that report. The host
+has exited and Alice invokes the exact production cancellation command.
+Dalph reconstructs P, records `RunCancellationApplied`, then uses the exact
+latest accepted stopped report as its abandonment proof. It records
+`CancelledAttemptImplementationAbandoned` without issuing Suspend, Resume,
+Continue, Begin, or a new attempt. It freshly reads C, settles only R's exact
+claim, and reaches `Cancelled`, preserving W and all implementation evidence.
+A fresh activation need not establish a complete tracker graph to abandon P;
+the focused claim read still belongs after abandonment.
+
+A crash before abandonment reuses the same accepted proof. A crash after it
+reconstructs the disposition and reconciles any uncertain claim read/release
+before retry. Repeating cancellation after settlement performs no second
+abandonment or mutation. A rejected report with `Unresolved` custody, a foreign
+correlation, a stale report, or a later unresolved executor command cannot
+supply abandonment proof or release capacity. Cancellation must not invent
+safe suspension or turn rejection into terminal success. No new Git mutation
+is involved: cancellation preserves the worktree rather than deleting it.
+
+Acceptance seams: `cancels a Stopped rejected result without inventing stopped evidence`
+in `recovery-activation.test.ts` proves the selected transition and rejects
+unresolved custody; `accepts only Stopped rejected reports as cancellation
+proof` in `cancelled-attempt-history.test.ts` proves durable proof validation.
+`abandons a stopped rejected result through the Journal without calling the
+executor` in `delivery-proposal-routes.test.ts` proves exactly one durable
+abandonment through the real Journal and exact redelivery. The existing focused
+claim cancellation mapping owns release and retry boundaries. The recovery
+matrix also checks that only stopped custody releases the task-work position.
+
+### Passive observation preserves the same custody rule
+
+Before cancellation, a running host owns P's task-work position. Its passive
+executor attachment observes a rejected result and records that exact
+observation before accepting the report. `Stopped` releases only P's position;
+`Unresolved` retains it. The host must not require terminal result acceptance
+to release proved stopped writers, release another attempt, or grant Continue
+from custody alone. After process restart the same latest accepted report and
+absence of a later unresolved command determine position reconstruction.
+Existing accepted observation provenance and intent/reconciliation rules own
+crashes; this refinement adds no provider command or durable event.
+
+`observes live executor RejectedStopped once and releases capacity only for
+stopped writers` and its `RejectedUnresolved` counterpart in
+`journaled-run-bootstrap.test.ts` prove production passive publication and
+position release. `passive delivery observation RejectedStopped releases
+capacity only for stopped writers` and its unresolved counterpart in
+`delivery-proposal-routes.test.ts` cover the controlled delivery route.
+
+### Cancellation reconciles an already intended release
+
+Dalph has abandoned P with exact stopped-writer proof, observed its exact
+active tracker claim, and recorded a cancellation-authorized release intent.
+The release removes the claim, but its outcome has not yet been recorded.
+A fresh focused tracker read names that release as a predecessor and observes
+an absent claim. Dalph selects reconciliation of the original release operation,
+records `TaskClaimReleased` under that operation ID, and settles cancellation.
+It must not allocate another release identity, mutate an absent claim, or record
+`CancelledAttemptClaimNoReleaseObserved` after the existing release intent.
+An already selected no-release proposal rechecks accepted history at execution
+and performs no append when that release intent exists. Its append compares
+the same accepted prefix under the Journal lock; an intervening accepted record
+reports a typed action deferral for fresh selection without writing against
+stale facts or retaining a completed action that has no settlement record.
+A foreign claim remains
+protected by the release protocol's ownership-conflict boundary; unreadable
+facts remain pending. On crash or retry, the same intent and fresh observation
+reconstruct the same release operation. Git and executor calls are inapplicable
+at this claim-only boundary; their abandonment proof is already accepted.
+
+`derives cancellation abandonment, exact claim release, and typed no-release
+settlement` in `recovery-activation.test.ts` checks absent and foreign observations
+after an intent preserve its exact operation identity. `executes cancellation
+no-release only for a fresh foreign claim observation` in
+`delivery-proposal-routes.test.ts` checks a stale proposal cannot append after
+an intended release, rejects an append against an intervening accepted record,
+and reconciles the absent claim to exactly one release outcome with no second
+mutation, through the real Journal and release protocol. The existing release protocol
+and cancellation settlement tests own absent-claim reconciliation, release
+outcome redelivery, and ownership conflicts.
+
 ## Claim settlement remains unavailable or foreign
 
 After abandonment, an unreadable claim keeps the separate claim responsibility
-pending. A foreign or absent claim records the applicable no-release
-observation. Dalph never deletes an unproved or foreign claim. Restart first
+pending. A foreign or absent claim without an existing release intent records the applicable
+no-release observation. Dalph never deletes an unproved or foreign claim. Restart first
 reconciles an uncertain prior read or release outcome before another effect.
 
 ## Crashes and rejected entry

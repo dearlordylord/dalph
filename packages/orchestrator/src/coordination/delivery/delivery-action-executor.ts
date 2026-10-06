@@ -194,6 +194,7 @@ export type DeliveryActionResult =
       readonly _tag: "ActionDeferred"
       readonly proposalId: DeliveryProposalId
       readonly reason:
+        | "CancelledAttemptClaimFactsAdvanced"
         | "CompletionClaimConflict"
         | "CompletionClaimNonConvergent"
         | "CompletionClaimReadUnavailable"

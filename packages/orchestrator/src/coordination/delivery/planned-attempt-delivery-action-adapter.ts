@@ -1,36 +1,27 @@
+import { executeCancelledAttemptClaimNoRelease } from "./cancelled-attempt-claim-delivery.js"
 import { deliverResultRecoveryRestart } from "./result-recovery-delivery.js"
 import { authorizeResultRecoveryContinueWithPermit } from "../../workflow/protocols/result-recovery/control.js"
 import { plannedAttemptExecutorCorrelation, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { Effect } from "effect"
-import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { authorizedClaimForAttempt } from "../run/recovery-authority.js"
-import {
-  CancelledAttemptClaimNoReleaseObservedEvent,
-  CancelledAttemptImplementationAbandonedEvent
-} from "../../workflow/protocols/run-cancellation/events.js"
+import { CancelledAttemptImplementationAbandonedEvent } from "../../workflow/protocols/run-cancellation/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import {
-  cancelledAttemptClaimNoReleaseRecordKey,
-  cancelledAttemptImplementationAbandonedRecordKey
-} from "../../workflow-journal/record-key.js"
+import { cancelledAttemptImplementationAbandonedRecordKey } from "../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
-import { type JournalRecord } from "../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import {
   journalRecordsForAttemptKind,
-  journalRecordsForOperationId,
-  lastJournalRecordForAttemptKind,
   lastJournalRecordOfKind,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 import {
+  executorReportProvesStoppedWriters,
   latestPlannedAttemptExecutorEvidence,
   type PlannedAttemptExecutorEvidence
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { AttemptQuiescenceProof } from "../../workflow/protocols/attempt-choice/events.js"
 import { beginPlannedAttemptExecutorWorkWithPermit } from "../../workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
 import { beginPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
-import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import type { SafeContinuationRevalidationEligibility } from "../frontier/fresh-facts.js"
 import {
   advanceAttemptStoppageWithPermit,
@@ -90,7 +81,7 @@ const cancelledAttemptAbandonmentIsQuiescent = (
   evidence: PlannedAttemptExecutorEvidence | undefined
 ): boolean =>
   evidence !== undefined &&
-  (evidence.report._tag === "ExecutorWorkSafelySuspended" || evidence.report._tag === "ExecutorWorkTerminal") &&
+  executorReportProvesStoppedWriters(evidence.report) &&
   !Array.from(
     journalRecordsForAttemptKind(records, transition.plannedAttempt.attemptId, "PlannedAttemptExecutorCommandIntended")
   ).some(
@@ -149,122 +140,6 @@ const executeCancelledAttemptAbandonment = Effect.fn("DeliveryAction.executeCanc
   )
 })
 
-type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> & {
-    readonly observation: Extract<
-      Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
-      { readonly _tag: "FocusedTaskClaimFacts" }
-    >
-  }
-}
-
-type CancelledAttemptAbandonedRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "CancelledAttemptImplementationAbandoned" }>
-}
-
-type CancelledAttemptClaimNoReleaseTransition = Extract<
-  PlannedAttemptTransition,
-  { readonly _tag: "RecordCancelledAttemptClaimNoRelease" }
->
-
-const hasMatchingCancelledAttemptClaimRead = (
-  observation: FocusedClaimObservationRecord,
-  readIntent: JournalRecord | undefined,
-  transition: CancelledAttemptClaimNoReleaseTransition,
-  abandoned: CancelledAttemptAbandonedRecord
-): boolean => {
-  if (readIntent?.event._tag !== "TaskTrackerReadIntentRecorded") return false
-  if (readIntent.event.operation._tag !== "ReadTaskClaim") return false
-  return (
-    readIntent.event.operation.taskId === transition.plannedAttempt.taskId &&
-    readIntent.event.operation.predecessorOperationIds.includes(abandoned.event.authorizedClaim.operationId) &&
-    taskTrackerObservationMatchesRead(observation.event.observation, readIntent.event.operation)
-  )
-}
-
-const exactCancelledAttemptAbandonment = (
-  records: JournalHistorySource,
-  transition: CancelledAttemptClaimNoReleaseTransition
-): CancelledAttemptAbandonedRecord | undefined => {
-  const candidate = lastJournalRecordForAttemptKind(
-    records,
-    transition.plannedAttempt.attemptId,
-    "CancelledAttemptImplementationAbandoned"
-  )
-  return candidate?.event._tag === "CancelledAttemptImplementationAbandoned" &&
-    plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, transition.plannedAttempt)
-    ? { ...candidate, event: candidate.event }
-    : undefined
-}
-
-const cancelledAttemptClaimNoReleaseFacts = (
-  records: JournalHistorySource,
-  transition: CancelledAttemptClaimNoReleaseTransition
-) => {
-  if (
-    Array.from(
-      journalRecordsForAttemptKind(
-        records,
-        transition.plannedAttempt.attemptId,
-        "CancelledAttemptClaimNoReleaseObserved"
-      )
-    ).some(
-      ({ event }) =>
-        event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
-        plannedTaskAttemptEquivalence(event.plannedAttempt, transition.plannedAttempt)
-    )
-  )
-    return undefined
-  const abandoned = exactCancelledAttemptAbandonment(records, transition)
-  if (abandoned === undefined) return undefined
-  const operationRecords = Array.from(journalRecordsForOperationId(records, transition.observationOperationId))
-  const observation = operationRecords.findLast(
-    (record): record is FocusedClaimObservationRecord =>
-      record.position > abandoned.position &&
-      record.event._tag === "TaskTrackerFactsObserved" &&
-      record.event.operationId === transition.observationOperationId &&
-      record.event.observation._tag === "FocusedTaskClaimFacts" &&
-      record.event.observation.coverage.taskId === transition.plannedAttempt.taskId
-  )
-  if (observation === undefined) return undefined
-  const readIntent = operationRecords.findLast(
-    (record) =>
-      record.position > abandoned.position &&
-      record.position < observation.position &&
-      record.event._tag === "TaskTrackerReadIntentRecorded" &&
-      record.event.operation.operationId === observation.event.operationId
-  )
-  if (!hasMatchingCancelledAttemptClaimRead(observation, readIntent, transition, abandoned)) return undefined
-  if (
-    observation.event.observation.observation._tag === "ActiveTaskClaim" &&
-    isExactTaskClaim(observation.event.observation.observation, abandoned.event.authorizedClaim)
-  )
-    return undefined
-  return { observation, abandoned }
-}
-
-const executeCancelledAttemptClaimNoRelease = Effect.fn("DeliveryAction.executeCancelledAttemptClaimNoRelease")(
-  function* (transition: CancelledAttemptClaimNoReleaseTransition) {
-    const journal = yield* InRunJournal
-    const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.plannedAttempt.runId)
-    const facts = cancelledAttemptClaimNoReleaseFacts(records, transition)
-    if (facts === undefined) return
-    yield* journal.append(
-      transition.plannedAttempt.runId,
-      cancelledAttemptClaimNoReleaseRecordKey(transition.plannedAttempt.attemptId),
-      CancelledAttemptClaimNoReleaseObservedEvent.make({
-        cancellationAppliedAt: facts.abandoned.event.cancellationAppliedAt,
-        expectedClaim: facts.abandoned.event.authorizedClaim,
-        observation: facts.observation.event.observation.observation,
-        observationOperationId: facts.observation.event.operationId,
-        occurrenceClassification: "NonActionOccurrence",
-        plannedAttempt: transition.plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-  }
-)
-
 const executeAttemptStoppageTransition = Effect.fn("DeliveryAction.executeAttemptStoppageTransition")(function* (
   transition: AttemptStoppageTransition,
   lease: DeliveryActionExecutionLease
@@ -316,11 +191,7 @@ const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTrans
   }
   const result = yield* executorReportFor(transition, correlation, lease, eligibility)
   const report = result.report
-  if (
-    report._tag === "ExecutorWorkSafelySuspended" ||
-    report._tag === "ExecutorWorkTerminal" ||
-    (report._tag === "ExecutorWorkResultRejected" && report.custody._tag === "Stopped")
-  ) {
+  if (executorReportProvesStoppedWriters(report)) {
     yield* lease.releasePlannedAttemptPosition(correlation)
   }
   return result
@@ -357,7 +228,7 @@ export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFresh
     })
   )
   const report = result.report
-  if (report._tag === "ExecutorWorkSafelySuspended" || report._tag === "ExecutorWorkTerminal") {
+  if (executorReportProvesStoppedWriters(report)) {
     yield* lease.releasePlannedAttemptPosition(correlation)
   }
   return {
@@ -403,8 +274,10 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
     return deliveryActionCompleted(action.proposal.id)
   }
   if (transition._tag === "RecordCancelledAttemptClaimNoRelease") {
-    yield* executeCancelledAttemptClaimNoRelease(transition)
-    return deliveryActionCompleted(action.proposal.id)
+    const result = yield* executeCancelledAttemptClaimNoRelease(transition)
+    return result?._tag === "PrefixAdvanced"
+      ? deliveryActionDeferred(action.proposal.id, "CancelledAttemptClaimFactsAdvanced")
+      : deliveryActionCompleted(action.proposal.id)
   }
   const result = yield* executeExecutorTransition(
     transition,

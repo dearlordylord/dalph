@@ -1,3 +1,4 @@
+import { executorReportProvesStoppedWriters } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { JournalTerminationQualification } from "./journal-termination-qualification.js"
 import {
   makeExecutorGuidanceControl,
@@ -637,7 +638,7 @@ export const journaledRunBootstrapLayer = (
         )
 
       const releaseAcceptedPlannedAttemptPosition = (result: PlannedAttemptExecutorObservationResult) =>
-        result.report._tag === "ExecutorWorkSafelySuspended" || result.report._tag === "ExecutorWorkTerminal"
+        executorReportProvesStoppedWriters(result.report)
           ? processRuntimeCapabilities.releasePlannedAttemptPosition(result.report.correlation)
           : Effect.succeed("AlreadyAbsent" as const)
 

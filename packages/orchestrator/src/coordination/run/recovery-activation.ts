@@ -85,6 +85,7 @@ import {
 import { targetPromotionRequestIdForCandidate } from "../../workflow/protocols/target-promotion/events.js"
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
+  executorReportProvesStoppedWriters,
   currentAcceptedPlannedAttemptExecutorLifecycleFor,
   latestPlannedAttemptExecutorEvidence,
   latestAcceptedPlannedAttemptExecutorEvidence,
@@ -667,10 +668,7 @@ const cancellationProofFor = (evidence: AcceptedPlannedAttemptExecutorEvidence):
 
 const cancellationQuiescenceEvidenceFor = (records: JournalHistorySource, plannedAttempt: PlannedTaskAttempt) => {
   const evidence = latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)
-  if (
-    evidence === undefined ||
-    (evidence.report._tag !== "ExecutorWorkSafelySuspended" && evidence.report._tag !== "ExecutorWorkTerminal")
-  ) {
+  if (evidence === undefined || !executorReportProvesStoppedWriters(evidence.report)) {
     return undefined
   }
   return latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt) === undefined ? evidence : undefined
@@ -937,13 +935,6 @@ const cancelledAttemptClaimObservationDisposition = (
       observationOperationId: claimObservation.event.operationId
     })
   }
-  const observation = claimObservation.event.observation.observation
-  if (observation._tag !== "ActiveTaskClaim" || !isExactTaskClaim(observation, abandoned.event.authorizedClaim)) {
-    return ResponsibilityDisposition.CancelledAttemptClaimNoReleaseRequired({
-      observationOperationId: claimObservation.event.operationId,
-      plannedAttempt
-    })
-  }
   if (releaseIntent !== undefined) {
     const authority = releaseIntent.event.operation.authority
     /* v8 ignore next -- @preserve cancellationReleaseIntentFor admits only this cancellation authority variant. */
@@ -959,6 +950,13 @@ const cancelledAttemptClaimObservationDisposition = (
           observationOperationId: authority.observationOperationId
         })
       },
+      plannedAttempt
+    })
+  }
+  const observation = claimObservation.event.observation.observation
+  if (observation._tag !== "ActiveTaskClaim" || !isExactTaskClaim(observation, abandoned.event.authorizedClaim)) {
+    return ResponsibilityDisposition.CancelledAttemptClaimNoReleaseRequired({
+      observationOperationId: claimObservation.event.operationId,
       plannedAttempt
     })
   }

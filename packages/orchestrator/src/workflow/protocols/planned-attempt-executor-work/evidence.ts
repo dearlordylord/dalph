@@ -32,6 +32,16 @@ import {
   type JournalRecordEvidence
 } from "../../../workflow-journal/record-evidence.js"
 
+/**
+ * Writer quiescence is distinct from result acceptance and terminal lifecycle.
+ * A rejected result proves it only when the executor explicitly reports Stopped
+ * custody; callers must separately check correlation, freshness and provenance.
+ */
+export const executorReportProvesStoppedWriters = (report: PlannedAttemptExecutorReport): boolean =>
+  report._tag === "ExecutorWorkSafelySuspended" ||
+  report._tag === "ExecutorWorkTerminal" ||
+  (report._tag === "ExecutorWorkResultRejected" && report.custody._tag === "Stopped")
+
 const lastArrayElement = -1
 
 const latestElementOffset = -1

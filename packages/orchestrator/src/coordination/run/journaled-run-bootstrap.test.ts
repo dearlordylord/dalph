@@ -4581,236 +4581,251 @@ it.effect(
     ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("observes live terminal executor change once and releases the exact position", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const target = FixtureTarget.make("journaled-bootstrap-passive-terminal")
-      const runId = yield* freshWorkflowRunId(target)
-      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
-      const storage = Context.get(journalContext, JournalStore)
-      const taskId = TaskId.make("journaled-bootstrap-passive-terminal-task")
-      const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
-      const plannedAttempt = PlannedTaskAttempt.make({
-        attemptId: AttemptId.make("journaled-bootstrap-passive-terminal-attempt"),
-        baseSha: GitCommitSha.make("7".repeat(40)),
-        branch: TaskBranchRef.make("refs/heads/dalph/journaled-bootstrap-passive-terminal"),
-        executor: TaskExecutorLocator.make("executor:journaled-bootstrap-passive-terminal"),
-        runId,
-        taskId,
-        taskRevision: specification.fingerprint,
-        worktree: WorktreeLocator.make("/worktrees/journaled-bootstrap-passive-terminal")
-      })
-      yield* storage.beginRun(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-        remotePublicationTargetForTest
-      )
-      const claim = ActiveTaskClaim.make({
-        operationId: OperationId.make("journaled-bootstrap-passive-terminal-claim"),
-        owner: ClaimOwner.make("journaled-run-bootstrap-test"),
-        taskId,
-        token: ClaimToken.make("journaled-bootstrap-passive-terminal-token")
-      })
-      const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
-      yield* storage.append(
-        runId,
-        intentRecordKey(claim.operationId),
-        TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
-      )
-      yield* storage.append(
-        runId,
-        outcomeRecordKey(claim.operationId),
-        TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
-      )
-      const graphOperation = makeTrackerGraphObservationOperation(
-        { _tag: "WorkflowEstablishment" },
-        OperationId.make("journaled-bootstrap-passive-terminal-graph"),
-        target,
-        [claim.operationId],
-        [taskId]
-      )
-      yield* storage.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
-      yield* storage.append(
-        runId,
-        outcomeRecordKey(graphOperation.operationId),
-        TaskTrackerFactsObservedEvent.make({
-          observation: makeCompleteTaskTrackerFactsObserved(
-            graphOperation,
-            validSnapshot({
-              revision: "journaled-bootstrap-passive-terminal-graph",
-              rootTaskId: taskId,
-              tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-            })
-          ),
-          operationId: graphOperation.operationId,
-          version: workflowJournalEventVersion
-        })
-      )
-      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
-        OperationId.make("journaled-bootstrap-passive-terminal-specification"),
-        target,
-        taskId,
-        [graphOperation.operationId]
-      )
-      yield* storage.append(
-        runId,
-        intentRecordKey(specificationOperation.operationId),
-        taskTrackerReadIntent(specificationOperation)
-      )
-      yield* storage.append(
-        runId,
-        outcomeRecordKey(specificationOperation.operationId),
-        TaskTrackerFactsObservedEvent.make({
-          observation: makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification),
-          operationId: specificationOperation.operationId,
-          version: workflowJournalEventVersion
-        })
-      )
-      const plan = makeTaskAttemptPlanOperation({
-        operationId: OperationId.make("journaled-bootstrap-passive-terminal-plan"),
-        plannedAttempt,
-        predecessorOperationIds: [specificationOperation.operationId]
-      })
-      yield* storage.append(
-        runId,
-        attemptPlanRecordKey(plannedAttempt.attemptId),
-        TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
-      )
-      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
-        operationId: OperationId.make("journaled-bootstrap-passive-terminal-worktree"),
-        plannedAttempt,
-        predecessorOperationIds: [plan.operationId]
-      })
-      yield* storage.append(
-        runId,
-        intentRecordKey(worktreeOperation.operationId),
-        TaskWorktreeReconciliationIntendedEvent.make({
-          operation: worktreeOperation,
-          version: workflowJournalEventVersion
-        })
-      )
-      yield* storage.append(
-        runId,
-        outcomeRecordKey(worktreeOperation.operationId),
-        TaskWorktreeReadyEvent.make({
-          operationId: worktreeOperation.operationId,
-          proof: PlannedWorktreeReady.make({
-            baseSha: plannedAttempt.baseSha,
-            branch: plannedAttempt.branch,
-            headSha: plannedAttempt.baseSha,
-            worktree: plannedAttempt.worktree
-          }),
-          version: workflowJournalEventVersion
-        })
-      )
-
-      const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
-      const terminal = PlannedAttemptExecutorProjection.cases.Exact.make({
-        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-          correlation,
-          result: { _tag: "Completed" }
-        })
-      })
-      const changes = yield* Queue.unbounded<typeof terminal>()
-      const terminalAccepted = yield* Deferred.make<void>()
-      const beginCalls = yield* Ref.make(0)
-      const lifecycle = PlannedAttemptExecutorLifecycleObservation.of({
-        attach: () =>
-          Effect.succeed({
-            changes: Stream.fromQueue(changes),
-            close: Effect.void,
-            current: PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing })
-          })
-      })
-      const executor = PlannedAttemptExecutor.of({
-        begin: () => Ref.update(beginCalls, (count) => count + 1).pipe(Effect.as(executing)),
-        observe: () => Effect.die("the lifecycle attachment owns passive projection"),
-        requestSuspension: () => Effect.die("terminal observation must not suspend"),
-        resume: () => Effect.die("terminal observation must not resume")
-      })
-      const bootstrap = yield* buildBootstrap(
-        runId,
-        storage,
-        defaultTrackerGraphReader,
-        undefined,
-        undefined,
-        defaultOwnership,
-        undefined,
-        noopJournalMaintenanceObservation,
-        undefined,
-        executor,
-        lifecycle
-      )
-      const admissionCapture =
-        yield* Deferred.make<
-          Effect.Success<ReturnType<DeliveryRuntimeResources["Service"]["makeAdmissionController"]>>
-        >()
-
-      expect(
-        yield* bootstrap.activate(
-          target,
-          Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
+it.effect.each(["Terminal", "RejectedStopped", "RejectedUnresolved"] as const)(
+  "observes live executor %s once and releases capacity only for stopped writers",
+  (kind) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const target = FixtureTarget.make("journaled-bootstrap-passive-terminal")
+        const runId = yield* freshWorkflowRunId(target)
+        const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+        const storage = Context.get(journalContext, JournalStore)
+        const taskId = TaskId.make("journaled-bootstrap-passive-terminal-task")
+        const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
+        const plannedAttempt = PlannedTaskAttempt.make({
+          attemptId: AttemptId.make("journaled-bootstrap-passive-terminal-attempt"),
+          baseSha: GitCommitSha.make("7".repeat(40)),
+          branch: TaskBranchRef.make("refs/heads/dalph/journaled-bootstrap-passive-terminal"),
+          executor: TaskExecutorLocator.make("executor:journaled-bootstrap-passive-terminal"),
           runId,
-          Effect.gen(function* () {
-            const resources = yield* DeliveryRuntimeResources
-            const observer = yield* PassivePlannedAttemptObserver
-            const admission = yield* resources.makeAdmissionController(
-              makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), runId })
-            )
-            const protocol = yield* PlannedAttemptProtocolController
-            const publication = yield* PassivePlannedAttemptProjectionPublication
-            yield* protocol.withPermit(correlation, (permit) =>
-              Effect.gen(function* () {
-                const beginReport = yield* beginPlannedAttemptExecutorWorkWithPermit(
-                  permit,
-                  plannedAttempt,
-                  specification
-                )
-                expect(beginReport).toEqual(executing)
-                yield* admission.synchronize(
-                  makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt], runId })
-                )
-                yield* observer.attach({
-                  plannedAttempt,
-                  publishCurrent: (projection) => publication.publishWithPermit(permit, plannedAttempt, projection),
-                  publishChange: (projection) =>
-                    publication.publish(plannedAttempt, projection).pipe(
-                      Effect.tap(() => Deferred.succeed(terminalAccepted, undefined)),
-                      Effect.asVoid
-                    )
-                })
+          taskId,
+          taskRevision: specification.fingerprint,
+          worktree: WorktreeLocator.make("/worktrees/journaled-bootstrap-passive-terminal")
+        })
+        yield* storage.beginRun(
+          runId,
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTargetForTest
+        )
+        const claim = ActiveTaskClaim.make({
+          operationId: OperationId.make("journaled-bootstrap-passive-terminal-claim"),
+          owner: ClaimOwner.make("journaled-run-bootstrap-test"),
+          taskId,
+          token: ClaimToken.make("journaled-bootstrap-passive-terminal-token")
+        })
+        const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+        yield* storage.append(
+          runId,
+          intentRecordKey(claim.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+        )
+        yield* storage.append(
+          runId,
+          outcomeRecordKey(claim.operationId),
+          TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+        )
+        const graphOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("journaled-bootstrap-passive-terminal-graph"),
+          target,
+          [claim.operationId],
+          [taskId]
+        )
+        yield* storage.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+        yield* storage.append(
+          runId,
+          outcomeRecordKey(graphOperation.operationId),
+          TaskTrackerFactsObservedEvent.make({
+            observation: makeCompleteTaskTrackerFactsObserved(
+              graphOperation,
+              validSnapshot({
+                revision: "journaled-bootstrap-passive-terminal-graph",
+                rootTaskId: taskId,
+                tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
               })
-            )
-            yield* Deferred.succeed(admissionCapture, admission)
-            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+            operationId: graphOperation.operationId,
+            version: workflowJournalEventVersion
           })
         )
-      ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
-
-      const admission = yield* Deferred.await(admissionCapture)
-      const position = (yield* admission.snapshot).positions.get(taskId)
-      expect(position).toMatchObject({
-        _tag: "ExactAttemptHeld",
-        plannedAttempt: { attemptId: correlation.attemptId, runId: correlation.runId, taskId }
-      })
-      yield* Queue.offer(changes, terminal)
-      yield* Deferred.await(terminalAccepted)
-
-      const records = yield* storage.read(runId)
-      expect(yield* Ref.get(beginCalls)).toBe(1)
-      expect(
-        records.flatMap(({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkReported" ? [[event.ordinal, event.report._tag] as const] : []
+        const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+          OperationId.make("journaled-bootstrap-passive-terminal-specification"),
+          target,
+          taskId,
+          [graphOperation.operationId]
         )
-      ).toEqual([
-        [1, "ExecutorWorkExecuting"],
-        [2, "ExecutorWorkTerminal"]
-      ])
-      expect((yield* admission.snapshot).positions.size).toBe(0)
-    })
-  ).pipe(Effect.provide(NodeCrypto.layer))
+        yield* storage.append(
+          runId,
+          intentRecordKey(specificationOperation.operationId),
+          taskTrackerReadIntent(specificationOperation)
+        )
+        yield* storage.append(
+          runId,
+          outcomeRecordKey(specificationOperation.operationId),
+          TaskTrackerFactsObservedEvent.make({
+            observation: makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification),
+            operationId: specificationOperation.operationId,
+            version: workflowJournalEventVersion
+          })
+        )
+        const plan = makeTaskAttemptPlanOperation({
+          operationId: OperationId.make("journaled-bootstrap-passive-terminal-plan"),
+          plannedAttempt,
+          predecessorOperationIds: [specificationOperation.operationId]
+        })
+        yield* storage.append(
+          runId,
+          attemptPlanRecordKey(plannedAttempt.attemptId),
+          TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+        )
+        const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+          operationId: OperationId.make("journaled-bootstrap-passive-terminal-worktree"),
+          plannedAttempt,
+          predecessorOperationIds: [plan.operationId]
+        })
+        yield* storage.append(
+          runId,
+          intentRecordKey(worktreeOperation.operationId),
+          TaskWorktreeReconciliationIntendedEvent.make({
+            operation: worktreeOperation,
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* storage.append(
+          runId,
+          outcomeRecordKey(worktreeOperation.operationId),
+          TaskWorktreeReadyEvent.make({
+            operationId: worktreeOperation.operationId,
+            proof: PlannedWorktreeReady.make({
+              baseSha: plannedAttempt.baseSha,
+              branch: plannedAttempt.branch,
+              headSha: plannedAttempt.baseSha,
+              worktree: plannedAttempt.worktree
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+
+        const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+        const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        const terminal = PlannedAttemptExecutorProjection.cases.Exact.make({
+          report:
+            kind === "Terminal"
+              ? PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                  correlation,
+                  result: { _tag: "Completed" }
+                })
+              : PlannedAttemptExecutorReport.cases.ExecutorWorkResultRejected.make({
+                  correlation,
+                  reason: "ResultEnvelopeInvalid",
+                  recoveryCause: "CorrectionExhausted",
+                  responseCount: PlannedAttemptResultResponseCount.make(3),
+                  custody: { _tag: kind === "RejectedStopped" ? "Stopped" : "Unresolved" }
+                })
+        })
+        const changes = yield* Queue.unbounded<typeof terminal>()
+        const terminalAccepted = yield* Deferred.make<void>()
+        const beginCalls = yield* Ref.make(0)
+        const lifecycle = PlannedAttemptExecutorLifecycleObservation.of({
+          attach: () =>
+            Effect.succeed({
+              changes: Stream.fromQueue(changes),
+              close: Effect.void,
+              current: PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing })
+            })
+        })
+        const executor = PlannedAttemptExecutor.of({
+          begin: () => Ref.update(beginCalls, (count) => count + 1).pipe(Effect.as(executing)),
+          observe: () => Effect.die("the lifecycle attachment owns passive projection"),
+          requestSuspension: () => Effect.die("terminal observation must not suspend"),
+          resume: () => Effect.die("terminal observation must not resume")
+        })
+        const bootstrap = yield* buildBootstrap(
+          runId,
+          storage,
+          defaultTrackerGraphReader,
+          undefined,
+          undefined,
+          defaultOwnership,
+          undefined,
+          noopJournalMaintenanceObservation,
+          undefined,
+          executor,
+          lifecycle
+        )
+        const admissionCapture =
+          yield* Deferred.make<
+            Effect.Success<ReturnType<DeliveryRuntimeResources["Service"]["makeAdmissionController"]>>
+          >()
+
+        expect(
+          yield* bootstrap.activate(
+            target,
+            Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
+            runId,
+            Effect.gen(function* () {
+              const resources = yield* DeliveryRuntimeResources
+              const observer = yield* PassivePlannedAttemptObserver
+              const admission = yield* resources.makeAdmissionController(
+                makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), runId })
+              )
+              const protocol = yield* PlannedAttemptProtocolController
+              const publication = yield* PassivePlannedAttemptProjectionPublication
+              yield* protocol.withPermit(correlation, (permit) =>
+                Effect.gen(function* () {
+                  const beginReport = yield* beginPlannedAttemptExecutorWorkWithPermit(
+                    permit,
+                    plannedAttempt,
+                    specification
+                  )
+                  expect(beginReport).toEqual(executing)
+                  yield* admission.synchronize(
+                    makeFreshTaskAdmissionTestBasis({
+                      capacity: TaskWorkCapacity.make(1),
+                      held: [plannedAttempt],
+                      runId
+                    })
+                  )
+                  yield* observer.attach({
+                    plannedAttempt,
+                    publishCurrent: (projection) => publication.publishWithPermit(permit, plannedAttempt, projection),
+                    publishChange: (projection) =>
+                      publication.publish(plannedAttempt, projection).pipe(
+                        Effect.tap(() => Deferred.succeed(terminalAccepted, undefined)),
+                        Effect.asVoid
+                      )
+                  })
+                })
+              )
+              yield* Deferred.succeed(admissionCapture, admission)
+              return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            })
+          )
+        ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+
+        const admission = yield* Deferred.await(admissionCapture)
+        const position = (yield* admission.snapshot).positions.get(taskId)
+        expect(position).toMatchObject({
+          _tag: "ExactAttemptHeld",
+          plannedAttempt: { attemptId: correlation.attemptId, runId: correlation.runId, taskId }
+        })
+        yield* Queue.offer(changes, terminal)
+        yield* Deferred.await(terminalAccepted)
+
+        const records = yield* storage.read(runId)
+        expect(yield* Ref.get(beginCalls)).toBe(1)
+        expect(
+          records.flatMap(({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" ? [[event.ordinal, event.report._tag] as const] : []
+          )
+        ).toEqual([
+          [1, "ExecutorWorkExecuting"],
+          [2, kind === "Terminal" ? "ExecutorWorkTerminal" : "ExecutorWorkResultRejected"]
+        ])
+        expect((yield* admission.snapshot).positions.size).toBe(kind === "RejectedUnresolved" ? 1 : 0)
+      })
+    ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("observes safe suspension only after exact suspend intent and releases only that attempt", () =>

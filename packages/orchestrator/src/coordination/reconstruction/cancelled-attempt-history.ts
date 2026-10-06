@@ -10,6 +10,7 @@ import type { CancelledAttemptClaimNoReleaseObservedEvent } from "../../workflow
 import { authorizedClaimForAttempt } from "../../workflow/claim-authority-history.js"
 import { recordedTaskAttemptPlanFor } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import {
+  executorReportProvesStoppedWriters,
   latestPlannedAttemptExecutorEvidence,
   plannedAttemptExecutorEvidence,
   type PlannedAttemptExecutorEvidence
@@ -132,7 +133,7 @@ const proofMatchesEvidence = (
     evidence === undefined ||
     latest === undefined ||
     latest.observedAt !== evidence.observedAt ||
-    (evidence.report._tag !== "ExecutorWorkTerminal" && evidence.report._tag !== "ExecutorWorkSafelySuspended")
+    !executorReportProvesStoppedWriters(evidence.report)
   ) {
     return false
   }
@@ -586,7 +587,7 @@ const validateAbandonmentProof = (
   onInvalid: (detail: string) => void
 ): void => {
   if (cancellation === undefined || !proofMatchesEvidence(event.proof, event.plannedAttempt, prior)) {
-    onInvalid("cancelled-attempt abandonment requires current safe or terminal executor evidence")
+    onInvalid("cancelled-attempt abandonment requires current stopped-writer executor evidence")
   }
 }
 

@@ -582,9 +582,7 @@ it.effect("fails closed for a cancelled-attempt abandonment with malformed execu
     )
     expect(failure).toBeInstanceOf(TraceProjectionInvalid)
     if (failure._tag !== "TraceProjectionInvalid") return
-    expect(failure.detail).toContain(
-      "cancelled-attempt abandonment requires current safe or terminal executor evidence"
-    )
+    expect(failure.detail).toContain("cancelled-attempt abandonment requires current stopped-writer executor evidence")
   })
 )
 
