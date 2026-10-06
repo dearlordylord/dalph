@@ -163,6 +163,38 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                   )
                   expect(completionDeleted).toHaveLength(1)
                   expect(completionDeleted[0]).toMatchObject({ event: { claim: { plannedAttempt: planned } } })
+                  const promotions = records.filter(
+                    ({ event }) =>
+                      event._tag === "TargetPromotionObservedSuccess" &&
+                      event.correlation.qualifiedCandidate.run.session.plannedAttempt.attemptId === planned.attemptId
+                  )
+                  expect(promotions).toHaveLength(1)
+                  const promotion = promotions[0]?.event
+                  if (promotion?._tag !== "TargetPromotionObservedSuccess")
+                    return expect.fail("requires the exact promoted candidate")
+                  expect(promotion.correlation.qualifiedCandidate.run.session.plannedAttempt).toEqual(planned)
+                  const finality = records.filter(
+                    ({ event }) =>
+                      event._tag === "IntegrationFinalitySettled" &&
+                      event.claim.plannedAttempt.attemptId === planned.attemptId
+                  )
+                  expect(finality).toHaveLength(1)
+                  expect(finality[0]).toMatchObject({ event: { claim: { plannedAttempt: planned } } })
+                  const candidates = records.filter(
+                    ({ event }) =>
+                      event._tag === "IntegratorCandidateCleanupSettled" &&
+                      event.authorization.disposition._tag === "Settled" &&
+                      event.authorization.disposition.qualifiedCandidate.run.session.plannedAttempt.attemptId ===
+                        planned.attemptId
+                  )
+                  expect(candidates).toHaveLength(1)
+                  expect(candidates[0]).toMatchObject({
+                    event: {
+                      authorization: {
+                        disposition: { _tag: "Settled", qualifiedCandidate: promotion.correlation.qualifiedCandidate }
+                      }
+                    }
+                  })
                   expect(planned.baseSha).toBe(fixture.configuration.plannedAttemptBaseSha)
                   expect(yield* fs.exists(planned.worktree)).toBe(false)
                   expect(
@@ -197,6 +229,17 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                       }
                     }
                   })
+                  if (planned.taskId !== c) {
+                    for (const settlement of [
+                      promotions[0],
+                      finality[0],
+                      candidates[0],
+                      completionDeleted[0],
+                      worktreeCleanup,
+                      branchCleanup
+                    ])
+                      expect(settlement?.position).toBeLessThan(cPlan?.position ?? 0)
+                  }
                   const begins = records.filter(
                     ({ event }) =>
                       event._tag === "PlannedAttemptExecutorCommandIntended" &&
