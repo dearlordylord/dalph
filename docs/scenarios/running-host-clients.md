@@ -686,8 +686,8 @@ No correlated refresh receipt, synchronous read promise, task publication barrie
 new retry policy or authority is introduced. Temporary `GraphNotEstablished`
 publications may occur during subsequent reads; discovery tests observe later
 publications and read snapshots independently. Accepted `Completed` after all
-A/B/E and C deliveries remains #375, blocked on #367; this prefix does not claim
-that suffix.
+A/B/E and C deliveries is qualified separately by #375 below; this prefix
+does not claim that suffix.
 
 ## Bounded implementation split and qualification
 
@@ -698,11 +698,10 @@ complete changing-graph Blocked story. The same shared projection and request
 algebra serve every adapter; controlled seams are allowed only where they expose
 a cut the production fixture cannot discriminate.
 
-The tool/resource names above describe the complete future interface. #368
-implements passive reads and handshake only; command owners add their tools,
-and #372 alone adds WatchSnapshots/watch tools and resource subscription runtime.
-Before that slice, MCP advertises resources without subscribe and omits watch
-tools. This staging cannot be claimed as the complete milestone.
+The host now exposes the complete maintained interface: #368 owns passive reads
+and handshake, #369–#371 own commands, and #372 owns WatchSnapshots/watch tools
+and resource subscriptions. #375 qualifies their combined production-client
+composition below; each slice retains its independent assertion owners.
 
 The concrete transport work has two substantial pieces. Implement the local HTTP
 host and direct attached CLI first within #368, then the stdio MCP bridge as the
@@ -1022,3 +1021,46 @@ owner alternatives, without a new event, persisted state, or finality rule.
 Fresh `check:all` and `check:quint` plus scoped domain/spec,
 architecture/connascence and correctness review are still required before
 integration; aggregate totals never replace the row-specific evidence above.
+
+### #375 implementation review and qualification evidence
+
+The original production host delivers A, B and E before C and settles each
+exact attempt through native CLI/MCP boundaries on Linux, Node 24.20.0.
+The thirteen-row census above assigns the separate discovery, lifecycle,
+transport and finality assertions; it does not substitute aggregate totals for
+those owners. All five full-delivery variants and both S10 public compositions
+passed in the final focused run on 2026-10-06:
+`pnpm exec vitest run packages/dalph/src/application/production-complete-delivery.acceptance.test.ts packages/dalph/src/application/production-changing-graph-finality.test.ts --maxWorkers=1`
+(7 passed, 102.73 seconds). The native parity matrix separately passed all 137
+applicable operation/failure cases in 203.58 seconds.
+
+The domain/spec, architecture/connascence and correctness reviews closed at
+`00874888b37c199949051657e8a2e695ae6f2bbf`, against planned Base
+`f3a23e515e7d05efdd66647c9f7ac68f53a4165a`. Their exact per-attempt settlement,
+prerequisite cleanup-order and named-census findings were repaired and rechecked.
+The later native-capacity fixture repair holds an actual tracker read during
+an active lease; the independent inactive-lease refusal remains unchanged.
+The extracted helper error name and optional adapter-dispatch consolidation
+remain nonblocking maintenance follow-ups; neither defers an acceptance edge.
+
+`pnpm check:all --candidate=f3a23e515e7d05efdd66647c9f7ac68f53a4165a`
+passed on that clean frozen candidate in gate
+`4a3c1c9c-3acf-41ff-8950-46c4b81c0d66`: every selected stage passed,
+command exit 0, custody stopped and source unchanged. Coverage reported
+5,235 passed tests and 72 skipped; this is suite scope, not a scenario mapping.
+Its formal disposition was `not-requested`.
+
+`pnpm check:quint --force` then executed the complete required profile freshly
+on the same unchanged candidate. Gate `6a9e3a8f-dc4c-463b-b8bb-ae5addafe16a`
+passed with command exit 0, stopped custody and unchanged source. No earlier
+worktree's certification replaces this execution. The integrated commits end at
+`941a87519`; its committed tree equals the qualified candidate's tree
+`62b60b9c4b597b24b21770a0c101a75d0fb78a3a`.
+
+The earlier full gate `4ebab0da-9cfe-4a6a-9cab-2311e33cae5a` failed only the
+MCPWhole capacity assertion after the fixture allowed its runtime lease to end
+while the native child started. It retained stopped custody and unchanged
+source. The inactive-lease diagnostic, repaired MCPWhole reproducer and final
+seven-case run passed before the replacement full gate. Failed evidence is not
+credited. Local qualification does not claim hosted CI or live-provider bulk
+execution, and no GitHub issue closure is asserted.
