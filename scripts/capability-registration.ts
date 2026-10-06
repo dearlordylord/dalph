@@ -12,6 +12,7 @@ type CapabilityFamily =
   | "task-tracker-completion"
   | "git-worktree"
   | "git-lineage"
+  | "git-task-attempt-base"
   | "git-integrator-candidate"
   | "git-target-promotion"
   | "codex-owned-activity-census"
@@ -231,6 +232,7 @@ const requiredCapabilityFamilies = [
   "task-tracker-completion",
   "git-worktree",
   "git-lineage",
+  "git-task-attempt-base",
   "git-integrator-candidate",
   "git-target-promotion",
   "codex-owned-activity-census",
@@ -489,6 +491,41 @@ const lineageContract = contract("GitTargetLineage", [
       "nodeGitTargetLineageLayer",
       "packages/orchestrator/src/authorities/git/target-lineage.ts",
       "nodeGitTargetLineageLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
+  }
+])
+
+const taskAttemptBaseContract = contract("GitTaskAttemptBase", [
+  {
+    invocation: {
+      marker: "gitTaskAttemptBaseContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "controlled" },
+      source: "packages/orchestrator/src/authorities/git/task-attempt-base.property.test.ts"
+    },
+    marker: "gitTaskAttemptBaseContract",
+    role: "controlled",
+    source: "packages/orchestrator/test/contracts/git-task-attempt-base-contract.ts",
+    implementation: implementationBinding(
+      "controlledTaskAttemptBaseLayer",
+      "packages/orchestrator/src/workflow/interpretation/layers.ts",
+      "controlledTaskAttemptBaseLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
+  },
+  {
+    invocation: {
+      marker: "gitTaskAttemptBaseContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "command-backed" },
+      source: "packages/orchestrator/src/authorities/git/task-attempt-base.property.test.ts"
+    },
+    marker: "gitTaskAttemptBaseContract",
+    role: "production",
+    source: "packages/orchestrator/test/contracts/git-task-attempt-base-contract.ts",
+    implementation: implementationBinding(
+      "nodeGitTaskAttemptBaseLayer",
+      "packages/orchestrator/src/authorities/git/task-attempt-base.ts",
+      "nodeGitTaskAttemptBaseLayer",
       { _tag: "ObjectProperty", property: "layer" }
     )
   }
@@ -929,6 +966,26 @@ export const capabilityRegistrationInventory = {
         "packages/orchestrator/src/authorities/git/target-lineage.ts",
         "nodeGitTargetLineageLayer",
         composed("packages/dalph/src/application/production.ts", "nodeGitTargetLineageLayer")
+      )
+    },
+    {
+      boundary: "Git qualification of the exact Base before task-attempt planning",
+      family: "git-task-attempt-base",
+      contract: taskAttemptBaseContract,
+      controlled: implementation(
+        "controlledTaskAttemptBaseLayer",
+        "packages/orchestrator/src/workflow/interpretation/layers.ts",
+        "controlledTaskAttemptBaseLayer",
+        controlledComposition(
+          "packages/orchestrator/src/workflow/interpretation/layers.ts",
+          "controlledTaskAttemptBaseLayer"
+        )
+      ),
+      production: implementation(
+        "nodeGitTaskAttemptBaseLayer",
+        "packages/orchestrator/src/authorities/git/task-attempt-base.ts",
+        "nodeGitTaskAttemptBaseLayer",
+        composed("packages/dalph/src/application/production.ts", "nodeGitTaskAttemptBaseLayer")
       )
     },
     {

@@ -1,3 +1,5 @@
+import { controlledTaskAttemptBaseLayer } from "../../workflow/interpretation/layers.js"
+import { gitTaskAttemptBaseContract } from "../../../test/contracts/git-task-attempt-base-contract.js"
 import { GitCommitSha, GitRepositoryLocator, IntegrationTargetRef } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { Duration, Effect, Layer } from "effect"
@@ -136,3 +138,21 @@ it.effect("settles a proved deadline but retains an unproven Git child as a type
     }
   })
 )
+
+// The fixed policy must not consult Git, including in the production adapter.
+gitTaskAttemptBaseContract({ name: "controlled", layer: controlledTaskAttemptBaseLayer })
+gitTaskAttemptBaseContract({
+  name: "command-backed",
+  layer: nodeGitTaskAttemptBaseLayer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        GitCommand,
+        GitCommand.of({
+          run: () => Effect.die("fixed Base consulted Git"),
+          runInWorktree: () => Effect.die("fixed Base consulted worktree Git"),
+          runBytesInWorktree: () => Effect.die("fixed Base consulted byte Git")
+        })
+      )
+    )
+  )
+})

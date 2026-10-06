@@ -607,3 +607,7 @@ export const executorGuidanceDispatchIntendedRecordKey = (requestId: ExecutorGui
   JournalRecordKey.make(`executor-guidance:${requestId}:dispatch-intended`)
 export const executorGuidanceObservedRecordKey = (requestId: ExecutorGuidanceRequestId): JournalRecordKey =>
   JournalRecordKey.make(`executor-guidance:${requestId}:observed`)
+
+/** Exact refused Base read authorized by one operator retry receipt. */
+export const taskAttemptBaseRetryRecordKey = (refusedReadOperationId: OperationId) =>
+  JournalRecordKey.make(`task-attempt-base-retry:${refusedReadOperationId}`)

@@ -1,14 +1,17 @@
 import type { RunId } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import type { JournalService } from "../../../coordination/delivery/journal.js"
-import { JournalRecordKey } from "../../../workflow-journal/identity.js"
 import {
   journalRecordByKey,
   journalRecordsForTask,
   journalRecordsOfKind,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
-import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  intentRecordKey,
+  outcomeRecordKey,
+  taskAttemptBaseRetryRecordKey
+} from "../../../workflow-journal/record-key.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -18,8 +21,7 @@ import {
   type TaskAttemptBaseRetryRequestId
 } from "./retry-data.js"
 
-export const taskAttemptBaseRetryRecordKey = (refusedReadOperationId: OperationId) =>
-  JournalRecordKey.make(`task-attempt-base-retry:${refusedReadOperationId}`)
+export { taskAttemptBaseRetryRecordKey } from "../../../workflow-journal/record-key.js"
 
 /** Stable identities for each fresh tracker observation authorized by a recorded retry. */
 export const taskAttemptBaseRetryFactOperationId = (
