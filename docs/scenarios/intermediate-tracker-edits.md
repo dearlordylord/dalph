@@ -89,3 +89,37 @@ and checked at every replay checkpoint for history, operational state, pure
 selection and occurrence-position equivalence. Fixture Exit follows the prefix;
 it is not a consequence of authoring a blocker or disconnecting either client.
 Exact qualification evidence belongs to the implementation handoff.
+
+## Qualification and review evidence
+
+The maintainer audited #373 on 2026-10-06 against Base
+`8141248fb6860df0407bf2a813c3300c8c0721f9` and candidate
+`a33de193e5a7976693502a34188d1a1a45b8f837` in the exact retained worktree
+`/workspace/typescript/dalph-worktrees/qualify-373-534f29065`.
+The scenario-to-test rows above cover the complete authored-state case, all four
+incomplete-provider cases, both-client availability/parity, executing versus
+safely suspended responsibility, and process-local stale inspection. Their
+assertions were inspected against every acceptance criterion; no crash or
+command retry is required by this chronology.
+
+`mise exec -- pnpm check:all --candidate=8141248fb6860df0407bf2a813c3300c8c0721f9`
+passed as run `9735f696-480d-45db-ab83-699b785b24c9`. Its candidate report names
+the exact head above and records every selected stage passing, including tests
+and coverage. Its durable terminal record reports exit 0, stopped custody and
+unchanged source inputs. `mise exec -- pnpm check:quint --force` passed as run
+`2e55a743-3465-452e-909c-18dd0753b3dd`, with exit 0, stopped custody and unchanged
+inputs. The formal attempt's 126 source-manifest entries were inspected and its
+file hashes still match the retained worktree. These are local Linux/Node
+24.20.0 qualification results; no hosted or live-provider result is claimed.
+
+Separate Standards and Spec reviewers inspected the fixed Base-to-candidate
+diff without editing it. Domain/spec, architecture/connascence and
+correctness/assertion reviews found no blocking findings. The Standards review
+identified one nonblocking name ambiguity: the shared fixture's `childB` plays
+D in this chronology. The existing explicit `authoredIntermediateD` mode and
+exact identity assertions establish its role; renaming the shared fixture is
+not required for acceptance. This finding is accepted as a maintenance concern,
+not deferred acceptance work. The Spec review confirmed the mapped production
+and cassette assertions and the unchanged membership, lifecycle, claim and Git
+constraints. The later documentation-only handoff records this evidence and
+cannot change workflow decisions or provider effects.
