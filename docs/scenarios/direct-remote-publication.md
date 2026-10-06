@@ -1301,6 +1301,54 @@ subject command is checked against that retained Journal before submission.
 
 ## Controlled qualification transport
 
+### Public request recovery qualification chronology
+
+The Operator starts one task A through the public production parser. Real Git,
+SQLite, coordinator ownership, task execution, integration, publication and
+finality use the production composition; GitHub and Codex return controlled
+provider responses. A disposable bare remote's receiving hook conclusively
+denies publication. Dalph retains the exact Run, responsibility, candidate and
+numbered publication intent. The Operator stops that invocation, reads
+`publication-subjects` without starting another Run, and submits a versioned
+`publication-resume` request for that exact responsibility.
+
+The qualification separately loses the result output after the receipt is
+recorded, reconnects with the identical body and request ID, and restarts over
+the same SQLite and Git resources. It checks the original receipt position and
+one durable request before allowing ordinary delivery. A separate resumed invocation keeps the policy-denying hook in place and
+retains another precise denial under the same request and remaining allowance.
+It cannot start another task or grant another batch. Replaying that receipt
+after repair returns its original result without another push; the Operator
+submits a distinct stable repair request under the remaining allowance. Repairing the remote
+hook permits publication, local promotion, tracker confirmation, exact cleanup
+and accepted Completed; a receipt by itself proves none of those outcomes.
+
+For exhaustion, the fixture moves its disposable remote to a competing head
+between discovery and each native push, then restores the original head with
+an exact expected-head update. Three real non-fast-forward rejections retain
+real sender custody and numbered intent history. The third numbered intent consumes
+the original allowance. Ordinary restart and resume cannot create a fourth intent.
+The Operator selects that exact retained exhaustion occurrence and submits
+`publication-grant`. Losing its receipt output and replaying its identical body
+after restart authorizes one additional batch. Releasing the competing-head race
+and repairing the hook allows the
+same candidate to publish with the next historical ordinal, one grant and one
+task Begin. A changed request body, Pause, current claims/custody, exhausted
+allowance and throttled mutations keep their owning constraints; no control
+request changes those authorities or resets history.
+
+During Pause, the Operator uses the existing accepted Run control boundary
+before submitting either public request. Resume and exhaustion grant record
+their exact receipts while forward work stays paused. Neither starts another publication
+intent, task attempt, promotion or finality. After explicit Unpause, receipt
+recovery resumes the same candidate under the remaining core constraints.
+
+The maintained public-entry acceptance tests must prove these positive and
+forbidden results through the actual parser, request-file decoder, host,
+durable controls and result encoder. Core tests remain separate owners for
+model reachability and protocol cuts. Until the public matrix and required
+gates pass, this chronology supplies no qualification credit.
+
 The disposable positive fixture detaches its own checkout before Dalph starts,
 leaving the integration ref unoccupied. Dalph does not change a checkout to
 resolve a promotion refusal. The GraphQL fixture decodes the actual serialized
@@ -1318,3 +1366,39 @@ digest registration. Full snapshots retain their original content validation. Th
 `direct-remote-publication.integration.test.ts` retains the actual CLI composition.
 These changes affect qualification fixtures and record bookkeeping only; the
 production CLI budget, workflow decisions and provider mutation policy do not change.
+
+### #389 public qualification test ownership
+
+`production-publication-control.acceptance.test.ts` uses the actual public
+parser, versioned request-file decoder, production host and result encoder.
+It substitutes provider responses and deliberately withheld Git custody at
+its owning boundary; the positive sends use native Git and its durable sender
+custody. This is controlled-provider public-entry evidence, with the existing
+actual CLI subprocess integration test retaining its transport owner.
+
+| Public chronology | Named maintained test |
+| --- | --- |
+| Lost receipt output, same-ID reconnect, identical duplicate, changed-body refusal, ordinary restart and exact candidate completion | `public resume reconnects after receipt output loss and delivers the exact retained candidate`; `public grant reconnects after receipt output loss and delivers the exact retained candidate` |
+| Three native non-fast-forward rejections, ordinary restart and resume cannot create ordinal four, exact exhaustion grant authorizes one batch | The grant reconnect case; bare-receiver fixture commit and compare-and-swap restoration preserve actual native sender custody |
+| Both receipts accepted during Pause, no forward intent until explicit Unpause | `public resume reconnects after receipt output loss through Pause and delivers the exact retained candidate` and `public grant reconnects after receipt output loss through Pause and delivers the exact retained candidate` |
+| Fresh tracker read failure cannot authorize another intent, task plan or terminal occurrence | `public resume receipt does not bypass unavailable fresh tracker authority` and `public grant receipt does not bypass unavailable fresh tracker authority`; these prove refusal, not repair of unavailable authority |
+| Next sender preparation remains unproven | `public resume receipt does not bypass unavailable sender custody` and `public grant receipt does not bypass unavailable sender custody`; no new publication intent, task plan, success or terminal occurrence |
+| Native throttled receiving hook, public grant refusal, duplicate resume request and ordinary restart | `public resume preserves native throttling across duplicate requests and restart`; no hidden mutation retry or allowance reset |
+
+This test mapping does not remove the qualification limit or replace the
+required final gates. Recorded positive histories also undergo
+state, history, selection and position cassette round-trip checks.
+
+The public custody cases prove next-sender preparation refusal after a
+conclusive rejection; they do not claim an ambiguous pending-send cut.
+`direct-publication/resume.test.ts`, `reconciles the active receipt after an
+ambiguous push before any later push`, owns that independent core cut.
+The same file's `keeps unchanged incompatible lineage retained with no push in
+memory and reopened SQLite` and `does not replay a conclusive resume denial
+after restart in memory and reopened SQLite journals` retain lineage and
+conclusive-denial ownership. `direct-publication/batch-grant.test.ts`,
+`retains exact post-Unpause authentication, throttle, custody, and lineage waits
+without retrying forward work` and `keeps a granted responsibility waiting after
+Unpause when tracker permission or its exact claim is absent`, retain the
+remaining current-claim and authority prohibitions. These are split assertion
+owners; public unreadable-graph cases do not substitute for them.

@@ -113,6 +113,40 @@ type. Graceful application Exit does not itself terminate the selected Run. If
 that Run was not independently and durably terminated, it remains available to
 the ordinary recovery path on the next invocation.
 
+## Recover a retained remote publication
+
+The Operator selects the exact retained delivery from the configured repository:
+
+```sh
+node packages/dalph/dist/bin/dalph.js publication-subjects \
+  github:OWNER/REPOSITORY#ISSUE --config /absolute/dalph-production.json
+node packages/dalph/dist/bin/dalph.js publication-resume \
+  github:OWNER/REPOSITORY#ISSUE --config /absolute/dalph-production.json \
+  --request /absolute/resume.json
+node packages/dalph/dist/bin/dalph.js publication-grant \
+  github:OWNER/REPOSITORY#ISSUE --config /absolute/dalph-production.json \
+  --request /absolute/grant.json
+```
+
+`publication-subjects` returns `PublicationSubjects` without starting task work.
+For the selected subject, the resume JSON contains `schemaVersion: 1`, a stable
+nonempty `requestId`, its exact `runId`, and its complete `responsibility` object
+(`runId` and numeric `queuedAt`). The grant JSON contains the same fields plus
+numeric `exhaustionAt`, copied from that subject's `retainedAt` only when the
+retained cause is `AttemptsExhausted`. A grant authorizes one additional bounded
+batch; resume reuses the remaining allowance.
+
+`PublicationResumeResult` or `PublicationGrantResult` reports the recorded
+receipt or actual retained status separately from `RunDisposition`. After lost
+output, resend the same file and request ID. Changing that body's subject under
+the same ID is refused. After a resumed attempt receives another conclusive
+denial, repair the cause and use a distinct request ID; replaying the older
+receipt reports its original result and grants no further push. Pause, current
+tracker permission, sender custody, exhausted allowance and throttling keep
+their constraints. Neither request resets historical ordinals or starts a new
+task attempt. See the [public recovery chronology](docs/scenarios/direct-remote-publication.md#public-retained-publication-control-389)
+for maintained acceptance and qualification evidence.
+
 ## Guidance for an active executor
 
 An Operator can send informational input to an existing implementation attempt

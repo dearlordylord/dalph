@@ -24,6 +24,7 @@ import {
   GithubIssueNodeId,
   githubTaskIdFor,
   GitCommand,
+  type RemotePublicationGit,
   GithubGraphqlClient,
   nodeGitCommandLayer,
   type GithubGraphqlRequest,
@@ -66,6 +67,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   paused?: PausedRunningHostFixture,
   discovery?: {
     readonly completeDelivery?: boolean
+    readonly remotePublicationGitLayer?: (
+      configuration: ProductionRepositoryHostConfiguration
+    ) => Layer.Layer<RemotePublicationGit>
     readonly startupIncludesE?: boolean
     readonly independentB?: boolean
     readonly authoredIntermediateD?: boolean
@@ -73,6 +77,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
     readonly onRootGraphRead?: () => Effect.Effect<void>
     readonly onActivationIdle?: () => Effect.Effect<void>
+    readonly onActivationFailure?: () => Effect.Effect<void>
   },
   interruptStopsTurn = false,
   diagnostics?: ControlledProviderDiagnostics
@@ -255,6 +260,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   const ownerReady = yield* Deferred.make<RunReactivationOwner["Service"]>()
   const productionGraph = productionRepositoryHostGraph({
     ...reactivationObserversFor(paused),
+    ...(discovery?.remotePublicationGitLayer === undefined
+      ? {}
+      : { remotePublicationGitLayer: discovery.remotePublicationGitLayer(configuration) }),
     ...(discovery?.onTimerStateChange === undefined ? {} : { onTimerStateChange: discovery.onTimerStateChange }),
     githubRequestCircuitMaxRequests: 2000,
     ...(diagnostics?.rejectResult !== true ? {} : { codexProcessNative: isolatedCodexProcessNativeService }),
@@ -271,7 +279,10 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
       ),
     applicationExitRequestObserver: () => Ref.update(exitCalls, (count) => count + 1),
     applicationExitTraceObserver: (event) => Ref.update(exitEvents, (events) => [...events, event]),
-    onActivationFailure: (failure) => Ref.update(failures, (all) => [...all, failure]),
+    onActivationFailure: (failure) =>
+      Ref.update(failures, (all) => [...all, failure]).pipe(
+        Effect.andThen(discovery?.onActivationFailure?.() ?? Effect.void)
+      ),
     codexAppServer: () =>
       Layer.effect(
         CodexAppServer,
@@ -354,6 +365,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
   }
   return {
     configuration,
+    configurationPath: fixture.configurationPath,
     graph,
     enableCloseFailure: Ref.set(closeFailureEnabled, true),
     setGraphReadFailure: (failure: GithubGraphqlReadThrottled | GithubGraphqlRequestError | null) =>
