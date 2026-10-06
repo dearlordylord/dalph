@@ -81,7 +81,7 @@ inspection to `Ready`.
 | --- | --- |
 | S7 complete intermediate edit, actual timer read/claim/plan/Git/Begin before E, exact retained attempt, forbidden mutations, both native clients, recorded cassette equivalence | `running-host-intermediate-edits.acceptance.test.ts`: `timer reads Complete authored D evidence before later edits and both clients preserve its exact meaning` |
 | S7 missing page, missing blocker, contradictory grouping and unreadable result; no D admission; independent complete later timer read; both native clients distinguish unavailable from established graph | The same file's separately named `MissingPage`, `MissingBlocker`, `Contradictory` and `Unreadable` cases |
-| Later blockers leave executing responsibility intact while still constraining safely suspended work | `recovery-activation.test.ts`: `later blocker authoring retains Running work and still prevents resuming safely suspended work` |
+| Later blockers leave executing responsibility intact while still constraining safely suspended work | `recovery-activation.test.ts`: `later blocker authoring retains Running work and still prevents resuming safely suspended work`; `production-reactivation.test.ts`: `a later unfinished blocker is observed without suspending any executing attempt` |
 | Explicit process-local stale inspection, initial unavailability and later recovery through scheduled reads | `running-host-inspection.test.ts`: `scheduled inspection marks its process-local retained graph stale and reports initial failure as unavailable`; `restart reconstructs without durable inspection state` |
 
 The cassette is generated from each production fixture's accepted Journal prefix

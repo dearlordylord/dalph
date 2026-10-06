@@ -2687,20 +2687,6 @@ const completeAuthorityConstraintCases: ReadonlyArray<{
     options: { graph: "MembershipLost" }
   },
   {
-    name: "new unfinished blocker",
-    observation: (event) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "CompleteTaskTrackerFacts" &&
-      event.observation.factFamilies.some(
-        (family) =>
-          family._tag === "TaskPrerequisites" &&
-          family.prerequisites.some(
-            ({ prerequisiteTaskIds, taskId }) => taskId === "B" && prerequisiteTaskIds.includes(TaskId.make("D"))
-          )
-      ),
-    options: { graph: "BlockerAdded" }
-  },
-  {
     name: "missing exact claim",
     observation: (event) =>
       event._tag === "TaskTrackerFactsObserved" &&
@@ -2751,6 +2737,44 @@ it.effect.each(completeAuthorityConstraintCases)(
         [TaskId.make("A"), TaskId.make("C")]
       )
     })
+)
+
+it.effect("a later unfinished blocker is observed without suspending any executing attempt", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({
+      graph: "BlockerAdded",
+      changedTask: "B",
+      source: "Timer",
+      threeExecuting: true
+    })
+    expect(result.executorCalls).toEqual([])
+    expect(
+      result.journalRecords.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies.some(
+            (family) =>
+              family._tag === "TaskPrerequisites" &&
+              family.prerequisites.some(
+                ({ prerequisiteTaskIds, taskId }) => taskId === "B" && prerequisiteTaskIds.includes(TaskId.make("D"))
+              )
+          )
+      )
+    ).toBe(true)
+    const activeReadIndex = result.journalRecords.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTrackerGraph" &&
+        event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+    )
+    expect(activeReadIndex).toBeGreaterThanOrEqual(0)
+    expect(
+      result.journalRecords
+        .slice(activeReadIndex)
+        .some(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+    ).toBe(false)
+  })
 )
 
 it.effect("accepted B F2 refresh suspends only B1 while A1 and C1 continue executing", () =>

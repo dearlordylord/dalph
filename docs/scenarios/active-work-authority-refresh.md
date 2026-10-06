@@ -305,8 +305,10 @@ ordinary executing-work shortcut prevents them from refreshing A1, B1, or C1.
    intent and asks the executor to suspend B1. It preserves B's exact claim,
    worktree and work in progress, B1's executor evidence, and every separate
    unfinished disposition. The same ordinary route localizes any independently
-   proven lifecycle, membership, blocker, claim, worktree, or lineage
-   constraint. A complete observation that B's exact claim is missing or held
+   proven lifecycle, membership, claim, worktree, or lineage
+   constraint. Later unfinished prerequisites constrain admission and safely
+   suspended resumption; they preserve an executing attempt’s responsibility
+   and do not enter the suspension route merely because a blocker appeared. A complete observation that B's exact claim is missing or held
    by another owner is a proven claim constraint and enters this `Suspend(B1)`
    route. An incomplete, unavailable, unreadable, malformed, or
    identity-contradictory boundary result proves no constraint and selects no
@@ -524,10 +526,15 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   including a missing or foreign exact claim suspend only their affected
   attempt: $name` in
   `packages/dalph/src/application/production-reactivation.test.ts` covers
-  changed instructions, completed lifecycle, target-membership loss, a new
-  unfinished blocker, missing claim, foreign claim, lost worktree, and
+  changed instructions, completed lifecycle, target-membership loss,
+  missing claim, foreign claim, lost worktree, and
   incompatible lineage. Every case observes B's complete authority fact before
   one B-only Suspend/Safe chronology and asserts no A/C executor command.
+- **Later-blocker refinement:** [S7 intermediate tracker edits](intermediate-tracker-edits.md)
+  preserves executing work when a later blocker appears. `a later unfinished
+  blocker is observed without suspending any executing attempt` in the same
+  production test file observes B’s complete prerequisite fact and asserts no
+  executor command or command intent for any executing attempt.
 - **Existing model-based test:** `re-establishes ordinary provenance after
   active refresh lifecycle suspension` in
   `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts`
