@@ -906,3 +906,35 @@ model state is introduced. The coverage configuration serializes this process-he
 acceptance file alongside the existing host command files; it changes scheduling
 of checks only. Graceful command admission/Exit remains #369, graceful watch
 closure remains #372, and complete changing-graph settlement remains #375.
+
+
+### #374 implementation review and qualification evidence
+
+The Linux production host and both actual client children passed the owned
+S5/S9 rows above on Node 24.20.0. The specification and repository-standards
+reviews of `a33de193e` through `fcaf5ead5` reported no scoped blockers. Their
+separate tooling-repair reviews closed the fixture deadline finding at
+`5af8ee9df`; all 19 owned-server fixture tests passed under admitted custody,
+as did the complete formal-control suite, lint census and documentation check.
+
+`pnpm check:all --candidate=a33de193e5a7976693502a34188d1a1a45b8f837`
+passed on the frozen repaired candidate `5af8ee9dfc578d2207e1105b5b3dffa36534cb15`
+in gate `11ab8e7a-f316-4725-8b43-4a3e310f82eb`: command exit 0,
+qualification passed and custody stopped. Its formal disposition was
+`not-requested`. The earlier formal gate
+`aaeb2661-9a6b-4fcd-a35f-57c517b2ecca` separately exited 0 with passed outcome,
+stopped custody and unchanged source; formal attempt
+`1c16855f-1935-4911-a8c7-9544e3f8e43b` passed. All 126 recorded formal source
+entries match the repaired candidate. This audits the executed proof's scope;
+it does not represent another worktree's reused certification or a new formal
+run on the tooling-only repair.
+
+The first full attempt failed in formal-control fixture admission because the
+bounded runner restored enclosing custody into its disposable-repository
+child. The repair registers that exact launcher with its parent, gives the
+child independent disposable admission and preserves its own deadline;
+cancellation obtains separate exact stopped-descendant evidence without
+rewriting the failed receipt. That routing changes no Dalph runtime behavior.
+The focused failure was reproduced and repaired before the full rerun above.
+This closes local implementation evidence for #374; it does not claim tracker
+closure or the complete #375 delivery suffix.
