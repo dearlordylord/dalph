@@ -62,6 +62,8 @@ questions. Reuse guidance already read unless it changed or scope changed.
   leaving no stage result or child-stage log. Repair the cause and observe the
   focused check passing before another full run. An incomplete process retains
   its custody fence until stopped writers are proved through reconciliation.
+  After two attempts without new discriminating evidence, name competing causes
+  and change the experiment; another full run or reviewer alone is not progress.
 - After a completed broad run, close isolated test-only defects using
   [focused repair evidence](docs/development/checks.md#closing-a-test-only-repair).
   Repeat broad checks only for a named affected boundary or still-required agreed
@@ -69,13 +71,16 @@ questions. Reuse guidance already read unless it changed or scope changed.
 - Before starting or waiting on an operation expected to exceed one minute,
   record its expected duration and wall-clock stop time. At that time, stop
   safely, preserve evidence, and name the next discriminating action before a
-  rerun; a live handle is not progress. Time-box fixture repair separately;
-  then open a scoped follow-up, or report blocked if it is the only proof of
-  current acceptance behavior.
+  rerun; a live handle is not progress. After 30 minutes of active fixture repair
+  without new discriminating evidence, open a scoped follow-up, or report blocked
+  if it is the only proof of current acceptance behavior.
 - Use minimal live-provider fixtures, controlled tests for bulk behavior, and
   never retry throttled mutations.
-- Select checks using [choosing checks](docs/development/checks.md#choosing-checks);
-  close [scoped reviews](docs/CODE_REVIEW.md#review-closure) before handoff.
+- For implementation and handoff, follow
+  [choosing checks](docs/development/checks.md#choosing-checks) for focused checks,
+  broad-run authorization and evidence, and final acceptance. In delegated work,
+  the parent/integrator owns acceptance of the combined task. Close
+  [scoped reviews](docs/CODE_REVIEW.md#review-closure) before handoff.
 - Target repositories' application-specific typecheck, model-checking, and MBT
   gates are not Dalph implementation gates.
 - `check:all`, `check:ci:quality`, `test:coverage`, `check:quint`, `check:baseline`,

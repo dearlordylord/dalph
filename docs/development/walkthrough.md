@@ -1,15 +1,123 @@
-# Disposable production walkthrough
+# Production walkthrough
 
 [Development entry](../DEVELOPMENT.md) · [Navigation](../NAVIGATION.md)
 
-### Disposable production repository walkthrough
+## Run an authorized real task graph
+
+The Operator selects a GitHub issue and Dalph reads its native grouping
+descendants and transitive prerequisites. An authored `Parent` link or a textual
+prerequisite does not create those relationships. Inspect the actual sub-issue
+and blocked-by edges before launch; the selected Run graph is this target
+closure, not every issue in the repository. A grouping root may itself become
+runnable, so give it an explicit accepted task and the required native blockers.
+See [graph and claim authority](../architecture/tracker-graph-and-claims.md).
+
+Use a dedicated local clone for integration, with private state and worktree
+roots outside it. Keep the operator's ordinary checkout separate. Pin the Dalph
+source commit and build its CLI before launch; do not rebuild or edit that
+source while a host uses it. Record the target repository, exact planned Base
+SHA, integration ref and authorized publication endpoint. The disposable
+example below publishes to a local bare repository; real remote publication
+requires its own authorized endpoint and Git credentials.
+
+Choose preparation for the target project. `worktreePreparation: dalph-worktree`
+opts into Dalph's Node/pnpm preparation helper and is appropriate for this
+repository's task worktrees. Do not enable it for a Bend or other unrelated
+target merely because Dalph itself uses pnpm. Use the target's instructions and
+checks; Dalph implementation gates are not target-application acceptance gates.
+See [exact worktree preparation](../scenarios/prepare-exact-codex-task-worktree.md).
+
+Before a live invocation, record its expected duration, absolute UTC stop time,
+non-secret configuration path and retained stdout/stderr locations. Keep
+credentials in the environment and preserve the selected Run's durable state.
+At the stop time request graceful Exit, observe the process result and prove
+owned writers stopped before restarting. A live process or repeated status
+record does not prove task progress.
+
+### Attach to the running host
+
+Use `host` when separate clients need live inspection. `run` does not create a
+listening attachment endpoint. For example, with a complete non-secret
+configuration and authorized target:
+
+```bash
+mise exec -- node "${DALPH_EXECUTABLE}" host --production \
+  --config /absolute/production.json --listen http://127.0.0.1:43127 \
+  github:OWNER/REPOSITORY#ISSUE
+```
+
+From another shell, use the same built CLI to read the descriptor and snapshot:
+
+```bash
+mise exec -- node "${DALPH_EXECUTABLE}" attach descriptor \
+  --host http://127.0.0.1:43127 --json
+mise exec -- node "${DALPH_EXECUTABLE}" attach snapshot \
+  --host http://127.0.0.1:43127 --json
+```
+
+These reads observe the host without scheduling work or polling GitHub directly.
+An explicit assigned Docker IPv4 address can replace loopback; use the exact
+address on both host and client. The endpoint retains Host-authority and browser
+Origin guards and is not a browser dashboard. See
+[Docker-IP attachment](../scenarios/running-host-docker-ip.md) and
+[host/client contracts](../scenarios/running-host-clients.md).
+Check the pinned executable's `attach --help` before using additional commands:
+accepted scenarios may describe capabilities not yet shipped in that build.
+Full-work-scope inspection and a native live page are tracked in
+[#432](https://github.com/dearlordylord/dalph/issues/432).
+
+### Diagnose and recover without bypassing authority
+
+Distinguish executor completion, integrated/published task delivery, Run
+termination and application Exit. Verify delivery against the tracker and Git;
+`RunDisposition: Completed` does not prove successful provider finalization or
+process exit. Likewise, successful graceful Exit does not prove task delivery.
+Preserve sanitized failing-boundary evidence when finalization exits nonzero.
+
+Treat `CircuitOpen` as a local request-circuit observation and `Throttled` as a
+provider read-boundary observation; neither proves bad credentials or exhausted
+primary quota. Diagnose the named operation before another launch. Do not retry
+throttled mutations. Empty delivery entries do not prove there is no retained
+failure or integration responsibility; actionable projection is tracked in
+[#430](https://github.com/dearlordylord/dalph/issues/430).
+
+One real beta Run stalled during Codex thread enumeration and resumed with an
+explicit dedicated provider home using the original protocol. This is an
+observed configuration recovery, not a universal source fix. Dalph currently
+uses the invoking provider environment; it does not automatically provision an
+isolated home. Preserve authentication and exact session continuity when
+diagnosing an isolated environment; do not copy global history/databases,
+rewrite provider parameters or mutate another host's home as a workaround.
+The supported isolation design is tracked in
+[#431](https://github.com/dearlordylord/dalph/issues/431).
+
+Private stores can contain append-only integrity-wrapped records even when a
+filename ends in `.json`; do not assume one ordinary JSON document or edit
+records to repair state. Long deterministic worktree paths preserve exact
+identity. Inspect their locations with `git worktree list --porcelain`, rather
+than reconstructing opaque identifiers manually. A live SQLite store can hold
+an exclusive lock: prefer passive host inspection and do not bypass that lock.
+
+After Exit, recover an unfinished Run with the same configuration, journal,
+repository, private stores and retained resources only after stopped-writer
+reconciliation. A sealed executor `Failed` is not permission for ordinary
+Restart or a duplicate Run. Keep the candidate and failure evidence; the new
+explicit recovery protocol is tracked in
+[#428](https://github.com/dearlordylord/dalph/issues/428). Native result binding
+[#429](https://github.com/dearlordylord/dalph/issues/429) and in-flight guidance
+[#433](https://github.com/dearlordylord/dalph/issues/433) must not be assumed
+available until delivered. Do not manually publish a retained candidate as
+Dalph delivery.
+
+## Disposable production repository walkthrough
 
 This walkthrough lets Alice run the shipped production command against one
 dedicated disposable GitHub repository and one unblocked issue. Production can
 create and delete repository labels, close the issue, start Codex sessions,
 write local Git refs and worktrees, and retain durable local state. Do not point
-it at an existing project, a shared clone, or an issue with sub-issues or
-blocking relationships.
+the disposable creation or deletion steps at an existing project. Real graph
+operation uses the separate guidance above; this example intentionally has no
+sub-issues or blocking relationships.
 
 This is an operator walkthrough of already implemented behavior. It is not the
 repeatable live-provider qualification owned by GitHub issue #261 and supplies
@@ -88,8 +196,8 @@ is separate from this source checkout.
 
 ```bash
 export DALPH_SOURCE="$(pwd -P)"
-pnpm install --frozen-lockfile
-pnpm build
+mise exec -- pnpm install --frozen-lockfile
+mise exec -- pnpm build
 
 export DALPH_EXECUTABLE="${DALPH_SOURCE}/packages/dalph/dist/bin/dalph.js"
 export DALPH_CODEX_EXECUTABLE="${DALPH_SOURCE}/node_modules/.bin/codex"
@@ -167,7 +275,7 @@ chmod 700 \
   "${DALPH_DEMO_TASK_WORKTREES}" \
   "${DALPH_DEMO_INTEGRATOR_WORKTREES}"
 
-node --input-type=module <<'NODE'
+mise exec -- node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs"
 
 const requiredEnvironment = [
@@ -254,7 +362,7 @@ work. See [shared-home startup scenarios and qualification limits](../scenarios/
 Run exactly this public command from any directory:
 
 ```bash
-node "${DALPH_EXECUTABLE}" \
+mise exec -- node "${DALPH_EXECUTABLE}" \
   run "github:${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}#${DALPH_DEMO_ISSUE_NUMBER}" \
   --production \
   --config "${DALPH_DEMO_CONFIG}"
@@ -394,7 +502,7 @@ then invokes the same public command and asserts that the same Run is
 recovered:
 
 ```bash
-pnpm exec vitest run \
+mise exec -- pnpm exec vitest run \
   packages/dalph/src/application/production-public-recovery.integration.test.ts \
   -t "unfinished SQLite public restart reports the same recovered Run and no second beginning"
 ```

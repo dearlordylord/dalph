@@ -6,6 +6,34 @@
 
 Choose checks by affected behavior, not by commit or handoff alone:
 
+Default: `pnpm check:fast`, focused owner/consumer checks. Changed socket,
+process, crash, installation or ownership boundary: exercise it physically.
+Completion: selected checks + scoped reviews pass; report scope/gaps, not full coverage.
+
+Full suite/coverage/gate: explicit user request, accepted release/milestone, or
+agreed cross-cutting qualification beyond focused checks. State authorization and
+added evidence before starting.
+
+For delegated work, the parent/integrator owns final acceptance of the combined
+task. Workers run focused owner and affected-consumer checks and report results,
+candidate identity, and gaps. The parent/integrator selects and arranges required
+task-wide checks on the coherent integrated candidate, then assesses their results;
+execution may be delegated on that exact candidate. Batch repairs, focused checks,
+and scoped reviews before required task-wide qualification.
+
+“Once at the end” means the end of the combined task; each child handoff closes
+its assigned scope with its selected checks. Repeat checks only under the failure
+and evidence-validity rules, including [test-only repair closure](#closing-a-test-only-repair).
+An agent delivering a worktree independently owns its final acceptance under the
+same check-selection rules. Explicit requests for checks at another stage,
+required hooks/CI, submission checks, and formal obligations still apply. Routine
+implementation, review, configuration, or fixture edits alone require no full repeat.
+
+`check:all`: exact Base via `--candidate=<base sha>`. `check:ci:quality`: same flag,
+`DALPH_FULL_GATE=1`, or CI. Agent-set values are not user agreement.
+Focused tests: explicit files. Bare `pnpm test` runs coverage; `--no-coverage`
+without files still runs the full ordinary suite.
+
 - **Documentation/history cleanup:** check formatting, links, and remaining
   references. Explain why runtime behavior is unchanged; no local full gate.
 - **Tooling-only changes:** run affected tool tests, consumer/path checks, and
@@ -45,9 +73,16 @@ Choose checks by affected behavior, not by commit or handoff alone:
   `check:baseline` remains an explicit diagnostic convenience, not a prerequisite.
 - **Shared qualification changes:** run affected tool tests and inspect the
   generated local and hosted plans before integration. Run the full local gate
-  only when its end-to-end custody or evidence validity is the changed boundary;
+  only when its end-to-end custody or evidence validity is the changed boundary
+  and that qualification is part of the agreed task scope;
   selection-only changes receive hosted CI validation after integration.
   Uncertain impact requires investigation, not exemption.
+
+Broad failure: retain evidence; diagnose every defect with its owner check;
+distinguish source, fixture and environment. Repair established cause; focused
+pass before full repeat; reassess agreed need. Unexplained timeout: discriminate.
+Two attempts without new evidence: name competing causes, change experiment.
+Another broad run/reviewer alone is not progress.
 
 ### Closing a test-only repair
 
