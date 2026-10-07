@@ -1,6 +1,6 @@
 {
   "version": 1,
   "lane": "integration-finality/1",
-  "provenanceSha256": "375828764bbd69a68a431bb1ebdb42cfd282311c0056cc1924bd34e49ce6deba",
-  "corpusSha256": "bce50977f70676805436709e51866e8664f4a2833f8beb14e7b0f969d52e6cc0"
+  "provenanceSha256": "b0174d526ac3331b3ee06199a2f66edafdc84f6fa415ad3697064d254e1d051b",
+  "corpusSha256": "4fbfdefc431e4e376ea9a23b78fb200e03df893f8ab86506414b53695808681f"
 }

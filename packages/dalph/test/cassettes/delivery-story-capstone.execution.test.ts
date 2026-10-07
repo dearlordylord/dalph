@@ -2549,7 +2549,7 @@ it.effect(
       expect(observations.every(({ purpose }) => purpose._tag === "PassiveLifecycleObservation")).toBe(true)
       for (const { currentGraphPublication } of observations) {
         expect(currentGraphPublication).toMatchObject({
-          publication: {
+          graphView: {
             graph: { _tag: "GraphEstablished", observation: { snapshot: controlledScenario.graphs.G1 } },
             policy: ds09.beforeLoss.ds07.returned
           }

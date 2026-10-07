@@ -709,7 +709,15 @@ it.effect("requires a new activation graph without discarding the shared accepte
 it.effect("keeps foreign tracker facts out of the target-bound public delivery relation", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const journal = yield* makeJournalService
+      const storage = yield* JournalStore
+      // Fresh-task planning requires the immutable Base policy in the Run beginning.
+      yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest, {
+        _tag: "ExplicitFixedBase",
+        baseSha: recoveredAttempt.baseSha
+      })
+      const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+      if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+      const journal = yield* makeJournal(runId, target, initial, storage)
       const foreignTarget = FixtureTarget.make("reactive-delivery-foreign-target")
       const appendGraph = Effect.fn("ReactiveDeliveryTest.appendTargetGraph")(function* (
         operationId: OperationId,
