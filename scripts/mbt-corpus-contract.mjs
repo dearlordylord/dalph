@@ -32,6 +32,11 @@ export const deriveCorpusManifest = async (worktree = root) => {
     "scripts/hosted-formal-input-manifest.json",
     "scripts/mbt-corpus-contract.mjs",
     "scripts/measure-mbt-corpus.mjs",
+    "scripts/mbt-corpus-loader.mjs",
+    "scripts/generate-mbt-corpus.mjs",
+    "scripts/generate-mbt-corpus-worker.mjs",
+    "scripts/mbt-corpus-replay.mjs",
+    "scripts/replay-mbt-corpus.mjs",
     "patches/@firfi__quint-connect@2.0.2-effect4.1.patch",
     "patches/@informalsystems__quint@0.32.0.patch"
   ])

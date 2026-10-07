@@ -1,20 +1,31 @@
 # MBT corpus inventory and replay provenance
 
 The repository's MBT verifier selects the existing conformance drivers through
-`pnpm test:mbt`. This slice inventories those selections and defines validation
+`pnpm test:mbt`. The manifest inventories those selections and validates provenance
 before corpus consumption. It changes no Dalph runtime code, driver, assertion,
 Vitest selection, or Quint model semantics. Ordinary and coverage tests still
 exclude `packages/**/*.mbt.test.ts`.
 
 Derived from issue #363. The checked-in
 [manifest](../../scripts/mbt-corpus-manifest.json) is the single repository-owned
-lane-to-corpus inventory. Refresh and check it with:
+lane-to-corpus inventory. Refresh and check it explicitly with:
 
 ```bash
 mise exec -- node scripts/mbt-corpus-contract.mjs --write
 mise exec -- node scripts/mbt-corpus-contract.mjs --check
 mise exec -- node --test scripts/mbt-corpus-contract.test.mjs
 ```
+
+Generate selected lanes, or the entire finite corpus, explicitly:
+
+```bash
+mise exec -- pnpm mbt:generate result-recovery-direction/1
+mise exec -- pnpm mbt:generate --all
+mise exec -- pnpm mbt:replay
+```
+
+[Generation and replay controls](mbt-corpus-generation.md) describe custody,
+publication, failure evidence, and the corpus-only service.
 
 ## Selected boundaries
 
@@ -35,7 +46,7 @@ worker. Both resolve current workspace source, as checked by
 [the source-resolution control](../../scripts/mbt-source-resolution.test.ts).
 The workspace-source-resolution suite is selected but generates no corpus.
 
-| Suite | Existing replay boundary that the next owner must preserve |
+| Suite | Existing replay boundary that corpus consumers preserve |
 | --- | --- |
 | accepted-result-integration | Production accepted-result, Integrator, Git promotion and publication alignment, including directed seed-57 paths and lost acknowledgement assertions. |
 | application-exit | Application Exit decisions, drain/cleanup and projected state after each action. |
@@ -165,9 +176,13 @@ configuration, state check and post-replay assertions. It must never call
 `quintRun` (which supplies live generation), `generateTraces`, the CLI, or a
 fallback generator. A corpus-only `TraceGeneration` service may supply already
 validated traces to `quintRunWithTraceGeneration`; its `generate` method must
-fail on an option mismatch and have no live generation layer. This is the next
-owner's wiring boundary. Existing MBTs still generate live traces in this slice;
-no payload corpus or replay migration is claimed here.
+fail on an option mismatch and have no live generation layer. The [corpus-only layer](../../scripts/mbt-corpus-loader.mjs) supplies this seam.
+The lane owner still provides its existing driver, configuration, state check
+and assertions. This task does not change the selected MBT source files or wire
+mandatory automatic verification. The explicit `pnpm mbt:replay` consumer runs
+temporary copies of all selected suites through the corpus-only seam.
+`pnpm test:mbt` retains its existing live-generation behavior until its migration
+is separately accepted.
 
 The controls in [the contract tests](../../scripts/mbt-corpus-contract.test.mjs)
 cover valid inventory/receipt acceptance; stale, missing and malformed model,
@@ -209,48 +224,42 @@ them with corpus membership would require a new accepted formal contract and is
 blocked. Their model/helper source digests and `checkReverseTrace` consumers are
 included in the manifest.
 
-## Representative measurement and handoff
+## Representative replay and acceptance boundary
 
-At Base `893505ffb2bfc9a04dc4f4342feb12070dddf649`, on 2026-10-07 UTC,
-[the bounded fixture](../../scripts/measure-mbt-corpus.mjs) copied the existing
-result-recovery-direction positive replay, retaining its production driver,
-state comparison, seed 428, ten samples, ten traces and depth 15. It measured
-live generation separately, then supplied those same traces through a corpus-only
-service for replay. This instrumented consumer passed all ten traces:
-**276,227 bytes**, **160 states**, **1,168 ms generation**, **62 ms replay**.
-The surrounding Vitest command took 2.31 seconds. This is a single local fixture
-observation, not complete corpus generation or full-suite qualification.
+The [bounded representative fixture](../../scripts/measure-mbt-corpus.mjs)
+copies the existing result-recovery-direction positive driver, state comparison,
+seed 428, ten samples, ten traces and depth 15. It compares the generated states
+and variables with the validated artifact, runs the same driver against both,
+and asserts exact outcomes. Process and fetch traps surround corpus replay;
+any attempted call fails the fixture. The temporary suite uses ordinary test
+selection and cannot change the maintained MBT inventory. The fixture refuses
+missing or stale corpus before replay; it does not repair it.
 
 ```bash
 mise exec -- node scripts/measure-mbt-corpus.mjs
+mise exec -- node --test scripts/mbt-corpus-contract.test.mjs scripts/mbt-corpus-loader.test.mjs
 ```
 
-The fixture validates provenance before invoking generation, pins `QUINT_BIN`,
-uses the shared bounded runner with a 60-second process-group deadline, creates
-its temporary suite exclusively and removes only that file afterward. It writes
-measurement and complete trace bytes under `.scratch/mbt-fixture/`. The normal
-result-recovery suite and all other selected suites remain untouched. A failure
-requires diagnosis at this fixture's boundary; it does not authorize a broad
-formal rerun.
+The command records measurement, exact live/replay results and instrumentation
+under `.scratch/mbt-fixture/`. It validates current provenance, pins the generator
+executable, and uses the shared bounded runner with a 60-second deadline.
+It creates its temporary suite exclusively and removes only that file.
+Root Quint metadata can contain generation wall time; comparison preserves and
+checks the model variables and complete states rather than requiring timestamps
+to match across separate generation invocations. Artifact validity uses content
+hashes and checked inputs, never timestamps or file modification times.
 
-| Next owner | Files and obligation |
-| --- | --- |
-| Inventory/provenance maintenance | `scripts/mbt-corpus-contract.mjs`, `scripts/mbt-corpus-manifest.json`, `scripts/mbt-corpus-contract.test.mjs`: refresh exact closures/options and run all refusal controls. |
-| Bounded offline corpus producer | `corpora/mbt/<id>.itf.json` and exact receipts defined above: generate every mapped option site using pinned tools, enforce decreasing budgets and report fit before replay wiring. No files at these paths exist yet. |
-| Corpus replay wiring | Each `source` in the manifest: keep every consumer in `replayBoundaries`, shared positive/mutant drivers, exact state comparisons and post-replay assertions; replace only live generation. |
-| Reverse/evaluator preservation | `packages/dalph/test/conformance/planned-attempt-executor-reverse.ts`, `quint-evaluator-frontier.ts`, `planned-attempt-executor.mbt.test.ts`: keep the existing reverse contract and refusal controls. |
-| Selection/control ownership | `vitest.config.ts`, `scripts/mbt-source-resolution.test.ts`, `scripts/hosted-formal-input-manifest.json`: preserve ordinary exclusion, both current-source projects and hosted closure controls. |
-| Measurement | `scripts/measure-mbt-corpus.mjs`: one full existing representative lane; no broad profile exploration. |
+The loader controls use an isolated copy of the semantic inputs. They prove
+repeated validated loads are equal, and missing bytes/receipt, corrupt bytes,
+rehashed stale model/tool/options provenance, malformed ITF envelopes, option
+mismatch, unknown lanes and live-generator configuration are refused. Process,
+HTTP/HTTPS and fetch instrumentation must remain zero across positive and
+negative loads. Action dispatch and model state decoding remain responsibilities
+of the pinned runner and existing configured drivers, including the named-test
+`replayAction` path in automatic-successor.
 
-Host-liveness issue #466 remains a blocking prerequisite for unattended execution.
-This bounded slice supplies no evidence that #466 is resolved and does not close
-#363. Downstream production generation/wiring remains conditional on that
-prerequisite and proof that every existing obligation fits the documented limits.
-
-For this tooling candidate, the manifest freshness check, 25 focused contract
-controls, four MBT source-selection controls, the bounded representative fixture,
-documentation links and full type-aware lint census passed. The initial census
-failed before workspace export declarations were built; `pnpm check:artifacts`
-prepared them, the affected lint boundary passed, and the coherent census passed.
-No application source/test or model changed, so `check:fast`, `check:submit`,
-full MBT and full formal qualification were not selected for this tooling slice.
+Issue #466 is a prerequisite for unattended execution. The tracker marked it
+closed when this task read it on 2026-10-07 UTC; the Base includes its finality
+and retained Codex scope cleanup repairs. This tooling work does not itself
+qualify host liveness or close #363. Complete corpus fit and the focused controls
+are required before mandatory gate wiring; partial generation never qualifies.
