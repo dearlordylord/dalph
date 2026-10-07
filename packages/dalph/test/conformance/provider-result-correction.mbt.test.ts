@@ -1,6 +1,6 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, quintRun, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
+import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -13,6 +13,8 @@ import {
   providerResultResponseExpired,
   rejectProviderResultResponse
 } from "../../src/application/provider-result-correction.js"
+
+const { quintIt, quintRun } = corpusReplayFor("packages/dalph/test/conformance/provider-result-correction.mbt.test.ts")
 
 // Model ticks represent fifteen seconds; production retains absolute milliseconds.
 const tickMilliseconds = 15_000

@@ -4,7 +4,7 @@ import { quintRunWithTraceGeneration, TraceGeneration } from "@firfi/quint-conne
 import { corpusManifestPath, validateCorpusManifest } from "./mbt-corpus-contract.mjs"
 import { corpusOptions, corpusTraceGenerationLayer } from "./mbt-corpus-loader.mjs"
 
-// Temporary consumer copies keep their original source identity for lane selection.
+// Each maintained suite supplies its exact source identity for lane selection.
 export const corpusReplayFor = (source) => {
   const selectLayer = (options) =>
     Effect.tryPromise(async () => {

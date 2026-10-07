@@ -87,253 +87,253 @@
     "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 4785,
+        "line": 4787,
         "source": "quintIt(\n  it.effect,\n  \"replays accepted-result integration through the outer Integrator journal and direct Git qualification premise\",\n  {\n    backend: \"typescript\",\n    driverFactory: acceptedResultIntegrationDriver,\n    maxSteps: 35,\n    nTraces: 100,\n    maxSamples: 100,\n    // Directed recovery tests below own mandatory ambiguity and refusal paths.\n    seed: \"57\",\n    spec: \"specs/acceptedResultIntegration.qnt\",\n    stateCheck: stateCheck(\n      (raw) =>\n        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(\n          Effect.map(({ state }) => ({\n            ...state,\n            results: new Map(\n              [...state.results].map(([id, result]) => [\n                id,\n                {\n                  ...result,\n                  phase: variantTag(result.phase),\n                  integratorOutcome: variantTag(result.integratorOutcome),\n                  candidateGitObservation: variantTag(result.candidateGitObservation),\n                  publicationProofBasis: variantTag(result.publicationProofBasis),\n                  publicationObservation: variantTag(result.publicationObservation),\n                  publicationResumePriorPhase: variantTag(result.publicationResumePriorPhase),\n                  publicationResumePriorObservation: variantTag(result.publicationResumePriorObservation),\n                  promotionGitObservation: variantTag(result.promotionGitObservation),\n                  quarantineCause: variantTag(result.quarantineCause),\n                  quarantineDirection: variantTag(result.quarantineDirection),\n                  lastDirection: variantTag(result.lastDirection)\n                }\n              ])\n            )\n          })),\n          Effect.orDie\n        ),\n      (spec, implementation) => {\n        if (\n          spec.nextJournalPosition !== implementation.nextJournalPosition ||\n          variantTag(spec.destinationAdmission) !== implementation.destinationAdmission ||\n          spec.destinationAdmissionIntentRecorded !== implementation.destinationAdmissionIntentRecorded ||\n          spec.destinationEndpoint !== implementation.destinationEndpoint ||\n          spec.destinationBranch !== implementation.destinationBranch ||\n          spec.destinationCompatibilityProven !== implementation.destinationCompatibilityProven ||\n          spec.recovered !== implementation.recovered ||\n          spec.restartCount !== implementation.restartCount ||\n          spec.targetFactsCurrent !== implementation.targetFactsCurrent ||\n          spec.targetHeadProof !== implementation.targetHeadProof ||\n          spec.targetReacquisitionRequired !== implementation.targetReacquisitionRequired ||\n          spec.trackerFactsCurrent !== implementation.trackerFactsCurrent ||\n          spec.runPaused !== implementation.runPaused ||\n          spec.runExitAdmitted !== implementation.runExitAdmitted\n        ) {\n          return false\n        }\n        return [...spec.results].every(([id, expected]) => {\n          const actual = implementation.results.get(id)\n          return (\n            actual !== undefined &&\n            expected.acceptedEvidencePreserved === actual.acceptedEvidencePreserved &&\n            expected.acceptedResultCommit === actual.acceptedResultCommit &&\n            expected.candidateGitObservation === actual.candidateGitObservation &&\n            expected.candidateGitReadCount === actual.candidateGitReadCount &&\n            expected.candidateGitReadIntentRecorded === actual.candidateGitReadIntentRecorded &&\n            expected.candidateGitResponseAmbiguous === actual.candidateGitResponseAmbiguous &&\n            expected.candidateJournalPosition === actual.candidateJournalPosition &&\n            expected.candidateQualificationProven === actual.candidateQualificationProven &&\n            expected.candidateReported === actual.candidateReported &&\n            expected.candidateResource === actual.candidateResource &&\n            expected.expectedTargetHead === actual.expectedTargetHead &&\n            expected.integrationResponsibilityCount === actual.integrationResponsibilityCount &&\n            expected.integrationResponsibilityRecorded === actual.integrationResponsibilityRecorded &&\n            expected.integrationSession === actual.integrationSession &&\n            expected.integrationTarget === actual.integrationTarget &&\n            expected.integratorInvocationCount === actual.integratorInvocationCount &&\n            expected.integratorOutcome === actual.integratorOutcome &&\n            expected.integratorResponseAmbiguous === actual.integratorResponseAmbiguous &&\n            expected.integratorRunResultRecorded === actual.integratorRunResultRecorded &&\n            expected.integratorResumeCount === actual.integratorResumeCount &&\n            expected.lineageCompatible === actual.lineageCompatible &&\n            expected.sessionFixed === actual.sessionFixed &&\n            expected.observedFirstParent === actual.observedFirstParent &&\n            expected.observedSecondParent === actual.observedSecondParent &&\n            expected.phase === actual.phase &&\n            expected.plannedTargetHead === actual.plannedTargetHead &&\n            expected.preIntegrationCancellation === actual.preIntegrationCancellation &&\n            expected.processSuccessObserved === actual.processSuccessObserved &&\n            expected.promotionAttemptCount === actual.promotionAttemptCount &&\n            expected.promotionAuthorized === actual.promotionAuthorized &&\n            expected.promotionCandidateAncestryProven === actual.promotionCandidateAncestryProven &&\n            expected.promotionCompareAndSetRequested === actual.promotionCompareAndSetRequested &&\n            expected.promotionEquivalentContentAccepted === actual.promotionEquivalentContentAccepted &&\n            expected.promotionExpectedHeadVerified === actual.promotionExpectedHeadVerified &&\n            expected.promotionForceRequested === actual.promotionForceRequested &&\n            expected.promotionFreshExactHeadObservation === actual.promotionFreshExactHeadObservation &&\n            expected.promotionFreshExactHeadReads === actual.promotionFreshExactHeadReads &&\n            expected.promotionGitObservation === actual.promotionGitObservation &&\n            expected.promotionIntentRecorded === actual.promotionIntentRecorded &&\n            expected.promotionLastAttempt === actual.promotionLastAttempt &&\n            expected.promotionObservedTargetHead === actual.promotionObservedTargetHead &&\n            expected.promotionResponseAmbiguous === actual.promotionResponseAmbiguous &&\n            expected.promotionResultRecorded === actual.promotionResultRecorded &&\n            expected.promotionTargetFactsCurrent === actual.promotionTargetFactsCurrent &&\n            expected.publicationIntentRecorded === actual.publicationIntentRecorded &&\n            expected.publicationAttemptCount === actual.publicationAttemptCount &&\n            expected.publicationLastAttempt === actual.publicationLastAttempt &&\n            expected.publicationResponseAmbiguous === actual.publicationResponseAmbiguous &&\n            expected.publicationFinalReadRequired === actual.publicationFinalReadRequired &&\n            expected.publicationResultRecorded === actual.publicationResultRecorded &&\n            expected.publicationProofRecorded === actual.publicationProofRecorded &&\n            expected.publicationProofBasis === actual.publicationProofBasis &&\n            expected.publicationObservation === actual.publicationObservation &&\n            expected.publicationObservedRemoteHead === actual.publicationObservedRemoteHead &&\n            expected.publicationEndpoint === actual.publicationEndpoint &&\n            expected.publicationBranch === actual.publicationBranch &&\n            expected.publicationRequestId === actual.publicationRequestId &&\n            expected.publicationCandidate === actual.publicationCandidate &&\n            expected.publicationIntegratorSession === actual.publicationIntegratorSession &&\n            expected.publicationExpectedTargetHead === actual.publicationExpectedTargetHead &&\n            expected.publicationOrdinaryRefspecRequested === actual.publicationOrdinaryRefspecRequested &&\n            expected.publicationForceRequested === actual.publicationForceRequested &&\n            expected.publicationDryRunOnly === actual.publicationDryRunOnly &&\n            expected.publicationEqualContentAccepted === actual.publicationEqualContentAccepted &&\n            expected.publicationProcessSuccessObserved === actual.publicationProcessSuccessObserved &&\n            expected.publicationSenderStopped === actual.publicationSenderStopped &&\n            expected.runIdentity === actual.runIdentity &&\n            expected.integrationResponsibilityIdentity === actual.integrationResponsibilityIdentity &&\n            expected.publicationResumeRequestRecorded === actual.publicationResumeRequestRecorded &&\n            expected.publicationResumeRequestRunIdentity === actual.publicationResumeRequestRunIdentity &&\n            expected.publicationResumeRequestResponsibilityIdentity ===\n              actual.publicationResumeRequestResponsibilityIdentity &&\n            expected.publicationResumeRequestIdentity === actual.publicationResumeRequestIdentity &&\n            expected.publicationResumeSchemaVersion === actual.publicationResumeSchemaVersion &&\n            expected.publicationResumePriorPhase === actual.publicationResumePriorPhase &&\n            expected.publicationResumePriorObservation === actual.publicationResumePriorObservation &&\n            expected.publicationResumeFactsRefreshed === actual.publicationResumeFactsRefreshed &&\n            expected.publicationResumeDispatchCount === actual.publicationResumeDispatchCount &&\n            expected.publicationResumeActive === actual.publicationResumeActive &&\n            expected.predecessorPreserved === actual.predecessorPreserved &&\n            expected.quarantineCause === actual.quarantineCause &&\n            expected.quarantineConflictCount === actual.quarantineConflictCount &&\n            expected.quarantineDirection === actual.quarantineDirection &&\n            expected.quarantineDirectionCount === actual.quarantineDirectionCount &&\n            expected.quarantineDirectionPosition === actual.quarantineDirectionPosition &&\n            expected.quarantineDirectionSession === actual.quarantineDirectionSession &&\n            expected.quarantineOccurrenceCount === actual.quarantineOccurrenceCount &&\n            expected.quarantinePosition === actual.quarantinePosition &&\n            expected.quarantineRecorded === actual.quarantineRecorded &&\n            expected.quarantineRedeliveryCount === actual.quarantineRedeliveryCount &&\n            expected.queuePosition === actual.queuePosition &&\n            expected.resourceBoundCommit === actual.resourceBoundCommit &&\n            expected.resourceBoundHead === actual.resourceBoundHead &&\n            expected.resourceBoundTarget === actual.resourceBoundTarget &&\n            expected.resourceHeadCandidate === actual.resourceHeadCandidate &&\n            retryDirectionFieldsMatch(expected, actual) &&\n            expected.retryFreshQuarantineCount === actual.retryFreshQuarantineCount &&\n            expected.retryNotApplicableCount === actual.retryNotApplicableCount &&\n            expected.retryRunCount === actual.retryRunCount &&\n            expected.submittedCandidate === actual.submittedCandidate &&\n            expected.successorFixed === actual.successorFixed &&\n            expected.successorHeadFreshlyObserved === actual.successorHeadFreshlyObserved &&\n            expected.successorIntegratorInvocationCount === actual.successorIntegratorInvocationCount &&\n            expected.successorResource === actual.successorResource &&\n            expected.successorRunCount === actual.successorRunCount &&\n            expected.successorRunOrdinal === actual.successorRunOrdinal &&\n            expected.successorSession === actual.successorSession &&\n            expected.successorTargetHead === actual.successorTargetHead &&\n            expected.targetHeld === actual.targetHeld &&\n            expected.legacyVerificationEvidence === actual.legacyVerificationEvidence &&\n            expected.integratorRunOrdinal === actual.integratorRunOrdinal &&\n            expected.integratorRunSession === actual.integratorRunSession &&\n            expected.lastDirection === actual.lastDirection &&\n            expected.lastDirectionPosition === actual.lastDirectionPosition &&\n            expected.lastDirectionSession === actual.lastDirectionSession &&\n            expected.lastRecoveryRunOrdinal === actual.lastRecoveryRunOrdinal &&\n            expected.lastRecoveryRunSession === actual.lastRecoveryRunSession\n          )\n        })\n      }\n    )\n  },\n  300_000\n)"
       }
     ],
     "packages/dalph/test/conformance/application-exit.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 766,
+        "line": 768,
         "source": "quintIt(\n  it.effect,\n  \"replays application Exit decisions through the production lifecycle kernel\",\n  {\n    backend: \"typescript\",\n    driverFactory: applicationExitDriver,\n    maxSteps: 30,\n    nTraces: 200,\n    seed: \"203\",\n    spec: \"specs/applicationExit.qnt\",\n    stateCheck: stateCheck(\n      (raw) =>\n        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(\n          Effect.map(({ state }) => ({\n            ...state,\n            phase: variantTag(state.phase),\n            tick: Number(state.tick),\n            cutoffCount: Number(state.cutoffCount),\n            requestCount: Number(state.requestCount),\n            mode: variantTag(state.mode),\n            result: variantTag(state.result),\n            resultProvenance: variantTag(state.resultProvenance),\n            requestedStatus: variantTag(state.requestedStatus),\n            ownerA: normalizedOwner(state.ownerA),\n            ownerB: normalizedOwner(state.ownerB),\n            attemptA: variantTag(state.attemptA),\n            attemptB: variantTag(state.attemptB),\n            write: variantTag(state.write),\n            durable: { ...state.durable, workflowExitRecords: Number(state.durable.workflowExitRecords) },\n            trace: {\n              ...state.trace,\n              postCutoffForwardRegistrations: Number(state.trace.postCutoffForwardRegistrations),\n              ambiguousReleasesWithoutIntent: Number(state.trace.ambiguousReleasesWithoutIntent),\n              foreignExecutorReleases: Number(state.trace.foreignExecutorReleases),\n              timerResets: Number(state.trace.timerResets),\n              tickRegressions: Number(state.trace.tickRegressions),\n              joinedResultMismatches: Number(state.trace.joinedResultMismatches),\n              llmRequests: Number(state.trace.llmRequests),\n              freshReconciliationReads: Number(state.trace.freshReconciliationReads),\n              stabilizationReads: Number(state.trace.stabilizationReads),\n              durableCleanupCalls: Number(state.trace.durableCleanupCalls),\n              attemptReplacements: Number(state.trace.attemptReplacements),\n              postCutoffControlApplications: Number(state.trace.postCutoffControlApplications),\n              postCutoffTerminationStarts: Number(state.trace.postCutoffTerminationStarts),\n              manufacturedWorkflowOutcomes: Number(state.trace.manufacturedWorkflowOutcomes)\n            }\n          })),\n          Effect.orDie\n        ),\n      (spec, implementation) => JSON.stringify(spec) === JSON.stringify(implementation)\n    )\n  },\n  240_000\n)"
       }
     ],
     "packages/dalph/test/conformance/automatic-successor.mbt.test.ts": [
       {
         "call": "quintRun",
-        "line": 605,
+        "line": 608,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: productionDriver(capture),\n        generation: { mode: \"test\", test: \"automaticSuccessorProductionConformanceTest\" },\n        maxSamples: 1,\n        seed: \"385\",\n        spec: \"specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt\",\n        stateCheck: projectedModelState\n      })"
       },
       {
         "call": "quintRun",
-        "line": 710,
+        "line": 713,
         "source": "quintRun({\n          backend: \"typescript\",\n          driverFactory: productionDriver(capture, false),\n          generation: { mode: \"test\", test: \"automaticSuccessorProductionConformanceTest\" },\n          maxSamples: 1,\n          seed: \"385385\",\n          spec: \"specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt\",\n          stateCheck: stateCheck(\n            (raw) => Schema.decodeUnknownEffect(selectedAutomaticSuccessorFields)(raw),\n            (model, production) => {\n              const matches = model.baseAncestorOfSuccessorHead === production.baseAncestorOfSuccessorHead\n              if (!matches) {\n                capture.lineageStateMismatch = {\n                  model: model.baseAncestorOfSuccessorHead,\n                  production: production.baseAncestorOfSuccessorHead\n                }\n              }\n              return matches\n            }\n          )\n        })"
       }
     ],
     "packages/dalph/test/conformance/control-direction-application.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 295,
+        "line": 297,
         "source": "quintIt(\n  it.effect,\n  \"replays received and applied control directions through production history reconstruction\",\n  {\n    backend: \"typescript\",\n    driverFactory: controlDirectionDriver,\n    maxSteps: 12,\n    nTraces: 100,\n    seed: \"166\",\n    spec: \"specs/controlDirectionApplication.qnt\",\n    stateCheck: stateCheck(\n      (raw) =>\n        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(\n          Effect.map(({ state }) => ({\n            ...state,\n            appliedCount: Number(state.appliedCount),\n            lastApplied: normalizedDirection(state.lastApplied),\n            lastControlResult: normalizedDirection(state.lastControlResult),\n            membershipProof: normalizedMembershipProof(state.membershipProof),\n            pendingRequest: normalizedDirection(state.pendingRequest),\n            taskAMembership: variantTag(state.taskAMembership),\n            taskBMembership: variantTag(state.taskBMembership)\n          })),\n          Effect.orDie\n        ),\n      (spec, implementation) =>\n        spec.appliedCount === implementation.appliedCount &&\n        spec.executorInterrupted === implementation.executorInterrupted &&\n        spec.executorResumed === implementation.executorResumed &&\n        spec.finalPausePhaseClaimed === implementation.finalPausePhaseClaimed &&\n        spec.lastApplied === implementation.lastApplied &&\n        spec.lastAppliedWasOperatorInitiated === implementation.lastAppliedWasOperatorInitiated &&\n        spec.lastControlResult === implementation.lastControlResult &&\n        spec.membershipProof === implementation.membershipProof &&\n        spec.pauseAtRequest.runPaused === implementation.pauseAtRequest.runPaused &&\n        spec.pauseAtRequest.taskAPaused === implementation.pauseAtRequest.taskAPaused &&\n        spec.pauseAtRequest.taskBPaused === implementation.pauseAtRequest.taskBPaused &&\n        spec.pendingRequest === implementation.pendingRequest &&\n        spec.runPaused === implementation.runPaused &&\n        spec.taskAMembership === implementation.taskAMembership &&\n        spec.taskAPaused === implementation.taskAPaused &&\n        spec.taskBMembership === implementation.taskBMembership &&\n        spec.taskBPaused === implementation.taskBPaused &&\n        spec.trackerReread === implementation.trackerReread\n    )\n  },\n  120_000\n)"
       }
     ],
     "packages/dalph/test/conformance/executor-guidance.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 309,
+        "line": 311,
         "source": "quintIt(\n  it.effect,\n  \"replays guidance chronology and retained identity through production decisions\",\n  {\n    backend: \"typescript\",\n    spec: \"specs/executorGuidance.qnt\",\n    driverFactory: makeGuidanceDriver(),\n    nTraces: 20,\n    maxSamples: 20,\n    maxSteps: 30,\n    seed: \"433\",\n    stateCheck: guidanceStateCheck\n  },\n  30_000\n)"
       },
       {
         "call": "quintRun",
-        "line": 338,
+        "line": 340,
         "source": "quintRun({ ...options, driverFactory: makeGuidanceDriver() })"
       },
       {
         "call": "quintRun",
-        "line": 339,
+        "line": 341,
         "source": "quintRun({ ...options, driverFactory: makeGuidanceDriver(true) })"
       }
     ],
     "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 1714,
+        "line": 1716,
         "source": "quintIt(\n  it.effect,\n  \"reconstructs an accepted claim intent whose append response was lost\",\n  focusedConformance(\"acceptedClaimRecoveryMbtStep\", 4)\n)"
       },
       {
         "call": "quintIt",
-        "line": 1720,
+        "line": 1722,
         "source": "quintIt(\n  it.effect,\n  \"reconstructs accepted executor responsibility whose append response was lost\",\n  focusedConformance(\"acceptedResponsibilityRecoveryMbtStep\", 6)\n)"
       },
       {
         "call": "quintIt",
-        "line": 1726,
+        "line": 1728,
         "source": "quintIt(\n  it.effect,\n  \"retains the worktree commitment when an absent responsibility append is observed\",\n  focusedConformance(\"absentResponsibilityRecoveryMbtStep\", 5)\n)"
       },
       {
         "call": "quintIt",
-        "line": 1760,
+        "line": 1762,
         "source": "quintIt(\n  it.effect,\n  \"releases a held position from accepted safe executor evidence\",\n  focusedConformance(\"notReadyReleaseMbtStep\", 6)\n)"
       },
       {
         "call": "quintIt",
-        "line": 1766,
+        "line": 1768,
         "source": "quintIt(\n  it.effect,\n  \"rebinds a ready retained responsibility without an admission gap\",\n  focusedConformance(\"readyResponsibilityHandoffMbtStep\", 8)\n)"
       },
       {
         "call": "quintIt",
-        "line": 1772,
+        "line": 1774,
         "source": "quintIt(\n  it.effect,\n  \"reserves a lifecycle-reopened Safe continuation through exact focused reads and Resume intent\",\n  focusedConformance(\"lifecycleRevalidationMbtStep\", 18)\n)"
       },
       {
         "call": "quintIt",
-        "line": 1864,
+        "line": 1866,
         "source": "quintIt(\n  it.effect,\n  \"keeps lifecycle continuation capacity decisions aligned across A-E\",\n  focusedConformance(\"lifecycleCapacityMbtStep\", 45)\n)"
       },
       {
         "call": "quintIt",
-        "line": 1870,
+        "line": 1872,
         "source": "quintIt(\n  it.effect,\n  \"keeps production admission and controller occupancy aligned with the canonical model\",\n  {\n    backend: \"typescript\",\n    driverFactory: freshTaskAdmissionDriver,\n    maxSamples: 120,\n    maxSteps: 45,\n    nTraces: 120,\n    seed: \"315\",\n    spec: \"specs/freshTaskAdmission.qnt\",\n    step: \"mbtStep\",\n    stateCheck: freshTaskAdmissionStateCheck\n  },\n  180_000\n)"
       }
     ],
     "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts": [
       {
         "call": "quintRun",
-        "line": 906,
+        "line": 909,
         "source": "quintRun({\n      backend: \"typescript\",\n      driverFactory: gitReconciliationDriver,\n      maxSteps: 12,\n      nTraces: 100,\n      seed: \"139\",\n      spec: \"specs/gitReconciliation.qnt\",\n      stateCheck: stateCheck(\n        (raw) =>\n          Effect.gen(function* () {\n            const { state } = yield* Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(Effect.orDie)\n            return {\n              ...state,\n              constraint: variantTag(state.constraint),\n              decision: variantTag(state.decision),\n              resultRejection: variantTag(state.resultRejection),\n              status: variantTag(state.status),\n              trackerBlocker: variantTag(state.trackerBlocker)\n            }\n          }),\n        (spec, implementation) =>\n          spec.candidateGitQualified === implementation.candidateGitQualified &&\n          spec.candidatePreserved === implementation.candidatePreserved &&\n          spec.claimPreserved === implementation.claimPreserved &&\n          spec.compareAndSetAuthorized === implementation.compareAndSetAuthorized &&\n          spec.compatibleAdvanceObserved === implementation.compatibleAdvanceObserved &&\n          spec.constraint === implementation.constraint &&\n          spec.decision === implementation.decision &&\n          spec.evidencePreserved === implementation.evidencePreserved &&\n          spec.exactExpectedHeadObserved === implementation.exactExpectedHeadObserved &&\n          spec.independentTaskEligible === implementation.independentTaskEligible &&\n          spec.independentTaskSelected === implementation.independentTaskSelected &&\n          spec.overwriteAuthorized === implementation.overwriteAuthorized &&\n          spec.positionHeld === implementation.positionHeld &&\n          spec.repairAuthorized === implementation.repairAuthorized &&\n          spec.resultRejected === implementation.resultRejected &&\n          spec.resultRejection === implementation.resultRejection &&\n          spec.promotionProof === implementation.promotionProof &&\n          spec.status === implementation.status &&\n          spec.trackerBlocker === implementation.trackerBlocker &&\n          spec.worktreePreserved === implementation.worktreePreserved\n      )\n    })"
       },
       {
         "call": "quintRun",
-        "line": 1312,
+        "line": 1315,
         "source": "quintRun({\n      backend: \"typescript\",\n      driverFactory: baseSelectionDriver,\n      spec: \"specs/gitReconciliation.qnt\",\n      step: \"baseRetryStep\",\n      maxSteps: 12,\n      nTraces: 5,\n      seed: \"439\",\n      stateCheck: stateCheck(\n        (raw) =>\n          Schema.decodeUnknownEffect(BaseSelectionProjection)(raw).pipe(\n            Effect.map(({ state }) => {\n              const stage = state.baseSelection.tag\n              const value = state.baseSelection.value\n              const evidence =\n                stage === \"BasePlanRecorded\"\n                  ? Schema.decodeUnknownSync(Schema.Struct({ observation: Schema.Unknown }))(value).observation\n                  : value\n              const selected =\n                stage === \"QualifiedBaseObserved\" || stage === \"BasePlanRecorded\" || stage === \"BaseSelectionReadCalled\"\n                  ? Schema.decodeUnknownSync(\n                      Schema.Struct({\n                        targetHead: Schema.Struct({ tag: Schema.String }),\n                        refObservation: Schema.Struct({ tag: Schema.String }),\n                        anchorIsAncestor: Schema.Boolean,\n                        objectReadable: Schema.Boolean,\n                        commitAvailable: Schema.Boolean,\n                        target: Schema.Struct({ tag: Schema.String }),\n                        anchor: Schema.Struct({ tag: Schema.String }),\n                        executionRepository: Schema.Struct({ tag: Schema.String })\n                      })\n                    )(evidence)\n                  : undefined\n              const qualified =\n                selected !== undefined &&\n                selected.target.tag === \"BaseTarget1\" &&\n                selected.anchor.tag === \"Anchor1\" &&\n                selected.executionRepository.tag === \"ExecutionRepository1\" &&\n                selected.refObservation.tag === \"TargetResolved\" &&\n                selected.anchorIsAncestor &&\n                selected.objectReadable &&\n                selected.commitAvailable\n              return {\n                stage,\n                head: state.currentBaseHead.tag,\n                intentAccepted: state.baseIntentAccepted,\n                selectedHead: qualified ? selected.targetHead.tag : \"None\",\n                refusal: stage === \"BaseSelectionRefused\" ? variantTag(value) : \"None\"\n              }\n            }),\n            Effect.orDie\n          ),\n        (spec, implementation) => JSON.stringify(spec) === JSON.stringify(implementation)\n      )\n    })"
       },
       {
         "call": "quintRun",
-        "line": 1373,
+        "line": 1376,
         "source": "quintRun({\n      backend: \"typescript\",\n      driverFactory: baseSelectionDriver,\n      spec: \"specs/gitReconciliation.qnt\",\n      step: \"baseSelectionStep\",\n      maxSteps: 8,\n      nTraces: 60,\n      seed: \"439\",\n      stateCheck: stateCheck(\n        (raw) =>\n          Schema.decodeUnknownEffect(BaseSelectionProjection)(raw).pipe(\n            Effect.map(({ state }) => {\n              const stage = state.baseSelection.tag\n              const value = state.baseSelection.value\n              const evidence =\n                stage === \"BasePlanRecorded\"\n                  ? Schema.decodeUnknownSync(Schema.Struct({ observation: Schema.Unknown }))(value).observation\n                  : value\n              const selected =\n                stage === \"QualifiedBaseObserved\" || stage === \"BasePlanRecorded\" || stage === \"BaseSelectionReadCalled\"\n                  ? Schema.decodeUnknownSync(\n                      Schema.Struct({\n                        targetHead: Schema.Struct({ tag: Schema.String }),\n                        refObservation: Schema.Struct({ tag: Schema.String }),\n                        anchorIsAncestor: Schema.Boolean,\n                        objectReadable: Schema.Boolean,\n                        commitAvailable: Schema.Boolean,\n                        target: Schema.Struct({ tag: Schema.String }),\n                        anchor: Schema.Struct({ tag: Schema.String }),\n                        executionRepository: Schema.Struct({ tag: Schema.String })\n                      })\n                    )(evidence)\n                  : undefined\n              const qualified =\n                selected !== undefined &&\n                selected.target.tag === \"BaseTarget1\" &&\n                selected.anchor.tag === \"Anchor1\" &&\n                selected.executionRepository.tag === \"ExecutionRepository1\" &&\n                selected.refObservation.tag === \"TargetResolved\" &&\n                selected.anchorIsAncestor &&\n                selected.objectReadable &&\n                selected.commitAvailable\n              return {\n                stage,\n                head: state.currentBaseHead.tag,\n                intentAccepted: state.baseIntentAccepted,\n                selectedHead: qualified ? selected.targetHead.tag : \"None\",\n                refusal: stage === \"BaseSelectionRefused\" ? variantTag(value) : \"None\"\n              }\n            }),\n            Effect.orDie\n          ),\n        (spec, implementation) => JSON.stringify(spec) === JSON.stringify(implementation)\n      )\n    })"
       }
     ],
     "packages/dalph/test/conformance/integration-finality.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 2555,
+        "line": 2557,
         "source": "quintIt(\n  it.effect,\n  \"replays promoted-task completion settlement through production claim protocols and Run finality\",\n  {\n    backend: \"typescript\",\n    driverFactory: integrationFinalityDriver,\n    maxSteps: 20,\n    nTraces: 100,\n    seed: \"141\",\n    spec: \"specs/integrationFinality.qnt\",\n    step: \"integrationFinalityConformanceStep\",\n    stateCheck: stateCheck(\n      (raw) =>\n        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(\n          Effect.map(({ state }) => ({\n            completeTaskRequests: quintInt(state.completeTaskRequests),\n            dependantReleases: quintInt(state.dependantReleases),\n            frontierEmpty: state.frontierEmpty,\n            promoted: normalizedSubject(state.promoted),\n            reintegrationRequests: quintInt(state.reintegrationRequests),\n            runTerminated: state.runTerminated,\n            unrelated: {\n              phase: variantTag(state.unrelated.phase),\n              responsibilityHeld: state.unrelated.responsibilityHeld,\n              settled: state.unrelated.settled,\n              taskId: quintInt(state.unrelated.taskId)\n            }\n          })),\n          Effect.orDie\n        ),\n      (spec, implementation) =>\n        spec.completeTaskRequests === implementation.completeTaskRequests &&\n        spec.dependantReleases === implementation.dependantReleases &&\n        spec.frontierEmpty === implementation.frontierEmpty &&\n        spec.promoted.attemptId === implementation.promoted.attemptId &&\n        spec.promoted.blockerPresent === implementation.promoted.blockerPresent &&\n        spec.promoted.claimState === implementation.promoted.claimState &&\n        spec.promoted.completionClaim === implementation.promoted.completionClaim &&\n        spec.promoted.completionClaimDerived === implementation.promoted.completionClaimDerived &&\n        spec.promoted.completionAncestry === implementation.promoted.completionAncestry &&\n        spec.promoted.legacyEvidenceForged === implementation.promoted.legacyEvidenceForged &&\n        spec.promoted.completionAttemptIntents === implementation.promoted.completionAttemptIntents &&\n        spec.promoted.completionOpenConfirmationRecorded ===\n          implementation.promoted.completionOpenConfirmationRecorded &&\n        spec.promoted.completionConfirmationViolationLookups ===\n          implementation.promoted.completionConfirmationViolationLookups &&\n        spec.promoted.completionConflict === implementation.promoted.completionConflict &&\n        spec.promoted.completionEvidenceRecorded === implementation.promoted.completionEvidenceRecorded &&\n        spec.promoted.completionIntentRecorded === implementation.promoted.completionIntentRecorded &&\n        spec.promoted.completionOutcome === implementation.promoted.completionOutcome &&\n        spec.promoted.completionNotAppliedReads === implementation.promoted.completionNotAppliedReads &&\n        spec.promoted.completionReads === implementation.promoted.completionReads &&\n        spec.promoted.completionRequestId === implementation.promoted.completionRequestId &&\n        spec.promoted.completionPremiseViolationCalls === implementation.promoted.completionPremiseViolationCalls &&\n        spec.promoted.completionRequests === implementation.promoted.completionRequests &&\n        spec.promoted.completeGraphObservation === implementation.promoted.completeGraphObservation &&\n        spec.promoted.completeTaskAcknowledged === implementation.promoted.completeTaskAcknowledged &&\n        spec.promoted.currentClaimId === implementation.promoted.currentClaimId &&\n        spec.promoted.deleteIntentRecorded === implementation.promoted.deleteIntentRecorded &&\n        spec.promoted.deleteReadBeforeRetry === implementation.promoted.deleteReadBeforeRetry &&\n        spec.promoted.deleteReads === implementation.promoted.deleteReads &&\n        spec.promoted.deleteRequests === implementation.promoted.deleteRequests &&\n        spec.promoted.deletionFailureRecorded === implementation.promoted.deletionFailureRecorded &&\n        spec.promoted.deletionOutcomeRecorded === implementation.promoted.deletionOutcomeRecorded &&\n        spec.promoted.foreignMutationCount === implementation.promoted.foreignMutationCount &&\n        spec.promoted.freshTrackerSuccess === implementation.promoted.freshTrackerSuccess &&\n        spec.promoted.focusedFactsNoBlocker === implementation.promoted.focusedFactsNoBlocker &&\n        spec.promoted.focusedFactsOpen === implementation.promoted.focusedFactsOpen &&\n        spec.promoted.focusedFactsRecorded === implementation.promoted.focusedFactsRecorded &&\n        spec.promoted.focusedSuccessRecorded === implementation.promoted.focusedSuccessRecorded &&\n        spec.promoted.lastMutation === implementation.promoted.lastMutation &&\n        spec.promoted.phase === implementation.promoted.phase &&\n        spec.promoted.proof === implementation.promoted.proof &&\n        spec.promoted.proofPresent === implementation.promoted.proofPresent &&\n        spec.promoted.publicationCurrentObservation === implementation.promoted.publicationCurrentObservation &&\n        spec.promoted.publicationContradictionObserved === implementation.promoted.publicationContradictionObserved &&\n        spec.promoted.publicationPauseCount === implementation.promoted.publicationPauseCount &&\n        spec.promoted.publicationRestartCount === implementation.promoted.publicationRestartCount &&\n        spec.promoted.reopenedAfterSuccess === implementation.promoted.reopenedAfterSuccess &&\n        spec.promoted.reintegrationCount === implementation.promoted.reintegrationCount &&\n        spec.promoted.replacementIntentRecorded === implementation.promoted.replacementIntentRecorded &&\n        spec.promoted.replacementOutcomeRecorded === implementation.promoted.replacementOutcomeRecorded &&\n        spec.promoted.replacementReadBeforeRetry === implementation.promoted.replacementReadBeforeRetry &&\n        spec.promoted.replacementReads === implementation.promoted.replacementReads &&\n        spec.promoted.replacementRequests === implementation.promoted.replacementRequests &&\n        spec.promoted.responsibilityHeld === implementation.promoted.responsibilityHeld &&\n        spec.promoted.settled === implementation.promoted.settled &&\n        spec.promoted.taskId === implementation.promoted.taskId &&\n        spec.promoted.taskRevision === implementation.promoted.taskRevision &&\n        spec.promoted.trackerCompletionRequestRevision === implementation.promoted.trackerCompletionRequestRevision &&\n        spec.promoted.trackerObservation === implementation.promoted.trackerObservation &&\n        spec.promoted.trackerObservationRevision === implementation.promoted.trackerObservationRevision &&\n        spec.promoted.trackerSuccessEver === implementation.promoted.trackerSuccessEver &&\n        spec.promoted.dependantEligible === implementation.promoted.dependantEligible &&\n        spec.reintegrationRequests === implementation.reintegrationRequests &&\n        spec.runTerminated === implementation.runTerminated &&\n        spec.unrelated.phase === implementation.unrelated.phase &&\n        spec.unrelated.responsibilityHeld === implementation.unrelated.responsibilityHeld &&\n        spec.unrelated.settled === implementation.unrelated.settled &&\n        spec.unrelated.taskId === implementation.unrelated.taskId\n    )\n  },\n  120_000\n)"
       }
     ],
     "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts": [
       {
         "call": "checkReverseTrace",
-        "line": 1833,
+        "line": 1835,
         "source": "checkReverseTrace(trace)"
       },
       {
         "call": "checkReverseTrace",
-        "line": 1941,
+        "line": 1943,
         "source": "checkReverseTrace(trace)"
       },
       {
         "call": "generateTraces",
-        "line": 2292,
+        "line": 2294,
         "source": "generateTraces(options)"
       },
       {
         "call": "quintRunWithTraceGeneration",
-        "line": 2296,
+        "line": 2298,
         "source": "quintRunWithTraceGeneration({\n          ...options,\n          driverFactory: scopedExecutorConformanceDriver,\n          stateCheck: executorStateCheck\n        })"
       },
       {
         "call": "checkReverseTrace",
-        "line": 2363,
+        "line": 2365,
         "source": "checkReverseTrace(reverseTrace)"
       },
       {
         "call": "quintRun",
-        "line": 2367,
+        "line": 2369,
         "source": "quintRun({\n          backend: \"typescript\",\n          driverFactory: mutantDriver,\n          maxSamples: 1,\n          maxSteps: 34,\n          nTraces: 1,\n          seed: \"2\",\n          spec: \"specs/plannedAttemptExecutor.qnt\",\n          stateCheck: executorStateCheck,\n          step: \"mbtStep\"\n        })"
       },
       {
         "call": "quintIt",
-        "line": 2385,
+        "line": 2387,
         "source": "quintIt(\n  it.effect,\n  \"replays durable executor commands through production protocol and admission seams\",\n  {\n    backend: \"typescript\",\n    driverFactory: scopedExecutorConformanceDriver,\n    maxSamples: 100,\n    maxSteps: 34,\n    nTraces: 100,\n    seed: \"158\",\n    spec: \"specs/plannedAttemptExecutor.qnt\",\n    step: \"mbtStep\",\n    stateCheck: executorStateCheck\n  },\n  180_000\n)"
       },
       {
         "call": "quintRun",
-        "line": 2407,
+        "line": 2409,
         "source": "quintRun({\n        backend: \"typescript\",\n        spec: \"specs/plannedAttemptExecutor.qnt\",\n        step: \"resumeRedeliveryMbtStep\",\n        maxSamples: 1,\n        maxSteps: 40,\n        nTraces: 1,\n        seed: \"158\",\n        stateCheck: executorStateCheck,\n        driverFactory: {\n          create: () =>\n            scopedExecutorConformanceDriver\n              .create()\n              .pipe(\n                Effect.map((driver) => ({\n                  ...driver,\n                  getState: () =>\n                    driver.getState === undefined\n                      ? Effect.die(\"executor MBT state observer is missing\")\n                      : driver\n                          .getState()\n                          .pipe(\n                            Effect.tap((state) =>\n                              Ref.set(reached, {\n                                intents: state.resumeRecovery.totalRedeliveryIntents,\n                                calls: state.resumeRecovery.redeliveryCallCount\n                              })\n                            )\n                          )\n                }))\n              )\n        }\n      })"
       }
     ],
     "packages/dalph/test/conformance/provider-result-correction.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 238,
+        "line": 240,
         "source": "quintIt(\n  it.effect,\n  \"replays bounded correction and crash recovery through production cycle functions\",\n  {\n    backend: \"typescript\",\n    spec: \"specs/providerResultCorrection.qnt\",\n    driverFactory: makeCorrectionDriver(),\n    nTraces: 30,\n    maxSamples: 30,\n    maxSteps: 20,\n    seed: \"428\",\n    stateCheck: correctionStateCheck\n  },\n  30_000\n)"
       },
       {
         "call": "quintRun",
-        "line": 268,
+        "line": 270,
         "source": "quintRun({ ...options, driverFactory: makeCorrectionDriver() })"
       },
       {
         "call": "quintRun",
-        "line": 270,
+        "line": 272,
         "source": "quintRun({\n        backend: \"typescript\",\n        spec: \"specs/providerResultCorrection.qnt\",\n        step: \"recoveryDeadlineMbtStep\",\n        driverFactory: makeCorrectionDriver(true, () => {\n          mutationObserved = true\n        }),\n        stateCheck: correctionStateCheck,\n        nTraces: 1,\n        maxSamples: 1,\n        maxSteps: 10,\n        seed: \"428\"\n      })"
       }
     ],
     "packages/dalph/test/conformance/result-recovery-direction.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 296,
+        "line": 298,
         "source": "quintIt(\n  it.effect,\n  \"replays explicit recovery admission and redelivery through the production decision\",\n  {\n    backend: \"typescript\",\n    spec: \"specs/resultRecoveryDirection.qnt\",\n    driverFactory: makeDirectionDriver(),\n    nTraces: 10,\n    maxSamples: 10,\n    maxSteps: 15,\n    seed: \"428\",\n    stateCheck: directionStateCheck\n  },\n  30_000\n)"
       },
       {
         "call": "quintRun",
-        "line": 325,
+        "line": 327,
         "source": "quintRun({ ...options, driverFactory: makeDirectionDriver() })"
       },
       {
         "call": "quintRun",
-        "line": 327,
+        "line": 329,
         "source": "quintRun({\n        ...options,\n        driverFactory: makeDirectionDriver(true, () => {\n          mutated = true\n        })\n      })"
       }
     ],
     "packages/dalph/test/conformance/run-activation.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 2244,
+        "line": 2246,
         "source": "quintIt(\n    (name, test, options) =>\n      it.effect(\n        name,\n        () =>\n          Effect.scoped(\n            Effect.gen(function* () {\n              runActivationMbtScope = yield* Effect.scope\n              yield* Effect.addFinalizer(() => Effect.sync(() => (runActivationMbtScope = undefined)))\n              return yield* test()\n            })\n          ),\n        options\n      ),\n    \"replays idempotent Run establishment and bounded activation through production seams\",\n    {\n      backend: \"typescript\",\n      driverFactory: runActivationDriver,\n      maxSteps: 20,\n      nTraces: 100,\n      seed: \"195\",\n      spec: \"specs/runActivation.qnt\",\n      stateCheck: stateCheck(\n        (raw) =>\n          Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(\n            Effect.map(\n              ({ state }): DriverProjection => ({\n                configuredBasePolicy: policyKeyFromModel(state.configuredBasePolicy),\n                establishedBasePolicy:\n                  state.process.establishedRun.tag === \"NoEstablishedRun\"\n                    ? \"NoEstablishedRun\"\n                    : policyKeyFromModel(state.process.establishedRun.value.attemptBasePolicy),\n                activationsStarted: Number(state.trace.activationsStarted),\n                beginningAppends: Number(state.trace.beginningAppends),\n                cancellationAppends: Number(state.trace.cancellationAppends),\n                cancellationRedeliveries: Number(state.trace.cancellationRedeliveries),\n                cancellationApplied: state.durable.cancellationApplied,\n                establishedCapacity:\n                  state.process.establishedRun.tag === \"ExactEstablishedRun\"\n                    ? state.process.establishedRun.value.latestPolicy.taskCapacity.tag\n                    : \"NoEstablishedCapacity\",\n                establishedInitialCapacity:\n                  state.process.establishedRun.tag === \"ExactEstablishedRun\"\n                    ? state.process.establishedRun.value.initialPolicy.taskCapacity.tag\n                    : \"NoEstablishedCapacity\",\n                establishedRunId:\n                  state.process.establishedRun.tag === \"ExactEstablishedRun\"\n                    ? state.process.establishedRun.value.runId.tag\n                    : \"NoEstablishedRun\",\n                establishedTarget:\n                  state.process.establishedRun.tag === \"ExactEstablishedRun\"\n                    ? state.process.establishedRun.value.target.tag\n                    : \"NoEstablishedTarget\",\n                establishmentSource: state.process.establishmentSource.tag,\n                entryFailure: state.process.entryFailure.tag,\n                executorCalls: Number(state.trace.executorCalls),\n                heldPosition:\n                  state.process.heldPosition.tag === \"ExactTaskPosition\"\n                    ? state.process.heldPosition.value.attemptId.tag\n                    : \"NoTaskPosition\",\n                history: state.durable.history.tag,\n                independentTaskAdmitted: state.process.independentTaskAdmitted,\n                independentTaskSettled: state.durable.independentTaskSettled,\n                initialPolicyEvaluated: state.process.initialPolicyEvaluated,\n                initialPolicyEvaluations: Number(state.trace.initialPolicyEvaluations),\n                initialTrackerObserved: state.process.initialTrackerObserved,\n                otherHeldPositions: state.process.otherHeldPosition.tag === \"ExactTaskPosition\" ? 1 : 0,\n                phase: state.process.phase.tag,\n                postQuiescenceReads: Number(state.process.postQuiescenceReads),\n                processLosses: Number(state.trace.processLosses),\n                quiescent: state.process.quiescent,\n                requestedRunId: state.requestedRunId.tag,\n                requestedTarget: state.requestedTarget.tag,\n                terminationAppends: Number(state.trace.terminationAppends),\n                terminationAppendAttempts: Number(state.trace.terminationAppendAttempts),\n                trackerCalls: Number(state.trace.trackerCalls),\n                trackerSettled: state.trackerFinality.targetSettled,\n                terminationDisposition: state.durable.terminationDisposition.tag,\n                terminalDisposition: state.process.terminalDisposition.tag,\n                graphOutcome: state.trackerFinality.graphOutcome.tag,\n                trackerContentIdentity: state.trackerFinality.contentIdentity.tag,\n                trackerObservationPosition: Number(state.trackerFinality.observationPosition),\n                trackerRootTaskId: state.trackerFinality.rootTaskId.tag\n              })\n            ),\n            Effect.orDie\n          ),\n        (spec, implementation) =>\n          spec.configuredBasePolicy === implementation.configuredBasePolicy &&\n          spec.establishedBasePolicy === implementation.establishedBasePolicy &&\n          spec.activationsStarted === implementation.activationsStarted &&\n          spec.beginningAppends === implementation.beginningAppends &&\n          spec.cancellationAppends === implementation.cancellationAppends &&\n          spec.cancellationRedeliveries === implementation.cancellationRedeliveries &&\n          spec.cancellationApplied === implementation.cancellationApplied &&\n          spec.establishedCapacity === implementation.establishedCapacity &&\n          spec.establishedInitialCapacity === implementation.establishedInitialCapacity &&\n          spec.establishedRunId === implementation.establishedRunId &&\n          spec.establishedTarget === implementation.establishedTarget &&\n          spec.establishmentSource === implementation.establishmentSource &&\n          spec.entryFailure === implementation.entryFailure &&\n          spec.executorCalls === implementation.executorCalls &&\n          spec.heldPosition === implementation.heldPosition &&\n          spec.history === implementation.history &&\n          spec.independentTaskAdmitted === implementation.independentTaskAdmitted &&\n          spec.independentTaskSettled === implementation.independentTaskSettled &&\n          spec.initialPolicyEvaluated === implementation.initialPolicyEvaluated &&\n          spec.initialPolicyEvaluations === implementation.initialPolicyEvaluations &&\n          spec.initialTrackerObserved === implementation.initialTrackerObserved &&\n          spec.otherHeldPositions === implementation.otherHeldPositions &&\n          spec.phase === implementation.phase &&\n          spec.postQuiescenceReads === implementation.postQuiescenceReads &&\n          spec.processLosses === implementation.processLosses &&\n          spec.quiescent === implementation.quiescent &&\n          spec.requestedRunId === implementation.requestedRunId &&\n          spec.requestedTarget === implementation.requestedTarget &&\n          spec.terminationAppends === implementation.terminationAppends &&\n          spec.terminationAppendAttempts === implementation.terminationAppendAttempts &&\n          spec.terminationDisposition === implementation.terminationDisposition &&\n          spec.terminalDisposition === implementation.terminalDisposition &&\n          spec.graphOutcome === implementation.graphOutcome &&\n          spec.trackerContentIdentity === implementation.trackerContentIdentity &&\n          spec.trackerObservationPosition === implementation.trackerObservationPosition &&\n          spec.trackerRootTaskId === implementation.trackerRootTaskId &&\n          spec.trackerCalls === implementation.trackerCalls &&\n          spec.trackerSettled === implementation.trackerSettled\n      )\n    },\n    120_000\n  )"
       }
     ],
     "packages/dalph/test/conformance/run-cancellation.mbt.test.ts": [
       {
         "call": "quintIt",
-        "line": 3018,
+        "line": 3020,
         "source": "quintIt(\n    (name, test, options) =>\n      it.effect(\n        name,\n        () =>\n          Effect.scoped(\n            Effect.gen(function* () {\n              const scope = yield* Effect.scope\n              runCancellationMbtScope = scope\n              yield* Effect.addFinalizer(() =>\n                Effect.sync(() => {\n                  if (runCancellationMbtScope === scope) runCancellationMbtScope = undefined\n                })\n              )\n              return yield* test()\n            })\n          ),\n        options\n      ),\n    \"replays Run cancellation through the production bootstrap and journal reconstruction\",\n    {\n      backend: \"typescript\",\n      driverFactory: runCancellationDriver,\n      maxSteps: 24,\n      nTraces: 100,\n      seed: \"102\",\n      spec: \"specs/runCancellation.qnt\",\n      stateCheck: stateCheckProjection\n    },\n    120_000\n  )"
       }
     ],
     "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts": [
       {
         "call": "quintRun",
-        "line": 2927,
+        "line": 2930,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 1,\n        maxSteps: 6,\n        nTraces: 1,\n        seed: \"2815\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"activeRefreshLifecycleReestablishmentMbtStep\",\n        stateCheck: taskFactLifecycleStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 2944,
+        "line": 2947,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 40,\n        maxSteps: 4,\n        nTraces: 40,\n        seed: \"281\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"activeRefreshMbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 2961,
+        "line": 2964,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 4,\n        maxSteps: 4,\n        nTraces: 4,\n        seed: \"2811\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"activeRefreshTrackerNotificationMbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 2978,
+        "line": 2981,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 4,\n        maxSteps: 4,\n        nTraces: 4,\n        seed: \"2812\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"activeRefreshTimerMbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 2995,
+        "line": 2998,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 1,\n        maxSteps: 3,\n        nTraces: 1,\n        seed: \"2813\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"activeRefreshGitFailureTrackerNotificationMbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 3012,
+        "line": 3015,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 1,\n        maxSteps: 3,\n        nTraces: 1,\n        seed: \"2814\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"activeRefreshGitFailureTimerMbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 3029,
+        "line": 3032,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 100,\n        maxSteps: 34,\n        nTraces: 100,\n        seed: \"65\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"mbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 3046,
+        "line": 3049,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 200,\n        maxSteps: 18,\n        nTraces: 200,\n        seed: \"66\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"restartMbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       },
       {
         "call": "quintRun",
-        "line": 3063,
+        "line": 3066,
         "source": "quintRun({\n        backend: \"typescript\",\n        driverFactory: taskFactReconciliationDriver,\n        maxSamples: 1,\n        maxSteps: 12,\n        nTraces: 1,\n        seed: \"6601\",\n        spec: \"specs/taskFactReconciliation.qnt\",\n        step: \"restartSuccessMbtStep\",\n        stateCheck: taskFactStateCheck\n      })"
       }
     ],
@@ -344,7 +344,7 @@
       "id": "accepted-result-integration/1",
       "corpus": "corpora/mbt/accepted-result-integration/1.itf.json",
       "source": "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts",
-      "line": 4788,
+      "line": 4790,
       "spec": "specs/acceptedResultIntegration.qnt",
       "options": {
         "backend": "typescript",
@@ -379,7 +379,7 @@
       "id": "application-exit/1",
       "corpus": "corpora/mbt/application-exit/1.itf.json",
       "source": "packages/dalph/test/conformance/application-exit.mbt.test.ts",
-      "line": 769,
+      "line": 771,
       "spec": "specs/applicationExit.qnt",
       "options": {
         "backend": "typescript",
@@ -413,7 +413,7 @@
       "id": "automatic-successor/1",
       "corpus": "corpora/mbt/automatic-successor/1.itf.json",
       "source": "packages/dalph/test/conformance/automatic-successor.mbt.test.ts",
-      "line": 605,
+      "line": 608,
       "spec": "specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt",
       "options": {
         "backend": "typescript",
@@ -448,7 +448,7 @@
       "id": "automatic-successor/2",
       "corpus": "corpora/mbt/automatic-successor/2.itf.json",
       "source": "packages/dalph/test/conformance/automatic-successor.mbt.test.ts",
-      "line": 710,
+      "line": 713,
       "spec": "specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt",
       "options": {
         "backend": "typescript",
@@ -483,7 +483,7 @@
       "id": "control-direction-application/1",
       "corpus": "corpora/mbt/control-direction-application/1.itf.json",
       "source": "packages/dalph/test/conformance/control-direction-application.mbt.test.ts",
-      "line": 298,
+      "line": 300,
       "spec": "specs/controlDirectionApplication.qnt",
       "options": {
         "backend": "typescript",
@@ -517,7 +517,7 @@
       "id": "executor-guidance/1",
       "corpus": "corpora/mbt/executor-guidance/1.itf.json",
       "source": "packages/dalph/test/conformance/executor-guidance.mbt.test.ts",
-      "line": 312,
+      "line": 314,
       "spec": "specs/executorGuidance.qnt",
       "options": {
         "backend": "typescript",
@@ -552,7 +552,7 @@
       "id": "executor-guidance/2",
       "corpus": "corpora/mbt/executor-guidance/2.itf.json",
       "source": "packages/dalph/test/conformance/executor-guidance.mbt.test.ts",
-      "line": 328,
+      "line": 330,
       "spec": "specs/executorGuidance.qnt",
       "options": {
         "backend": "typescript",
@@ -588,7 +588,7 @@
       "id": "fresh-task-admission/1",
       "corpus": "corpora/mbt/fresh-task-admission/1.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1717,
+      "line": 1719,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -624,7 +624,7 @@
       "id": "fresh-task-admission/2",
       "corpus": "corpora/mbt/fresh-task-admission/2.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1723,
+      "line": 1725,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -660,7 +660,7 @@
       "id": "fresh-task-admission/3",
       "corpus": "corpora/mbt/fresh-task-admission/3.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1729,
+      "line": 1731,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -696,7 +696,7 @@
       "id": "fresh-task-admission/4",
       "corpus": "corpora/mbt/fresh-task-admission/4.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1763,
+      "line": 1765,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -732,7 +732,7 @@
       "id": "fresh-task-admission/5",
       "corpus": "corpora/mbt/fresh-task-admission/5.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1769,
+      "line": 1771,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -768,7 +768,7 @@
       "id": "fresh-task-admission/6",
       "corpus": "corpora/mbt/fresh-task-admission/6.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1775,
+      "line": 1777,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -804,7 +804,7 @@
       "id": "fresh-task-admission/7",
       "corpus": "corpora/mbt/fresh-task-admission/7.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1867,
+      "line": 1869,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -840,7 +840,7 @@
       "id": "fresh-task-admission/8",
       "corpus": "corpora/mbt/fresh-task-admission/8.itf.json",
       "source": "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
-      "line": 1873,
+      "line": 1875,
       "spec": "specs/freshTaskAdmission.qnt",
       "options": {
         "backend": "typescript",
@@ -876,7 +876,7 @@
       "id": "git-reconciliation/1",
       "corpus": "corpora/mbt/git-reconciliation/1.itf.json",
       "source": "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts",
-      "line": 906,
+      "line": 909,
       "spec": "specs/gitReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -910,7 +910,7 @@
       "id": "git-reconciliation/2",
       "corpus": "corpora/mbt/git-reconciliation/2.itf.json",
       "source": "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts",
-      "line": 1312,
+      "line": 1315,
       "spec": "specs/gitReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -945,7 +945,7 @@
       "id": "git-reconciliation/3",
       "corpus": "corpora/mbt/git-reconciliation/3.itf.json",
       "source": "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts",
-      "line": 1373,
+      "line": 1376,
       "spec": "specs/gitReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -980,7 +980,7 @@
       "id": "integration-finality/1",
       "corpus": "corpora/mbt/integration-finality/1.itf.json",
       "source": "packages/dalph/test/conformance/integration-finality.mbt.test.ts",
-      "line": 2558,
+      "line": 2560,
       "spec": "specs/integrationFinality.qnt",
       "options": {
         "backend": "typescript",
@@ -1015,7 +1015,7 @@
       "id": "planned-attempt-executor/1",
       "corpus": "corpora/mbt/planned-attempt-executor/1.itf.json",
       "source": "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts",
-      "line": 2281,
+      "line": 2283,
       "spec": "specs/plannedAttemptExecutor.qnt",
       "options": {
         "backend": "typescript",
@@ -1051,7 +1051,7 @@
       "id": "planned-attempt-executor/2",
       "corpus": "corpora/mbt/planned-attempt-executor/2.itf.json",
       "source": "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts",
-      "line": 2367,
+      "line": 2369,
       "spec": "specs/plannedAttemptExecutor.qnt",
       "options": {
         "backend": "typescript",
@@ -1087,7 +1087,7 @@
       "id": "planned-attempt-executor/3",
       "corpus": "corpora/mbt/planned-attempt-executor/3.itf.json",
       "source": "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts",
-      "line": 2388,
+      "line": 2390,
       "spec": "specs/plannedAttemptExecutor.qnt",
       "options": {
         "backend": "typescript",
@@ -1123,7 +1123,7 @@
       "id": "planned-attempt-executor/4",
       "corpus": "corpora/mbt/planned-attempt-executor/4.itf.json",
       "source": "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts",
-      "line": 2407,
+      "line": 2409,
       "spec": "specs/plannedAttemptExecutor.qnt",
       "options": {
         "backend": "typescript",
@@ -1159,7 +1159,7 @@
       "id": "provider-result-correction/1",
       "corpus": "corpora/mbt/provider-result-correction/1.itf.json",
       "source": "packages/dalph/test/conformance/provider-result-correction.mbt.test.ts",
-      "line": 241,
+      "line": 243,
       "spec": "specs/providerResultCorrection.qnt",
       "options": {
         "backend": "typescript",
@@ -1194,7 +1194,7 @@
       "id": "provider-result-correction/2",
       "corpus": "corpora/mbt/provider-result-correction/2.itf.json",
       "source": "packages/dalph/test/conformance/provider-result-correction.mbt.test.ts",
-      "line": 258,
+      "line": 260,
       "spec": "specs/providerResultCorrection.qnt",
       "options": {
         "backend": "typescript",
@@ -1230,7 +1230,7 @@
       "id": "provider-result-correction/3",
       "corpus": "corpora/mbt/provider-result-correction/3.itf.json",
       "source": "packages/dalph/test/conformance/provider-result-correction.mbt.test.ts",
-      "line": 270,
+      "line": 272,
       "spec": "specs/providerResultCorrection.qnt",
       "options": {
         "backend": "typescript",
@@ -1266,7 +1266,7 @@
       "id": "result-recovery-direction/1",
       "corpus": "corpora/mbt/result-recovery-direction/1.itf.json",
       "source": "packages/dalph/test/conformance/result-recovery-direction.mbt.test.ts",
-      "line": 299,
+      "line": 301,
       "spec": "specs/resultRecoveryDirection.qnt",
       "options": {
         "backend": "typescript",
@@ -1301,7 +1301,7 @@
       "id": "result-recovery-direction/2",
       "corpus": "corpora/mbt/result-recovery-direction/2.itf.json",
       "source": "packages/dalph/test/conformance/result-recovery-direction.mbt.test.ts",
-      "line": 315,
+      "line": 317,
       "spec": "specs/resultRecoveryDirection.qnt",
       "options": {
         "backend": "typescript",
@@ -1337,7 +1337,7 @@
       "id": "run-activation/1",
       "corpus": "corpora/mbt/run-activation/1.itf.json",
       "source": "packages/dalph/test/conformance/run-activation.mbt.test.ts",
-      "line": 2259,
+      "line": 2261,
       "spec": "specs/runActivation.qnt",
       "options": {
         "backend": "typescript",
@@ -1371,7 +1371,7 @@
       "id": "run-cancellation/1",
       "corpus": "corpora/mbt/run-cancellation/1.itf.json",
       "source": "packages/dalph/test/conformance/run-cancellation.mbt.test.ts",
-      "line": 3038,
+      "line": 3040,
       "spec": "specs/runCancellation.qnt",
       "options": {
         "backend": "typescript",
@@ -1405,7 +1405,7 @@
       "id": "task-fact-reconciliation/1",
       "corpus": "corpora/mbt/task-fact-reconciliation/1.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 2927,
+      "line": 2930,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1441,7 +1441,7 @@
       "id": "task-fact-reconciliation/2",
       "corpus": "corpora/mbt/task-fact-reconciliation/2.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 2944,
+      "line": 2947,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1477,7 +1477,7 @@
       "id": "task-fact-reconciliation/3",
       "corpus": "corpora/mbt/task-fact-reconciliation/3.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 2961,
+      "line": 2964,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1513,7 +1513,7 @@
       "id": "task-fact-reconciliation/4",
       "corpus": "corpora/mbt/task-fact-reconciliation/4.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 2978,
+      "line": 2981,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1549,7 +1549,7 @@
       "id": "task-fact-reconciliation/5",
       "corpus": "corpora/mbt/task-fact-reconciliation/5.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 2995,
+      "line": 2998,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1585,7 +1585,7 @@
       "id": "task-fact-reconciliation/6",
       "corpus": "corpora/mbt/task-fact-reconciliation/6.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 3012,
+      "line": 3015,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1621,7 +1621,7 @@
       "id": "task-fact-reconciliation/7",
       "corpus": "corpora/mbt/task-fact-reconciliation/7.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 3029,
+      "line": 3032,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1657,7 +1657,7 @@
       "id": "task-fact-reconciliation/8",
       "corpus": "corpora/mbt/task-fact-reconciliation/8.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 3046,
+      "line": 3049,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1693,7 +1693,7 @@
       "id": "task-fact-reconciliation/9",
       "corpus": "corpora/mbt/task-fact-reconciliation/9.itf.json",
       "source": "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts",
-      "line": 3063,
+      "line": 3066,
       "spec": "specs/taskFactReconciliation.qnt",
       "options": {
         "backend": "typescript",
@@ -1728,12 +1728,12 @@
   ],
   "semanticInputs": {
     "mise.toml": "f4e76711ff120302d3b0e45d941b8e2413f5be3604a6868a6e997edb36968251",
-    "package.json": "ac06820c93fdf4f93d332067b25f761e19672b1c1aeb959df682a41ec7423414",
+    "package.json": "031e52fb7b8764de89f5d9e8924ac48e8e3a4a9f34aaecacb613017158c7bed0",
     "packages/contracts/package.json": "656d8f61f725650769440c8da5180c6e7e23c1e327eea799b125aac100ef07bb",
     "packages/contracts/src/evidence.ts": "876154d269998dc9c783599f1ddbca26644bd34ec07888f4de04556bccbc62e4",
     "packages/contracts/src/executor-guidance.ts": "84ac836e1d837f5b890c4d0bb66210ca813be9bcb03df103e0f78c398b10702f",
     "packages/contracts/src/executor-locator.ts": "a0494522501a87c3259e052c37d1dee8b8dc6f49e2f4d6aea3c963613e0822be",
-    "packages/contracts/src/executor.ts": "4a80c834f577122c9a871f9f04a18f258d03a0bc6c8fb92328b88b8ecfde70c5",
+    "packages/contracts/src/executor.ts": "dbe6dc35438031006453c6e70a4b6cb7716d87037a6660a296af39e6de7e6086",
     "packages/contracts/src/git-locator.ts": "1449f0966bf6648510ab2c310e0d72cefd0ec45eefd692a601b6c1b0125fef86",
     "packages/contracts/src/index.ts": "095091f62bc87e4fc93a2437951c78141f6cda23af21fc768fea5f4714e0e8ae",
     "packages/contracts/src/planned-attempt.ts": "03a72dbd7024e08e180b4705d92a33584cc8f842e3214e9497cc65495897b80d",
@@ -1745,24 +1745,24 @@
     "packages/dalph/src/application/provider-semantic-result.ts": "357e6accf6d4c938aafff7598e81ec1363275a9b5fb73c7b83079e7f63ac7556",
     "packages/dalph/test-support/controlled-synchronous-planned-attempt-executor.ts": "26098cfe36a3e7d2fa7efd09e91eff69566db239f13f9c27167a06e3d158464c",
     "packages/dalph/test-support/vitest-mode.ts": "9fc3b274e5eaab87526ad4e07fb25852ff7c64ab57415e70e3bec4611d778ccd",
-    "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts": "69e22145180de625acb30506234be3d84ed8de6e8dc2c3d962d50a6637d7128a",
-    "packages/dalph/test/conformance/application-exit.mbt.test.ts": "b579429df32412f7a06521e78c84a2b2e0e232fa6d75ceeca3f79df7a565586c",
-    "packages/dalph/test/conformance/automatic-successor.mbt.test.ts": "078e10f46ee0bcc55c3f077e3bd4ca82369f60073e0a548c6aa63abfd6c4584a",
-    "packages/dalph/test/conformance/control-direction-application.mbt.test.ts": "02a0f7f4e7a20fe7e4346b6ccf2bfc9ec956d60df2ecca25be48f34c8f907bdc",
-    "packages/dalph/test/conformance/executor-guidance.mbt.test.ts": "b0ee3388be82ed175a5d61e6071dcfa1ff7ce487e48c313b725684d628e1058f",
-    "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts": "ee4ae706681802aac26d1c51337551b667f03cf50e4e19a6babdec1c9db05a47",
+    "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts": "2db201d778bc008f394b4e315aa170dc6a8ccb6b1cda2d47f0ec2584e7666a7d",
+    "packages/dalph/test/conformance/application-exit.mbt.test.ts": "851f3226fa4c2d3bc3438848d8a3fd371001d39e9bf3e07ff0ffc4b4a86f2d1a",
+    "packages/dalph/test/conformance/automatic-successor.mbt.test.ts": "f19709e7150ce9e2869e87bde9a9754ae5881177a51d84d6f86168e1f1beafff",
+    "packages/dalph/test/conformance/control-direction-application.mbt.test.ts": "ee7703db795a09c6ecf4d6257b667a1a17b669a16a400ed62fe003527d3c2404",
+    "packages/dalph/test/conformance/executor-guidance.mbt.test.ts": "941ecbb77e81466fb25814ecaaec304501137d3c7bde15d10596dfe2073da643",
+    "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts": "3ec11e416234261e127f55c66959223e2357c6f6453ad13ac271ea6537c489dd",
     "packages/dalph/test/conformance/gate-run-identity-adapter.ts": "63d0f9dc280b42475fff6bf9d4fa4ba7a2cdcc4e7f50b61fae05b7f9962459a1",
-    "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts": "ef239c7e905a2b7ded4d03dc88518094d3d3e2d3adbab7b76ba47f9eaea83e64",
-    "packages/dalph/test/conformance/integration-finality.mbt.test.ts": "8f44096da92a4b78f3ff2aad7b78fbfa73a73f33cd6a02c33f053dd33d8d6eef",
+    "packages/dalph/test/conformance/git-reconciliation.mbt.test.ts": "370d6b7c8a56d60dd662b12336c5c77ae214d4e094c035391711486407089e4c",
+    "packages/dalph/test/conformance/integration-finality.mbt.test.ts": "fde709221298d6d92f8033d9c7a89a3c4ec837d297637b54796ab13b691957fe",
     "packages/dalph/test/conformance/planned-attempt-executor-resume-fixture.ts": "22862182f9f8415a2efd1e04073b1d20b5de72721e10437d1be635cc8140798d",
     "packages/dalph/test/conformance/planned-attempt-executor-reverse.ts": "af9987860204c1867a322914c88eb7a053b97ca449001da07c36403d10f1e2e3",
-    "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts": "20c880bab47c47833be32243b9aa53f81342b8848008eded612a49ac0b342d33",
-    "packages/dalph/test/conformance/provider-result-correction.mbt.test.ts": "e9258f196cf051e0b42f6afca02588b5972efaafbec905db9f4e60ac45c17ad0",
+    "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts": "7d6f61fc07e86fbab74f35ae739fce87096357fae6f2381d7e1d913e0f35d97a",
+    "packages/dalph/test/conformance/provider-result-correction.mbt.test.ts": "df81481b01128365c2a071b7f48074a31849b278c7a04d28bcd14050ae1b12f1",
     "packages/dalph/test/conformance/quint-evaluator-frontier.ts": "7ab4e715e6affabdf3eefbd52191be1aea608b9ee6d9b9abd95492c7fb4f4906",
-    "packages/dalph/test/conformance/result-recovery-direction.mbt.test.ts": "0e0c68d2793271b36d6c93d31678c88c937baa53ea2c3850b53bdcda1dd75a25",
-    "packages/dalph/test/conformance/run-activation.mbt.test.ts": "eae156b84aa0f21ffaf1cf4fd3e98b451ee3925827b4b447a5649202e6368b78",
-    "packages/dalph/test/conformance/run-cancellation.mbt.test.ts": "7f406bed3c37e507e4b9ffafe6b51f7ebf2644ca308362d7b3ec41e602c572c6",
-    "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts": "9d6998d02e53693c415c408753f70f61f35a65462a9be1ce0ca809ebfc6307df",
+    "packages/dalph/test/conformance/result-recovery-direction.mbt.test.ts": "ef7d9a6f44a73a4e8928419a03f59ec89381e849f72ec9a5e52b148fb5152bdf",
+    "packages/dalph/test/conformance/run-activation.mbt.test.ts": "e398c1141fc34e4c5a119bc402c85c1e5b9183344b0d9ac227dc89ef421dcabf",
+    "packages/dalph/test/conformance/run-cancellation.mbt.test.ts": "947fb27e6916dc024087b159fd7dfa1ac34ee48b2dcac76d3e68a446d5199523",
+    "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts": "730df6a366b6a2403a0c8abf64b8b0adb819fdbd863e434a8949f8ad2002bed8",
     "packages/dalph/test/conformance/workspace-source-resolution.mbt.test.ts": "4f428cb7b71120c2fc2a0e24f70cb3432138cc7596a36d92512a7f4f598cf19b",
     "packages/orchestrator/package.json": "ef418e33326529f265ca10426f1cfef6c05c51bd54233cc2f8aa09a674215e64",
     "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts": "cbe3fc00f4b55e85df2be251c7c875cecc52674c56604b52fc8a7abfe44ad748",
@@ -2123,7 +2123,7 @@
     "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/resume-redelivery-authorization.ts": "e2b2cf6e4e21932bf286cf277e742735ad4302134f98a4a8c9437706818f13e3",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/tracker-read-freshness.ts": "d0b69335edf957106abf3330f8b7dbddbb126f97989f8910e8d43fb7387002f4",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/command-delivery.ts": "1dfbf455eac5699ed9e118171cf19e9d99741b6842e6faf91362c45396c02c66",
-    "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/command.ts": "74f26368c2af9675e410f2c798aab8f248d2915b615aa27d790094741265bfaf",
+    "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/command.ts": "9043f1808b16ac287224cea62eccb60dfd8945ccf7243afb65b42f50d8a009cc",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/errors.ts": "f8da170effd837897af81f65dc5074b767f121a6f221489361dba6066fccd400",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.ts": "08dd971ed4bfbb19c636bb7b82cce103ff7fed242fb0bd478a7078ba2d1506c1",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/evidence.ts": "5543f4db8a3418dfb6426220998878c3deb71ce9030399f99c48364f85aad214",
@@ -2215,14 +2215,15 @@
     "scripts/gate-run-identity.mjs": "ff1aa327417a97d501f325f4a412b5c08595c03fd023f5c28a0b8fc9fd6aa496",
     "scripts/generate-mbt-corpus-worker.mjs": "07f3d6fdaca0d6c6d7baf48de2ad0f056445d082022817712c84290be7385744",
     "scripts/generate-mbt-corpus.mjs": "891b8d2b0b10bb35256262e7f609470b78bef02be44a922ab16dfa7eae82ced8",
-    "scripts/hosted-formal-input-manifest.json": "5205fc6c4cb1f96d9e0cca526e5533d84410bfe75e633000ffa87607cadfb284",
+    "scripts/hosted-formal-input-manifest.json": "a8ac42bdc50de3181b8669b94fb3999bc00002aed3df27654113d9067e510412",
     "scripts/mbt-corpus-contract.mjs": "537cd9564572f9a2edb4652c85fb9136759d7e64694cd34952f67d7d607cbdc8",
     "scripts/mbt-corpus-controls.mjs": "6bdfbff517a5f9b7c0acf14f33220d365b645308b2deee36cf542383160dd125",
     "scripts/mbt-corpus-loader.mjs": "c680a5488d20ea80c08fd546c1eb1c48448b74029723d322011c98367fd9562b",
     "scripts/mbt-corpus-process-custody.mjs": "1712a518764b1060f0fff9218bae2e5c9d63308fdf5bf708cbb3b245bff76917",
-    "scripts/mbt-corpus-replay.mjs": "6d7c0a08b9350c4b9ad6b87f0477d831eb98e84d5f2a8b05993198ef2e084bae",
-    "scripts/measure-mbt-corpus.mjs": "18150cb6edebdc5e5014c25d09975d0cd924af259580f3f5839ac0e1634dd144",
-    "scripts/replay-mbt-corpus.mjs": "bea18d51c265fd98918f4a2ec3fdf478b1901f915637077332354265cbd4c7b1",
+    "scripts/mbt-corpus-replay.d.mts": "16ef911716a39b1abc9c40c7a531df8c71b68fbcd0e69cf2412a89839eba09ee",
+    "scripts/mbt-corpus-replay.mjs": "1f6d98316503d4c5a48f81ca2cc9278cbd04f43a0d66398dc20b551f6794ef3e",
+    "scripts/measure-mbt-corpus.mjs": "f49dd3d8ed44c2397ba94ab047755cbdfd3696bdfeff04f8aba4c887bb96541e",
+    "scripts/replay-mbt-corpus.mjs": "6913f00b0b286e75977b31426f00537ee9f0aa584fb6aa7eb3f48b6f343ddaf5",
     "scripts/resolve-quality-gate-base.d.mts": "0a427f3ad0af1e973e8463ba4d8cca77643e15aef9f01cd27bd93265de7ed626",
     "specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt": "7c33f3253ce8293bc7a73d13668be979ba4e1320dba3bd1219234f1f3bd9ecd5",
     "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt": "a023b41ba3e624ae0ded32234b3aa327af985c6fe513b8c3079feb81762e5846",

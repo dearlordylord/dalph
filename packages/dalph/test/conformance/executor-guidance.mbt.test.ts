@@ -1,6 +1,6 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, ITFMap, quintRun, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
+import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -43,6 +43,8 @@ import {
   executorGuidanceRedelivery,
   type ExecutorGuidanceJournalEvent
 } from "../../../orchestrator/src/workflow/protocols/executor-guidance/protocol.js"
+
+const { quintIt, quintRun } = corpusReplayFor("packages/dalph/test/conformance/executor-guidance.mbt.test.ts")
 
 const fixture = integrationFinalityFixture
 const requestId = (nonce: number) => ExecutorGuidanceRequestId.make(`guidance-model:${nonce}`)

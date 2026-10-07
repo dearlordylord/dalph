@@ -177,12 +177,18 @@ configuration, state check and post-replay assertions. It must never call
 fallback generator. A corpus-only `TraceGeneration` service may supply already
 validated traces to `quintRunWithTraceGeneration`; its `generate` method must
 fail on an option mismatch and have no live generation layer. The [corpus-only layer](../../scripts/mbt-corpus-loader.mjs) supplies this seam.
+The hosted formal source manifest binds both the adapter declaration and the
+actual replay adapter/loader/contract JavaScript closure; model obligations and
+formal command content are unchanged.
 The lane owner still provides its existing driver, configuration, state check
-and assertions. This task does not change the selected MBT source files or wire
-mandatory automatic verification. The explicit `pnpm mbt:replay` consumer runs
-temporary copies of all selected suites through the corpus-only seam.
-`pnpm test:mbt` retains its existing live-generation behavior until its migration
-is separately accepted.
+and assertions. Every selected suite imports its generation-named calls from
+`corpusReplayFor` with its exact inventory source identity. The adapter supplies
+only validated traces to the existing runner. `pnpm test:mbt` and
+`pnpm mbt:replay` invoke the same replay-only consumer, which validates all
+39 artifacts before launching either maintained MBT project. The shared quality
+plan requires this command once as `mbt-replay`, before catalog and coverage.
+Generation remains explicit through `pnpm mbt:generate`; failures never refresh
+the manifest or repair a corpus.
 
 The controls in [the contract tests](../../scripts/mbt-corpus-contract.test.mjs)
 cover valid inventory/receipt acceptance; stale, missing and malformed model,
@@ -262,4 +268,4 @@ Issue #466 is a prerequisite for unattended execution. The tracker marked it
 closed when this task read it on 2026-10-07 UTC; the Base includes its finality
 and retained Codex scope cleanup repairs. This tooling work does not itself
 qualify host liveness or close #363. Complete corpus fit and the focused controls
-are required before mandatory gate wiring; partial generation never qualifies.
+are required for mandatory gate wiring; partial generation never qualifies.

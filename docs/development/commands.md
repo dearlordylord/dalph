@@ -106,7 +106,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test:recorded-catalog` | Run the routine in-memory recorded-cassette catalog without starting the built production CLI. The seven-task capstone is manual through `test:integration:capstone`. |
 | `test:integration:capstone` | Explicitly run the seven-task delivery capstone, its status/cleanup assertions, and its recorded-catalog round trip with one Vitest worker. This is separate manual evidence for the accepted delivery-capstone story. |
 | `test:integration:publication` | Build the Dalph CLI and run the process-based direct-publication integration scenario explicitly, with one Vitest worker. Required before handoff when direct-publication or its composed completion/dependant behavior changes. |
-| `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
+| `test:mbt` | Required replay-only conformance run over all 39 validated corpus lanes and the source-resolution/reverse-evaluator controls. Missing or stale corpus fails before drivers launch; regeneration is explicit through `mbt:generate`. Local and hosted quality plans select it once as `mbt-replay`. |
 | `test:delivery-repeatability` | Manually run the historical DS01–DS13 strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. It is no longer an automatic local or hosted gate under #413's causal publication contract. |
 | `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
 | `test:ci-change-classification` | Prove CI classification, suffix plan/budget consistency, and hosted evidence/cancellation controls. |
@@ -119,8 +119,8 @@ All commands below use `pnpm`. Script definitions live in
 | `check:secrets` | Scan Git history with gitleaks. |
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id> [--previous-boot=<recorded boot UUID>]` | Ordinary form closes registration and proves every recorded writer group absent before clearing exact worktree/slot fences. The explicit previous-boot form accepts only a structurally complete no-child/observed inventory from the supplied recorded boot, durably records `UNPROVEN` stopped custody, and clears exact fences without probing or signalling old process groups. |
-| `check:all --candidate=<base sha>` | Invoke `scripts/run-candidate-checks.mjs` on the clean, frozen checkout using its exact Base. It records the selected preflight/application manifest and successful stage results. A launched child stage that exits nonzero is identified by the top-level failure message and retained stage log; dependency preparation or input-guard failures may have no stage result or child-stage log. Formal relevance is `not-requested`; run `pnpm check:quint` explicitly for local proof, and retain CI's separate formal verification. Revision-11 selects Reducer Lab only for a `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Interrupted attempts restart after stopped-writer reconciliation. |
-| `check:ci` | Hosted gate; MBT remains excluded pending #363. |
+| `check:all --candidate=<base sha>` | Invoke `scripts/run-candidate-checks.mjs` on the clean, frozen checkout using its exact Base. It records the selected preflight/application manifest and successful stage results. A launched child stage that exits nonzero is identified by the top-level failure message and retained stage log; dependency preparation or input-guard failures may have no stage result or child-stage log. Formal relevance is `not-requested`; run `pnpm check:quint` explicitly for local proof, and retain CI's separate formal verification. Revision-12 selects Reducer Lab only for a `prototypes/reducer-lab` path or missing/unknown changed-path evidence; a selected Lab failure blocks qualification. Interrupted attempts restart after stopped-writer reconciliation. |
+| `check:ci` | Hosted quality (including required MBT corpus replay) and independent formal verification. |
 
 The held files are `delivery-predecessor-cleanup.test.ts`,
 `ds14-final-activation-chronology.test.ts`, and
@@ -199,7 +199,7 @@ runtime-visible result, so no Dalph runtime operational scenario applies.
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
 complete profile fresh when an input that can affect it changed, while hosted
-quality retains its current Quint-connected MBT exclusion. A local success
+quality requires the complete corpus replay stage. A local success
 record is not hosted formal evidence. If no hosted-formal input changed, neither
 shard starts; the required aggregate check reports the exact base, head, and
 classification evidence as not applicable.

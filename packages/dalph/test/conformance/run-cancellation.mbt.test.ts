@@ -1,9 +1,9 @@
 /* eslint-disable max-lines -- One driver keeps the cancellation model-to-runtime seam map auditable. */
 /* eslint-disable functional/immutable-data -- The driver owns a short-lived mutable test projection. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import { isCoverageMode } from "../../test-support/vitest-mode.js"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AcceptedResult,
   AttemptId,
@@ -199,6 +199,8 @@ import {
 } from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
 import { TargetPromotionRuntime } from "../../../orchestrator/src/workflow/protocols/target-promotion/runtime.js"
 import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/protocol.js"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/run-cancellation.mbt.test.ts")
 
 const RunIdVariant = Schema.Struct({ tag: Schema.Literals(["R1", "R2"]), value: Schema.Unknown })
 const TargetVariant = Schema.Struct({ tag: Schema.Literals(["Target1", "Target2"]), value: Schema.Unknown })

@@ -1,3 +1,4 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { deriveFreshWorkflowEntryCapableTaskIds } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
 import {
   AttemptBasePolicy,
@@ -9,7 +10,6 @@ import { taskAttemptBaseReadOperationIdFor } from "../../../orchestrator/src/wor
 import { it } from "@effect/vitest"
 import { isCoverageMode } from "../../test-support/vitest-mode.js"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -158,6 +158,8 @@ import {
   executeTrackerGraphRead
 } from "../../../orchestrator/src/coordination/delivery/delivery-action-adapter-common.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/run-activation.mbt.test.ts")
 
 const HistoryVariant = Schema.Struct({
   tag: Schema.Literals([

@@ -1,7 +1,6 @@
-import { mkdir, mkdtemp, readFile, unlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import ts from "typescript"
 import { Clock, Effect } from "effect"
 import { corpusManifestPath, deriveCorpusManifest, validateCorpusManifest } from "./mbt-corpus-contract.mjs"
 import { loadCorpus } from "./mbt-corpus-loader.mjs"
@@ -33,76 +32,29 @@ await writeFile(executable, `#!/bin/sh\nprintf 'generator attempted\\n' >> '${se
   mode: 0o700,
   flag: "wx"
 })
-const created = []
-let cleanupDisposition = "SafeToClean"
-try {
-  for (const source of manifest.selection.files) {
-    const original = await readFile(join(root, source), "utf8")
-    const syntax = ts.createSourceFile(source, original, ts.ScriptTarget.Latest, true)
-    const edits = []
-    const routed = new Set()
-    for (const node of syntax.statements) {
-      if (!ts.isImportDeclaration(node) || !node.moduleSpecifier.text.startsWith("@firfi/quint-connect")) continue
-      const bindings = node.importClause?.namedBindings
-      if (!bindings || !ts.isNamedImports(bindings)) continue
-      for (const binding of bindings.elements) {
-        if (["quintRun", "quintIt", "generateTraces"].includes(binding.name.text)) {
-          if (binding.propertyName) throw new Error("Aliased generation import requires explicit review")
-          routed.add(binding.name.text)
-          edits.push({
-            start: binding.getStart(syntax),
-            end: binding.end,
-            text: `${binding.name.text} as unusedLive${binding.name.text}`
-          })
-        }
-      }
+for (const project of ["mbt", "accepted-result-integration-mbt"]) {
+  const remaining = stop - now()
+  if (remaining <= 0) throw new Error("MBT replay budget exhausted before child launch")
+  await runCorpusConsumer({
+    cleanup: async () => {},
+    retain: async () => {
+      await writeFile(join(evidence, "cleanup-retained.json"), JSON.stringify({ disposition: "WritersUnproven" }))
+    },
+    command: {
+      name: `validated MBT corpus replay: ${project}`,
+      executable: "pnpm",
+      args: ["exec", "vitest", "run", "--mode", "mbt", `--project=${project}`],
+      cwd: root,
+      timeoutMilliseconds: Math.min(600000, remaining),
+      relayParentSignals: true,
+      environment: { ...process.env, QUINT_BIN: executable }
     }
-    let copy = original
-    for (const edit of edits.sort((a, b) => b.start - a.start))
-      copy = copy.slice(0, edit.start) + edit.text + copy.slice(edit.end)
-    if (routed.size > 0)
-      copy = `import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"\nconst { ${[...routed].join(", ")} } = corpusReplayFor(${JSON.stringify(source)})\n${copy}`
-    const target = join(root, source.replace(".mbt.test.ts", ".corpus.test.ts"))
-    await writeFile(target, copy, { flag: "wx" })
-    created.push(target)
-  }
-  const accepted = created.filter((path) => path.endsWith("accepted-result-integration.corpus.test.ts"))
-  const ordinary = created.filter((path) => !accepted.includes(path))
-  for (const { files, workers } of [
-    { files: ordinary, workers: 4 },
-    { files: accepted, workers: 1 }
-  ]) {
-    const remaining = stop - now()
-    if (remaining <= 0) throw new Error("MBT replay budget exhausted before child launch")
-    cleanupDisposition = "WritersUnproven"
-    await runCorpusConsumer({
-      cleanup: async () => {
-        cleanupDisposition = "SafeToClean"
-      },
-      retain: async () => {
-        await writeFile(
-          join(evidence, "cleanup-retained.json"),
-          JSON.stringify({ disposition: "WritersUnproven", paths: created })
-        )
-      },
-      command: {
-        name: "validated MBT corpus replay",
-        executable: "pnpm",
-        args: ["exec", "vitest", "run", ...files, `--maxWorkers=${workers}`],
-        cwd: root,
-        timeoutMilliseconds: Math.min(600000, remaining),
-        relayParentSignals: true,
-        environment: { ...process.env, QUINT_BIN: executable }
-      }
-    })
-  }
-  try {
-    await readFile(sentinel)
-    throw new Error("MBT replay attempted generation")
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error
-  }
-  console.log("Required corpus replay passed; generator executable invocations: 0")
-} finally {
-  if (cleanupDisposition === "SafeToClean") for (const path of created) await unlink(path)
+  })
 }
+try {
+  await readFile(sentinel)
+  throw new Error("MBT replay attempted generation")
+} catch (error) {
+  if (error.code !== "ENOENT") throw error
+}
+console.log("Required corpus replay passed; generator executable invocations: 0")

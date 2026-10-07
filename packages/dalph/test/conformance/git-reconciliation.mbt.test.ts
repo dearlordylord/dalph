@@ -1,3 +1,4 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { Journal as RunJournal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { Task, TrackerRevision } from "../../../orchestrator/src/authorities/task-tracker/task.js"
 import { baseRetryWorkflowStep } from "../../../orchestrator/src/coordination/run/base-retry-workflow.js"
@@ -37,7 +38,7 @@ import {
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import { journalRecordByKey } from "../../../orchestrator/src/workflow-journal/record-evidence.js"
 import { expect, it } from "@effect/vitest"
-import { defineDriver, quintRun, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, stateCheck } from "@firfi/quint-connect/effect"
 import {
   AcceptedResult,
   EvidenceDigest,
@@ -118,6 +119,8 @@ import {
   IntegratorRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
+
+const { quintRun } = corpusReplayFor("packages/dalph/test/conformance/git-reconciliation.mbt.test.ts")
 
 type Constraint =
   | "NoGitConstraint"

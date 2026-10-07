@@ -1,8 +1,14 @@
 # Generate and replay an explicit MBT corpus
 
-**All 39 corpus lanes pass current provenance validation and complete replay.**
-Focused controls, `check:fast` and `check:submit` pass; historical failed
-attempts are retained below. Current generation/replay evidence binds source commit
+**All 39 current corpus lanes pass provenance validation and complete replay.**
+The replay-only implementation is source commit
+`65e88ca892aead74f4f4dc494936b46f2f2b15da`; its refreshed manifest provenance is
+`375828764bbd69a68a431bb1ebdb42cfd282311c0056cc1924bd34e49ce6deba`.
+The focused observations below ran against those source bytes before committing,
+with Git HEAD still at planned Base `08fa36605900f9edb59fc4bdc79b07d51d64593f`.
+They are source/corpus qualification, not a frozen candidate gate or hosted CI.
+
+Pre-migration generation/replay evidence binds source commit
 `87a897ebf2496ac32b07cb9b0bb3e1afe64a4476` and manifest provenance digest
 `c7ae0604d8fbb64ae3628d9ba530cc10b1ba34f808368839561fcf6d8b5c4359`.
 The original detached-generator custody blocker has a controlled repair in this
@@ -48,20 +54,20 @@ without retry or continuation. Inspect its `outcome.json` and raw traces before
 a focused repair. A failed or interrupted batch cannot count as all required
 artifacts. Never reduce samples, traces or depth to make a lane fit.
 
-The maintainer invokes `mise exec -- pnpm mbt:replay` for the complete manual
-consumer. It validates every required artifact before launching drivers, then
-creates exclusive temporary ordinary-test copies of the selected source files.
-Only the three live generation imports are routed through the corpus layer;
-the original bodies, state checks, mutant assertions, reverse evaluator controls
-and driver configurations remain. Copies preserve their original source identity
-for exact lane/options matching. Ordinary suites use four workers; accepted-result
+The maintainer invokes `mise exec -- pnpm test:mbt` (or `pnpm mbt:replay`)
+for the complete replay consumer. The required `mbt-replay` quality stage invokes
+that same command. It validates every required artifact before launching either
+maintained MBT project. Every suite routes its three generation-named imports
+through `corpusReplayFor` with its exact original source identity; all bodies,
+state checks, mutant assertions, reverse evaluator controls and driver
+configurations remain. Ordinary suites use four workers; accepted-result
 integration remains serial. `quintIt` retains its thirty-second default, and all
 explicit existing test timeouts remain. Each child command is bounded by ten
-minutes and the decreasing thirty-minute batch allowance. Temporary copies are
-removed only after their owned child stops. An unproven child outcome retains
-exact paths in `cleanup-retained.json`; reconciliation must prove stopped writers
-before removing them or retrying. A sentinel executable fails and
-records any attempt to launch Quint; success requires zero invocations.
+minutes and the decreasing thirty-minute batch allowance. No temporary suite
+copies are created. The existing bounded runner retains child custody; an
+unproven child outcome retains its evidence for reconciliation. A sentinel
+executable fails and records any attempt to launch Quint; success requires zero
+invocations. The enclosing quality stage has its own ten-minute bound.
 
 The corpus-only layer can also be selected explicitly by lane ID:
 
@@ -81,14 +87,15 @@ post-replay assertions. No alternate runner or model checker is introduced.
 
 This is verification tooling only. It does not change a Dalph command, workflow
 operation, decision, provider effect, journal record, retry, cleanup action or
-runtime-visible result. Runtime operational scenarios do not apply. Automatic
-MBT gate selection and source migration remain separate acceptance boundaries.
+runtime-visible result. Runtime operational scenarios do not apply. Hosted CI must validate shared automatic selection after integration; focused
+local routing controls do not claim hosted qualification.
 
 | Tooling chronology | Focused acceptance control |
 | --- | --- |
 | The maintainer supplies current inputs and a selected lane; the producer records intent, generates with the declared options, validates complete traces, then publishes bytes and receipt. Unknown/duplicate selections refuse before generation. | `pnpm mbt:generate --all`; manifest freshness and lane inventory controls in `scripts/mbt-corpus-contract.test.mjs` |
 | A replay consumer has a matching artifact and options; the layer validates provenance and decoding, then the existing driver replays every state. Repeated loads return the same traces without process or network effects. | `scripts/mbt-corpus-loader.test.mjs`; `pnpm mbt:replay`; `scripts/measure-mbt-corpus.mjs` compares supplied-trace baseline and corpus states and exact replay outcomes |
 | A replay consumer encounters missing bytes/receipt, corruption, stale model/tool/options with a rehashed receipt, malformed ITF, wrong options or unknown lane. It fails before exposing traces, without generation or network effects. | `scripts/mbt-corpus-loader.test.mjs`; stale imported-model, seed, depth and byte controls in `scripts/mbt-corpus-contract.test.mjs` |
+| The maintainer runs ordinary verification for narrow, shared or unknown changed paths. Local and hosted plans require exactly one `mbt-replay` stage using `test:mbt`; a missing/failed hosted replay cell cannot produce a passing aggregate. | `scripts/mbt-automatic-routing.test.mjs`; `scripts/quality-gate-stage-plan.test.mjs`; `scripts/quality-command-routing.test.mjs`; `scripts/hosted-quality-evidence.test.mjs` |
 | A generation lane fails or exceeds its bounds; the producer retains raw evidence and the failed outcome and does not launch the next lane. A crash during publication cannot authorize partial replay. | Failed generation evidence plus receipt/hash/count negatives in the contract controls; process custody remains owned by `scripts/run-bounded-command.mjs` |
 
 The representative fixture and loader instrumentation are focused proof of this
@@ -266,3 +273,44 @@ no fingerprinted implementation or model input, no corpus bytes, and no runtime
 behavior. Its affected check is `check:docs`; unchanged source qualification is
 not rerun. Integration, publication and parent issue disposition remain with
 Dalph and the Integrator as described above.
+
+## Automatic replay migration evidence, 2026-10-07 UTC
+
+The source/corpus snapshot identified above passed complete replay through the
+routine `pnpm test:mbt` entry point: all 14 ordinary suites / 87 tests, followed
+by the serial accepted-result suite / 14 tests. No required MBT test was skipped;
+the sentinel recorded zero generator invocations. Every inventory-approved lane
+option, driver expression, state-check expression, seed, trace/state budget and
+replay call expression equals the planned Base inventory; source line locations
+changed with the imports. Explicit generation batch
+`.scratch/mbt-generation/batch-HjM79u/` published all 39 pairs before its
+08:15:40 UTC outer stop. No receipt was relabeled to accept old artifacts.
+
+All artifacts passed current provenance/ITF validation under process/network
+traps. The representative fixture now invokes the actual `corpusReplayFor`
+adapter; supplied-trace baseline and corpus replay both return ten traces with
+seed 428, with zero generator/process/network calls. Isolated copies of the
+routine replay entry point refused missing corpus in 3.0 seconds and stale
+manifest in 1.6 seconds, before any child launch; process spies recorded zero.
+The maintained loader controls cover missing receipts, rehashed stale provenance,
+corruption, wrong options and malformed ITF without self-healing.
+
+Routing/aggregation controls, 150 formal controls, fresh typecheck and lint,
+`check:fast`, documentation links, and one coherent `check:submit` passed.
+Submission included 49 cassette files / 506 tests with the 21 existing cassette
+skips unchanged. Exact local evidence is retained in
+`.scratch/mbt-automatic-generation-final.log`,
+`.scratch/mbt-automatic-inventory.log`, `.scratch/mbt-automatic-replay.log`,
+`.scratch/mbt-automatic-measurement.log`,
+`.scratch/mbt-automatic-command-negatives.json`,
+`.scratch/mbt-inventory-preservation.json`,
+`.scratch/mbt-automatic-ci-controls.log`,
+`.scratch/mbt-automatic-formal-controls.log`, and
+`.scratch/mbt-automatic-check-submit.log`.
+
+An earlier partial batch was stopped to correct the adapter declaration's error
+contract. Its producer and every launched worker/generator group were proven
+absent before the complete batch above; its partial artifacts are not credited.
+Shared selection still requires hosted CI after integration, and the Integrator
+must refresh provenance and corpora for its exact merged source as described
+above. This bounded slice does not close #363 or claim hosted qualification.

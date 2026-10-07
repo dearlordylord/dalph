@@ -20,7 +20,8 @@ void test("product changes retain runtime proof without infrastructure and catal
     "format-lint",
     "secrets",
     "capability-registration",
-    "coverage"
+    "coverage",
+    "mbt-replay"
   ])
     assert.ok(selected.includes(id), id)
   for (const id of [

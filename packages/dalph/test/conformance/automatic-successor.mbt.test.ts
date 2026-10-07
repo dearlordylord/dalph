@@ -1,5 +1,6 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, quintRun, stateCheck, StateMismatchError } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, stateCheck, StateMismatchError } from "@firfi/quint-connect/effect"
 import { Cause, Effect, Exit, HashSet, Layer, Option, Schema } from "effect"
 import { expect } from "vitest"
 import { GitCommitSha } from "@dalph/contracts"
@@ -57,6 +58,8 @@ import {
 import { integratorSuccessorResponsibilityMatches } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import { makeSuccessorPrefix } from "../../../orchestrator/test/support/automatic-successor-history.js"
 import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
+
+const { quintRun } = corpusReplayFor("packages/dalph/test/conformance/automatic-successor.mbt.test.ts")
 
 const selectedAutomaticSuccessorFields = Schema.Struct({
   authorizationCount: ITFBigInt,
