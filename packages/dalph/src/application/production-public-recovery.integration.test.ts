@@ -682,47 +682,8 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* publicFixture
+        const { child: first, fixture, selected } = yield* startExecutingPublicRun()
         const fileSystem = yield* FileSystem.FileSystem
-        const first = yield* spawnPublicProcess(
-          fixture.config,
-          fixture.claimState,
-          fixture.cleanupObservation,
-          fixture.cleanupRelease,
-          fixture.cleanupWorktree,
-          fixture.commonDirectory,
-          fixture.gitFixtureDirectory,
-          "cancellation"
-        )
-        const selected = yield* takeMatching(first.records, ({ _tag }) => _tag === "RunSelected")
-        if (selected._tag !== "RunSelected") return
-        const turnStarted = yield* Effect.gen(function* () {
-          for (;;) {
-            if (
-              (yield* fileSystem.exists(fixture.executorState)) &&
-              (yield* fileSystem.readFileString(fixture.executorState)).includes('\\"_tag\\":\\"Running\\"')
-            ) {
-              return
-            }
-            yield* Effect.sleep("20 millis")
-          }
-        }).pipe(Effect.timeoutOption("10 seconds"))
-        if (turnStarted._tag === "None") {
-          const executorState = (yield* fileSystem.readFileString(fixture.executorState))
-            .split("\n")
-            .filter((line) => line.length > 0)
-            .at(-1)
-          yield* stopAbruptly(first)
-          return expect.fail(
-            `fixture did not start a turn: executor=${executorState} events=${JSON.stringify(yield* Ref.get(first.eventLog))} diagnostics=${JSON.stringify(yield* Ref.get(first.diagnostics))}`
-          )
-        }
-        yield* takeMatching(
-          first.records,
-          (record) =>
-            record._tag === "HistoricalSnapshot" &&
-            record.snapshot.items.some(({ occurrence }) => occurrence._tag === "PlannedAttemptExecutorWorkReported")
-        )
         expect(yield* fileSystem.exists(fixture.claimState)).toBe(true)
         yield* stopAbruptly(first)
 

@@ -107,6 +107,9 @@ const respond = (message: unknown) => {
           : { data: thread["turns"], nextCursor: null }
       )
       return
+    case "thread/loaded/list":
+      write(request.id, { data: [thread["id"]], nextCursor: null })
+      return
     case "thread/list":
       write(request.id, { data: [thread] })
       return
