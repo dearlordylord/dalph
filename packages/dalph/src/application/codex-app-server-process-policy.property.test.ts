@@ -687,6 +687,54 @@ describe("Codex process observation policy", () => {
     )
   })
 
+  it.each(["same", "unknown", "reused"])(
+    "retains unreadable %s-UID launch-token custody without signalling a candidate",
+    async (mode) => {
+      const prior = CodexServerLaunchRecord.make({
+        command: ["codex", "app-server"],
+        incarnation: CodexServerIncarnation.make("retained-token|linux%3A123"),
+        phase: "Live",
+        pid: 50
+      })
+      const signals: Array<readonly [number, number | NodeJS.Signals]> = []
+      let reads = 0
+      const selectedNative = native({
+        readdir: async () => ["100"],
+        kill: (pid, signal) => {
+          signals.push([pid, signal])
+        },
+        readFile: async (path) => {
+          if (path.endsWith("/stat")) {
+            reads += 1
+            return linuxStatText(stat(100, 1, 100, mode === "reused" && reads > 1 ? "linux:456" : "linux:123"))
+          }
+          if (path.endsWith("/status")) return mode === "unknown" ? "Uid: malformed" : "Uid: 1000 1000 1000 1000\n"
+          if (path.endsWith("/environ"))
+            return Promise.reject(Object.assign(new Error("controlled EACCES"), { code: "EACCES" }))
+          return "/bin/sh\u0000"
+        }
+      })
+      const refusal = await Effect.runPromise(
+        reconcilePriorTokenOwnedActivities(prior, selectedNative).pipe(Effect.result)
+      )
+      expect(refusal._tag).toBe("Failure")
+      if (refusal._tag === "Failure")
+        expect(refusal.failure).toMatchObject({
+          _tag: "CodexAppServerFailure",
+          operation: "initialize",
+          kind: "Ownership"
+        })
+      expect(reads).toBeGreaterThanOrEqual(2)
+      expect(signals.filter(([, signal]) => signal !== 0)).toEqual([])
+      // Fresh retry must not reuse the former unreadable observation as absence.
+      const retried = await Effect.runPromise(
+        reconcilePriorTokenOwnedActivities(prior, selectedNative).pipe(Effect.result)
+      )
+      expect(retried._tag).toBe("Failure")
+      expect(signals.filter(([, signal]) => signal !== 0)).toEqual([])
+    }
+  )
+
   it("skips an unreadable Linux environment only after proving a foreign effective uid", async () => {
     expect(linuxProcessEffectiveUid("Name:\tfixture\nUid:\t1000\t1001\t1001\t1001\n")).toBe("1001")
     expect(linuxProcessEffectiveUid("Uid: malformed")).toBeUndefined()
