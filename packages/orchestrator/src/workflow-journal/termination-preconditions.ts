@@ -26,10 +26,8 @@ type GraphObservationRecord = {
   readonly position: JournalPosition
 }
 
-type GraphReadOperation = Extract<
-  Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>["operation"],
-  { readonly _tag: "ReadTrackerGraph" }
->
+/** Private membership index for one immutable termination check. */
+type GraphReadPredecessors = ReadonlyMap<OperationId, ReadonlySet<OperationId>>
 
 const lengthPrefixed = (value: string): string => `${value.length}:${value}`
 
@@ -103,54 +101,21 @@ const graphObservationRecords = (records: ReadonlyArray<JournalRecord>): Readonl
     return [{ observation: event.observation, operationId: event.operationId, position }]
   })
 
-const graphReadOperations = (records: ReadonlyArray<JournalRecord>): ReadonlyMap<OperationId, GraphReadOperation> =>
+const graphReadPredecessors = (records: ReadonlyArray<JournalRecord>): GraphReadPredecessors =>
   new Map(
     records.flatMap(({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
-        ? [[event.operation.operationId, event.operation] as const]
+        ? [[event.operation.operationId, new Set(event.operation.predecessorOperationIds)] as const]
         : []
     )
   )
 
-/** Returns whether `ancestor` is named, directly or transitively, by `descendant`. */
-const causallyPrecedes = (
-  operations: ReadonlyMap<OperationId, GraphReadOperation>,
-  ancestor: OperationId,
-  descendant: OperationId
-): boolean => {
-  const visited = new Set<OperationId>()
-  const visit = (operationId: OperationId): boolean => {
-    if (visited.has(operationId)) return false
-    visited.add(operationId)
-    const operation = operations.get(operationId)
-    if (operation === undefined) return false
-    if (operation.predecessorOperationIds.includes(ancestor)) return true
-    return operation.predecessorOperationIds.some(visit)
-  }
-  return ancestor !== descendant && visit(descendant)
-}
-
-const graphObservationSupersededBy = (
-  operations: ReadonlyMap<OperationId, GraphReadOperation>,
-  earlier: GraphObservationRecord,
-  later: GraphObservationRecord
-): boolean => {
-  if (earlier.operationId === later.operationId) return false
-  if (causallyPrecedes(operations, earlier.operationId, later.operationId)) return true
-  return (
-    later.observation._tag === "UnchangedTaskTrackerFactsReconfirmed" &&
-    later.observation.priorFullObservationOperationId === earlier.operationId
-  )
-}
-
 const graphObservationsContradict = (
   observations: ReadonlyArray<GraphObservationRecord>,
-  operations: ReadonlyMap<OperationId, GraphReadOperation>,
   left: GraphObservationRecord,
   right: GraphObservationRecord
 ): boolean => {
   if (left.operationId === right.operationId) return false
-  if (graphObservationSupersededBy(operations, left, right)) return false
   if (
     taskTrackerTargetKey(graphObservationTarget(left.observation)) !==
     taskTrackerTargetKey(graphObservationTarget(right.observation))
@@ -163,18 +128,56 @@ const graphObservationsContradict = (
   return leftGraph !== undefined && rightGraph !== undefined && graphFactsKey(leftGraph) !== graphFactsKey(rightGraph)
 }
 
+/** Reverse only explicit edges; reaching another observed read proves supersession. */
+const causallySupersededGraphReads = (
+  operations: GraphReadPredecessors,
+  observations: ReadonlyArray<GraphObservationRecord>
+): ReadonlySet<OperationId> => {
+  const successors = new Map<OperationId, Set<OperationId>>()
+  for (const [operationId, predecessors] of operations) {
+    for (const predecessor of predecessors) {
+      const following = successors.get(predecessor) ?? new Set<OperationId>()
+      following.add(operationId)
+      successors.set(predecessor, following)
+    }
+  }
+  const observed = new Set(observations.map(({ operationId }) => operationId))
+  const superseded = new Set<OperationId>()
+  for (const origin of observed) {
+    const visited = new Set<OperationId>([origin])
+    const pending = [...(successors.get(origin) ?? [])]
+    while (pending.length > 0) {
+      const descendant = pending.pop()
+      if (descendant === undefined || visited.has(descendant)) continue
+      if (observed.has(descendant)) {
+        superseded.add(origin)
+        break
+      }
+      visited.add(descendant)
+      for (const successor of successors.get(descendant) ?? []) pending.push(successor)
+    }
+  }
+  return superseded
+}
+
 /**
  * A later journal position is not itself tracker freshness. Only an explicit causal
  * predecessor (or a typed reconfirmation reference) may supersede an older graph read.
  */
 const graphKnowledgeIssues = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> => {
   const observations = graphObservationRecords(records)
-  const operations = graphReadOperations(records)
+  const operations = graphReadPredecessors(records)
+  const superseded = causallySupersededGraphReads(operations, observations)
+  const reconfirmed = new Set(
+    observations.flatMap(({ observation }) =>
+      observation._tag === "UnchangedTaskTrackerFactsReconfirmed" ? [observation.priorFullObservationOperationId] : []
+    )
+  )
   const maximal = observations.filter(
-    (candidate) => !observations.some((later) => graphObservationSupersededBy(operations, candidate, later))
+    (candidate) => !superseded.has(candidate.operationId) && !reconfirmed.has(candidate.operationId)
   )
   const contradictory = maximal.some((left) =>
-    maximal.some((right) => graphObservationsContradict(observations, operations, left, right))
+    maximal.some((right) => graphObservationsContradict(observations, left, right))
   )
   return contradictory ? ["termination requires tracker graph observations to be causally comparable"] : []
 }

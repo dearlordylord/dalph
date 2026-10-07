@@ -1,4 +1,4 @@
-import { Clock, Crypto, Duration, Effect, Exit, Option, Schema, Scope } from "effect"
+import { Clock, Crypto, Duration, Effect, Exit, Fiber, Option, Schema, Scope } from "effect"
 import { type CodexAttemptStoreService } from "./codex-attempt-store.js"
 import {
   type CodexProviderHomeNamespace,
@@ -104,8 +104,14 @@ export const boundCodexServerStartup = Effect.fn("CodexServerStartup.bound")(fun
   if (remaining <= 0) return yield* expired()
   return yield* Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const scope = yield* Scope.fork(yield* Effect.scope)
-      const close = yield* Effect.cached(Scope.close(scope, Exit.void))
+      const parentScope = yield* Effect.scope
+      const scope = yield* Scope.fork(parentScope)
+      // Cache the owner, not its caller's wait: an Exit deadline must not
+      // abandon finalizers after Scope.close has marked the child closed.
+      const closing = yield* Effect.cached(
+        Scope.close(scope, Exit.void).pipe(Effect.forkIn(parentScope, { uninterruptible: true }))
+      )
+      const close = closing.pipe(Effect.uninterruptible, Effect.flatMap(Fiber.join))
       if (exit !== undefined) yield* exit.registerDrain(close)
       const acquiring =
         exit === undefined
