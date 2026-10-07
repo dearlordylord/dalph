@@ -1,0 +1,4 @@
+# Historical MBT manifest source-file SHA-256 digests, verified against the
+# exact Git blobs in 95758d11. These suppress only those immutable findings.
+95758d11c8b4126809bb5b1c5d178c522044f1aa:scripts/mbt-corpus-manifest.json:generic-api-key:1886
+95758d11c8b4126809bb5b1c5d178c522044f1aa:scripts/mbt-corpus-manifest.json:generic-api-key:1994
