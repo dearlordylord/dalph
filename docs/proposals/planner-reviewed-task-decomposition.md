@@ -135,11 +135,15 @@ not a currently available authoring API.
 5. Reconcile every mutation separately. Obtain a fresh complete closure and
    focused instruction reads proving the approved contents and all intended
    edges, lifecycle and membership. Bare acknowledgements prove no eligibility.
-   Edit P's residual instructions only after the active-parent disposition in S8.
+   Edit P's residual instructions only after S8 proves exact A safely suspended.
+   The publisher readback is not a Run-journal changed-instruction observation.
 6. Record established publication history. Operator explicitly Unpauses only
-   after publication intents/conflicts are resolved and the parent has a proven safe
-   report and recorded exact disposition choice. Ordinary cleanup/replacement
-   that Pause forbids waits for Unpause; no new parent attempt bypasses settlement.
+   after publication intents/conflicts are resolved and the parent has a proven
+   safe report. P's fresh complete blockers must prevent old A from resuming.
+   After Unpause, ordinary focused reads establish the changed revision in the
+   Run journal; only then can Operator apply an exact choice. Replacement waits
+   for P eligibility and atomically settles A while planning its successor;
+   predecessor cleanup is separately authorized, never a replacement prerequisite.
    Dalph's ordinary reads, claims, plans, Base selection, execution, integration
    and finality then apply. Child attempts get their own exact worktree and
    planned Base; no parent's worktree or plan is reused.
@@ -186,7 +190,7 @@ Dalph records controls, asks executor to suspend A and observes safe boundaries.
 Publisher then performs steps 3–5 above: journal intent, tracker create I, exact
 readback, observation; likewise C and D; intent/mutation/readback for C→I and
 D→I prerequisites, P grouping, and P→C/P→D blockers. Parent residual instructions
-and exact A disposition follow S8. Complete graph/specification readback precedes
+and the post-Unpause exact A choice/replacement follow S8. Complete graph/specification readback precedes
 publication observation and explicit Unpause. Ordinary Dalph delivers I, then
 C/D when tracker success releases them, then residual P.
 
@@ -370,17 +374,25 @@ Adding blockers alone would leave A executing.
 **Trigger and ordered calls.** Operator applies Run Pause; Dalph asks the executor
 to suspend exact A and obtains its normalized safe report. Publisher reads current
 P/Git/claim facts, records intent, edits P's instructions to the reviewed residual
-scope, and reads the new fingerprint. Existing changed-instruction protocol
-records old/new revision beside A. Operator explicitly chooses Restart for that
-pair; existing disposition/cleanup/replacement protocol must settle A before any
-new P attempt. Publisher can finalize after the safe report and exact choice are
-recorded; cleanup/replacement forward work waits for ordinary Unpause admission. When Unpaused,
-P remains blocked by C/D and its eventual new plan uses ordinary current Base
-selection, never an in-place re-pin.
+scope, and reads the new fingerprint. Publisher records that readback only in
+its authoring history; it cannot manufacture a Run-journal instruction observation
+or apply Restart from it. After final graph proof, Operator Unpauses. Ordinary
+Dalph reads current complete blockers and focused instructions, records F2 in
+its Run journal, and exposes the exact F1/F2 choice. A remains safely suspended:
+P's unfinished C/D blockers prohibit Resume even before that choice is applied.
+Operator then explicitly chooses Restart for the recorded pair. Applied Restart
+may wait while C/D execute and complete; it does not immediately plan a successor.
+Once fresh tracker facts prove P eligible, exact claim/Git reads authorize the
+ordinary atomic `PlannedAttemptReplaced`: A ceases to be unsettled in the same
+record that plans successor A2. A2 gets its own branch/worktree and ordinary
+current Base. A's old WIP/worktree and claim remain preserved; replacement does
+not delete them. Any later cleanup requires its own exact disposition.
+
 
 **Visible and forbidden outcomes.** Maintainer sees preserved A/WIP, new residual
 instructions and the exact choice required. Continue is not this profile's
-handoff: choosing Continue leaves publication held for replanning its overlap.
+handoff: choosing Continue requires replanning the residual overlap; unfinished blockers
+still prohibit Resume. No further publication repair is authorized meanwhile.
 Stop does not imply residual P success; it requires a revised disposition/review.
 No hidden suspension from new blockers, no forced cleanup, and no successor while
 old ownership or writers remain ambiguous.
@@ -393,7 +405,9 @@ review the split again against its actual result; do not rewrite integrated work
 
 **Proposed test mapping.** T8 composes publisher with changed-task, Pause, executor
 and Git disposition seams; assert suspension proof before edit, exact old/new
-choice, immutable B/W, no overlap or cleanup on unknown writers, and explicit
+choice, immutable B/W, Run-journal F2 read after Unpause before choice, replacement
+waiting for P eligibility, atomic predecessor settlement/successor planning,
+preserved predecessor resources, no overlap or cleanup on unknown writers, and explicit
 re-review for terminal/integration races. Also assert new blockers alone do not
 suspend A, preserving the existing intermediate-edit contract.
 
@@ -436,10 +450,11 @@ Planner receives a new split revision requiring an incompatible S change.
 attempt reports, records that the earlier interface contract no longer suffices,
 and names one new interface owner I2 with acceptance examples and migration scope.
 Operator applies Run Pause and observes safe boundaries. Revised instructions
-for affected C/D invoke their existing exact Continue/Restart/Stop choices;
+for affected C/D invoke their post-Unpause ordinary focused reads and exact Continue/Restart/Stop choices;
 Restart is required where the old work cannot meet the new contract;
-ordinary disposition settlement must precede replacement and waits for Unpause
-where Pause forbids forward work. Publisher authorizes explicit I2 prerequisites and graph edits
+ordinary replacement waits for eligibility and atomically settles the old
+attempt while planning its successor. Old resources remain for separately
+authorized disposition; no cleanup is prerequisite to replacement. Publisher authorizes explicit I2 prerequisites and graph edits
 only after review of the current dependencies and retained work. Ordinary delivery
 of I2 and fresh tracker success precede new dependent starts/resumes.
 
@@ -456,7 +471,7 @@ protocols own any later effects.
 
 **Proposed test mapping.** T10 at review, tracker and exact-attempt reconciliation
 seams asserts one assigned owner per surface/version, explicit edges, cycle
-rejection, immutable AC/BC, stopped-writer proof before replacement, and no resume
+rejection, immutable AC/BC, stopped-writer proof and atomic settlement/planning at replacement, and no resume
 of safely suspended D through unfinished I2.
 
 ## Future verification seams and present limits
