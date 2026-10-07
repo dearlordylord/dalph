@@ -1,27 +1,21 @@
-import type { RunningHostInspectionSnapshot } from "../src/application/running-host-contract.js"
+import type { RunningHostSnapshot } from "../src/application/running-host-contract.js"
 import {
   deliveryGraphEncoding,
   type DeliveryGraphProjection,
   type DeliveryGraphTaskTone
 } from "../../../prototypes/reducer-lab/src/delivery-graph-element.ts"
 
-/** Presentation joins independently observed tracker and Run facts. No selector
- * consumes this projection and no workflow permission is derived here. */
-export const projectLiveTaskGraph = (snapshot: RunningHostInspectionSnapshot): DeliveryGraphProjection | null => {
-  const inspection = snapshot.inspection
-  if (inspection._tag !== "Ready" && inspection._tag !== "Stale") return null
-  const graph = inspection.value.graph
-  const run = snapshot.run._tag === "Closed" ? snapshot.run.final : snapshot.run
-  const ready = run?._tag === "Ready" ? run : null
-  const observedRunTasks = new Set(
-    ready?.graph._tag === "GraphEstablished" ? ready.graph.snapshot.tasks.map((task) => task.id) : []
-  )
+/** Renders one published Run snapshot; it cannot fetch tracker facts or authorize work. */
+export const projectLiveTaskGraph = (snapshot: RunningHostSnapshot): DeliveryGraphProjection | null => {
+  const run = snapshot._tag === "Closed" ? snapshot.final : snapshot
+  if (run?._tag !== "Ready" || run.graph._tag !== "GraphEstablished") return null
+  const graph = run.graph.snapshot
+  const ready = run
   const frontier = new Set(
-    ready?.frontier.standings.filter((standing) => standing._tag === "Eligible").map((standing) => standing.taskId) ??
-      []
+    ready.frontier.standings.filter((standing) => standing._tag === "Eligible").map((standing) => standing.taskId)
   )
-  const held = new Set(ready?.held.map((position) => position.taskId) ?? [])
-  const retained = new Set(ready?.retained.map((standing) => standing.taskId) ?? [])
+  const held = new Set(ready.held.map((position) => position.taskId))
+  const retained = new Set(ready.retained.map((standing) => standing.taskId))
   const phases: Readonly<Record<string, DeliveryGraphTaskTone>> = {
     Preparing: "desired",
     Executing: "running",
@@ -35,12 +29,11 @@ export const projectLiveTaskGraph = (snapshot: RunningHostInspectionSnapshot): D
   }
   const tasks = graph.tasks.map((task) => {
     const diagnostic =
-      ready?.delivery._tag === "DeliveryStatusAvailable"
+      ready.delivery._tag === "DeliveryStatusAvailable"
         ? ready.delivery.diagnostics?.tasks.find((entry) => entry.taskId === task.id)
         : undefined
     const labels = [
       task.lifecycle._tag,
-      ...(observedRunTasks.has(task.id) ? [] : ["Outside the observed Run graph"]),
       ...(diagnostic === undefined ? [] : [diagnostic.phase]),
       ...(diagnostic?.failure._tag === "Known" ? [diagnostic.failure.code] : [])
     ]
@@ -60,9 +53,9 @@ export const projectLiveTaskGraph = (snapshot: RunningHostInspectionSnapshot): D
     }
   })
   return {
-    key: `live:${snapshot.run.runId}`,
+    key: `live:${snapshot.runId}`,
     fingerprint: `${graph.revision}:${JSON.stringify(tasks)}`,
-    status: inspection._tag === "Stale" ? "Last complete graph; refresh failed." : "Complete tracker observation.",
+    status: "Latest complete graph observed by the Run.",
     tasks,
     edges: graph.tasks.flatMap((task) => [
       ...task.prerequisiteIds.map((prerequisite) => ({

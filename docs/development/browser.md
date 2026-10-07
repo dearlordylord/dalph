@@ -52,7 +52,7 @@ It emits only `packages/dalph/dist/browser/index.html`, `graph.js`, and
 directory. The shared graph renderer has no cassette playback input in this page.
 
 After building artifacts, run `pnpm --dir prototypes/reducer-lab check:browser:live-host`
-for the real HTTP host, two Chromium pages, common renderer, stale graph and
+for the real HTTP host, two Chromium pages, common renderer, passive Run graph updates, restart clearing and
 origin refusal. Its controlled tracker inputs do not claim live GitHub timing.
 Use the browser setup above first. Pure projection and refresh tests own
 additional graph, cadence, coalescing and failure cases. These checks are mapped

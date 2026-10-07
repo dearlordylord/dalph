@@ -47,6 +47,11 @@ it.live(
             })
             return response.json()
           })
+        expect(yield* post("ReadSnapshot", address)).toMatchObject({
+          result: { _tag: "Success", value: { _tag: "NotReady", runId: probe.runId } }
+        })
+        expect(yield* Ref.get(started)).toBe(0)
+        expect(yield* Ref.get(refreshed)).toBe(0)
         expect(yield* post("ReadInspectionSnapshot", address)).toMatchObject({
           result: { _tag: "Success", value: { _tag: "InspectionSnapshot", inspection: { _tag: "Loading" } } }
         })
