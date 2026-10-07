@@ -35,6 +35,7 @@ Git history.
 - [Publish independent Journal operations by their accepted outcomes](accepted-publication-operation-boundary.md)
 - [Describe delivery actions without performing them](describe-delivery-actions.md)
 - [Run delivery actions from accepted reactive facts](run-reactive-delivery-actions.md)
+- [Deliver every accepted runtime occurrence through a bounded mailbox](bounded-runtime-mailbox.md)
 - [Stabilize each Run above delivery](stabilize-each-run.md)
 - [Reactivate incomplete Runs from non-authoritative hints](reactivate-incomplete-runs.md)
 - [Admit independent work while preserving an exact retained attempt](independent-work-retained-priority.md)
