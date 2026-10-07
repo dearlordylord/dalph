@@ -15,6 +15,7 @@ import {
   type RunningHostInspectionSnapshot
 } from "../src/application/running-host-contract.js"
 import { projectLiveTaskGraph } from "./live-task-graph-projection.ts"
+import { browserRequestId } from "./request-id.ts"
 
 class PageEnvironment extends Context.Service<
   PageEnvironment,
@@ -22,7 +23,7 @@ class PageEnvironment extends Context.Service<
 >()("@dalph/PageEnvironment") {}
 const pageEnvironment = Layer.succeed(PageEnvironment, {
   fetch: window.fetch.bind(window),
-  randomUuid: () => window.crypto.randomUUID()
+  randomUuid: () => browserRequestId(window.crypto)
 })
 const jsonIndentSpaces = 2
 const millisecondsPerSecond = 1000

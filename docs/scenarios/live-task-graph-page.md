@@ -37,6 +37,16 @@ Acceptance seams: controlled host failure/incomplete/recovery tests and widget s
 
 ## P4 — Exact origin and read-only boundary
 
+For an ordinary HTTP IPv4 origin, the browser may expose `getRandomValues`
+without `randomUUID`. After reading the descriptor, the page creates a UUIDv4
+request identity using that available cryptographic primitive, then reads the
+inspection snapshot and attaches its watch. The graph becomes visible with
+the same correlation and read-only guards; unavailable `randomUUID` must not
+leave the page permanently connecting. No mutation, crash or ambiguous retry
+is introduced by local identity generation. The controlled
+`browser-request-id.test.ts` covers this capability boundary; the existing
+real-host browser scenario owns end-to-end connection evidence.
+
 The host listens on an already supported literal IPv4 origin. Alice loads its page and assets, then reads descriptor/snapshot/watch from that exact origin. The host checks exact Host and, when present, exact same Origin. Cross-origin and mismatching authorities are rejected before dispatch. Browser-origin control operations remain rejected; the page has no scheduling controls. Asset paths are a fixed allowlist and never expose arbitrary repository files. Existing CLI/MCP no-Origin behavior remains compatible. HTTP disconnect affects only that browser's observation resources, and host Exit closes refresh and bounded watches through existing custody. No new authentication, hostname grammar, Docker requirement or authority source is introduced.
 
 Acceptance seams: running-host HTTP authority and route tests, asset allowlist tests, actual browser same-origin and cross-origin refusal, host Exit/watch resource cleanup tests. Browser retries re-handshake the descriptor and cannot acquire command authority.
