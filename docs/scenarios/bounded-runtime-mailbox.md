@@ -22,8 +22,16 @@ live ownership and journal-first recovery, and
 [ambiguity](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence).
 The mailbox changes no workflow operation, durable fact, admission capacity,
 cleanup disposition, or Run finality rule. It adds process-local backpressure.
-Existing admission and Exit models retain their scope; they do not prove this
-whole runtime wait graph. The production-boundary tests below must prove it.
+The preserved admission decisions are constrained by
+[freshTaskAdmission.qnt](../../specs/freshTaskAdmission.qnt):
+`everyEntryWasWithinItsObservedCapacity`,
+`ambiguousClaimIntentRetainsEntryReservation`, and
+`responsibilityHandoffNeverCreatesAdmissionGap`. Preserved Exit decisions are
+constrained by [applicationExit.qnt](../../specs/applicationExit.qnt):
+`forwardOwnerRegistrationRequiresServing`,
+`successfulExitRequiresRecoverableBoundary`, and
+`exitNeverDisposesDurableWorkflowResources`. These existing models retain their
+scope; they do not prove this whole runtime wait graph. The production-boundary tests below must prove it.
 
 The inspected implementation is
 [run-delivery-runtime.ts](../../packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts),
