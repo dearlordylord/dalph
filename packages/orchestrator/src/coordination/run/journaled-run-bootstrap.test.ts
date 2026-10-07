@@ -70,14 +70,14 @@ import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.j
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
-import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "../delivery/delivery-planning-catch-up.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { Journal } from "../delivery/journal.js"
 import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
 import {
-  DeliveryRelationPublicationObserver,
-  type DeliveryRelationPublicationObservation
-} from "../delivery/delivery-publication-observer.js"
+  DeliveryRelationInputObserver,
+  type DeliveryRelationInputObservation
+} from "../delivery/delivery-relation-input-observer.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { currentSignalOf, type DeliveryRelationInputBundle, TrackerGraphState } from "../delivery/relations.js"
@@ -441,7 +441,7 @@ const unpausedRuntimeEvaluation = (runId: RunId) =>
               },
               trackerGraphProposals: []
             },
-            publication: {
+            graphView: {
               exactEvidence: [],
               graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
               policy: runtimePolicy
@@ -472,7 +472,7 @@ const publicationBundle = (runId: RunId, acceptedAt: JournalPosition | null = nu
     },
     trackerGraphProposals: []
   },
-  publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
+  graphView: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
 })
 
 const makeRuntimeCreatedRelations = Effect.fn("JournaledRunBootstrapTest.makeRuntimeCreatedRelations")(function* (
@@ -501,14 +501,14 @@ const runtimeLayer = (
   publicationCount?: Ref.Ref<number>,
   passivePublicationCapture?: Deferred.Deferred<PassivePlannedAttemptProjectionPublicationService>,
   plannedAttemptExecutor?: PlannedAttemptExecutor["Service"],
-  relationObserverCapture?: Deferred.Deferred<DeliveryRelationPublicationObservation>
+  relationObserverCapture?: Deferred.Deferred<DeliveryRelationInputObservation>
 ) =>
   Layer.mergeAll(
     publicationCount === undefined
       ? Layer.empty
       : Layer.effectDiscard(
           Effect.gen(function* () {
-            const observer = yield* DeliveryRelationPublicationObserver
+            const observer = yield* DeliveryRelationInputObserver
             const first = yield* Ref.modify(publicationCount, (count) => [count === 0, count + 1] as const)
             if (first) yield* observer.observe(publicationBundle(runId))
           })
@@ -517,7 +517,7 @@ const runtimeLayer = (
       ? Layer.empty
       : Layer.effectDiscard(
           Effect.gen(function* () {
-            yield* Deferred.succeed(relationObserverCapture, yield* DeliveryRelationPublicationObserver)
+            yield* Deferred.succeed(relationObserverCapture, yield* DeliveryRelationInputObserver)
           })
         ),
     passivePublicationCapture === undefined
@@ -576,7 +576,7 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   lifecycleObservation: PlannedAttemptExecutorLifecycleObservation["Service"] = PlannedAttemptExecutorLifecycleObservation.of(
     { attach: () => Effect.die("the bootstrap fixture did not declare executor lifecycle observation") }
   ),
-  relationObserverCapture?: Deferred.Deferred<DeliveryRelationPublicationObservation>,
+  relationObserverCapture?: Deferred.Deferred<DeliveryRelationInputObservation>,
   guidance?: { readonly crypto: Crypto.Crypto; readonly executor: PlannedAttemptExecutor["Service"] }
 ) {
   const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
@@ -3340,7 +3340,7 @@ it.effect("tells Alice that her exact Run Pause is not applied", () =>
             const observation = yield* DeliveryRuntimeObservationPublication
             const journal = yield* Journal
             const acceptedAt = (yield* journal.state.get).position
-            yield* observation.publish({ ...(yield* unpausedRuntimeEvaluation(runId)), acceptedAt }, [])
+            yield* observation.updateLatest({ ...(yield* unpausedRuntimeEvaluation(runId)), acceptedAt }, [])
             yield* Deferred.succeed(ready, undefined)
             yield* Deferred.await(finish)
             return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
@@ -4228,7 +4228,7 @@ it.effect("runtime-created relations notify scheduling and ambient publication o
       const storage = Context.get(journalContext, JournalStore)
       const observed = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
       const hints = yield* Ref.make(0)
-      const observer = DeliveryRelationPublicationObserver.of({
+      const observer = DeliveryRelationInputObserver.of({
         observe: (bundle) => Ref.update(observed, (current) => [...current, bundle])
       })
       const bootstrap = yield* buildBootstrap(runId, storage)
@@ -4244,20 +4244,20 @@ it.effect("runtime-created relations notify scheduling and ambient publication o
           Effect.gen(function* () {
             const relations = yield* makeRuntimeCreatedRelations(runId, target)
             yield* completedFinalityProof(runId, target)
-            yield* DeliveryAcceptedFactPublication.use((publication) => publication.awaitCurrent).pipe(
+            yield* DeliveryPlanningCatchUp.use((publication) => publication.awaitJournalPosition).pipe(
               Effect.provide(relations)
             )
             expect(yield* Ref.get(hints)).toBeGreaterThan(0)
             const bundles = yield* Ref.get(observed)
             expect(bundles[0]?.actionInputs.runtimeFacts.acceptedAt).toBe(1)
-            expect(bundles.at(-1)?.publication.graph._tag).toBe("GraphEstablished")
+            expect(bundles.at(-1)?.graphView.graph._tag).toBe("GraphEstablished")
             expect(bundles.at(-1)?.actionInputs.runtimeFacts.acceptedAt).toBe(
               (yield* storage.read(runId)).at(-1)?.position
             )
             return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
           })
         )
-        .pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
+        .pipe(Effect.provideService(DeliveryRelationInputObserver, observer))
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -4271,7 +4271,7 @@ it.effect("signals once only when a relation publication advances beyond the act
       const storage = Context.get(journalContext, JournalStore)
       const hints = yield* Ref.make(0)
       const ambientPositions = yield* Ref.make<ReadonlyArray<JournalPosition | null>>([])
-      const observerCapture = yield* Deferred.make<DeliveryRelationPublicationObservation>()
+      const observerCapture = yield* Deferred.make<DeliveryRelationInputObservation>()
       const bootstrap = yield* buildBootstrap(
         runId,
         storage,
@@ -4298,7 +4298,7 @@ it.effect("signals once only when a relation publication advances beyond the act
           runId,
           Effect.gen(function* () {
             const observer = yield* Deferred.await(observerCapture)
-            expect(yield* DeliveryRelationPublicationObserver).toBe(observer)
+            expect(yield* DeliveryRelationInputObserver).toBe(observer)
             yield* observer.observe(publicationBundle(runId, JournalPosition.make(1)))
             const journal = yield* Journal
             const read = makeTrackerGraphObservationOperation(
@@ -4314,7 +4314,7 @@ it.effect("signals once only when a relation publication advances beyond the act
           })
         )
         .pipe(
-          Effect.provideService(DeliveryRelationPublicationObserver, {
+          Effect.provideService(DeliveryRelationInputObserver, {
             observe: (bundle) =>
               Ref.update(ambientPositions, (positions) => [...positions, bundle.actionInputs.runtimeFacts.acceptedAt])
           })
@@ -4333,7 +4333,7 @@ it.effect("retains a completed read when one relation publication also includes 
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      const observerCapture = yield* Deferred.make<DeliveryRelationPublicationObservation>()
+      const observerCapture = yield* Deferred.make<DeliveryRelationInputObservation>()
       const publications = yield* Ref.make<ReadonlyArray<AcceptedRunFactPublication>>([])
       const completedCallbackEntered = yield* Deferred.make<void>()
       const releaseCompletedCallback = yield* Deferred.make<void>()
@@ -4492,7 +4492,7 @@ it.effect(
             if (refresh) {
               for (const ordinal of [1, 2, 3]) {
                 yield* completedFinalityProof(runId, target, OperationId.make(`accepted-publication:${ordinal}`))
-                yield* DeliveryAcceptedFactPublication.use((publication) => publication.awaitCurrent).pipe(
+                yield* DeliveryPlanningCatchUp.use((publication) => publication.awaitJournalPosition).pipe(
                   Effect.provide(relations)
                 )
               }
@@ -4572,7 +4572,7 @@ it.effect(
           expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toEqual([])
         }).pipe(
           Effect.provide(ownerLayer),
-          Effect.provideService(DeliveryRelationPublicationObserver, {
+          Effect.provideService(DeliveryRelationInputObserver, {
             observe: (bundle) =>
               Ref.update(publicationPositions, (current) => [...current, bundle.actionInputs.runtimeFacts.acceptedAt])
           })

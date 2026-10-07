@@ -551,6 +551,36 @@ claim release
 
 ### Journal history and reconstruction
 
+**Workflow append**:
+Dalph records one accepted workflow event at the next position in one Run's
+ordered Journal; derived views and passive observations do not append events.
+_Avoid_: Delivery view publication, observation update
+
+**Delivery planning catch-up**:
+Delivery planning has incorporated one exact Run's accepted Journal prefix
+through a captured position; later appends require a later catch-up.
+_Avoid_: Accepted-fact publication, Journal append, runtime completion
+
+**Delivery graph view**:
+The coherent current descriptive value of accepted tracker graph, Run policy,
+and exact workflow evidence used to derive delivery consequences.
+_Avoid_: Graph publication, Journal record, persisted frontier
+
+**Delivery relation input observation**:
+A read-only observation of one coherent current delivery graph view and its
+associated action-planning inputs.
+_Avoid_: Relation publication, workflow occurrence
+
+**Delivery runtime evaluation**:
+One coherent derived value of delivery consequences, proposed actions,
+admission premises, and quiescence facts consumed by the runtime.
+_Avoid_: Workflow event, persisted runtime state, transport message
+
+**Latest runtime observation update**:
+The runtime replaces its process-local latest evaluation and live-owner view
+for passive status readers; it grants no permission to act or append history.
+_Avoid_: Workflow append, accepted-fact publication, lifecycle report
+
 **Workflow-journal history**:
 The ordered, decoded Dalph workflow-journal records for one exact `RunId`.
 It contains only facts Dalph recorded about its workflow; Git history,
@@ -818,7 +848,7 @@ _Avoid_: Delivery relation authority, persisted runtime state, workflow history
 The passive Run- or task-scoped description derived from one current delivery
 runtime observation. Its canonical entries distinguish dependency waits,
 tracker-fact waits, task-work capacity waits, proposed actions, live actions,
-accepted-fact publication waits, integration-target waits, unavailable or
+planning catch-up waits, integration-target waits, unavailable or
 conflicting evidence, settlements, and relinquishments. It may report that the
 observation is not ready, that a task is absent from an established graph, or
 that the observation is closed; it never calls a tracker, Git, executor, or

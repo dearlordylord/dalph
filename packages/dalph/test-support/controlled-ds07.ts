@@ -5,7 +5,7 @@ import { isControlledRetainedBResponsibility } from "./controlled-ds06.js"
 const expectedHeldAttemptIds = [scenario.attempts.A1, scenario.attempts.C1, scenario.attempts.D1].toSorted()
 
 const hasRetainedB = (publication: DeliveryRelationInputBundle) =>
-  publication.publication.exactEvidence.some(isControlledRetainedBResponsibility)
+  publication.graphView.exactEvidence.some(isControlledRetainedBResponsibility)
 
 const isAcceptedCapacityPublication = (
   publication: DeliveryRelationInputBundle,
@@ -16,8 +16,8 @@ const isAcceptedCapacityPublication = (
   )
   if (capacityChange === undefined || capacityChange.event._tag !== "TaskWorkCapacityChanged") return false
   return (
-    publication.publication.policy.revision === capacityChange.event.revision &&
-    publication.publication.policy.taskExecutionCapacity === capacityChange.event.capacity &&
+    publication.graphView.policy.revision === capacityChange.event.revision &&
+    publication.graphView.policy.taskExecutionCapacity === capacityChange.event.capacity &&
     publication.actionInputs.runtimeFacts.acceptedAt !== null &&
     publication.actionInputs.runtimeFacts.acceptedAt >= capacityChange.position
   )
@@ -32,8 +32,8 @@ export const isControlledDs07CompleteCheckpoint = (
     .map(({ correlation }) => correlation.attemptId)
     .toSorted()
   return (
-    publication.publication.graph._tag === "GraphEstablished" &&
-    publication.publication.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
+    publication.graphView.graph._tag === "GraphEstablished" &&
+    publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
     isAcceptedCapacityPublication(publication, records) &&
     hasRetainedB(publication) &&
     heldAttemptIds.join(",") === expectedHeldAttemptIds.join(",")

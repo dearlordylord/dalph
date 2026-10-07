@@ -138,7 +138,7 @@ const coherentBundle = (
     },
     trackerGraphProposals: []
   },
-  publication: { exactEvidence, graph, policy: currentPolicy }
+  graphView: { exactEvidence, graph, policy: currentPolicy }
 })
 
 const layerFor = (

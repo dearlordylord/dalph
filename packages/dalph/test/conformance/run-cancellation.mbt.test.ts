@@ -39,7 +39,7 @@ import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionLease
 } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
-import { DeliveryAcceptedFactPublication } from "../../../orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "../../../orchestrator/src/coordination/delivery/delivery-planning-catch-up.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { executeFreshTrackerGraphRead } from "../../../orchestrator/src/coordination/delivery/delivery-action-adapter-common.js"
 import { executeIntegrationAction } from "../../../orchestrator/src/coordination/delivery/integration-delivery-action-adapter.js"
@@ -1157,7 +1157,7 @@ const makeCancellationDriverImplementation = () => {
         yield* RunActivationGraphBaseline
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
-      const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
+      const acceptedFactPublication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(relations))
       const workflowInterpreter = yield* WorkflowInterpreter
       const workflowTrace = yield* WorkflowTrace
       const finalityExecutor = DeliveryActionExecutor.of({
@@ -1504,7 +1504,7 @@ const makeCancellationDriverImplementation = () => {
           }
           const proof = yield* runStabilizedDelivery(target, runId, relation).pipe(
             Effect.provideService(DeliveryActionExecutor, finalityExecutor),
-            Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
+            Effect.provideService(DeliveryPlanningCatchUp, acceptedFactPublication),
             Effect.provideService(PlannedTaskAttemptPlanner, finalityPlanner)
           )
           if (!("disposition" in proof) || proof.disposition !== command.disposition) {

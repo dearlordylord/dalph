@@ -9,7 +9,7 @@ import {
   CoordinatorOwnership,
   deliveryProposalOrderTaskId,
   DeliveryActionExecutor,
-  DeliveryRelationPublicationObserver,
+  DeliveryRelationInputObserver,
   DeliveryRuntimeObservationObserver,
   deterministicOperationIdAllocatorLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
@@ -579,7 +579,7 @@ const runControlledStartupCharacterizationFor = (
               return projection
             }
             const currentPublication = (yield* Ref.get(publications)).findLast(
-              ({ publication }) => publication.graph._tag === "GraphEstablished"
+              ({ graphView: publication }) => publication.graph._tag === "GraphEstablished"
             )
             const index = yield* Ref.getAndUpdate(ds09ObservationIndex, (current) => current + 1)
             const expectedAttemptId = [scenario.attempts.A1, scenario.attempts.C1, scenario.attempts.D1][index]
@@ -1071,14 +1071,14 @@ const runControlledStartupCharacterizationFor = (
               Effect.andThen(Deferred.await(ds07P2PublicationRelease))
             )
           : Effect.void
-      const publicationObserver = DeliveryRelationPublicationObserver.of({
+      const publicationObserver = DeliveryRelationInputObserver.of({
         observe: (bundle) =>
           // eslint-disable-next-line complexity -- One observer routes content-qualified DS-04 through DS-11 checkpoint signals without changing production.
           Effect.gen(function* () {
             yield* recordOccurrence({
               detail: describeOccurrenceIdentity({
                 acceptedAt: bundle.actionInputs.runtimeFacts.acceptedAt,
-                graph: bundle.publication.graph,
+                graph: bundle.graphView.graph,
                 heldAttemptIds: bundle.actionInputs.runtimeFacts.taskWork.held.map(
                   ({ correlation }) => correlation.attemptId
                 )
@@ -1088,8 +1088,8 @@ const runControlledStartupCharacterizationFor = (
             })
             yield* Ref.update(publications, (current) => [...current, bundle])
             if (
-              bundle.publication.graph._tag === "GraphEstablished" &&
-              bundle.publication.graph.observation.snapshot.revision === scenario.graphs.G0.revision
+              bundle.graphView.graph._tag === "GraphEstablished" &&
+              bundle.graphView.graph.observation.snapshot.revision === scenario.graphs.G0.revision
             ) {
               for (const taskId of selectedTaskIds) {
                 yield* recordSemanticPublicationOnce("TaskEligibilityPublished", taskId)
@@ -1102,7 +1102,7 @@ const runControlledStartupCharacterizationFor = (
             if (
               ds10Controls?.acceptedPublication !== undefined &&
               restartPhase === "DS349" &&
-              bundle.publication.graph._tag === "GraphNotEstablished" &&
+              bundle.graphView.graph._tag === "GraphNotEstablished" &&
               bundle.actionInputs.trackerGraphProposals.length === 1
             ) {
               yield* Deferred.succeed(ds10Controls.acceptedPublication.establishmentPublication, bundle)
@@ -1110,8 +1110,8 @@ const runControlledStartupCharacterizationFor = (
             if (
               ds10Controls?.acceptedPublication !== undefined &&
               restartPhase === "DS349" &&
-              bundle.publication.graph._tag === "GraphEstablished" &&
-              bundle.publication.graph.observation.snapshot.revision === scenario.graphs.G4.revision
+              bundle.graphView.graph._tag === "GraphEstablished" &&
+              bundle.graphView.graph.observation.snapshot.revision === scenario.graphs.G4.revision
             ) {
               const marker = bundle.actionInputs.runtimeFacts.taskWork.safeContinuationRevalidations.some(
                 ({ plannedAttempt }) => plannedAttempt.attemptId === scenario.attempts.C1
@@ -1526,7 +1526,7 @@ const runControlledStartupCharacterizationFor = (
       const activationLayer = Layer.mergeAll(
         sharedBootstrapLayer,
         sharedPlanningLayer,
-        Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)
+        Layer.succeed(DeliveryRelationInputObserver, publicationObserver)
       )
       const ordinaryActivation = (opportunity?: RunActivationOpportunityValue) =>
         runWorkflowWithControlledDeliveryActionExecutor(
@@ -1742,7 +1742,7 @@ const runControlledStartupCharacterizationFor = (
         const activationLayer = Layer.mergeAll(
           sharedBootstrapLayer,
           sharedPlanningLayer,
-          Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)
+          Layer.succeed(DeliveryRelationInputObserver, publicationObserver)
         )
         return {
           activateActiveRefresh: (source: "TrackerNotification" | "Timer") =>
@@ -2591,7 +2591,7 @@ const runControlledRestartCharacterization = (
       }
       const decision = { _tag: "RunMustRemainActive", reason: "RunnableTransition" } as const
       const reconstructedPublication = afterLoss.publications.findLast(
-        ({ publication }) => publication.graph._tag === "GraphEstablished"
+        ({ graphView: publication }) => publication.graph._tag === "GraphEstablished"
       )
       if (reconstructedPublication === undefined) {
         return yield* Effect.die("DS-09 did not publish reconstructed current graph state")
@@ -2733,7 +2733,7 @@ const runControlledRestartCharacterization = (
         return { ds09, ds10, ds11 } satisfies ControlledDs11StartupCharacterization
       }
 
-      const retainedB = ds11.checkpointPublication.publication.exactEvidence.find(isControlledRetainedBResponsibility)
+      const retainedB = ds11.checkpointPublication.graphView.exactEvidence.find(isControlledRetainedBResponsibility)
       if (
         retainedB === undefined ||
         retainedB._tag !== "ResponsibilityFacts" ||
@@ -3094,8 +3094,8 @@ const cExecutingSince = (prefixLength: number) => (snapshot: ControlledDs03Bound
     )
 
 const cRevalidationProposed = (bundle: DeliveryRelationInputBundle) =>
-  bundle.publication.graph._tag === "GraphEstablished" &&
-  bundle.publication.graph.observation.snapshot.revision === scenario.graphs.G4.revision &&
+  bundle.graphView.graph._tag === "GraphEstablished" &&
+  bundle.graphView.graph.observation.snapshot.revision === scenario.graphs.G4.revision &&
   bundle.actionInputs.runtimeFacts.taskWork.safeContinuationRevalidations.some(
     ({ plannedAttempt }) => plannedAttempt.attemptId === scenario.attempts.C1
   )
@@ -3205,8 +3205,8 @@ const continueRetainedC = Effect.fn("RetainedC.continueRetainedC")(function* (
     const recoveredRefresh = yield* restarted.awaitSnapshot((snapshot) => {
       const publication = snapshot.publications[snapshot.publications.length - 1]
       return (
-        publication?.publication.graph._tag === "GraphEstablished" &&
-        publication.publication.graph.observation.snapshot.revision === "G5"
+        publication?.graphView.graph._tag === "GraphEstablished" &&
+        publication.graphView.graph.observation.snapshot.revision === "G5"
       )
     })
     yield* restarted.stop
@@ -3403,8 +3403,8 @@ const continueRetainedCThroughCrash = Effect.fn("RetainedC.continueRetainedCThro
     yield* first.awaitPublication(
       checkpoint === "Pause"
         ? (bundle) =>
-            bundle.publication.graph._tag === "GraphEstablished" &&
-            bundle.publication.graph.observation.snapshot.revision === scenario.graphs.G4.revision
+            bundle.graphView.graph._tag === "GraphEstablished" &&
+            bundle.graphView.graph.observation.snapshot.revision === scenario.graphs.G4.revision
         : cRevalidationProposed
     )
     const policy = yield* first.operatorControl.readTaskWorkCapacity(scenario.runId)
@@ -3483,8 +3483,8 @@ const continueRetainedCThroughCrash = Effect.fn("RetainedC.continueRetainedCThro
       ? yield* second.awaitSnapshot((snapshot) =>
           snapshot.publications.some(
             (bundle) =>
-              bundle.publication.graph._tag === "GraphEstablished" &&
-              bundle.publication.graph.observation.snapshot.revision === scenario.graphs.G4.revision
+              bundle.graphView.graph._tag === "GraphEstablished" &&
+              bundle.graphView.graph.observation.snapshot.revision === scenario.graphs.G4.revision
           )
         )
       : yield* second.awaitSnapshot(cExecutingSince(before.records.length))

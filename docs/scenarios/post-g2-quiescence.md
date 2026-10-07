@@ -88,8 +88,8 @@ admission or authorize an executor command.
 5. Only now does Dalph apply the existing
    `TaskWorkAdmissionStalledRuntimeQuiescence` classification against the
    live admission snapshot. Before returning, Dalph captures the current
-   accepted journal position and waits for its relation publication through
-   `DeliveryAcceptedFactPublication.awaitCurrent`. The returned boundary must
+   accepted journal position and waits for planning to catch up through that position using
+   `DeliveryPlanningCatchUp.awaitJournalPosition`. The returned boundary must
    name this exact Run before its position can be compared. A foreign Run's
    boundary fails with `DeliveryRuntimeRunMismatch`, without consuming or
    waiting for a queued evaluation. If that position is newer

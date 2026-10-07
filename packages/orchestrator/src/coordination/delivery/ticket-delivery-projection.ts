@@ -19,7 +19,7 @@ import {
   type DeliveryFrontier,
   type DeliveryFrontierExclusion,
   type DeliveryFrontierStanding,
-  type DeliveryGraphPublication,
+  type DeliveryGraphView,
   type ExactWorkflowObligation,
   type TicketDeliveryEvidence,
   type TicketDeliveries,
@@ -84,13 +84,10 @@ const promotedFinalityChronologiesFor = (
     )
 }
 
-const graphFollowsFocusedSuccess = (
-  promotion: PromotedIntegrationFinality,
-  publication: DeliveryGraphPublication
-): boolean => {
-  if (publication.graph._tag !== "GraphEstablished") return false
-  const graphRecordedAt = publication.graph.observation.recordedAt
-  return publication.exactEvidence.some(
+const graphFollowsFocusedSuccess = (promotion: PromotedIntegrationFinality, graphView: DeliveryGraphView): boolean => {
+  if (graphView.graph._tag !== "GraphEstablished") return false
+  const graphRecordedAt = graphView.graph.observation.recordedAt
+  return graphView.exactEvidence.some(
     (evidence) =>
       evidence._tag === "FocusedTaskCompletionSuccess" &&
       evidence.recordedAt < graphRecordedAt &&
@@ -105,11 +102,11 @@ const graphFollowsFocusedSuccess = (
   )
 }
 
-/** Exhaustively classifies the journaled graph inside one coherent descriptive publication. */
-export const frontierOf = (publication: DeliveryGraphPublication): DeliveryFrontier => {
-  const graph = publication.graph
+/** Exhaustively classifies the journaled graph inside one coherent descriptive graphView. */
+export const frontierOf = (graphView: DeliveryGraphView): DeliveryFrontier => {
+  const graph = graphView.graph
   if (graph._tag === "GraphNotEstablished") {
-    return { _tag: "DeliveryFrontier", publication, source: graph, standings: [] }
+    return { _tag: "DeliveryFrontier", graphView, source: graph, standings: [] }
   }
   const tasks = new Map(graph.observation.snapshot.toWire().tasks.map((task) => [task.id, task] as const))
   const standings = [...tasks.values()]
@@ -121,12 +118,12 @@ export const frontierOf = (publication: DeliveryGraphPublication): DeliveryFront
         : { _tag: "Excluded", reasons: [firstReason, ...reasons.slice(1)], taskId: task.id }
     })
     .toSorted(compareByTaskId)
-  return { _tag: "DeliveryFrontier", publication, source: graph, standings }
+  return { _tag: "DeliveryFrontier", graphView, source: graph, standings }
 }
 
 /** Applies only deterministic graph ordering and configured policy; live positions are not an input. */
 export const boundedParallelTicketsOf = (source: DeliveryFrontier): BoundedParallelTickets => {
-  const policy = source.publication.policy
+  const policy = source.graphView.policy
   let eligibleRank = 0
   const placements = source.standings.map(({ taskId, ...standing }) => {
     if (standing._tag === "Excluded") {
@@ -137,7 +134,7 @@ export const boundedParallelTicketsOf = (source: DeliveryFrontier): BoundedParal
       rank < policy.taskExecutionCapacity ? { _tag: "Selected", rank } : { _tag: "EligibleOutsideBound", rank }
     return { placement, taskId }
   })
-  return { _tag: "BoundedParallelTickets", placements, policy, publication: source.publication, source }
+  return { _tag: "BoundedParallelTickets", placements, policy, graphView: source.graphView, source }
 }
 
 /** Reads only the selected positive space from the exhaustive bounded placements. */
@@ -293,13 +290,13 @@ const promotedPrerequisiteReleasePendingFor = (
   tickets: BoundedParallelTickets,
   taskId: TaskId
 ): ReadonlyArray<TaskId> => {
-  const graph = tickets.publication.graph
+  const graph = tickets.graphView.graph
   if (graph._tag !== "GraphEstablished") return []
   const task = graph.observation.snapshot.toWire().tasks.find((candidate) => candidate.id === taskId)
   if (task === undefined) return []
   return task.prerequisiteIds.filter((prerequisiteTaskId) =>
-    promotedFinalityChronologiesFor(prerequisiteTaskId, tickets.publication.exactEvidence).some(
-      (promotion) => !graphFollowsFocusedSuccess(promotion, tickets.publication)
+    promotedFinalityChronologiesFor(prerequisiteTaskId, tickets.graphView.exactEvidence).some(
+      (promotion) => !graphFollowsFocusedSuccess(promotion, tickets.graphView)
     )
   )
 }

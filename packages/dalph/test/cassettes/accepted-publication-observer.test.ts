@@ -138,14 +138,14 @@ it.effect(
       expect(result.activeRefreshCount).toBe(1)
       expect(result.ordinaryActivationCount).toBe(1)
       expect(result.trailingActivationCount).toBe(1)
-      expect(result.establishmentPublication.publication.graph._tag).toBe("GraphNotEstablished")
+      expect(result.establishmentPublication.graphView.graph._tag).toBe("GraphNotEstablished")
       expect(result.establishmentPublication.actionInputs.trackerGraphProposals).toMatchObject([
         { route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph" } }
       ])
       expect(result.establishmentPublication.actionInputs.runtimeFacts.taskWork.safeContinuationRevalidations).toEqual(
         []
       )
-      expect(result.reopened.publication.graph).toMatchObject({
+      expect(result.reopened.graphView.graph).toMatchObject({
         _tag: "GraphEstablished",
         observation: { snapshot: { revision: scenario.graphs.G4.revision } }
       })

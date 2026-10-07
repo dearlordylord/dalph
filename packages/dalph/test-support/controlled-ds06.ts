@@ -19,7 +19,7 @@ export const isControlledExactB1Plan = (plan: PlannedTaskAttempt) =>
 
 /** Exact retained B1 responsibility shared by later controlled-story checkpoints. */
 export const isControlledRetainedBResponsibility = (
-  evidence: DeliveryRelationInputBundle["publication"]["exactEvidence"][number]
+  evidence: DeliveryRelationInputBundle["graphView"]["exactEvidence"][number]
 ) => {
   if (evidence._tag !== "ResponsibilityFacts" || evidence.facts._tag !== "PlannedAttemptExecutorFreshFacts") {
     return false
@@ -47,19 +47,19 @@ export const isControlledDs06CompleteCheckpoint = (
       event.report._tag === "ExecutorWorkExecuting" &&
       event.report.correlation.attemptId === scenario.attempts.D1
   )
-  const hasDResponsibility = publication.publication.exactEvidence.some(
+  const hasDResponsibility = publication.graphView.exactEvidence.some(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
       evidence.facts.responsibility.plannedAttempt.attemptId === scenario.attempts.D1
   )
-  const hasRetainedBResponsibility = publication.publication.exactEvidence.some(isControlledRetainedBResponsibility)
+  const hasRetainedBResponsibility = publication.graphView.exactEvidence.some(isControlledRetainedBResponsibility)
   const heldAttemptIds = publication.actionInputs.runtimeFacts.taskWork.held
     .map(({ correlation }) => correlation.attemptId)
     .toSorted()
   return (
-    publication.publication.graph._tag === "GraphEstablished" &&
-    publication.publication.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
+    publication.graphView.graph._tag === "GraphEstablished" &&
+    publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
     hasDExecuting &&
     hasDResponsibility &&
     hasRetainedBResponsibility &&

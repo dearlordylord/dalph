@@ -271,7 +271,7 @@ const isExactWaitingBProposal = (
 }
 
 const retainsReadyB = (publication: DeliveryRelationInputBundle, plannedAttempt: PlannedTaskAttempt) => {
-  const evidence = publication.publication.exactEvidence.filter(
+  const evidence = publication.graphView.exactEvidence.filter(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
@@ -297,7 +297,7 @@ const retainsExactC = (publication: DeliveryRelationInputBundle, records: Readon
   )
   if (began?.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return false
   const plannedAttempt = began.event.plannedAttempt
-  const evidence = publication.publication.exactEvidence.filter(
+  const evidence = publication.graphView.exactEvidence.filter(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
@@ -393,7 +393,7 @@ export const isControlledDs12CompleteCheckpoint = (
   publication: DeliveryRelationInputBundle,
   records: ReadonlyArray<JournalRecord>
 ) => {
-  const retainedB = publication.publication.exactEvidence.find(
+  const retainedB = publication.graphView.exactEvidence.find(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
@@ -411,7 +411,7 @@ export const isControlledDs12CompleteCheckpoint = (
   const history = exactContinuationHistory(records, plannedAttempt)
   if (history === undefined) return false
   const acceptedAt = publication.actionInputs.runtimeFacts.acceptedAt
-  if (acceptedAt === null || publication.publication.graph._tag !== "GraphEstablished") return false
+  if (acceptedAt === null || publication.graphView.graph._tag !== "GraphEstablished") return false
   const held = publication.actionInputs.runtimeFacts.taskWork.held
     .map(({ correlation }) => `${correlation.runId}:${correlation.attemptId}`)
     .toSorted()
@@ -427,8 +427,8 @@ export const isControlledDs12CompleteCheckpoint = (
   )
   return [
     acceptedAt >= history.lineage.outcome.position,
-    publication.publication.graph.observation.snapshot.revision === scenario.graphs.G2.revision,
-    publication.publication.policy.taskExecutionCapacity === scenario.policies.P2,
+    publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G2.revision,
+    publication.graphView.policy.taskExecutionCapacity === scenario.policies.P2,
     held.join(",") === expectedHeld.join(","),
     hasExactOccupiedPositions(publication),
     proposals.length === 1,

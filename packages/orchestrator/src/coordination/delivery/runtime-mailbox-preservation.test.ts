@@ -1,7 +1,7 @@
 import { liveJournalTestLayer } from "./live-journal-test-layer.js"
 import { Journal } from "./journal.js"
 import { makeReactiveDeliveryRelationsLayer } from "./reactive-delivery-relations.js"
-import { DeliveryRelationPublicationObserver } from "./delivery-publication-observer.js"
+import { DeliveryRelationInputObserver } from "./delivery-relation-input-observer.js"
 import { deriveFreshTaskCandidateEvaluation } from "./fresh-task-candidate.js"
 import { RunActivationOpportunity } from "../run/run-activation-opportunity.js"
 import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
@@ -85,7 +85,7 @@ import {
 } from "./delivery-runtime-resources.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { DeliveryRuntimeObservationObserver } from "./delivery-runtime-observation.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "./delivery-planning-catch-up.js"
 import {
   makePreparedBeginFixture,
   preparedBeginProposalsOf as derivePreparedBeginProposals
@@ -145,8 +145,8 @@ const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
 })
 const runDeliveryRuntimeQuiescence = <E>(
   relation: DeliveryRuntimeInput<E>,
-  publication: DeliveryAcceptedFactPublication["Service"]
-) => runDeliveryRuntime(runId, relation).pipe(Effect.provideService(DeliveryAcceptedFactPublication, publication))
+  publication: DeliveryPlanningCatchUp["Service"]
+) => runDeliveryRuntime(runId, relation).pipe(Effect.provideService(DeliveryPlanningCatchUp, publication))
 const baseEvaluation = Effect.gen(function* () {
   const relation = yield* deliveryRuntime.pipe(
     Effect.provide(
@@ -170,7 +170,7 @@ const baseEvaluation = Effect.gen(function* () {
             },
             trackerGraphProposals: []
           },
-          publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
+          graphView: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
         } satisfies DeliveryRelationInputBundle)
       })
     )
@@ -234,8 +234,8 @@ it.effect("S2/S5: distinct completions retain owners until publication, settle o
       const secondResult: DeliveryActionResult = { _tag: "ActionCompleted", proposalId: second.id }
       const successorResult: DeliveryActionResult = { _tag: "ActionCompleted", proposalId: successor.id }
       const runtime = yield* runDeliveryRuntimeQuiescence(relation, {
-        awaitCurrent: Effect.succeed({
-          _tag: "DeliveryAcceptedPublicationBoundary",
+        awaitJournalPosition: Effect.succeed({
+          _tag: "DeliveryPlanningCatchUpBoundary",
           acceptedThrough: JournalPosition.make(12),
           runId
         })
@@ -356,8 +356,8 @@ it.effect("S3/S4: relation failure or phase cancellation abandons a pending comp
           const childHandle = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>()
           const outcomes = yield* Ref.make<ReadonlyArray<DeliveryActionResult>>([])
           const runtime = yield* runDeliveryRuntimeQuiescence(relation, {
-            awaitCurrent: Effect.succeed({
-              _tag: "DeliveryAcceptedPublicationBoundary",
+            awaitJournalPosition: Effect.succeed({
+              _tag: "DeliveryPlanningCatchUpBoundary",
               acceptedThrough: JournalPosition.make(21),
               runId
             })
@@ -461,9 +461,9 @@ it.effect(
             const runtime = yield* Effect.gen(function* () {
               yield* Deferred.succeed(runtimeResources, yield* DeliveryRuntimeResources)
               return yield* runDeliveryRuntimeQuiescence(relation, {
-                awaitCurrent: Deferred.succeed(publicationEntered, undefined).pipe(
+                awaitJournalPosition: Deferred.succeed(publicationEntered, undefined).pipe(
                   Effect.as({
-                    _tag: "DeliveryAcceptedPublicationBoundary" as const,
+                    _tag: "DeliveryPlanningCatchUpBoundary" as const,
                     acceptedThrough: JournalPosition.make(33),
                     runId
                   })
@@ -590,15 +590,15 @@ it.effect("S5: a newer accepted capacity publication admits its ordinary read be
       const firstCut = yield* Deferred.make<void>()
       const publishAcceptedControl = yield* Deferred.make<void>()
       const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
-      const publication = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Effect.gen(function* () {
+      const publication = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Effect.gen(function* () {
           // Capture the durable prefix before awaiting its projection, as the
           // production publication boundary does; no future fact is required.
           const acceptedThrough = yield* Ref.get(durablePosition)
           yield* Ref.update(freshnessCuts, (cuts) => [...cuts, acceptedThrough])
           yield* Deferred.succeed(firstCut, undefined)
           yield* Deferred.await(publishAcceptedControl)
-          return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId } as const
+          return { _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId } as const
         })
       })
       const runtime = yield* runDeliveryRuntimePhase(
@@ -606,7 +606,7 @@ it.effect("S5: a newer accepted capacity publication admits its ordinary read be
         relation,
         DeliveryRuntimePhase.ActiveRefreshPostG2([boundary])
       ).pipe(
-        Effect.provideService(DeliveryAcceptedFactPublication, publication),
+        Effect.provideService(DeliveryPlanningCatchUp, publication),
         Effect.provide(identityLayers),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -655,8 +655,8 @@ it.effect("S3: attachment failure preserves the exact cause and admits no action
     const exit = yield* Effect.exit(
       runDeliveryRuntimePhase(runId, currentSignalFromCurrentFirstStream(Stream.fail(failure))).pipe(
         Effect.provide(identityLayers),
-        Effect.provideService(DeliveryAcceptedFactPublication, {
-          awaitCurrent: Effect.die("attachment must fail before publication")
+        Effect.provideService(DeliveryPlanningCatchUp, {
+          awaitJournalPosition: Effect.die("attachment must fail before publication")
         }),
         Effect.provideService(DeliveryActionExecutor, {
           execute: () =>
@@ -696,7 +696,7 @@ it.effect("S4: application Exit interrupts the registered authority wait and for
       const calls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
       const outcomes = yield* Ref.make<ReadonlyArray<DeliveryActionResult>>([])
       const runtime = yield* runDeliveryRuntimeQuiescence(relation, {
-        awaitCurrent: Effect.die("interrupted authority wait cannot publish success")
+        awaitJournalPosition: Effect.die("interrupted authority wait cannot publish success")
       }).pipe(
         Effect.provide(plannerLayer),
         Effect.provide(plannedAttemptProtocolControllerLayer),
@@ -857,7 +857,7 @@ it.effect(
             const operationId = OperationId.make(`preservation-claim-${recordIntent}`)
             const outcomes = yield* Ref.make<ReadonlyArray<DeliveryActionResult>>([])
             const runtime = yield* runDeliveryRuntimeQuiescence(relation, {
-              awaitCurrent: Effect.die("cancelled claim cannot publish success")
+              awaitJournalPosition: Effect.die("cancelled claim cannot publish success")
             }).pipe(
               Effect.provide(plannerLayer),
               Effect.provide(plannedAttemptProtocolControllerLayer),
@@ -977,7 +977,7 @@ it.effect("S5: accepted journal facts pass through production reactive publicati
         capabilities.resources.integrationTargets,
         began.position
       ).pipe(
-        Effect.provideService(DeliveryRelationPublicationObserver, {
+        Effect.provideService(DeliveryRelationInputObserver, {
           observe: (bundle) =>
             bundle.actionInputs.runtimeFacts.acceptedAt === JournalPosition.make(3)
               ? Deferred.succeed(published, undefined).pipe(Effect.andThen(Deferred.await(releasePublication)))

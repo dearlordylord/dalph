@@ -78,7 +78,7 @@ import {
   TaskAdmissionOccupancy
 } from "../admission/fresh-task-admission.js"
 import { makeApplicationExitShell } from "../application-exit/application-shell.js"
-import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "../delivery/delivery-planning-catch-up.js"
 import { DeliveryActionExecutor } from "../delivery/delivery-action-executor.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
@@ -188,7 +188,7 @@ const bundle = (
     },
     trackerGraphProposals: []
   },
-  publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
+  graphView: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
 })
 
 const runtimeLayer = (
@@ -478,13 +478,13 @@ it.effect("returns admission-stalled finality through production bootstrap teard
             releaseAll: increment(counts, "releaseAll").pipe(Effect.andThen(resources.integrationTargets.releaseAll))
           }
         })
-        const publication = DeliveryAcceptedFactPublication.of({
-          awaitCurrent: Effect.gen(function* () {
+        const publication = DeliveryPlanningCatchUp.of({
+          awaitJournalPosition: Effect.gen(function* () {
             const records = yield* journal.read(runId).pipe(Effect.orDie)
             const acceptedThrough = records.at(-1)?.position
             if (acceptedThrough === undefined) return yield* Effect.die("C must publish one accepted Journal prefix")
             yield* SubscriptionRef.set(bundles, bundle(runId, acceptedThrough, blocked, [...heldAB, c.attempt]))
-            return { _tag: "DeliveryAcceptedPublicationBoundary" as const, acceptedThrough, runId }
+            return { _tag: "DeliveryPlanningCatchUpBoundary" as const, acceptedThrough, runId }
           })
         })
         const proof = yield* Effect.acquireUseRelease(
@@ -493,7 +493,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
             runStabilizedDelivery(target, runId, current).pipe(
               Effect.provideService(DeliveryRuntimeResources, countedResources),
               Effect.provideService(DeliveryActionExecutor, actionExecutor),
-              Effect.provideService(DeliveryAcceptedFactPublication, publication)
+              Effect.provideService(DeliveryPlanningCatchUp, publication)
             ),
           () => Ref.update(relationFinalizers, (count) => count + 1)
         )

@@ -517,7 +517,7 @@ No serialized snapshot or admission-state variant may be supplied to restart.
   relation `publish` boundary must record the count immediately afterward and
   prove that it remains unchanged while the runtime reads the snapshot and
   returns `TaskWorkAdmissionStalledRuntimeQuiescence`. Counting
-  `awaitCurrent` calls is not relation-publication evidence. The Journal must
+  `awaitJournalPosition` calls is not relation-publication evidence. The Journal must
   also remain unchanged, and the relation must still list A1/B1 while the typed
   result reports A1/B1/C1. Asserting only that an admission-snapshot type is
   absent from a public union is supporting structure, not sufficient

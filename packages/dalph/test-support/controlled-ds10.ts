@@ -50,7 +50,7 @@ const holdsExactlyGrandfatheredAttempts = (publication: DeliveryRelationInputBun
     .join(",") === expectedHeldCorrelations.join(",")
 
 const projectsCAsSuspending = (publication: DeliveryRelationInputBundle) =>
-  publication.publication.exactEvidence.some(
+  publication.graphView.exactEvidence.some(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
@@ -150,7 +150,7 @@ export const isControlledDs10CompleteCheckpoint = (
     return false
   }
   const acceptedAt = publication.actionInputs.runtimeFacts.acceptedAt
-  if (acceptedAt === null || publication.publication.graph._tag !== "GraphEstablished") return false
+  if (acceptedAt === null || publication.graphView.graph._tag !== "GraphEstablished") return false
   return (
     intent.position < response.position &&
     g2Facts.position < intent.position &&
@@ -158,9 +158,9 @@ export const isControlledDs10CompleteCheckpoint = (
     completedCurrentTrackerReads(records, g2Facts.position, intent.position) &&
     gitResults.length === expectedCurrentGitResultCount &&
     gitResults.every(({ position }) => acceptedAt >= position) &&
-    publication.publication.graph.observation.snapshot.revision === scenario.graphs.G2.revision &&
-    publication.publication.policy.revision === capacityChange.event.revision &&
-    publication.publication.policy.taskExecutionCapacity === scenario.policies.P2 &&
+    publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G2.revision &&
+    publication.graphView.policy.revision === capacityChange.event.revision &&
+    publication.graphView.policy.taskExecutionCapacity === scenario.policies.P2 &&
     acceptedAt >= capacityChange.position &&
     projectsCAsSuspending(publication) &&
     holdsExactlyGrandfatheredAttempts(publication)

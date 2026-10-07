@@ -26,7 +26,7 @@ import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordinati
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
 import { DeliveryActionExecutor } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
-import { DeliveryAcceptedFactPublication } from "../../../orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "../../../orchestrator/src/coordination/delivery/delivery-planning-catch-up.js"
 import { deliveryRuntime } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-adapter.js"
 import { DeliveryRuntimeResources } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-resources.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
@@ -183,7 +183,7 @@ const runProductionRecovery = (prefix: RecoveryPrefix, lane: "memory" | "sqlite"
           yield* RunActivationGraphBaseline
         )
         const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
-        const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
+        const acceptedFactPublication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(relations))
         const interpreter = yield* WorkflowInterpreter
         const trace = yield* WorkflowTrace
         const finalityExecutor = DeliveryActionExecutor.of({
@@ -201,7 +201,7 @@ const runProductionRecovery = (prefix: RecoveryPrefix, lane: "memory" | "sqlite"
         })
         return yield* runStabilizedDelivery(target, runId, relation).pipe(
           Effect.provideService(DeliveryActionExecutor, finalityExecutor),
-          Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
+          Effect.provideService(DeliveryPlanningCatchUp, acceptedFactPublication),
           Effect.provideService(
             PlannedTaskAttemptPlanner,
             PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("cancellation recovery planned task work") })
