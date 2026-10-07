@@ -2,7 +2,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import ts from "typescript"
 import { corpusManifestPath, deriveCorpusManifest, validateCorpusManifest } from "./mbt-corpus-contract.mjs"
-import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { runCorpusConsumer } from "./mbt-corpus-controls.mjs"
 
 // This fixture copies one existing production replay; it never edits its owner.
 const root = fileURLToPath(new URL("../", import.meta.url))
@@ -72,8 +72,14 @@ await mkdir(new URL("../.scratch/mbt-fixture/", import.meta.url), { recursive: t
 await writeFile(new URL("../.scratch/mbt-fixture/manifest.json", import.meta.url), JSON.stringify(manifest))
 // wx refuses a preexisting file; cleanup only follows this exact successful creation.
 await writeFile(temporary, source.slice(0, selected.end).replace(imports, wrapper), { flag: "wx" })
-try {
-  await runBoundedCommand({
+await runCorpusConsumer({
+  cleanup: () => unlink(temporary),
+  retain: () =>
+    writeFile(
+      new URL("../.scratch/mbt-fixture/cleanup-retained.json", import.meta.url),
+      JSON.stringify({ disposition: "WritersUnproven", paths: [fileURLToPath(temporary)] })
+    ),
+  command: {
     name: "representative MBT corpus measurement",
     executable: "pnpm",
     args: [
@@ -89,8 +95,6 @@ try {
     timeoutMilliseconds: 60000,
     relayParentSignals: true,
     environment: { ...process.env, QUINT_BIN: fileURLToPath(new URL("../node_modules/.bin/quint", import.meta.url)) }
-  })
-  console.log(await readFile(new URL("../.scratch/mbt-fixture/measurement.json", import.meta.url), "utf8"))
-} finally {
-  await unlink(temporary)
-}
+  }
+})
+console.log(await readFile(new URL("../.scratch/mbt-fixture/measurement.json", import.meta.url), "utf8"))

@@ -5,7 +5,7 @@ import ts from "typescript"
 import { Clock, Effect } from "effect"
 import { corpusManifestPath, deriveCorpusManifest, validateCorpusManifest } from "./mbt-corpus-contract.mjs"
 import { loadCorpus } from "./mbt-corpus-loader.mjs"
-import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { runCorpusConsumer } from "./mbt-corpus-controls.mjs"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 const manifest = JSON.parse(await readFile(join(root, corpusManifestPath), "utf8"))
@@ -34,6 +34,7 @@ await writeFile(executable, `#!/bin/sh\nprintf 'generator attempted\\n' >> '${se
   flag: "wx"
 })
 const created = []
+let cleanupDisposition = "SafeToClean"
 try {
   for (const source of manifest.selection.files) {
     const original = await readFile(join(root, source), "utf8")
@@ -71,14 +72,28 @@ try {
     { files: ordinary, workers: 4 },
     { files: accepted, workers: 1 }
   ]) {
-    await runBoundedCommand({
-      name: "validated MBT corpus replay",
-      executable: "pnpm",
-      args: ["exec", "vitest", "run", ...files, `--maxWorkers=${workers}`],
-      cwd: root,
-      timeoutMilliseconds: Math.max(1, Math.min(600000, stop - now())),
-      relayParentSignals: true,
-      environment: { ...process.env, QUINT_BIN: executable }
+    const remaining = stop - now()
+    if (remaining <= 0) throw new Error("MBT replay budget exhausted before child launch")
+    cleanupDisposition = "WritersUnproven"
+    await runCorpusConsumer({
+      cleanup: async () => {
+        cleanupDisposition = "SafeToClean"
+      },
+      retain: async () => {
+        await writeFile(
+          join(evidence, "cleanup-retained.json"),
+          JSON.stringify({ disposition: "WritersUnproven", paths: created })
+        )
+      },
+      command: {
+        name: "validated MBT corpus replay",
+        executable: "pnpm",
+        args: ["exec", "vitest", "run", ...files, `--maxWorkers=${workers}`],
+        cwd: root,
+        timeoutMilliseconds: Math.min(600000, remaining),
+        relayParentSignals: true,
+        environment: { ...process.env, QUINT_BIN: executable }
+      }
     })
   }
   try {
@@ -89,5 +104,5 @@ try {
   }
   console.log("Required corpus replay passed; generator executable invocations: 0")
 } finally {
-  for (const path of created) await unlink(path)
+  if (cleanupDisposition === "SafeToClean") for (const path of created) await unlink(path)
 }

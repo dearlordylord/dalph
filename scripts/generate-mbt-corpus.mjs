@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rename, stat, writeFile } from "node:fs/promises"
 import { Clock, Effect } from "effect"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { corpusManifestPath, deriveCorpusManifest, validateCorpusManifest } from "./mbt-corpus-contract.mjs"
+import { checkRawCorpusBudget } from "./mbt-corpus-controls.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const now = () => Effect.runSync(Clock.currentTimeMillis)
@@ -51,26 +52,17 @@ for (const lane of lanes) {
   console.log(JSON.stringify(intent))
   const controller = new AbortController()
   const budgetFailures = []
-  let checking = false
-  const monitor = setInterval(async () => {
-    if (checking) return
-    checking = true
+  const sample = async () => {
     try {
-      const raw = join(directory, "raw")
-      const files = await readdir(raw).catch((error) => {
-        if (error.code === "ENOENT") return []
-        throw error
-      })
-      let bytes = 0
-      for (const file of files) bytes += (await stat(join(raw, file))).size
-      if (bytes > lane.limits.bytes || totalBytes + bytes > manifest.budgets.bytes)
-        throw new Error(`MBT byte budget exceeded: ${lane.id}`)
+      await checkRawCorpusBudget(join(directory, "raw"), lane, totalBytes, manifest.budgets.bytes)
     } catch (error) {
       budgetFailures.push(String(error))
       controller.abort()
-    } finally {
-      checking = false
     }
+  }
+  const observation = { pending: Promise.resolve() }
+  const monitor = setInterval(() => {
+    observation.pending = observation.pending.then(sample)
   }, 100)
   try {
     const result = await runBoundedCommand({
@@ -90,6 +82,9 @@ for (const lane of lanes) {
       captureOutput: true,
       forwardOutput: false
     })
+    clearInterval(monitor)
+    await observation.pending
+    await sample()
     await writeFile(join(directory, "command.json"), JSON.stringify(result, null, 2))
     if (budgetFailures.length > 0) throw new Error(budgetFailures.join("\n"))
     validateCorpusManifest(manifest, await deriveCorpusManifest(root))
@@ -123,6 +118,7 @@ for (const lane of lanes) {
     })
   } finally {
     clearInterval(monitor)
+    await observation.pending
   }
 }
 await writeFile(

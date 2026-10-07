@@ -10,7 +10,7 @@ void test("unknown duplicate and malformed generation selections refuse before b
         if (error.code === "ENOENT") return []
         throw error
       })
-    ).sort()
+    ).sort((a, b) => a.localeCompare(b))
   const before = await batches()
   for (const args of [
     ["unknown"],
