@@ -58,25 +58,25 @@ it("runs resource-sensitive coverage files once after the ordinary batch without
   expect(serial.test?.testTimeout).toBe(30_000)
 })
 
-it("runs sensitive ordinary files exactly once after the parallel batch with unchanged budgets", () => {
+it("runs sensitive ordinary files exactly once after the ordinary batch with unchanged budgets", () => {
   const config = resolveVitestConfig("test")
   const projects = config.test?.projects
   if (!Array.isArray(projects)) throw new Error("ordinary tests must declare two projects")
   expect(projects).toHaveLength(2)
-  const [parallel, serial] = projects
-  if (typeof parallel !== "object" || parallel instanceof Promise) throw new Error("parallel project missing")
+  const [ordinary, serial] = projects
+  if (typeof ordinary !== "object" || ordinary instanceof Promise) throw new Error("ordinary project missing")
   if (typeof serial !== "object" || serial instanceof Promise) throw new Error("serial project missing")
-  expect(parallel.resolve).toBe(config.resolve)
+  expect(ordinary.resolve).toBe(config.resolve)
   expect(serial.resolve).toBe(config.resolve)
-  expect(parallel.test?.include).toEqual(config.test?.include)
-  expect(parallel.test?.exclude).toEqual([...(config.test?.exclude ?? []), ...resourceSensitiveFiles])
+  expect(ordinary.test?.include).toEqual(config.test?.include)
+  expect(ordinary.test?.exclude).toEqual([...(config.test?.exclude ?? []), ...resourceSensitiveFiles])
   expect(serial.test?.include).toEqual(resourceSensitiveFiles)
   expect(serial.test?.exclude).toEqual(config.test?.exclude)
-  expect(parallel.test?.sequence?.groupOrder).toBe(0)
+  expect(ordinary.test?.sequence?.groupOrder).toBe(0)
   expect(serial.test?.sequence?.groupOrder).toBe(1)
-  expect(parallel.test?.maxWorkers).toBe(4)
+  expect(ordinary.test?.maxWorkers).toBe(1)
   expect(serial.test?.maxWorkers).toBe(1)
   expect(serial.test?.fileParallelism).toBe(false)
-  expect(parallel.test?.testTimeout).toBe(10_000)
+  expect(ordinary.test?.testTimeout).toBe(10_000)
   expect(serial.test?.testTimeout).toBe(10_000)
 })

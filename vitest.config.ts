@@ -41,7 +41,10 @@ const serialResourceSensitiveTestPatterns = [
 const resourceSensitiveCoverageTestPatterns = [...lateCoverageTestPatterns, ...serialResourceSensitiveTestPatterns]
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
-const ordinaryWorkerCount = 4
+// Native process/storage fixtures and synchronous budget proofs share the host
+// with other workspaces. One ordinary worker preserves their existing deadlines.
+const ordinaryWorkerCount = 1
+const mbtWorkerCount = 4
 // V8 instrumentation and process-custody tests compete for CPU and memory. Two
 // workers keep individual 30-second test budgets meaningful on the supported
 // local/hosted runners without starving bounded Git process reconciliation.
@@ -104,7 +107,7 @@ export default defineConfig(({ mode }) => ({
     environment: "node",
     exclude: selectedTestExcludes(mode),
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
-    maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
+    maxWorkers: mode === "coverage" ? coverageWorkerCount : mode === "mbt" ? mbtWorkerCount : ordinaryWorkerCount,
     experimental: {
       // Persist transformed ordinary modules so fresh focused Vitest
       // processes in a bootstrapped worktree do not repeat cold transforms.
@@ -155,7 +158,7 @@ export default defineConfig(({ mode }) => ({
     ...(mode !== "coverage" && mode !== "mbt"
       ? {
           // Real Git/SQLite and native client fixtures keep their existing deadlines
-          // meaningful by running after the parallel batch, without competing files.
+          // meaningful by running after the ordinary batch, without competing files.
           projects: [
             {
               resolve: currentSourceResolution,
@@ -194,7 +197,7 @@ export default defineConfig(({ mode }) => ({
               test: {
                 exclude: [acceptedResultIntegrationMbtTestPattern],
                 include: [mbtTestPattern],
-                maxWorkers: ordinaryWorkerCount,
+                maxWorkers: mbtWorkerCount,
                 name: "mbt",
                 sequence: { groupOrder: 0 }
               }
