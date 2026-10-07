@@ -6,10 +6,12 @@ an unbounded mailbox. No person sends mailbox messages directly; Alice sees
 ordinary task progress, precise failure, or the existing Exit disposition.
 
 Issue: [#414](https://github.com/dearlordylord/dalph/issues/414).
-This is the contract for implementation and independent tests, not a claim that
-the bound is already implemented. This change edits documentation only and
-cannot change runtime behavior. The inspected Base is
-`77c81ba4de4339d1b7d537e458fb62a3bfa62881`; its mailbox is unbounded.
+The accepted contract preceded implementation in commit
+`d34370a0f`; the inspected original Base
+`77c81ba4de4339d1b7d537e458fb62a3bfa62881` had an unbounded mailbox.
+The integrated runtime now owns a scoped, suspending one-item mailbox. The
+parent audit below changes this document only; application and test bytes remain
+unchanged, so it cannot change runtime behavior.
 
 ## Governing behavior and boundary
 
@@ -280,3 +282,74 @@ an explicit fixed Base before graph observations. This supplies the existing
 production fresh-work eligibility requirement; it changes no runtime policy.
 Affected runtime completion and admission tests remain required at the joined
 candidate. No aggregate count substitutes for the named scenario assertions.
+
+
+## Parent acceptance audit — 2026-10-07
+
+Dalph's runtime hands each accepted occurrence to the consumer through
+`makeRuntimeEventMailbox`, which acquires `Queue.bounded(1)` and registers
+`Queue.shutdown` at scope closure. False offers interrupt instead of entering
+an acknowledgement wait. The parent inspected integrated Base
+`4ad871aa9afc54a067005c40d9bedd0d5d1a8ceb`, whose complete tree equals joined
+candidate `9443fe54eddad3ae559df8b6ebd17830c5aea299` (`git diff` is empty).
+This documentation reconciliation preserves those qualified application bytes.
+
+The retained join evidence is `/tmp/mailbox-acceptance-audit.md`,
+`/tmp/mailbox-negative-final.log`, `/tmp/mailbox-negative.log` and
+`/tmp/mailbox-submit-coherent.log` in the execution host. The parent read those
+artifacts and the join execution transcript; child acceptance status alone is
+not evidence. These host-local artifacts are not portable repository links.
+
+All commands below ran through `mise exec --` on the joined candidate:
+
+- `pnpm exec vitest run` selected both mailbox files,
+  `run-delivery-runtime.test.ts`, `delivery-runtime-admission.test.ts`,
+  `delivery-runtime-admission-loop.test.ts`,
+  `delivery-runtime-admission-sweep.test.ts` and
+  `coordination/admission/fresh-task-admission.test.ts`: exit 0 after restoring
+  the negative mutation. The S1–S5 table above identifies each required
+  assertion rather than relying on the 191-test total.
+- `node /tmp/mailbox-negative.mjs`: harness exit 0, child exit 1. Only the
+  production queue constructor changed to unbounded; S1 failed at line 177,
+  `Deferred.isDone(thirdPulled)` (`expected true to be false`). The script
+  restored source in `finally`. An earlier spurious passing mutation before
+  the scheduler yield refinement supplies no evidence.
+- `pnpm check:submit`: coherent run exit 0, including artifact preparation,
+  formal controls, `check:fast`, the full code-lint census and memory cassettes.
+  Its earlier interrupted run supplies no evidence. The optional Base-scoped
+  tooling fixture probe was skipped because `DALPH_DIAGNOSTICS_BASE` was unset;
+  changed lint included integrated changes relative to original master.
+- Joined documentation links and changed-file formatting: exit 0. The joined
+  fresh independent review found no reasonable blocking findings for
+  `dd8e17caef0b5356e446c0049543c4f7aac6ce09..9443fe54eddad3ae559df8b6ebd17830c5aea299`.
+
+S1 proves a successful first handoff, blocked second handoff, resumed pulling
+and exactly ordered evaluation occurrences. S2 combines the saturated runtime
+completion case with the independent preservation case: exact result objects,
+publication arrival order, successful predecessor child exits while a successor
+remains live, and one settlement each. S3 proves the original relation Cause
+survives preceding occurrences and abandons pending completion without an
+outcome. S4 separately covers blocked relation offers, blocked completion
+offers, retained acknowledgement waits, Exit authority-wait interruption,
+process-local cleanup and before/after-intent reservation dispositions. S5
+covers real reactive journal publication, newer capacity publication and exact
+ordinary quiescence through the mapped production runtime tests.
+
+The causal analysis remains valid in the integrated source: offers and child
+acknowledgement waits occur outside `selectionGate`; admission waits only for
+child readiness; pending completion application returns to consumption;
+publication waiters progress independently of runtime offers. Subscriber failure
+handoff is explicitly interruptible, and scope closure interrupts children and
+closes the queue without draining or inventing acknowledgement. Thus the full
+slot introduces no consumer wait on its blocked producer.
+
+Limits remain deliberate: controlled production composition proves these
+in-process boundaries, not live providers, every possible scheduler, or a total
+process-memory bound. Independent producers have no imposed global order.
+Scope closure abandons volatile messages and preserves durable responsibility;
+no crash replay or retry policy is added. Existing formal models constrain
+admission and Exit, not this entire wait graph. No broad gate, fresh model proof,
+coverage census or hosted CI pass is claimed. The submission cassette suite's
+21 skipped tests are not acceptance evidence for S1–S5; those required cases
+passed in the focused selection. Dalph retains publication, completion and
+resource-cleanup ownership.
