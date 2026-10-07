@@ -449,14 +449,19 @@ Planner receives a new split revision requiring an incompatible S change.
 **Trigger and ordered calls.** Planner reads tracker/Git and exact dependent
 attempt reports, records that the earlier interface contract no longer suffices,
 and names one new interface owner I2 with acceptance examples and migration scope.
-Operator applies Run Pause and observes safe boundaries. Revised instructions
-for affected C/D invoke their post-Unpause ordinary focused reads and exact Continue/Restart/Stop choices;
-Restart is required where the old work cannot meet the new contract;
-ordinary replacement waits for eligibility and atomically settles the old
-attempt while planning its successor. Old resources remain for separately
-authorized disposition; no cleanup is prerequisite to replacement. Publisher authorizes explicit I2 prerequisites and graph edits
-only after review of the current dependencies and retained work. Ordinary delivery
-of I2 and fresh tracker success precede new dependent starts/resumes.
+Operator applies Run Pause and observes exact safe reports for C/D. Publisher
+then records intent and authors I2, revised C/D instructions, and explicit I2
+prerequisites under the approved manifest; each effect receives exact readback.
+A complete graph/specification proof precedes Operator Unpause. Ordinary fresh
+focused reads then establish changed revisions in the Run journal and expose
+exact Continue/Restart/Stop choices. Unfinished I2 prevents safely suspended C/D
+from resuming during this choice wait. Restart is required where the old work
+cannot meet the new contract; ordinary replacement waits for eligibility and
+atomically settles the old attempt while planning its successor. Old resources
+remain for separately authorized disposition; no cleanup is prerequisite to
+replacement. Ordinary I2 delivery and fresh tracker success precede new dependent
+plans/starts/resumes.
+
 
 **Visible and forbidden outcomes.** Maintainer sees one interface owner, concrete
 compatibility/migration responsibilities and retained old attempts. Independent
@@ -471,7 +476,8 @@ protocols own any later effects.
 
 **Proposed test mapping.** T10 at review, tracker and exact-attempt reconciliation
 seams asserts one assigned owner per surface/version, explicit edges, cycle
-rejection, immutable AC/BC, stopped-writer proof and atomic settlement/planning at replacement, and no resume
+rejection, immutable AC/BC, post-Unpause Run-journal revision reads before choice,
+stopped-writer proof and atomic settlement/planning at replacement, and no resume
 of safely suspended D through unfinished I2.
 
 ## Future verification seams and present limits
