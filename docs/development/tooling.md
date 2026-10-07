@@ -32,6 +32,14 @@ The generated inventories and hosted input closure are refreshed with
 `node scripts/generate-formal-command-inventory.mjs --write` and
 `node scripts/generate-hosted-formal-input-manifest.mjs --write`.
 
+## MBT corpus ownership
+
+[The MBT inventory and provenance contract](mbt-corpus.md) maps every selected
+generation option site to a corpus path, records exact model/import and runtime
+inputs, and defines bounded generation, validation controls and the next-owner
+file map. This tooling slice leaves Dalph runtime, model semantics, selected
+scenarios and state comparisons unchanged.
+
 ## Owned Apalache endpoint observations
 
 The formal verifier connects to `127.0.0.1:port`. Its Linux socket observer
