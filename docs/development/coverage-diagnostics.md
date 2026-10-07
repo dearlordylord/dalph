@@ -96,3 +96,76 @@ lifecycle/finalization edges on the exact observed source. No runtime repair or
 complete-coverage success is claimed. Controlled observation tests, fresh
 TypeScript/Effect typecheck, changed-file lint and documentation links passed;
 no unchanged broad gate was retried. Dalph owns publication and tracker closure.
+
+### Exact local evidence binding
+
+The first focused reproducer used the test/tool source bytes committed in
+`c98d1138df86a9a9755a2cae1da6031a3c5a22c4` (documentation was committed later).
+The passing temporary diagnostic used those same helper/reporter bytes and the
+captured acceptance file with SHA-256
+`9f1696284d7ce06222cd224d98adc05481b67cdff3d2cca792becd9ea4802da4`.
+The restored acceptance source SHA-256 is
+`7a43038d61c8efe20ee0d870b1c3c6ae6c54ba7cd08e8031d11498007ae6595e`.
+Neither is evidence for subsequent source changes.
+
+Complete local logs and source/hash manifests are retained outside the attempt
+worktree at
+`/workspace/dalph-dogfood/issue-479-20261007/evidence/termination-diagnostic/`:
+`focused.log`, `termination-diagnostic.log`, `termination-snapshot.json`,
+`acceptance-diagnostic.ts`, `diagnostic-source.json`, `diagnostic-result.json`,
+and `evidence-manifest.json`. The original run's downloaded child logs and
+coverage envelope remain under `retained/` and `envelope/` there.
+
+Both commands used the existing bounded command runner with a 120,000 ms
+allowance, unchanged 60,000 ms test timeout, and the following child arguments:
+
+```bash
+mise exec -- pnpm exec vitest run \
+  packages/dalph/src/application/production-complete-delivery.acceptance.test.ts \
+  --mode=coverage --coverage --coverage.reporter=json-summary \
+  --coverage.reportsDirectory=.scratch/issue-479/coverage \
+  --maxWorkers=1 --reporter=dot \
+  --reporter=./scripts/coverage-lifecycle-reporter.ts \
+  -t 'discovered by MCPAdvisory'
+```
+
+The passing changed diagnostic used
+`.scratch/issue-479/diagnostic-coverage` instead and temporarily captured the
+journal/failures/Git calls on wait exit. Its journal has positions, not
+wall-clock timestamps: termination at position 532 and 688 tracker calls do
+not date intermediate delivery steps. Only the retained lifecycle timestamps
+establish the 16.35-second termination wait. A missed observation is not proved.
+
+### Parent-owned hosted diagnostic
+
+Manual CI dispatch accepts `coverage-diagnostics=true`. It enables
+`DALPH_COVERAGE_RESOURCE_OBSERVATIONS=1` only for coverage, passes that value
+through the isolated account's cleared environment, and uploads the complete
+child logs even on success. Each lifecycle edge gains one adjacent
+`CoverageResources` line with UTC time, PID, cumulative user/system CPU,
+resident memory, available parallelism and one-minute host load. Wait/scope
+samples describe the worker; reporter samples describe the reporter process.
+Compare CPU deltas only within one PID. Host load is a gauge, not causal
+attribution, and no samples poll between edges. Controlled child integration
+proves distinct reporter/worker PIDs, matched edges and at most 16 KiB combined
+output for the five-test control. Default coverage emits no resource samples.
+This is test observation and CI artifact routing; production runtime, workflow
+algebra, accepted variants, stage budgets and custody remain unchanged.
+
+After the parent publishes the reviewed exact diagnostic candidate to its
+owned ref, it can dispatch exactly once:
+
+```bash
+gh workflow run ci.yml --ref <parent-published-diagnostic-ref> \
+  -f coverage-diagnostics=true \
+  -f comparison-base=8bb1ddf085201b66d5c2832cdcde2befe872c75a
+```
+
+Bind the dispatched `head_sha` and the coverage envelope's candidate/source
+receipt to that candidate and the explicit comparison Base. Missing or
+malformed manual Bases remain unproven before a coverage child starts. The existing coverage child retains its
+35-minute bound and the suffix job its 51-minute bound. The parent must record
+its absolute stop time before dispatch and retain the full coverage child log,
+envelope and stopped-writer evidence. If the run cannot identify the owner,
+keep #479 open. No required hosted result has been observed for this diagnostic
+candidate yet; its control checks are not qualification.

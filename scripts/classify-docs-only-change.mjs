@@ -17,9 +17,11 @@ export const isDocsOnlyPath = (path) =>
 
 export const classifyChangedPaths = (paths) => paths.length > 0 && paths.every(isDocsOnlyPath)
 
-export const resolveComparisonBase = ({ eventName, pullRequestBaseSha, pushBeforeSha }) => {
+export const resolveComparisonBase = ({ eventName, pullRequestBaseSha, pushBeforeSha, workflowDispatchBaseSha }) => {
   if (eventName === "pull_request" && pullRequestBaseSha !== "") return pullRequestBaseSha
   if (eventName === "push" && pushBeforeSha !== "" && !allZeroSha.test(pushBeforeSha)) return pushBeforeSha
+  if (eventName === "workflow_dispatch" && workflowDispatchBaseSha !== undefined && workflowDispatchBaseSha !== "")
+    return workflowDispatchBaseSha
   return undefined
 }
 
@@ -156,7 +158,7 @@ const unavailablePlan = ({ baseSha = "", headSha = "", reason }) => ({
 })
 
 export const planCiChange = (
-  { eventName, headSha, pullRequestBaseSha = "", pushBeforeSha = "" },
+  { eventName, headSha, pullRequestBaseSha = "", pushBeforeSha = "", workflowDispatchBaseSha = "" },
   listChangedPaths = changedPathsBetween,
   listFormalInputPaths = hostedFormalInputPathsBetween,
   reportFailure = () => undefined
@@ -165,7 +167,7 @@ export const planCiChange = (
     reportFailure(input.reason)
     return unavailablePlan(input)
   }
-  const baseSha = resolveComparisonBase({ eventName, pullRequestBaseSha, pushBeforeSha })
+  const baseSha = resolveComparisonBase({ eventName, pullRequestBaseSha, pushBeforeSha, workflowDispatchBaseSha })
   if (baseSha === undefined)
     return unavailable({ headSha, reason: "The event has no supported nonzero comparison base" })
   if (!commitSha.test(baseSha) || !commitSha.test(headSha) || allZeroSha.test(headSha))
@@ -201,7 +203,8 @@ if (invokedDirectly) {
       eventName: process.env.DALPH_CI_EVENT_NAME ?? "",
       headSha: process.env.DALPH_CI_HEAD_SHA ?? "",
       pullRequestBaseSha: process.env.DALPH_CI_PULL_REQUEST_BASE_SHA ?? "",
-      pushBeforeSha: process.env.DALPH_CI_PUSH_BEFORE_SHA ?? ""
+      pushBeforeSha: process.env.DALPH_CI_PUSH_BEFORE_SHA ?? "",
+      workflowDispatchBaseSha: process.env.DALPH_CI_DISPATCH_BASE_SHA ?? ""
     },
     changedPathsBetween,
     hostedFormalInputPathsBetween,

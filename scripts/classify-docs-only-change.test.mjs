@@ -384,3 +384,23 @@ void test("reads NUL-delimited Git paths and rejects executable changes and rena
     ["scripts/tool.mjs"]
   )
 })
+
+void test("manual diagnostics require an explicit canonical comparison Base", () => {
+  const paths = () => ["scripts/coverage-lifecycle.ts"]
+  const formal = () => ["models/model.qnt"]
+  const plan = planCiChange(
+    { eventName: "workflow_dispatch", headSha, workflowDispatchBaseSha: baseSha },
+    paths,
+    formal
+  )
+  assert.equal(plan.baseSha, baseSha)
+  assert.equal(plan.headSha, headSha)
+  assert.equal(plan.formalClassification.status, "unaffected")
+  for (const workflowDispatchBaseSha of ["", "0".repeat(40), "master"]) {
+    assert.equal(
+      planCiChange({ eventName: "workflow_dispatch", headSha, workflowDispatchBaseSha }, paths, formal)
+        .formalClassification.status,
+      "unavailable"
+    )
+  }
+})
