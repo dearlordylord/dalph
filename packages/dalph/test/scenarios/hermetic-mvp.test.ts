@@ -13,6 +13,8 @@ import {
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorLifecycleObservation,
+  passiveLifecycleObservationPurpose,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   PlannedTaskAttempt,
@@ -25,6 +27,7 @@ import {
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
+  AttemptBasePolicy,
   ActiveTaskClaim,
   AllocatedWorkflowRunId,
   ClaimOwner,
@@ -76,7 +79,22 @@ import {
   type WorkflowJournalEvent
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { ConfigProvider, Deferred, Effect, Exit, FileSystem, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
+import {
+  Channel,
+  PubSub,
+  Stream,
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Scope
+} from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
@@ -84,7 +102,6 @@ import { derivePublicationContinuation } from "../../../orchestrator/src/coordin
 import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
 import { deriveCurrentIntegratorState } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 import { fileGitSenderCustodyLayer } from "../../src/application/git-sender-custody.js"
-import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import {
   acceptedManifestBytes,
   hermeticCandidateProviderAuthority,
@@ -255,6 +272,7 @@ const runHermeticMvpJourney = (
       const integratorCandidate = yield* Ref.make<Option.Option<GitCommitSha>>(Option.none())
       const targetPromotionCompareAndSetCalls = yield* Ref.make(0)
       const executorReport = yield* Ref.make<Option.Option<PlannedAttemptExecutorReport>>(Option.none())
+      const executorChanges = yield* PubSub.unbounded<void>()
       const acceptedEvidence = yield* Ref.make<Option.Option<EvidenceReference>>(Option.none())
       const childHandle = yield* Ref.make<Option.Option<ChildProcessSpawner.ChildProcessHandle>>(Option.none())
       const operationCounter = yield* Ref.make(0)
@@ -621,6 +639,7 @@ const runHermeticMvpJourney = (
                   result: { _tag: "Accepted", acceptedResult: { commit, evidenceManifest } }
                 })
                 yield* Ref.set(executorReport, Option.some(report))
+                yield* PubSub.publish(executorChanges, undefined)
                 yield* Deferred.succeed(terminalProjectionReady, undefined)
               })
             ).pipe(Effect.orDie, Effect.forkIn(executorScope))
@@ -682,9 +701,27 @@ const runHermeticMvpJourney = (
         GitRepositoryLocator.make(repository),
         integrationTarget,
         Layer.succeed(TrackerMutation, trackerMutation),
-        controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
+        Layer.merge(
+          Layer.succeed(PlannedAttemptExecutor, executor),
+          Layer.succeed(PlannedAttemptExecutorLifecycleObservation, {
+            attach: (correlation) =>
+              Effect.gen(function* () {
+                // Subscribe before reading so native child completion cannot be lost.
+                const subscription = yield* PubSub.subscribe(executorChanges)
+                const observe = executor.observe(correlation, passiveLifecycleObservationPurpose)
+                return {
+                  current: yield* observe,
+                  changes: Stream.fromChannel(Channel.fromSubscriptionArray(subscription)).pipe(
+                    Stream.mapEffect(() => observe)
+                  ),
+                  close: Effect.void
+                }
+              })
+          })
+        ),
         hermeticCandidateProviderAuthority,
         {
+          attemptBasePolicy: AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha }),
           acceptedResultEvidenceStore: evidenceStore,
           completionTask,
           integrationFinality: completionClaim,
@@ -1504,37 +1541,37 @@ const runHermeticMvpJourney = (
     expect(yield* fileSystem.exists(root)).toBe(false)
   }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
 
-it.effect(
+it.live(
   "runs one task through real local production boundaries and tears down only its owned resources",
   () => runHermeticMvpJourney(false),
   120_000
 )
 
-it.effect(
+it.live(
   "restarts after Git promotes A without returning and does not repeat A integration or promotion",
   () => runHermeticMvpJourney(true),
   120_000
 )
 
-it.effect(
+it.live(
   "recovers a competing remote head found before publication discovery through the automatic S2 full suffix",
   () => runHermeticMvpJourney(false, true),
   120_000
 )
 
-it.effect(
+it.live(
   "recovers a competing remote head advanced between publication discovery and update through the automatic S2 full suffix",
   () => runHermeticMvpJourney(false, false, true),
   120_000
 )
 
-it.effect(
+it.live(
   "recovers a competing remote head advanced after a lost publication response through the automatic S2 full suffix",
   () => runHermeticMvpJourney(false, false, false, true),
   120_000
 )
 
-it.effect(
+it.live(
   "retains the exact third competing head without an ungranted fourth automatic session or push",
   () => runHermeticMvpJourney(false, false, false, false, true),
   // The real-Git journey took about 143s with V8 coverage; retain headroom
@@ -1542,13 +1579,13 @@ it.effect(
   240_000
 )
 
-it.effect(
+it.live(
   "fixes a same-commit fourth successor only after the exact third-session exhaustion grant",
   () => runHermeticMvpJourney(false, false, false, false, true, true),
   240_000
 )
 
-it.effect(
+it.live(
   "continues one exhausted publication responsibility through exactly one granted batch while an unrelated target progresses",
   () =>
     runHermeticMvpJourney(false, false, false, false, true, true, () =>

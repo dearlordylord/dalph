@@ -20,7 +20,7 @@ const liveLaunchPreflightIntegrationTestPattern =
 // These process-heavy files passed focused coverage but crossed their own
 // deadlines when competing with other files in a broad coverage run.
 const lateCoverageTestPatterns = ["packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"]
-const serialCoverageTestPatterns = [
+const serialResourceSensitiveTestPatterns = [
   "packages/dalph/test/scenarios/running-host-death.acceptance.test.ts",
   "packages/dalph/src/application/running-host-command.acceptance.test.ts",
   "packages/dalph/src/application/running-host-client-parity.test.ts",
@@ -29,9 +29,12 @@ const serialCoverageTestPatterns = [
   "packages/dalph/src/application/production-changing-graph-finality.test.ts",
   "packages/dalph/test/cassettes/maintained-observations.test.ts",
   "packages/dalph/test/cassettes/normal-termination.test.ts",
-  "packages/dalph/test/scenarios/hermetic-mvp.test.ts"
+  "packages/dalph/test/scenarios/hermetic-mvp.test.ts",
+  "packages/dalph/src/application/production-complete-delivery.acceptance.test.ts",
+  "packages/dalph/test/conformance/completion-task-recovery-prefixes.test.ts",
+  "packages/dalph/test/conformance/recovery-store-lanes.property.test.ts"
 ]
-const resourceSensitiveCoverageTestPatterns = [...lateCoverageTestPatterns, ...serialCoverageTestPatterns]
+const resourceSensitiveCoverageTestPatterns = [...lateCoverageTestPatterns, ...serialResourceSensitiveTestPatterns]
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
 const ordinaryWorkerCount = 4
@@ -135,11 +138,42 @@ export default defineConfig(({ mode }) => ({
               test: {
                 exclude: selectedTestExcludes(mode),
                 fileParallelism: false,
-                include: serialCoverageTestPatterns,
+                include: serialResourceSensitiveTestPatterns,
                 maxWorkers: 1,
                 name: "coverage-serial",
                 sequence: { groupOrder: 2 },
                 testTimeout: coverageTestTimeoutMilliseconds
+              }
+            }
+          ]
+        }
+      : {}),
+    ...(mode !== "coverage" && mode !== "mbt"
+      ? {
+          // Real Git/SQLite and native client fixtures keep their existing deadlines
+          // meaningful by running after the parallel batch, without competing files.
+          projects: [
+            {
+              resolve: currentSourceResolution,
+              test: {
+                exclude: [...selectedTestExcludes(mode), ...resourceSensitiveCoverageTestPatterns],
+                include: ordinaryTestIncludes,
+                maxWorkers: ordinaryWorkerCount,
+                name: "ordinary",
+                sequence: { groupOrder: 0 },
+                testTimeout: ordinaryTestTimeoutMilliseconds
+              }
+            },
+            {
+              resolve: currentSourceResolution,
+              test: {
+                exclude: selectedTestExcludes(mode),
+                fileParallelism: false,
+                include: resourceSensitiveCoverageTestPatterns,
+                maxWorkers: 1,
+                name: "ordinary-serial",
+                sequence: { groupOrder: 1 },
+                testTimeout: ordinaryTestTimeoutMilliseconds
               }
             }
           ]
