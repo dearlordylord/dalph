@@ -1,5 +1,13 @@
 # Issue #386 acceptance and scoped review audit
 
+Current parent acceptance: [the #383 integrated-candidate reconciliation](ISSUE-383-ACCEPTANCE-RECONCILIATION.md)
+owns the 2026-10-07 S1–S8 ledger at `da34ab698aa01cf488aab254d06c569e5c896613`.
+This document retains historical candidate-specific grant and hosted S1 evidence;
+its passing reports do not qualify subsequent application changes. Public
+controls are implemented and #384–#389 are closed; historical deferred/open
+administrative statements below are dated observations, not current missing
+implementation. Parent #383 remains open for the exact proof gaps in that ledger.
+
 Evidence supports the current [direct-publication acceptance mapping](scenarios/direct-remote-publication.md). Each dated section names its own candidate and test boundary; a result applies only to that candidate. Earlier cassette paths below describe executed checks, not commands for today’s tree. Current execution uses [command preparation](development/commands.md#focused-test-preparation). No earlier passing stage qualifies current HEAD.
 
 Audit started 2026-09-27 16:39:59 UTC; stop time 17:24:59 UTC (45 minutes).
