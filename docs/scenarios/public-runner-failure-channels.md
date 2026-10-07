@@ -93,3 +93,55 @@ stdout/stderr, including Completed and Cancelled Run records followed by
 provider-close failure. `production-running-host.test.ts` separately proves
 those Run dispositions through real Git/SQLite host composition. A failed
 process finalizer does not retroactively invalidate delivery or Run termination.
+
+## Controlled unreadable process facts during public recovery
+
+[#345](https://github.com/dearlordylord/dalph/issues/345) accepts the controlled
+owned-process and recovery chronologies. The qualification executable supplies
+EACCES at `CodexProcessNative.readFile`, outside the production routing code.
+The public fixture's own live, same-owner `/proc/<pid>/environ` is unreadable;
+permission failure cannot establish absence or authorize clearing its retained
+launch. This is controlled evidence, not a reproduction of the historical
+hosted cause. The qualification-only switch cannot change the shipped CLI.
+
+The existing terminal-tracker fixture still selects one Run and publishes its
+ordinary terminal disposition, then reports the failed provider close with
+status one and a sanitized `NodeMainExit` diagnostic on stderr. The SQLite
+journal contains one Run beginning and no claim acquisition. The private launch
+remains retained, with no retained task attempt. Without injection, the
+same fixture exits zero and clears its launch.
+
+The cleanup fixture seeds its Run with the exact local remote-publication
+endpoint and branch used by its built CLI configuration. A generic simulated
+destination is not authority for this production recovery invocation. After
+`RunSelected`, its Git fixture holds the original worktree-list observation;
+Alice sends application Exit and releases that observation. Without injection,
+the public status closes and Exit succeeds without a Run disposition. With
+unreadable census evidence, Exit fails: the process exits one, emits exactly
+one failed application Exit disposition and a sanitized lifecycle diagnostic,
+and retains its launch. It emits neither a successful closed status nor Run
+completion. The stdout stream itself ends with the child process. Neither path
+starts a task turn or mutates a tracker claim.
+
+Both named cases in `production-public-recovery.integration.test.ts` run with
+and without injection. They decode every nonempty OS stdout line as
+`ProductionCliRecord`, independently decode stderr, assert exact diagnostic
+categories/dispositions, and reject configured credential sentinels in raw
+stderr. `built public recovery rejects a dirty stdout negative control` inserts
+one diagnostic line at the same native fault and proves the stdout reader fails
+with `InvalidPublicStdoutRecord`.
+
+`codex-owned-process-eacces.test.ts` exercises retained launch reconciliation
+before successor spawn using memory and real private-filesystem stores. Exact
+owned stat refusal and possibly owned unreadable token census both preserve the
+original launch and forbid destructive signals and successor creation. Memory
+reconciliation retries reread the same refusal; filesystem reconciliation
+exercises one owner acquisition, leaving later lease-owner reconciliation to its
+existing tests. SQLite is the workflow-journal lane in the built recovery tests,
+not the private process store. The process-policy suite separately covers
+foreign versus same/unknown UID, newly inert processes, and PID reuse after the
+failed environment read. These test/qualification changes alter no shipped
+workflow, ownership predicate, retry rule, or diagnostic routing.
+
+Passing controlled checks do not establish the cause of the historical hosted
+EACCES, qualify its original hosted revisions, or close #345.
