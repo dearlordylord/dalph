@@ -19,7 +19,7 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryRuntimeObservationObserver } from "./delivery-runtime-observation.js"
 import { deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "./delivery-planning-catch-up.js"
 import {
   currentSignalOf,
   makeCurrentSignal,
@@ -49,9 +49,9 @@ const support = Layer.mergeAll(
     makeApplicationExitLifecycle().pipe(Effect.map(({ admission }) => deliveryRuntimeResourcesLayer(admission)))
   )
 )
-const publication = DeliveryAcceptedFactPublication.of({
-  awaitCurrent: Effect.succeed({
-    _tag: "DeliveryAcceptedPublicationBoundary",
+const publication = DeliveryPlanningCatchUp.of({
+  awaitJournalPosition: Effect.succeed({
+    _tag: "DeliveryPlanningCatchUpBoundary",
     acceptedThrough: JournalPosition.make(5),
     runId
   })
@@ -97,7 +97,7 @@ const baseEvaluation = Effect.gen(function* () {
             },
             trackerGraphProposals: []
           },
-          publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
+          graphView: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
         } satisfies DeliveryRelationInputBundle)
       })
     )
@@ -165,7 +165,7 @@ for (const cancel of [false, true]) {
           const runtime = yield* runDeliveryRuntime(runId, relation).pipe(
             Effect.provide(support),
             Effect.provideService(DeliveryRuntimeObservationObserver, observer),
-            Effect.provideService(DeliveryAcceptedFactPublication, publication),
+            Effect.provideService(DeliveryPlanningCatchUp, publication),
             Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of({ execute: () => Effect.never })),
             Effect.forkChild
           )
@@ -254,9 +254,11 @@ for (const disposition of ["Drain", "CancelBlockedOffers", "CancelPendingAcknowl
             Effect.provideService(DeliveryRuntimeObservationObserver, observer),
             Effect.provideService(DeliveryActionExecutor, executor),
             Effect.provideService(
-              DeliveryAcceptedFactPublication,
-              DeliveryAcceptedFactPublication.of({
-                awaitCurrent: Queue.offer(published, undefined).pipe(Effect.andThen(publication.awaitCurrent))
+              DeliveryPlanningCatchUp,
+              DeliveryPlanningCatchUp.of({
+                awaitJournalPosition: Queue.offer(published, undefined).pipe(
+                  Effect.andThen(publication.awaitJournalPosition)
+                )
               })
             ),
             Effect.provideService(

@@ -55,7 +55,7 @@ type DeliveryRuntimeAdmissionLoopState<Evaluation extends DeliveryRuntimeAdmissi
 
 type DeliveryRuntimeAdmissionLoopActions = {
   readonly emit: (event: DeliverySemanticTraceEvent) => Effect.Effect<void>
-  readonly publishRuntimeObservationInsideGate: () => Effect.Effect<void>
+  readonly updateLatestRuntimeObservationInsideGate: () => Effect.Effect<void>
   readonly reserveAndStart: (
     proposal: DeliveryActionProposal
   ) => Effect.Effect<DeliveryRuntimeReservationResult, ApplicationExiting | JournalError>
@@ -104,10 +104,10 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     latest,
     localDeferrals,
     owners,
-    publishRuntimeObservationInsideGate,
     reserveAndStart,
     reserveFreshAndStart,
-    selectionGate
+    selectionGate,
+    updateLatestRuntimeObservationInsideGate
   } = dependencies
 
   const admitLaterAvailableProposal = Effect.fn("DeliveryRuntimeAdmissionLoop.admitLaterAvailableProposal")(function* (
@@ -225,7 +225,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     if (removable.length === 0) return
     const removableIds = new Set(removable.map(({ proposal }) => proposal.id))
     yield* Ref.update(owners, (current) => new Map([...current].filter(([id]) => !removableIds.has(id))))
-    yield* publishRuntimeObservationInsideGate()
+    yield* updateLatestRuntimeObservationInsideGate()
   })
 
   return Effect.succeed({ admitPass, pruneSettledOwners } satisfies DeliveryRuntimeAdmissionLoop)

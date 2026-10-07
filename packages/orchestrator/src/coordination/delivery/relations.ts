@@ -182,8 +182,8 @@ export type DeliveryFrontierStanding =
 /** Graph-only delivery evidence; workflow responsibility and runtime ownership are excluded. */
 export interface DeliveryFrontier {
   readonly _tag: "DeliveryFrontier"
-  /** The journaled graph, policy, and exact evidence published for this revision. */
-  readonly publication: DeliveryGraphPublication
+  /** The accepted graph, policy, and exact evidence in this current view. */
+  readonly graphView: DeliveryGraphView
   readonly source: TrackerGraphState
   readonly standings: ReadonlyArray<DeliveryFrontierStanding>
 }
@@ -206,8 +206,8 @@ export type BoundedTicketPlacement =
 /** Desired graph tickets under policy, not admitted work or held runtime positions. */
 export interface BoundedParallelTickets {
   readonly _tag: "BoundedParallelTickets"
-  /** The same accepted descriptive publication carried through bounded admission. */
-  readonly publication: DeliveryGraphPublication
+  /** The same accepted descriptive graph view carried through bounded admission. */
+  readonly graphView: DeliveryGraphView
   readonly placements: ReadonlyArray<{ readonly placement: BoundedTicketPlacement; readonly taskId: TaskId }>
   readonly policy: RunControlPolicy
   readonly source: DeliveryFrontier
@@ -436,8 +436,8 @@ export class DeliveryReflectionError extends Schema.TaggedError<DeliveryReflecti
 
 export interface TrackerGraphRelationService {
   readonly proposedActions: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
-  /** One coherent graph-centered publication consumed by the literal delivery composition. */
-  readonly signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
+  /** One coherent graph-centered view consumed by the literal delivery composition. */
+  readonly signal: CurrentSignal<DeliveryGraphView, DeliveryRelationSourceError>
 }
 
 /** Current accepted tracker-graph relation supplied to delivery. */
@@ -569,8 +569,8 @@ export type DeliveryRuntimeFacts = DeliveryRuntimeFactsBase &
     | { readonly acceptedAt: JournalPosition; readonly acceptedFactPublication: AcceptedRunFactPublication }
   )
 
-/** Current descriptive inputs published together for one delivery revision. */
-export interface DeliveryGraphPublication {
+/** Current descriptive inputs derived together for one delivery revision. */
+export interface DeliveryGraphView {
   /** Exact accepted workflow and executor observations retained by ticket projection. */
   readonly exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
   /** Accepted tracker graph used to construct the graph frontier. */
@@ -589,10 +589,10 @@ interface DeliveryActionInputs {
   readonly trackerGraphProposals: ReadonlyArray<TrackerGraphActionProposal>
 }
 
-/** One current-first bundle containing the descriptive publication and action inputs. */
+/** One current-first bundle containing the descriptive graph view and action inputs. */
 export interface DeliveryRelationInputBundle {
   readonly actionInputs: DeliveryActionInputs
-  readonly publication: DeliveryGraphPublication
+  readonly graphView: DeliveryGraphView
 }
 
 /** One coherent value consumed by the runtime action owner. */

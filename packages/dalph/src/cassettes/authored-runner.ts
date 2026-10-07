@@ -19,7 +19,7 @@ import {
   CompletionTaskBoundary,
   type CompletionTaskRequest,
   type BoundedTicketRank,
-  DeliveryRelationPublicationObserver,
+  DeliveryRelationInputObserver,
   DeliveryRuntimeObservationObserver,
   evaluateDeliveryRelationAndRuntimeInputBundle,
   type DeliveryConsequences,
@@ -1724,7 +1724,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       >(Option.none())
       const initialPauseObservationConsumed = yield* Deferred.make<void>()
       const latestDeliveryPublication = yield* SubscriptionRef.make<AuthoredDeliveryPublication | null>(null)
-      const publicationObserver = DeliveryRelationPublicationObserver.of({
+      const publicationObserver = DeliveryRelationInputObserver.of({
         observe: (bundle) =>
           Effect.gen(function* () {
             const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
@@ -2705,8 +2705,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                 const matches = ({ activationOrdinal, bundle }: AuthoredDeliveryPublication) =>
                   activationOrdinal === activation &&
                   bundle.actionInputs.runtimeFacts.taskWork.runId === runId &&
-                  bundle.publication.graph._tag === "GraphEstablished" &&
-                  bundle.publication.graph.observation.snapshot.revision === prerequisite.graphRevision &&
+                  bundle.graphView.graph._tag === "GraphEstablished" &&
+                  bundle.graphView.graph.observation.snapshot.revision === prerequisite.graphRevision &&
                   bundle.actionInputs.runtimeFacts.taskWork.safeContinuationRevalidations.some(
                     ({ plannedAttempt }) =>
                       plannedAttempt.taskId === prerequisite.taskId &&
@@ -2752,8 +2752,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                     publication.activationOrdinal !== activation ||
                     bundle.actionInputs.runtimeFacts.acceptedAt === null ||
                     bundle.actionInputs.runtimeFacts.acceptedAt < replacement.position ||
-                    bundle.publication.graph._tag !== "GraphEstablished" ||
-                    bundle.publication.graph.observation.snapshot.revision !== prerequisite.graphRevision ||
+                    bundle.graphView.graph._tag !== "GraphEstablished" ||
+                    bundle.graphView.graph.observation.snapshot.revision !== prerequisite.graphRevision ||
                     bundle.actionInputs.runtimeFacts.taskWork.capacity !== prerequisite.capacity ||
                     bundle.actionInputs.runtimeFacts.taskWork.held.length !== Number(prerequisite.capacity)
                   )
@@ -3817,7 +3817,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         processProvidedCoordinatorExecution,
         observationPlayback.playback.awaitFailure
       ).pipe(
-        Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
+        Effect.provideService(DeliveryRelationInputObserver, publicationObserver),
         Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
       )
       const { activationOrdinals, coordinatorExitAtAssertions, records } = execution

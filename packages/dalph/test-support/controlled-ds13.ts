@@ -398,7 +398,7 @@ const isExactA1PlanRecord = (record: JournalRecord) => {
 }
 
 const isFreshResponsibilityEvidenceFor = (
-  candidate: DeliveryRelationInputBundle["publication"]["exactEvidence"][number],
+  candidate: DeliveryRelationInputBundle["graphView"]["exactEvidence"][number],
   plannedAttempt: PlannedTaskAttempt
 ) => {
   if (candidate._tag !== "ResponsibilityFacts" || candidate.facts._tag !== "PlannedAttemptExecutorFreshFacts") {
@@ -439,7 +439,7 @@ const exactA1PublicationEvidence = (
   plannedAttempt: PlannedTaskAttempt,
   report: PlannedAttemptExecutorReport
 ) => {
-  const evidence = publication.publication.exactEvidence.filter((candidate) =>
+  const evidence = publication.graphView.exactEvidence.filter((candidate) =>
     isFreshResponsibilityEvidenceFor(candidate, plannedAttempt)
   )
   const exact = onlyItem(evidence)
@@ -458,7 +458,7 @@ const exactReadyBPublicationEvidence = (
   plannedAttempt: PlannedTaskAttempt,
   reportOrdinal: PlannedAttemptExecutorReportOrdinal
 ) => {
-  const evidence = publication.publication.exactEvidence.filter(
+  const evidence = publication.graphView.exactEvidence.filter(
     (candidate) =>
       candidate._tag === "ResponsibilityFacts" &&
       candidate.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
@@ -511,7 +511,7 @@ const exactRetainedC1PublicationEvidence = (
 ) => {
   const cAttempt = exactC1Attempt(records)
   if (cAttempt === undefined) return false
-  const evidence = publication.publication.exactEvidence.filter((candidate) =>
+  const evidence = publication.graphView.exactEvidence.filter((candidate) =>
     isFreshResponsibilityEvidenceFor(candidate, cAttempt)
   )
   const exact = onlyItem(evidence)
@@ -723,11 +723,11 @@ const finalPublicationMatches = (
   bReport: NonNullable<ReturnType<typeof exactBExecutingReport>>
 ) => {
   const acceptedAt = publication.actionInputs.runtimeFacts.acceptedAt
-  if (acceptedAt === null || publication.publication.graph._tag !== "GraphEstablished") return false
+  if (acceptedAt === null || publication.graphView.graph._tag !== "GraphEstablished") return false
   return [
     acceptedAt >= bReport.position,
-    publication.publication.graph.observation.snapshot.revision === scenario.graphs.G2.revision,
-    publication.publication.policy.taskExecutionCapacity === scenario.policies.P2,
+    publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G2.revision,
+    publication.graphView.policy.taskExecutionCapacity === scenario.policies.P2,
     publication.actionInputs.runtimeFacts.taskWork.capacity === scenario.policies.P2,
     hasExactFinalPositions(publication),
     exactA1PublicationEvidence(publication, aTerminal.aPlan, aTerminal.report.event.report),

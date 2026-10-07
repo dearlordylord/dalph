@@ -16,7 +16,7 @@ export const isControlledDs05CompleteCheckpoint = (
       event.report._tag === "ExecutorWorkSafelySuspended" &&
       event.report.correlation.attemptId === scenario.attempts.B1
   )
-  const hasChangedB = publication.publication.exactEvidence.some(
+  const hasChangedB = publication.graphView.exactEvidence.some(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
@@ -29,8 +29,8 @@ export const isControlledDs05CompleteCheckpoint = (
     .map(({ correlation }) => correlation.attemptId)
     .toSorted()
   return (
-    publication.publication.graph._tag === "GraphEstablished" &&
-    publication.publication.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
+    publication.graphView.graph._tag === "GraphEstablished" &&
+    publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
     acceptedSafe !== undefined &&
     publication.actionInputs.runtimeFacts.acceptedAt !== null &&
     publication.actionInputs.runtimeFacts.acceptedAt >= acceptedSafe.position &&

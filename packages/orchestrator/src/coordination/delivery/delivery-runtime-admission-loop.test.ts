@@ -103,7 +103,7 @@ it.effect("does not admit a fresh candidate after a ready existing responsibilit
       latest,
       localDeferrals,
       owners,
-      publishRuntimeObservationInsideGate: () => Effect.sync(() => (published += 1)),
+      updateLatestRuntimeObservationInsideGate: () => Effect.sync(() => (published += 1)),
       reserveAndStart: (proposal) =>
         Effect.sync(() => {
           reserved.push(proposal.id)

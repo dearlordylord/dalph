@@ -117,7 +117,7 @@ import { GitWorktree } from "../../authorities/git/worktree.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { DeliveryRuntimeResourceCapabilityPair, DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import { DeliveryActionExecutor } from "./delivery-action-executor.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "./delivery-planning-catch-up.js"
 import { Journal } from "./journal.js"
 import { ApplicationExitAdmission } from "../application-exit/lifecycle.js"
 import { Integrator, IntegratorGit } from "../../workflow/protocols/integrator/protocol.js"
@@ -2768,8 +2768,8 @@ it.effect("calls no instrumented authority or mutation boundary while status cha
         ),
         Context.add(DeliveryActionExecutor, forbidden<typeof DeliveryActionExecutor.Service>("DeliveryActionExecutor")),
         Context.add(
-          DeliveryAcceptedFactPublication,
-          forbidden<typeof DeliveryAcceptedFactPublication.Service>("DeliveryAcceptedFactPublication")
+          DeliveryPlanningCatchUp,
+          forbidden<typeof DeliveryPlanningCatchUp.Service>("DeliveryPlanningCatchUp")
         ),
         Context.add(Journal, forbidden<typeof Journal.Service>("Journal")),
         Context.add(

@@ -21,8 +21,8 @@ for (const cut of ["Intent", "Observation"] as const) {
       expect(result.after.plans).toEqual([])
       expect(result.after.worktreeCreateRequests).toEqual(result.prefix.worktreeCreateRequests)
       const final = result.after.publications.at(-1)
-      if (final?.publication.graph._tag !== "GraphEstablished") return expect.fail("missing recovered G5 publication")
-      expect(final.publication.graph.observation.snapshot.taskIds()).toEqual(["A", "B", "C", "D", "E", "F", "G"])
+      if (final?.graphView.graph._tag !== "GraphEstablished") return expect.fail("missing recovered G5 publication")
+      expect(final.graphView.graph.observation.snapshot.taskIds()).toEqual(["A", "B", "C", "D", "E", "F", "G"])
       expect(
         final.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
       ).toEqual(["attempt:B:1", "attempt:C:1", "attempt:D:1"])
@@ -38,8 +38,8 @@ it.effect("observes F and G without admitting either while B C and D retain ever
     expect(result.graphReads).toBe(1)
     expect(result.sources).toHaveLength(1)
     const before = result.before.publications.at(-1)
-    if (before?.publication.graph._tag !== "GraphEstablished") return expect.fail("missing initial G4")
-    expect(before.publication.graph.observation.snapshot.taskIds()).toEqual(["A", "B", "C", "D", "E"])
+    if (before?.graphView.graph._tag !== "GraphEstablished") return expect.fail("missing initial G4")
+    expect(before.graphView.graph.observation.snapshot.taskIds()).toEqual(["A", "B", "C", "D", "E"])
     expect(
       before.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
     ).toEqual(["attempt:B:1", "attempt:C:1", "attempt:D:1"])
@@ -79,9 +79,9 @@ it.effect("observes F and G without admitting either while B C and D retain ever
     expect(result.after.plans).toEqual(result.before.plans)
     expect(result.after.worktreeCreateRequests).toEqual(result.before.worktreeCreateRequests)
     const final = result.after.publications.at(-1)
-    if (final?.publication.graph._tag !== "GraphEstablished") return expect.fail("missing accepted G5")
-    expect(final.publication.graph.observation.snapshot.revision).toBe("G5")
-    expect(final.publication.graph.observation.snapshot.taskIds()).toEqual(["A", "B", "C", "D", "E", "F", "G"])
+    if (final?.graphView.graph._tag !== "GraphEstablished") return expect.fail("missing accepted G5")
+    expect(final.graphView.graph.observation.snapshot.revision).toBe("G5")
+    expect(final.graphView.graph.observation.snapshot.taskIds()).toEqual(["A", "B", "C", "D", "E", "F", "G"])
     for (const publication of result.after.publications.slice(result.before.publications.length)) {
       expect(publication.actionInputs.runtimeFacts.taskWork.capacity).toBe(3)
       expect(

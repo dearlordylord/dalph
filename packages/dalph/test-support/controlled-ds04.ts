@@ -29,9 +29,9 @@ const hasExactMembers = (observed: ReadonlyArray<string>, expected: ReadonlyArra
   observed.every((item) => expected.includes(item))
 
 export const isControlledDs04CheckpointPublication = (publication: DeliveryRelationInputBundle) =>
-  publication.publication.graph._tag === "GraphEstablished" &&
-  publication.publication.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
-  publication.publication.exactEvidence.some(
+  publication.graphView.graph._tag === "GraphEstablished" &&
+  publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G1.revision &&
+  publication.graphView.exactEvidence.some(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&

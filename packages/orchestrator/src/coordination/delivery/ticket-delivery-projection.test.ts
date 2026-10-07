@@ -34,7 +34,7 @@ import {
 } from "../../workflow/registry/operation.js"
 import {
   TrackerGraphState,
-  type DeliveryGraphPublication,
+  type DeliveryGraphView,
   type ExactTicketDeliveryEvidence,
   type TicketDeliveryEvidence
 } from "./relations.js"
@@ -99,14 +99,14 @@ const graph = (tasks: ReadonlyArray<TrackerTask>, revision = "graph-1", recorded
 const policy = (capacity: number) =>
   RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: TaskWorkCapacity.make(capacity) })
 
-const publication = (
+const graphView = (
   currentGraph: TrackerGraphState,
   currentPolicy: RunControlPolicy,
   exactEvidence: ReadonlyArray<TicketDeliveryEvidence> = []
-): DeliveryGraphPublication => ({ exactEvidence, graph: currentGraph, policy: currentPolicy })
+): DeliveryGraphView => ({ exactEvidence, graph: currentGraph, policy: currentPolicy })
 
 const boundedTickets = (currentGraph: TrackerGraphState, currentPolicy: RunControlPolicy) =>
-  boundedParallelTicketsOf(frontierOf(publication(currentGraph, currentPolicy)))
+  boundedParallelTicketsOf(frontierOf(graphView(currentGraph, currentPolicy)))
 
 const project = (
   tasks: ReadonlyArray<TrackerTask>,
@@ -115,7 +115,7 @@ const project = (
 ) =>
   ticketDeliveriesOf(
     boundedParallelTicketsOf(
-      frontierOf(publication(graph(tasks, "graph-1", JournalPosition.make(10)), policy(capacity), evidence))
+      frontierOf(graphView(graph(tasks, "graph-1", JournalPosition.make(10)), policy(capacity), evidence))
     ),
     evidence
   )
@@ -317,15 +317,13 @@ describe("#181 graph and bounded projections", () => {
       { _tag: "TargetPromotion" as const, responsibility, state: promotion },
       ...journaledIntegrationEvidenceOf(focusedSuccessRecords)
     ]
-    const projectPublication = (currentPublication: DeliveryGraphPublication) =>
+    const projectPublication = (currentPublication: DeliveryGraphView) =>
       ticketDeliveriesOf(boundedParallelTicketsOf(frontierOf(currentPublication)), currentPublication.exactEvidence)
-    const deliveryBeforeSuccess = projectPublication(
-      publication(beforeFocusedSuccess, policy(1), evidenceBeforeSuccess)
-    )
+    const deliveryBeforeSuccess = projectPublication(graphView(beforeFocusedSuccess, policy(1), evidenceBeforeSuccess))
     const deliveryWithPredatingGraph = projectPublication(
-      publication(beforeFocusedSuccess, policy(1), evidenceAfterSuccess)
+      graphView(beforeFocusedSuccess, policy(1), evidenceAfterSuccess)
     )
-    const deliveryWithLaterGraph = projectPublication(publication(afterFocusedSuccess, policy(1), evidenceAfterSuccess))
+    const deliveryWithLaterGraph = projectPublication(graphView(afterFocusedSuccess, policy(1), evidenceAfterSuccess))
 
     for (const blocked of [deliveryBeforeSuccess, deliveryWithPredatingGraph]) {
       expect(blocked.deliveries.find(({ taskId }) => taskId === TaskId.make("B"))).toMatchObject({
@@ -400,10 +398,10 @@ describe("#181 graph and bounded projections", () => {
     for (const conflict of conflictingEvents) expect(successesIn([conflict])).toEqual([])
   })
 
-  it("keeps graph and policy in one publication value", () => {
+  it("keeps graph and policy in one graphView value", () => {
     const currentGraph = graph([task("A")], "stage-graph")
     const currentPolicy = policy(1)
-    const currentPublication = publication(currentGraph, currentPolicy)
+    const currentPublication = graphView(currentGraph, currentPolicy)
     const frontier = frontierOf(currentPublication)
     const tickets = boundedParallelTicketsOf(frontier)
 
@@ -411,7 +409,7 @@ describe("#181 graph and bounded projections", () => {
     expect(frontier.standings).toMatchObject([{ _tag: "Eligible", taskId: "A" }])
     expect(selectedTicketIds(tickets)).toEqual([TaskId.make("A")])
     expect(tickets.policy).toBe(currentPolicy)
-    expect(frontier.publication).toBe(currentPublication)
+    expect(frontier.graphView).toBe(currentPublication)
   })
 
   it("partitions every established graph task with exact exclusion evidence", () => {
@@ -423,7 +421,7 @@ describe("#181 graph and bounded projections", () => {
       task("D", TaskLifecycle.cases.TerminalWithoutSuccess.make({})),
       task("P", TaskLifecycle.cases.TerminalWithoutSuccess.make({}))
     ])
-    const frontier = frontierOf(publication(currentGraph, policy(1)))
+    const frontier = frontierOf(graphView(currentGraph, policy(1)))
 
     expect(frontier.standings).toMatchObject([
       { _tag: "Eligible", taskId: "A" },
@@ -440,7 +438,7 @@ describe("#181 graph and bounded projections", () => {
       task("B", TaskLifecycle.cases.Open.make({}), [TaskId.make("A")]),
       task("C")
     ])
-    const frontier = frontierOf(publication(currentGraph, policy(1)))
+    const frontier = frontierOf(graphView(currentGraph, policy(1)))
     const tickets = boundedParallelTicketsOf(frontier)
 
     expect(frontier.standings).toMatchObject([
@@ -453,7 +451,7 @@ describe("#181 graph and bounded projections", () => {
 
   it("does not release B when the later graph reports A reopened", () => {
     const frontier = frontierOf(
-      publication(
+      graphView(
         graph([task("A"), task("B", TaskLifecycle.cases.Open.make({}), [TaskId.make("A")])], "reopened-A"),
         policy(2)
       )
@@ -473,7 +471,7 @@ describe("#181 graph and bounded projections", () => {
       task("B"),
       task("C")
     ])
-    const frontier = frontierOf(publication(currentGraph, policy(1)))
+    const frontier = frontierOf(graphView(currentGraph, policy(1)))
 
     expect(frontier.standings.find(({ taskId }) => taskId === TaskId.make("A"))).toMatchObject({
       _tag: "Excluded",
@@ -513,7 +511,7 @@ describe("#181 graph and bounded projections", () => {
       ids.map((id) => task(id)),
       "mixed-case-punctuation"
     )
-    const currentPublication = publication(currentGraph, policy(ids.length))
+    const currentPublication = graphView(currentGraph, policy(ids.length))
     const frontier = frontierOf(currentPublication)
     const tickets = boundedParallelTicketsOf(frontier)
 
@@ -646,7 +644,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
       }
     }
     const noGraphTickets = boundedParallelTicketsOf(
-      frontierOf(publication(TrackerGraphState.cases.GraphNotEstablished.make({}), policy(1)))
+      frontierOf(graphView(TrackerGraphState.cases.GraphNotEstablished.make({}), policy(1)))
     )
     expect(
       releaseEligibleProposalContributionsOf(noGraphTickets, {
@@ -671,7 +669,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
   it("retains exact evidence while the current graph is not established", () => {
     const taskA = TaskId.make("A")
     const currentGraph = TrackerGraphState.cases.GraphNotEstablished.make({})
-    const tickets = boundedParallelTicketsOf(frontierOf(publication(currentGraph, policy(1))))
+    const tickets = boundedParallelTicketsOf(frontierOf(graphView(currentGraph, policy(1))))
     const result = ticketDeliveriesOf(tickets, [exactExecutorEvidence(taskA)])
 
     expect(result.deliveries).toMatchObject([

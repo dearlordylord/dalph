@@ -79,16 +79,16 @@ backpressure cannot make an unavailable outside authority succeed.
 | Initial attachment | `attachCurrentSignal` peels current; initial observation and admission synchronization precede the loop | No initial mailbox offer; attachment lifetime belongs to the phase scope |
 | Relation subscriber | Sequential `Stream.runForEach` offers evaluations; `catchCause` offers the exact relation Cause | Neither offer holds `selectionGate`; subscription-ready Deferred is signalled before changes are pulled |
 | Admission consumer | Sweep reserves and installs a child under the selection gate and uninterruptible reservation handoff | `installInterruptibleDeliveryChild` waits only for child readiness, grants `mayStart`, then yields; it never joins execution, offer or acknowledgement |
-| Action child | Materialization and lease observation may acquire the selection gate; executor and `awaitCurrent` precede completion offer | Gate permits are released before offering; one completion is offered outside the gate, then the child awaits its Deferred |
-| Accepted publication service | `awaitCurrent` captures the journal position, registers under its separate relation gate, then waits outside that gate | Reactive refresh sets its SubscriptionRef and completes publication waiters independently of runtime mailbox consumption |
-| Runtime consumer | Admission sweep, quiescence classification, then `Queue.take`; capacity-wait freshness can call `awaitCurrent` before taking | Neither take nor freshness wait holds selection gate; producer offers do not require this consumer to finish a producer |
+| Action child | Materialization and lease observation may acquire the selection gate; executor and `awaitJournalPosition` precede completion offer | Gate permits are released before offering; one completion is offered outside the gate, then the child awaits its Deferred |
+| Accepted publication service | `awaitJournalPosition` captures the journal position, registers under its separate relation gate, then waits outside that gate | Reactive refresh sets its SubscriptionRef and completes publication waiters independently of runtime mailbox consumption |
+| Runtime consumer | Admission sweep, quiescence classification, then `Queue.take`; capacity-wait freshness can call `awaitJournalPosition` before taking | Neither take nor freshness wait holds selection gate; producer offers do not require this consumer to finish a producer |
 | Completion consumer | Applies under selection gate; success may enter `pendingCompletions` until accepted prefix and predecessor removal permit settlement | It returns to take more events without awaiting the child; evaluation application retries pending completions; acknowledgement happens after the gate is released |
 | Interrupted child | `releaseInterruptedOwner` acquires selection gate and uses existing rollback disposition | Consumer interruption releases its permit; release does not await an offer, acknowledgement or child join |
 | Phase closure | Scoped relation subscriber and interruptible children stop; standalone runtime releases integration targets and closes observation | No drain-before-interrupt or acknowledgement-before-interrupt requirement may be introduced |
 
 Production publication evidence is in
 [reactive-delivery-relations.ts](../../packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts):
-`refresh`, `completePublicationWaiters`, and `acceptedFactPublication.awaitCurrent`.
+`refresh`, `completeCatchUpWaiters`, and `planningCatchUp.awaitJournalPosition`.
 Runtime observation writes a SubscriptionRef in
 [delivery-runtime-observation.ts](../../packages/orchestrator/src/coordination/delivery/delivery-runtime-observation.ts);
 its optional observer is passive and production is inert by default.

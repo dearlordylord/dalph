@@ -53,7 +53,7 @@ import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryActionExecutor } from "../delivery/delivery-action-executor.js"
-import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "../delivery/delivery-planning-catch-up.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import {
@@ -61,7 +61,7 @@ import {
   DeliveryRuntimeObservationPublication
 } from "../delivery/delivery-runtime-observation.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
-import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
+import { DeliveryRelationInputObserver } from "../delivery/delivery-relation-input-observer.js"
 import { makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
 import {
@@ -438,7 +438,7 @@ const graphState = (graph: TaskDagSnapshot, recordedAt: JournalPosition) =>
 interface BundleInput {
   readonly runId: RunId
   readonly acceptedAt: JournalPosition
-  readonly evidence: DeliveryRelationInputBundle["publication"]["exactEvidence"]
+  readonly evidence: DeliveryRelationInputBundle["graphView"]["exactEvidence"]
   readonly graph: TaskDagSnapshot
   readonly paused: "Run" | "Task" | "Unpaused"
   readonly proposals?: ReadonlyArray<DeliveryActionProposal>
@@ -472,7 +472,7 @@ const bundle = ({ acceptedAt, evidence, graph, paused, proposals = [], runId, ta
       },
       trackerGraphProposals: []
     },
-    publication: { exactEvidence: evidence, graph: graphState(graph, acceptedAt), policy }
+    graphView: { exactEvidence: evidence, graph: graphState(graph, acceptedAt), policy }
   }) satisfies DeliveryRelationInputBundle
 
 const dynamicBundle = Effect.fn("PauseProgressAcceptance.dynamicBundle")(function* (
@@ -552,7 +552,7 @@ const runtimeLayer = (
     taskClaimReacquisitionControlLayer,
     deterministicOperationIdAllocatorLayer(`pause-progress-public:${runId}`),
     plannedAttemptLayer(runId),
-    Layer.mock(DeliveryRelationPublicationObserver, { observe: () => Effect.void }),
+    Layer.mock(DeliveryRelationInputObserver, { observe: () => Effect.void }),
     plannedAttemptProtocolControllerLayer,
     journaledWorkflowInterpreterLayer(
       runId,
@@ -616,26 +616,26 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
   return Context.get(yield* Layer.build(application), JournaledRunBootstrap)
 })
 
-const publishJournaledRuntimeObservation = Effect.fn("PauseProgressAcceptance.publishJournaledRuntimeObservation")(
-  function* (runId: RunId) {
-    const journal = yield* Journal
-    const publication = yield* DeliveryRuntimeObservationPublication
-    const resources = yield* DeliveryRuntimeResources
-    const recovery = yield* makeRunRecoveryProjection(runId, undefined, resources.integrationTargets)
-    const relations = yield* makeReactiveDeliveryRelationsLayer(
-      runId,
-      target,
-      journal,
-      recovery,
-      resources.integrationTargets,
-      yield* RunActivationGraphBaseline
-    )
-    const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
-    const evaluation = yield* relation.get
-    yield* publication.publish(evaluation, [])
-    return evaluation
-  }
-)
+const updateLatestJournaledRuntimeObservation = Effect.fn(
+  "PauseProgressAcceptance.updateLatestJournaledRuntimeObservation"
+)(function* (runId: RunId) {
+  const journal = yield* Journal
+  const publication = yield* DeliveryRuntimeObservationPublication
+  const resources = yield* DeliveryRuntimeResources
+  const recovery = yield* makeRunRecoveryProjection(runId, undefined, resources.integrationTargets)
+  const relations = yield* makeReactiveDeliveryRelationsLayer(
+    runId,
+    target,
+    journal,
+    recovery,
+    resources.integrationTargets,
+    yield* RunActivationGraphBaseline
+  )
+  const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+  const evaluation = yield* relation.get
+  yield* publication.updateLatest(evaluation, [])
+  return evaluation
+})
 
 const startRelationRuntime = Effect.fn("PauseProgressAcceptance.startRelationRuntime")(function* (
   bootstrap: JournaledRunBootstrap["Service"],
@@ -703,14 +703,10 @@ const startRelationRuntime = Effect.fn("PauseProgressAcceptance.startRelationRun
         yield* runDeliveryRuntime(runId, relation).pipe(
           Effect.provideService(DeliveryActionExecutor, actionExecutor),
           Effect.provideService(
-            DeliveryAcceptedFactPublication,
-            DeliveryAcceptedFactPublication.of({
-              awaitCurrent: livePublication.pipe(
-                Effect.map((acceptedThrough) => ({
-                  _tag: "DeliveryAcceptedPublicationBoundary",
-                  acceptedThrough,
-                  runId
-                }))
+            DeliveryPlanningCatchUp,
+            DeliveryPlanningCatchUp.of({
+              awaitJournalPosition: livePublication.pipe(
+                Effect.map((acceptedThrough) => ({ _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId }))
               )
             })
           )
@@ -1209,7 +1205,7 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
             yield* Deferred.succeed(firstReady, undefined)
             yield* Deferred.await(publishWaiting)
             yield* appendUnresolvedSuspension(journal, aAttempt)
-            yield* publishJournaledRuntimeObservation(runId)
+            yield* updateLatestJournaledRuntimeObservation(runId)
             yield* Deferred.succeed(waitingPublished, undefined)
             yield* Deferred.await(finishFirst)
             return {
@@ -1276,7 +1272,7 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
             yield* appendUnresolvedSuspension(journal, dAttempt)
             yield* appendSafeSuspensionReport(journal, aAttempt)
             yield* appendSafeSuspensionReport(journal, dAttempt)
-            yield* publishJournaledRuntimeObservation(runId)
+            yield* updateLatestJournaledRuntimeObservation(runId)
             yield* Deferred.succeed(secondPublished, undefined)
             yield* Deferred.await(finishSecond)
             return {
@@ -1656,7 +1652,7 @@ it.effect(
         const views = Array.from(yield* Fiber.join(observing))
         expect(views.map(({ _tag }) => _tag)).toEqual(["PauseWaiting", "PauseNoLongerApplied"])
         expect(
-          (yield* relation.signal.get).publication.exactEvidence.some(
+          (yield* relation.signal.get).graphView.exactEvidence.some(
             (evidence) =>
               evidence._tag === "ResponsibilityFacts" &&
               evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
@@ -1793,7 +1789,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
               yield* RunActivationGraphBaseline
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
-            const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
+            const acceptedFactPublication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(relations))
             const observeReady = yield* resources.runtimeObservation.changes.pipe(
               Stream.filter(({ _tag }) => _tag === "Ready"),
               Stream.take(1),
@@ -1803,7 +1799,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
             )
             const runtime = yield* runDeliveryRuntime(runId, relation).pipe(
               Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of({ execute: () => Effect.never })),
-              Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
+              Effect.provideService(DeliveryPlanningCatchUp, acceptedFactPublication),
               Effect.forkChild
             )
             yield* Deferred.await(runtimeReady)

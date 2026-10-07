@@ -4,8 +4,8 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { currentSignalOf, makeDeliveryConsequences, type DeliveryRelationInputBundle } from "./relations.js"
 
-/** Read-only ambient observation of one exact bundle successfully published by the reactive runtime. */
-export interface DeliveryRelationPublicationObservation {
+/** Read-only ambient observation of one exact bundle derived by reactive delivery planning. */
+export interface DeliveryRelationInputObservation {
   readonly observe: (bundle: DeliveryRelationInputBundle) => Effect.Effect<void>
 }
 
@@ -13,18 +13,18 @@ export interface DeliveryRelationPublicationObservation {
  * Optional observation seam. Production's default is inert; controlled callers
  * may override it without adding a required runtime dependency or failure.
  */
-export const DeliveryRelationPublicationObserver = Context.Reference<DeliveryRelationPublicationObservation>(
-  "@dalph/DeliveryRelationPublicationObserver",
+export const DeliveryRelationInputObserver = Context.Reference<DeliveryRelationInputObservation>(
+  "@dalph/DeliveryRelationInputObserver",
   { defaultValue: () => ({ observe: () => Effect.void }) }
 )
 
 /** Evaluates one captured production bundle through the literal delivery composition. */
-export const evaluateDeliveryRelationInputBundle = Effect.fn("DeliveryRelations.evaluatePublishedBundle")(function* (
+export const evaluateDeliveryRelationInputBundle = Effect.fn("DeliveryRelations.evaluateCapturedBundle")(function* (
   bundle: DeliveryRelationInputBundle
 ) {
   const coherent = currentSignalOf(bundle)
   const layer = makeDeliveryRelationsLayer({
-    ...deterministicDeliveryRuntimeSupport(bundle.publication.policy),
+    ...deterministicDeliveryRuntimeSupport(bundle.graphView.policy),
     coherent
   })
   const signal = yield* delivery.pipe(Effect.provide(layer))
@@ -32,11 +32,11 @@ export const evaluateDeliveryRelationInputBundle = Effect.fn("DeliveryRelations.
 })
 
 /** Evaluates the same captured bundle through descriptive delivery and downstream action planning. */
-export const evaluateDeliveryRuntimeInputBundle = Effect.fn("DeliveryRelations.evaluatePublishedRuntimeBundle")(
+export const evaluateDeliveryRuntimeInputBundle = Effect.fn("DeliveryRelations.evaluateCapturedRuntimeBundle")(
   function* (bundle: DeliveryRelationInputBundle) {
     const coherent = currentSignalOf(bundle)
     const layer = makeDeliveryRelationsLayer({
-      ...deterministicDeliveryRuntimeSupport(bundle.publication.policy),
+      ...deterministicDeliveryRuntimeSupport(bundle.graphView.policy),
       coherent
     })
     const signal = yield* deliveryRuntime.pipe(Effect.provide(layer))
@@ -51,11 +51,11 @@ export const evaluateDeliveryRuntimeInputBundle = Effect.fn("DeliveryRelations.e
  * equivalent to evaluating `delivery` as a second independent composition.
  */
 export const evaluateDeliveryRelationAndRuntimeInputBundle = Effect.fn(
-  "DeliveryRelations.evaluatePublishedRelationAndRuntimeBundle"
+  "DeliveryRelations.evaluateCapturedRelationAndRuntimeBundle"
 )(function* (bundle: DeliveryRelationInputBundle) {
   const coherent = currentSignalOf(bundle)
   const layer = makeDeliveryRelationsLayer({
-    ...deterministicDeliveryRuntimeSupport(bundle.publication.policy),
+    ...deterministicDeliveryRuntimeSupport(bundle.graphView.policy),
     coherent
   })
   const signal = yield* deliveryRuntime.pipe(Effect.provide(layer))

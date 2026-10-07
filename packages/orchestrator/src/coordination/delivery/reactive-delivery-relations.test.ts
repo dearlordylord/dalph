@@ -102,11 +102,11 @@ import {
 } from "../run/recovery-activation.js"
 import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "./delivery-planning-catch-up.js"
 import {
-  DeliveryRelationPublicationObserver,
+  DeliveryRelationInputObserver,
   evaluateDeliveryRelationInputBundle
-} from "./delivery-publication-observer.js"
+} from "./delivery-relation-input-observer.js"
 import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
 import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
@@ -522,11 +522,11 @@ it.effect("records the initial and later exact production bundles without changi
       const journal = yield* makeJournalService
       const observed = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
       const establishedSeen = yield* Deferred.make<void>()
-      const observer = DeliveryRelationPublicationObserver.of({
+      const observer = DeliveryRelationInputObserver.of({
         observe: (bundle) =>
           Ref.update(observed, (bundles) => [...bundles, bundle]).pipe(
             Effect.andThen(
-              bundle.publication.graph._tag === "GraphEstablished"
+              bundle.graphView.graph._tag === "GraphEstablished"
                 ? Deferred.succeed(establishedSeen, undefined)
                 : Effect.void
             )
@@ -537,7 +537,7 @@ it.effect("records the initial and later exact production bundles without changi
         target,
         journal,
         currentProjection(journal.state.get.pipe(Effect.orDie))
-      ).pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
+      ).pipe(Effect.provideService(DeliveryRelationInputObserver, observer))
       const operation = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
         OperationId.make("observed-production-bundle"),
@@ -561,11 +561,11 @@ it.effect("records the initial and later exact production bundles without changi
       yield* Deferred.await(establishedSeen)
 
       const bundles = yield* Ref.get(observed)
-      expect(bundles[0]?.publication.graph._tag).toBe("GraphNotEstablished")
-      const established = bundles.find(({ publication }) => publication.graph._tag === "GraphEstablished")
+      expect(bundles[0]?.graphView.graph._tag).toBe("GraphNotEstablished")
+      const established = bundles.find(({ graphView: publication }) => publication.graph._tag === "GraphEstablished")
       if (established === undefined) return expect.fail("expected established production bundle")
       const consequences = yield* evaluateDeliveryRelationInputBundle(established)
-      expect(consequences.graph).toBe(established.publication.graph)
+      expect(consequences.graph).toBe(established.graphView.graph)
       expect(consequences.frontier.source).toBe(consequences.graph)
       expect(consequences.tickets.source).toBe(consequences.frontier)
       expect(consequences.ticketDeliveries.source).toBe(consequences.tickets)
@@ -699,8 +699,8 @@ it.effect("requires a new activation graph without discarding the shared accepte
       expect(yield* journal.readAccepted(runId)).toBe(before)
       expect((yield* journal.state.get).graph._tag).toBe("GraphEstablished")
       yield* appendGraph("current-activation-graph")
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      yield* publication.awaitCurrent
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
+      yield* publication.awaitJournalPosition
       expect((yield* relation.get).graph._tag).toBe("GraphEstablished")
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
@@ -1093,7 +1093,7 @@ it.effect("waits for the accepted journal position to reach delivery planning be
         )
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
       const operation = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
         OperationId.make("publication-handshake"),
@@ -1106,12 +1106,12 @@ it.effect("waits for the accepted journal position to reach delivery planning be
         taskTrackerReadIntent(operation)
       )
       yield* Deferred.await(refreshStarted)
-      const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
+      const waiting = yield* publication.awaitJournalPosition.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(waiting.pollUnsafe()).toBeUndefined()
       yield* Deferred.succeed(projectionBlocked, undefined)
       expect(yield* Fiber.join(waiting)).toEqual({
-        _tag: "DeliveryAcceptedPublicationBoundary",
+        _tag: "DeliveryPlanningCatchUpBoundary",
         acceptedThrough: accepted.position,
         runId
       })
@@ -1141,7 +1141,7 @@ it.effect("removes an interrupted accepted-fact waiter before the next publicati
         )
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
       const operation = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
         OperationId.make("interrupted-publication-waiter"),
@@ -1150,9 +1150,9 @@ it.effect("removes an interrupted accepted-fact waiter before the next publicati
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       yield* Deferred.await(refreshStarted)
 
-      const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
+      const waiting = yield* publication.awaitJournalPosition.pipe(Effect.forkChild)
       yield* Effect.yieldNow
-      const surviving = yield* publication.awaitCurrent.pipe(Effect.forkChild)
+      const surviving = yield* publication.awaitJournalPosition.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       yield* Fiber.interrupt(waiting)
       yield* Deferred.succeed(projectionBlocked, undefined)
@@ -1179,7 +1179,7 @@ it.effect("cancels an accepted-fact waiter after it has crossed the publication 
         quietJournal,
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
       const operation = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
         OperationId.make("cancelled-publication-waiter"),
@@ -1187,12 +1187,12 @@ it.effect("cancels an accepted-fact waiter after it has crossed the publication 
       )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
 
-      const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
+      const waiting = yield* publication.awaitJournalPosition.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(waiting.pollUnsafe()).toBeUndefined()
       yield* Fiber.interrupt(waiting)
 
-      const surviving = yield* publication.awaitCurrent.pipe(Effect.forkChild)
+      const surviving = yield* publication.awaitJournalPosition.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       yield* Deferred.succeed(refreshSignal, undefined)
       yield* Fiber.join(surviving)
@@ -1865,7 +1865,7 @@ it.effect("publishes a typed relation failure when a later recovery projection f
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
 
       yield* Ref.set(failProjection, true)
       const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
@@ -1877,7 +1877,7 @@ it.effect("publishes a typed relation failure when a later recovery projection f
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
       const failure = yield* Fiber.join(failed)
       const currentFailure = yield* relation.get.pipe(Effect.flip)
-      const publicationFailure = yield* publication.awaitCurrent.pipe(Effect.flip)
+      const publicationFailure = yield* publication.awaitJournalPosition.pipe(Effect.flip)
 
       expect(failure).toBeInstanceOf(DeliveryRelationReconciliationError)
       expect(currentFailure).toEqual(failure)
@@ -1949,9 +1949,9 @@ it.effect("publishes a typed failure when journal-triggered reconciliation canno
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
       yield* Ref.set(failRead, true)
-      const publicationFailure = yield* publication.awaitCurrent.pipe(Effect.flip)
+      const publicationFailure = yield* publication.awaitJournalPosition.pipe(Effect.flip)
       const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
       const trigger = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
@@ -2038,14 +2038,14 @@ it.effect("fails an accepted-fact waiter when the journal signal fails", () =>
         failingJournal,
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
       const trigger = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
         OperationId.make("pending-waiter-failure-trigger"),
         target
       )
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
-      const waiting = yield* publication.awaitCurrent.pipe(Effect.flip, Effect.forkChild)
+      const waiting = yield* publication.awaitJournalPosition.pipe(Effect.flip, Effect.forkChild)
       yield* Effect.yieldNow
       expect(waiting.pollUnsafe()).toBeUndefined()
 
@@ -2116,7 +2116,7 @@ it.effect("captures only accepted same-target graph observations before proposin
       yield* journal.append(runId, intentRecordKey(pending.operationId), taskTrackerReadIntent(pending))
       yield* appendGraph("g2")
       const bundles = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
-      const observer = DeliveryRelationPublicationObserver.of({
+      const observer = DeliveryRelationInputObserver.of({
         observe: (bundle) => Ref.update(bundles, (current) => [...current, bundle])
       })
       const integrationTargets = yield* makeIntegrationTargetResourceController()
@@ -2127,14 +2127,14 @@ it.effect("captures only accepted same-target graph observations before proposin
         currentProjection(journal.state.get.pipe(Effect.orDie)),
         integrationTargets,
         (yield* journal.state.get).position
-      ).pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
+      ).pipe(Effect.provideService(DeliveryRelationInputObserver, observer))
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       yield* relation.get
       const captured = (yield* Ref.get(bundles))[0]?.actionInputs.trackerGraphProposals[0]
       expect(captured?.route).toMatchObject({ _tag: "TrackerGraphReadRoute", predecessorOperationIds: ["g1", "g2"] })
       yield* appendGraph("later")
-      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      yield* publication.awaitCurrent
+      const publication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(layer))
+      yield* publication.awaitJournalPosition
       expect(captured?.route).toMatchObject({ predecessorOperationIds: ["g1", "g2"] })
     })
   ).pipe(Effect.provide(memoryJournalStoreLayer))

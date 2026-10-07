@@ -124,7 +124,7 @@ const makeDeliveryRelationsLayer = (
         },
         trackerGraphProposals: []
       },
-      publication: { exactEvidence, graph, policy: currentPolicy }
+      graphView: { exactEvidence, graph, policy: currentPolicy }
     })
   )
   return makeDeliveryRelationsLayerWithRuntime({ ...deterministicDeliveryRuntimeSupport(policy), ...input, coherent })
