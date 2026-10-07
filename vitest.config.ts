@@ -160,6 +160,8 @@ export default defineConfig(({ mode }) => ({
       ? {
           // Real Git/SQLite and native client fixtures keep their existing deadlines
           // meaningful by running after the ordinary batch, without competing files.
+          // Vitest moves isolated one-worker group 0 behind numbered groups.
+          // Positive orders preserve ordinary completion before sensitive startup.
           projects: [
             {
               resolve: currentSourceResolution,
@@ -168,7 +170,7 @@ export default defineConfig(({ mode }) => ({
                 include: ordinaryTestIncludes,
                 maxWorkers: ordinaryWorkerCount,
                 name: "ordinary",
-                sequence: { groupOrder: 0 },
+                sequence: { groupOrder: 1 },
                 testTimeout: ordinaryTestTimeoutMilliseconds
               }
             },
@@ -180,7 +182,7 @@ export default defineConfig(({ mode }) => ({
                 include: resourceSensitiveCoverageTestPatterns,
                 maxWorkers: 1,
                 name: "ordinary-serial",
-                sequence: { groupOrder: 1 },
+                sequence: { groupOrder: 2 },
                 testTimeout: ordinaryTestTimeoutMilliseconds
               }
             }
