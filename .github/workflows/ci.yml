@@ -6,6 +6,15 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      coverage-diagnostics:
+        description: Retain coverage lifecycle resource samples and complete child logs
+        type: boolean
+        default: false
+      comparison-base:
+        description: Exact comparison Base SHA for manual qualification
+        type: string
+        required: true
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -51,6 +60,7 @@ jobs:
           DALPH_CI_HEAD_SHA: ${{ github.sha }}
           DALPH_CI_PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           DALPH_CI_PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
+          DALPH_CI_DISPATCH_BASE_SHA: ${{ inputs['comparison-base'] || '' }}
         run: node scripts/classify-docs-only-change.mjs
 
       - name: Generate hosted quality suffix matrix from the stage algebra
@@ -173,6 +183,7 @@ jobs:
       DALPH_HOSTED_QUALITY_RUN_ATTEMPT: ${{ github.run_attempt }}
       DALPH_HOSTED_QUALITY_NODE_VERSION: ${{ matrix.nodeVersion }}
       DALPH_HOSTED_QUALITY_STAGE_ID: ${{ matrix.stageId }}
+      DALPH_COVERAGE_RESOURCE_OBSERVATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs['coverage-diagnostics'] && matrix.stageId == 'coverage' && '1' || '0' }}
       DALPH_COVERAGE_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
       NODE_OPTIONS: --max-old-space-size=8192
 
@@ -265,6 +276,7 @@ jobs:
               "DALPH_HOSTED_QUALITY_STAGE_ID=$DALPH_HOSTED_QUALITY_STAGE_ID" \
               "DALPH_HOSTED_QUALITY_CELL_STARTED_AT=$DALPH_HOSTED_QUALITY_CELL_STARTED_AT" \
               "DALPH_COVERAGE_BASE_SHA=$DALPH_COVERAGE_BASE_SHA" \
+              "DALPH_COVERAGE_RESOURCE_OBSERVATIONS=$DALPH_COVERAGE_RESOURCE_OBSERVATIONS" \
               "${stage_command[@]}"
           else
             mkdir -p "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"
@@ -294,7 +306,7 @@ jobs:
           fi
 
       - name: Upload failed hosted quality child logs
-        if: always() && (steps.failed_stage.outputs.upload == 'true' || failure())
+        if: always() && (steps.failed_stage.outputs.upload == 'true' || failure() || (github.event_name == 'workflow_dispatch' && inputs['coverage-diagnostics'] && matrix.stageId == 'coverage'))
         uses: actions/upload-artifact@v4
         with:
           name: hosted-quality-child-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.nodeVersion }}-${{ matrix.stageId }}

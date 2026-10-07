@@ -3,8 +3,8 @@ import { execFile } from "node:child_process"
 import process from "node:process"
 import { expect, test } from "vitest"
 
-test("retains bounded lifecycle edges and the named controlled timeout in child output", async () => {
-  const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+const runObservationChild = (resources: boolean) =>
+  new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     execFile(
       process.execPath,
       [
@@ -15,13 +15,20 @@ test("retains bounded lifecycle edges and the named controlled timeout in child 
         "--reporter=dot",
         "--reporter=./scripts/coverage-lifecycle-reporter.ts"
       ],
-      { timeout: 15000, maxBuffer: 65536 },
+      {
+        timeout: 15000,
+        maxBuffer: 65536,
+        env: { ...process.env, DALPH_COVERAGE_RESOURCE_OBSERVATIONS: resources ? "1" : "0" }
+      },
       (error, stdout, stderr) => {
         if (error !== null) reject(new Error(`${error.message}: ${stderr}`))
         else resolve({ stdout, stderr })
       }
     )
   })
+
+test("retains bounded lifecycle edges and the named controlled timeout in child output", async () => {
+  const result = await runObservationChild(true)
   const lines = result.stderr.split("\n").filter((line) => line.startsWith('{"_tag":"CoverageLifecycle"'))
   const observations = lines.map((line) => JSON.parse(line))
   expect(observations.filter(({ phase }) => phase === "ModuleQueued")).toHaveLength(1)
@@ -52,5 +59,28 @@ test("retains bounded lifecycle edges and the named controlled timeout in child 
   ])
   expect(lines.every((line) => Buffer.byteLength(line + "\n\n") <= 4096)).toBe(true)
   expect(Buffer.byteLength(lines.join("\n"))).toBeLessThanOrEqual(8192)
+  const resourceLines = result.stderr.split("\n").filter((line) => line.startsWith('{"_tag":"CoverageResources"'))
+  const resources = resourceLines.map((line) => JSON.parse(line))
+  expect(resources).toHaveLength(observations.length)
+  expect(new Set(resources.map(({ processId }) => processId)).size).toBeGreaterThanOrEqual(2)
+  expect(
+    resources.every(
+      ({ parallelism, processId, residentBytes, systemCpuMicroseconds, userCpuMicroseconds }) =>
+        processId > 0 && residentBytes > 0 && userCpuMicroseconds >= 0 && systemCpuMicroseconds >= 0 && parallelism > 0
+    )
+  ).toBe(true)
+  expect(Buffer.byteLength([...lines, ...resourceLines].join("\n"))).toBeLessThanOrEqual(16384)
+  expect(resources.map(({ owner, phase }) => ({ owner, phase }))).toEqual(
+    observations.map(({ owner, phase }) => ({ owner, phase }))
+  )
+  expect(resourceLines.every((line) => Buffer.byteLength(line + "\n\n") <= 4096)).toBe(true)
+  expect(result.stdout).not.toContain('"_tag":"CoverageResources"')
   expect(result.stdout).not.toContain('"_tag":"CoverageLifecycle"')
+}, 20000)
+
+test("keeps resource samples opt in", async () => {
+  const result = await runObservationChild(false)
+  expect(result.stderr).toContain('"_tag":"CoverageLifecycle"')
+  expect(result.stderr).not.toContain('"_tag":"CoverageResources"')
+  expect(result.stdout).not.toContain('"_tag":"CoverageResources"')
 }, 20000)
