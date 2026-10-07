@@ -49,6 +49,26 @@ Choose checks by affected behavior, not by commit or handoff alone:
   selection-only changes receive hosted CI validation after integration.
   Uncertain impact requires investigation, not exemption.
 
+### Closing a test-only repair
+
+After a completed broad run, close an isolated test oracle or fixture defect by
+reproducing the failure, correcting its established cause, and observing the
+affected test file pass. Preserve accepted assertions and run affected consumer
+checks when a shared fixture changes. Close the scoped review as usual.
+
+When runtime behavior and shared verification boundaries are unchanged, retain
+successful evidence for unaffected checks; a fresh all-green broad run is not
+required to close the repaired defect. A completed requested broad run is not a
+standing request to repeat it after each repair. Repeat broad checks only for a
+named affected boundary requiring that evidence, or an agreed qualification
+that still requires a full run on the final candidate. Do not propose a repeat
+solely for additional confidence. Separate submission checks still apply when
+submission is in scope.
+
+Report the original broad failure and the passing focused repair separately.
+Retained evidence does not turn a failed gate into a passing gate or certify a
+new candidate as having passed the full gate.
+
 Gate infrastructure controls run for tooling and shared configuration changes;
 ordinary product edits omit them. Missing change evidence retains the controls.
 Recorded-catalog checks run for cassette, schema, projection, Lab, and shared
@@ -102,9 +122,9 @@ child exit, and writes results alongside that same manifest in
 supervisor retains worktree locking, clone capacity, logs, source-change checks,
 and stopped-process fences. There is no second checkout's profile reader, repair
 permit, stage resume, or cross-worktree formal reuse on this ordinary path.
-Interruption costs a rerun after reconciliation; this is an explicit simplicity
-tradeoff. Formal relevance is recorded, while proof runs by explicit local
-request or in CI.
+If full qualification is still required, an interrupted run restarts in full
+after reconciliation; this is an explicit simplicity tradeoff. Formal relevance is
+recorded, while proof runs by explicit local request or in CI.
 
 After structural preflight, the local gate runs required MBT corpus replay,
 recorded-catalog, and coverage. Its recorded manifest contains no formal proof
@@ -115,7 +135,8 @@ behavior or assertions inside the formal command.
 
 ### Local CI evidence before a hosted push
 
-On a clean Linux worktree with Python 3, inotify, the pinned Node version, and
+When full local CI qualification is required by the selection rules above,
+on a clean Linux worktree with Python 3, inotify, the pinned Node version, and
 installed workspace dependencies, run
 `pnpm check:all --candidate=<exact Base SHA>` for the exact
 committed HEAD. This runs the preflight and MBT replay, recorded-catalog, and

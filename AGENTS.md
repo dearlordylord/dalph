@@ -62,6 +62,10 @@ questions. Reuse guidance already read unless it changed or scope changed.
   leaving no stage result or child-stage log. Repair the cause and observe the
   focused check passing before another full run. An incomplete process retains
   its custody fence until stopped writers are proved through reconciliation.
+- After a completed broad run, close isolated test-only defects using
+  [focused repair evidence](docs/development/checks.md#closing-a-test-only-repair).
+  Repeat broad checks only for a named affected boundary or still-required agreed
+  full qualification; a focused pass can close the defect without a fresh full run.
 - Before starting or waiting on an operation expected to exceed one minute,
   record its expected duration and wall-clock stop time. At that time, stop
   safely, preserve evidence, and name the next discriminating action before a
