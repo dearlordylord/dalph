@@ -221,7 +221,8 @@ const attempts = new Map(
     id,
     PlannedTaskAttempt.make({
       attemptId: AttemptId.make(`accepted-result-integration-attempt-${id}`),
-      baseSha: commitOf(id),
+      // Both tasks are admitted in the same explicitly fixed-base Run.
+      baseSha: commitOf(1n),
       branch: TaskBranchRef.make(`refs/heads/dalph/accepted-result-integration-${id}`),
       executor: TaskExecutorLocator.make("executor:model"),
       runId,

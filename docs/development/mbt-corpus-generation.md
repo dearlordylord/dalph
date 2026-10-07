@@ -176,3 +176,66 @@ independent-task eligibility at initialization, followed by its owner's focused
 runtime/driver/model repair. Only after that repair passes should this corpus be
 regenerated with the new fingerprints and complete replay attempted again.
 No mandatory automatic-gate migration or parent-issue closure is claimed.
+
+## Controlled task-fact fixture repair
+
+The driver represents a contemporary workflow established with an explicit fixed
+base. Its starting facts now record that policy at the same base as attempt A.
+When capacity permits independent task B, the fresh frontier must select ordinal
+zero at that exact base; the driver checks both before recording B's plan. The
+separately observed replacement base for explicit restart remains unchanged.
+The existing independent-task scenario in `reconcile-changed-task-facts.md` owns
+this chronology. A focused initial-state test checks eligibility, and all nine
+task-fact replay lanes check the subsequent boundary calls and state predicates.
+
+Only the controlled fixture changes: historical runs without a base policy still
+refuse fresh admission. Production code, the Quint model, state predicates and
+generation/replay budgets remain unchanged. Refreshed manifest fingerprints and
+complete corpus replay are required before crediting acceptance.
+
+## Integrator source refresh
+
+The Integrator owns the merge of its fixed target head H and accepted task commit
+C. This task's producer fingerprints the implementation import closure as well
+as models and tools; every receipt binds to the complete manifest. If that merge
+changes an input (including published host-recovery maintenance), the Integrator
+must regenerate the derived artifacts against the merged source before freezing
+and qualifying its candidate:
+
+```sh
+mise exec -- node scripts/mbt-corpus-contract.mjs --write
+mise exec -- pnpm mbt:generate --all
+mise exec -- pnpm mbt:replay
+```
+
+Record an expected duration and absolute hard stop before generation/replay;
+recent complete generation took about seven minutes. Preserve all 39 lanes and
+the declared seeds, traces, samples and depths. Reconcile stopped writers before
+retrying a failed boundary. Do not relabel older receipts or reuse pre-merge
+qualification. Include the refreshed manifest, corpora and receipts inside the
+merge candidate whose ordered direct parents remain exactly [H, C]; do not add a
+separate single-parent artifact-fix commit. Then run the repository's required
+checks on that exact frozen candidate and let Dalph publish it through its
+existing owner boundary. The task's immutable PlannedBase remains unchanged.
+
+This is derived-artifact maintenance under the accepted Integrator scenario
+(`introduce-outer-integrator.md`), not a runtime or provenance policy change.
+
+## Fixed-base replay verification, 2026-10-07 UTC
+
+Both task-fact and accepted-result fixtures now use internally consistent fixed
+Run bases. The earlier task-fact initialization mismatch and accepted-result
+plan/worktree semantic refusal are retained as negative evidence. Focused initial
+eligibility, stop-A/select-B preservation, and accepted-result promotion checks
+pass; the historical no-policy fresh-admission refusal also passes. Fresh
+typecheck, changed lint, documentation links and 150 formal controls passed.
+
+Batch `.scratch/mbt-generation/batch-KbvJ1P/` generated all 39 lanes with unchanged
+budgets. Complete inventory/provenance/ITF validation passed without processes or
+network. Full replay passed: 14 ordinary suites / 87 tests, followed by the serial
+accepted-result suite / 14 tests. Generator executable invocations were zero.
+Exact evidence is in `.scratch/fixture-combined-generation.log`,
+`.scratch/fixture-combined-inventory.log` and
+`.scratch/fixture-combined-replay.log`. This qualifies that replay boundary only;
+the task owner still must complete required submission checks and the Integrator
+must qualify its exact merged source as described above.
