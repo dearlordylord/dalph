@@ -46,7 +46,7 @@ void test("private response-cycle changes retain every correction check and nati
   for (const path of ["specs/providerResultCorrection.qnt", "specs/providerResultCorrection_negative_test.qnt"]) {
     const selected = await selectAffectedQuintFamilies({ profile, changedPaths: [path], worktree: process.cwd() })
     assert.deepEqual(selected, ["provider result correction"])
-    assert.deepEqual(createAffectedQuintSelection(profile, selected).positions, [127, 128, 129, 130, 131])
+    assert.deepEqual(createAffectedQuintSelection(profile, selected).positions, [128, 129, 130, 131, 132])
   }
 })
 
@@ -54,6 +54,6 @@ void test("result recovery direction changes retain admission controls and the c
   for (const path of ["specs/resultRecoveryDirection.qnt", "specs/resultRecoveryDirection_negative_test.qnt"]) {
     const selected = await selectAffectedQuintFamilies({ profile, changedPaths: [path], worktree: process.cwd() })
     assert.deepEqual(selected, ["result recovery direction"])
-    assert.deepEqual(createAffectedQuintSelection(profile, selected).positions, [132, 133, 134, 135, 136])
+    assert.deepEqual(createAffectedQuintSelection(profile, selected).positions, [133, 134, 135, 136, 137])
   }
 })

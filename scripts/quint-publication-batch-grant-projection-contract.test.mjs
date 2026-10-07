@@ -55,6 +55,28 @@ void test("binds generated sample and verify CLI invariant/witness lists to the 
   assert.throws(() => assertDirectPublicationBatchGrantProjectionCommands(mutated), /invariant list differs/u)
 })
 
+void test("requires complete TLC exploration for batch/finality without a depth limit", () => {
+  const profile = createQuintEffectiveProfile()
+  const name = "publication exhaustion batch grant batch/finality projection exhaustive model"
+  const verify = profile.commands.find((command) => command.name === name)
+  assert.ok(verify)
+  assert.equal(verify.kind, "verify")
+  assert.equal(verify.args[verify.args.indexOf("--backend") + 1], "tlc")
+  assert.ok(!verify.args.includes("--max-steps"))
+  assert.throws(
+    () =>
+      assertDirectPublicationBatchGrantProjectionCommands(profile.commands.filter((command) => command.name !== name)),
+    /differs from its model source/u
+  )
+  for (const mutation of ["bounded", "apalache"]) {
+    const commands = structuredClone(profile.commands)
+    const command = commands.find((candidate) => candidate.name === name)
+    if (mutation === "bounded") command.args.push("--max-steps", "32")
+    else command.args[command.args.indexOf("--backend") + 1] = "apalache"
+    assert.throws(() => assertDirectPublicationBatchGrantProjectionCommands(commands), /complete TLC exploration/u)
+  }
+})
+
 void test("rejects an omitted exhaustion transition instead of accepting a vacuous projection", async () => {
   const original = contract.profiles.grantControl.transitions
   const withoutExhaustion = original.filter((action) => action !== "retainInitialPublicationExhaustion")

@@ -1,0 +1,56 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /workspace/typescript/dalph-408-exhaustive/_apalache-out/server/2026-10-07T17-20-56_10810324500127470778
+# APALACHE version: 0.56.1 | build: 70cdaf4                       I@17:20:56.390
+Starting checker server on port 8822...                           I@17:20:56.404
+The Apalache server is running on port 8822. Press Ctrl-C to stop.
+Oct 07, 2026 5:20:58 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+PASS #0: SanyParser                                               I@17:20:59.525
+[TLC] Running TLC model checker...
+
+TLC2 Version 2.19 of 08 August 2024
+Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 102 and seed -3244446979318047835 with 12 workers on 12 cores with 8192MB heap and 64MB offheap memory [pid: 3824045] (Linux 7.0.14-orbstack-00380-ga7e0a2dc9535 aarch64, Debian 17.0.20.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /tmp/quint-tlc-MjrEqR/directPublicationBatchGrantBatchFinalityProof.tla
+Parsing file /tmp/Integers.tla
+Parsing file /tmp/Sequences.tla
+Parsing file /tmp/FiniteSets.tla
+Parsing file /tmp/TLC.tla
+Parsing file /tmp/Apalache.tla
+Parsing file /tmp/Variants.tla
+Parsing file /tmp/Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module directPublicationBatchGrantBatchFinalityProof
+Starting... (2026-10-07 17:21:01)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-07 17:21:01.
+Progress(28) at 2026-10-07 17:21:04: 499,522 states generated (499,522 s/min), 229,850 distinct states found (229,850 ds/min), 59,438 states left on queue.
+Progress(37) at 2026-10-07 17:22:04: 9,900,464 states generated (9,400,942 s/min), 4,729,683 distinct states found (4,499,833 ds/min), 1,177,315 states left on queue.
+Progress(40) at 2026-10-07 17:23:04: 19,391,270 states generated (9,490,806 s/min), 8,853,145 distinct states found (4,123,462 ds/min), 1,710,632 states left on queue.
+Progress(41) at 2026-10-07 17:24:04: 24,749,263 states generated (5,357,993 s/min), 11,040,658 distinct states found (2,187,513 ds/min), 1,865,590 states left on queue.
+Progress(42) at 2026-10-07 17:25:04: 28,311,357 states generated (3,562,094 s/min), 12,446,507 distinct states found (1,405,849 ds/min), 1,856,056 states left on queue.
+Progress(43) at 2026-10-07 17:26:04: 35,286,419 states generated (6,975,062 s/min), 15,111,891 distinct states found (2,665,384 ds/min), 1,783,530 states left on queue.
+Progress(46) at 2026-10-07 17:27:04: 46,846,393 states generated (11,559,974 s/min), 19,134,768 distinct states found (4,022,877 ds/min), 1,254,044 states left on queue.
+Progress(50) at 2026-10-07 17:28:04: 55,916,149 states generated (9,069,756 s/min), 21,844,216 distinct states found (2,709,448 ds/min), 415,390 states left on queue.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 4.4E-5
+  based on the actual fingerprints:  val = 1.3E-5
+58825887 states generated, 22484076 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 57.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 6 and the 95th percentile is 4).
+Finished in 07min 21s at (2026-10-07 17:28:22)
+
+[ok] No violation found (441887ms).

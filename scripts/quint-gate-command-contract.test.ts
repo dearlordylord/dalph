@@ -26,14 +26,14 @@ const freshTaskBlockStart = 47
 const freshTaskBlockEnd = 60
 
 describe("Quint gate command contract", () => {
-  it("accepts the independent 146-command contract", () => {
+  it("accepts the independent 147-command contract", () => {
     assertQuintGateCommandContract({ manifest: quintGateCommandManifest, executed: quintGateExpectedCommandCounts })
     expect(quintGateExpectedCommandCounts).toEqual({
-      total: 146,
+      total: 147,
       typecheck: 23,
       test: 64,
       "sampled-run": 32,
-      verify: 27
+      verify: 28
     })
   })
 
@@ -102,7 +102,7 @@ describe("Quint gate command contract", () => {
     expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
   })
 
-  it("accepts the independent twelve-command #386 publication-grant inventory", () => {
+  it("accepts the independent thirteen-command #386/#408 publication-grant inventory", () => {
     expect(publicationBatchGrantQuintGateCommandKeys).toEqual([
       "typecheck\u0000publication exhaustion batch grant model typecheck",
       "test\u0000publication exhaustion batch grant deterministic tests",
@@ -115,13 +115,14 @@ describe("Quint gate command contract", () => {
       "verify\u0000publication exhaustion batch grant control projection exhaustive model",
       "test\u0000publication exhaustion batch grant batch/finality projection deterministic tests",
       "test\u0000publication exhaustion batch grant batch/finality projection negative mutation profile",
-      "sampled-run\u0000publication exhaustion batch grant batch/finality projection sampled model"
+      "sampled-run\u0000publication exhaustion batch grant batch/finality projection sampled model",
+      "verify\u0000publication exhaustion batch grant batch/finality projection exhaustive model"
     ])
     const blockStart = quintGateCommandManifest.findIndex(
       ({ name }) => name === "publication exhaustion batch grant model typecheck"
     )
     expect(
-      quintGateCommandManifest.slice(blockStart, blockStart + 12).map(({ kind, name }) => `${kind}\u0000${name}`)
+      quintGateCommandManifest.slice(blockStart, blockStart + 13).map(({ kind, name }) => `${kind}\u0000${name}`)
     ).toEqual(publicationBatchGrantQuintGateCommandKeys)
     expect(() => assertAcceptedQuintGateCommands(quintGateCommandManifest)).not.toThrow()
   })

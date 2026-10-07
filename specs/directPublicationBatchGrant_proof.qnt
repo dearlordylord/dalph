@@ -761,6 +761,7 @@ module directPublicationBatchGrantGrantControlProof {
   action recordExactCleanup: bool = all {
     state.phase == TaskCompletionRecorded,
     state.taskCompleted,
+    not(state.cleanupComplete),
     state.lifecycle == Running,
     state.hostLive,
     state' = recordQForwardEffect(state, { ...state, cleanupComplete: true }),
@@ -1581,6 +1582,7 @@ module directPublicationBatchGrantBatchFinalityProof {
   action recordExactCleanup: bool = all {
     state.phase == TaskCompletionRecorded,
     state.taskCompleted,
+    not(state.cleanupComplete),
     state.lifecycle == Running,
     state.hostLive,
     state' = recordQForwardEffect(state, { ...state, cleanupComplete: true }),

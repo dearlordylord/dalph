@@ -354,6 +354,34 @@ module directPublicationBatchGrantTest {
       })
   }
 
+  run exactCleanupCannotRepeatBeforeSettlementTest = {
+    init
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(startInitialSession)
+      .then(recordInitialPushIntent)
+      .then(resolveInitialIntentWithoutProof)
+      .then(closeInitialSession)
+      .then(retainInitialPublicationExhaustion)
+      .then(submitExactFullRerunRequest(FIRST_REQUEST_ID))
+      .then(appendExactExhaustionGrant(FIRST_GRANT_RECEIPT))
+      .then(acknowledgeGrant)
+      .expect(not(state.exactRemoteProof) and not(state.taskCompleted) and grantDoesNotProvePublication)
+      .then(reconcileAlreadyPublishedCandidate)
+      .then(recordLocalPromotion)
+      .then(refreshTaskPermission)
+      .then(completeTaskFromExactProof)
+      .then(recordExactCleanup)
+      .expect(state.cleanupComplete and state.phase == TaskCompletionRecorded)
+      .then(recordExactCleanup).fail()
+  }
+
   run exactPublicationProofAndFinalityRequireFreshBoundariesTest = {
     init
       .then(startInitialSession)

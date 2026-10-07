@@ -69,6 +69,7 @@ export const quintGateCommandManifest = Object.freeze([
   command("test", "publication exhaustion batch grant batch/finality projection deterministic tests"),
   command("test", "publication exhaustion batch grant batch/finality projection negative mutation profile"),
   command("sampled-run", "publication exhaustion batch grant batch/finality projection sampled model"),
+  command("verify", "publication exhaustion batch grant batch/finality projection exhaustive model"),
   ...exhaustiveModel("provider result correction"),
   ...exhaustiveModel("result recovery direction"),
   command("typecheck", "executor guidance model typecheck"),

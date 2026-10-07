@@ -7,11 +7,11 @@ import { publicationBatchGrantQuintGateCommandKeys } from "./quint-gate-publicat
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
-  total: 146,
+  total: 147,
   typecheck: 23,
   test: 64,
   "sampled-run": 32,
-  verify: 27
+  verify: 28
 })
 
 export const legacyQuintGateExpectedCommandCounts = Object.freeze({

@@ -254,8 +254,8 @@ export const directPublicationBatchGrantProjectionContract = Object.freeze({
         },
         {
           action: "recordExactCleanup",
-          reads: ["phase", "taskCompleted", "lifecycle", "hostLive"],
-          guardReads: ["phase", "taskCompleted", "lifecycle", "hostLive"],
+          reads: ["phase", "taskCompleted", "cleanupComplete", "lifecycle", "hostLive"],
+          guardReads: ["phase", "taskCompleted", "cleanupComplete", "lifecycle", "hostLive"],
           writes: ["cleanupComplete", "pausedForwardEffects", "exitForwardEffects", "qForwardEffectOrdinal"],
           projectedWrites: [],
           abstractedWrites: ["cleanupComplete", "pausedForwardEffects", "exitForwardEffects", "qForwardEffectOrdinal"],
@@ -315,12 +315,11 @@ export const directPublicationBatchGrantProjectionContract = Object.freeze({
       positiveCommand: "publication exhaustion batch grant batch/finality projection deterministic tests",
       negativeCommand: "publication exhaustion batch grant batch/finality projection negative mutation profile",
       sampledCommand: "publication exhaustion batch grant batch/finality projection sampled model",
+      verifyCommand: "publication exhaustion batch grant batch/finality projection exhaustive model",
       test: "specs/directPublicationBatchGrant_batch_finality_proof_test.qnt",
       negativeTest: "specs/directPublicationBatchGrant_batch_finality_proof_negative_test.qnt",
       positiveMain: "directPublicationBatchGrantBatchFinalityProofTest",
       negativeMain: "directPublicationBatchGrantBatchFinalityProofNegativeTest",
-      // #408 owns exhaustive batch/finality exploration. #386 retains its
-      // deterministic positive and negative controls and one exact control proof.
       invariants: directPublicationBatchGrantObligations.invariants,
       witnesses: Object.freeze([
         "exactExhaustionReached",
@@ -873,28 +872,32 @@ export const assertDirectPublicationBatchGrantProjectionCommands = (commands) =>
     if (JSON.stringify(sampleWitnesses) !== JSON.stringify(profile.witnesses)) {
       throw new Error(`sample command ${profile.sampledCommand} witness list differs from its profile contract`)
     }
-    if (profile.verifyCommand !== undefined) {
-      const verify = commands.find(({ name }) => name === profile.verifyCommand)
-      if (
-        !verify ||
-        verify.kind !== "verify" ||
-        verify.args[0] !== "verify" ||
-        verify.args[1] !== contract.projectionModel
-      ) {
-        throw new Error(`verify command ${profile.verifyCommand} differs from its model source`)
-      }
-      if (verify.args[verify.args.indexOf("--main") + 1] !== profile.main) {
-        throw new Error(`verify command ${profile.verifyCommand} selects the wrong main`)
-      }
-      const invariantStart = verify.args.indexOf("--invariants")
-      const invariantEnd = verify.args.indexOf("--verbosity", invariantStart)
-      if (invariantStart < 0 || invariantEnd <= invariantStart) {
-        throw new Error(`verify command ${profile.verifyCommand} has no closed invariant argument list`)
-      }
-      const actual = verify.args.slice(invariantStart + 1, invariantEnd)
-      if (JSON.stringify(actual) !== JSON.stringify(profile.invariants)) {
-        throw new Error(`verify command ${profile.verifyCommand} invariant list differs from its profile contract`)
-      }
+    const verify = commands.find(({ name }) => name === profile.verifyCommand)
+    if (
+      !verify ||
+      verify.kind !== "verify" ||
+      verify.args[0] !== "verify" ||
+      verify.args[1] !== contract.projectionModel
+    ) {
+      throw new Error(`verify command ${profile.verifyCommand} differs from its model source`)
+    }
+    if (verify.args[verify.args.indexOf("--main") + 1] !== profile.main) {
+      throw new Error(`verify command ${profile.verifyCommand} selects the wrong main`)
+    }
+    if (
+      verify.args[verify.args.indexOf("--backend") + 1] !== "tlc" ||
+      verify.args.some((argument) => argument === "--max-steps" || argument.startsWith("--max-steps="))
+    ) {
+      throw new Error(`verify command ${profile.verifyCommand} must retain complete TLC exploration`)
+    }
+    const invariantStart = verify.args.indexOf("--invariants")
+    const invariantEnd = verify.args.indexOf("--verbosity", invariantStart)
+    if (invariantStart < 0 || invariantEnd <= invariantStart) {
+      throw new Error(`verify command ${profile.verifyCommand} has no closed invariant argument list`)
+    }
+    const actual = verify.args.slice(invariantStart + 1, invariantEnd)
+    if (JSON.stringify(actual) !== JSON.stringify(profile.invariants)) {
+      throw new Error(`verify command ${profile.verifyCommand} invariant list differs from its profile contract`)
     }
   }
 }

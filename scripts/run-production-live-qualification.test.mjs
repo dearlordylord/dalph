@@ -150,13 +150,13 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
           (position >= 60 && position <= 64) ||
           (position >= 86 && position <= 90) ||
           (position >= 110 && position <= 114) ||
-          (position >= 127 && position <= 136)
+          (position >= 128 && position <= 137)
         : (position >= 37 && position <= 41) ||
           (position >= 47 && position <= 59) ||
           (position >= 65 && position <= 85) ||
           (position >= 91 && position <= 109) ||
-          (position >= 115 && position <= 126) ||
-          (position >= 137 && position <= 145)
+          (position >= 115 && position <= 127) ||
+          (position >= 138 && position <= 146)
     ),
     setupInstallSeconds: 12,
     formalSeconds: 105 - shard,

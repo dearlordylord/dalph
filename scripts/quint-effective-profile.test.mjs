@@ -58,7 +58,7 @@ void test("hosted and local imports launch no checker", async () => {
   assert.equal(result.stderr, "")
 })
 
-void test("materializes the independent complete 146 obligations before any launch", () => {
+void test("materializes the independent complete 147 obligations before any launch", () => {
   const profile = createQuintEffectiveProfile()
   assertQuintEffectiveProfile(profile)
   const commandContract = profile.commands.map(({ args, kind, name, position, verdict }) => ({
@@ -72,7 +72,7 @@ void test("materializes the independent complete 146 obligations before any laun
   // obligation lists, even when those additions do not change command count.
   assert.equal(
     createHash("sha256").update(JSON.stringify(commandContract)).digest("hex"),
-    "fc61459bb0a3c359cc719300f2fe802ac9481fcf0fddcb25873a262b1d6fceaf"
+    "5ad3d83e0bbf4f7a0644bbc19b0a48a5f2d42cd52421c41629210bd87ea0628e"
   )
   const counts = Object.fromEntries(
     ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
@@ -84,7 +84,7 @@ void test("materializes the independent complete 146 obligations before any laun
   assert.ok(Object.isFrozen(profile.commands[0].args))
   assert.deepEqual(
     profile.steps.filter((step) => step.kind === "commands").flatMap((step) => step.positions),
-    Array.from({ length: 146 }, (_, index) => index)
+    Array.from({ length: 147 }, (_, index) => index)
   )
   assert.deepEqual(profile.steps[1], { kind: "commands", positions: [1, 2, 3], concurrency: 2, serializedPrefix: 1 })
   assert.deepEqual(profile.policy, {
@@ -134,10 +134,10 @@ void test("materializes the independent complete 146 obligations before any laun
       [118, "5000", "38601"],
       [122, "5000", "38602"],
       [126, "5000", "38603"],
-      [130, "5000", "428"],
-      [135, "5000", "428"],
-      [140, "1000", "433"],
-      [144, "1000", "433"]
+      [131, "5000", "428"],
+      [136, "5000", "428"],
+      [141, "1000", "433"],
+      [145, "1000", "433"]
     ]
   )
   for (const command of profile.commands.filter(({ kind }) => kind === "sampled-run")) {
@@ -195,15 +195,15 @@ void test("records every actual command custody ID and required verdict output w
     evaluatorPath: "/identified/evaluator",
     remainingExecutionMilliseconds: () => 700000
   })
-  assert.equal(launches.length, 146)
-  assert.equal(report.commands.length, 146)
+  assert.equal(launches.length, 147)
+  assert.equal(report.commands.length, 147)
   assert.equal(Object.hasOwn(report, "shard"), false)
   assert.deepEqual(
     report.commands.map(({ obligationId }) => obligationId),
-    Array.from({ length: 146 }, (_, p) => `custody-${p}`)
+    Array.from({ length: 147 }, (_, p) => `custody-${p}`)
   )
   assert.deepEqual(report.provenance, provenance)
-  assert.equal(report.timing.records.length, 146)
+  assert.equal(report.timing.records.length, 147)
   for (const actual of report.commands) {
     const command = profile.commands[actual.position]
     const expectedArgs =
@@ -247,9 +247,9 @@ void test("compact and noncompact profiles retain lifecycle while applying their
         }
       }
     })
-    assert.equal(report.commands.length, 146)
-    assert.equal(events.filter(({ type }) => type === "start").length, 146)
-    assert.equal(events.filter(({ type }) => type === "terminal").length, 146)
+    assert.equal(report.commands.length, 147)
+    assert.equal(events.filter(({ type }) => type === "start").length, 147)
+    assert.equal(events.filter(({ type }) => type === "terminal").length, 147)
     if (compact) {
       assert.doesNotMatch(writes.join(""), /== .* ==/u)
       assert.doesNotMatch(writes.join(""), /was witnessed in/u)
@@ -286,8 +286,8 @@ void test("compact profile keeps live lifecycle in actual completion order after
     }
   })
 
-  assert.equal(report.commands.length, 146)
-  assert.equal(events.length, 292)
+  assert.equal(report.commands.length, 147)
+  assert.equal(events.length, 294)
   assert.deepEqual(
     events.slice(0, 6).map(({ position, type }) => [type, position]),
     [
@@ -309,7 +309,7 @@ void test("compact profile keeps live lifecycle in actual completion order after
   }
   assert.deepEqual(
     report.commands.map(({ position }) => position),
-    Array.from({ length: 146 }, (_, position) => position)
+    Array.from({ length: 147 }, (_, position) => position)
   )
 })
 
@@ -400,7 +400,7 @@ void test("a bare successful exit cannot replace required witness and temporal v
       failure = error
     }
     assert.ok(failure instanceof Error)
-    assert.ok(failure.formalProfileReport.commands.length < 146)
+    assert.ok(failure.formalProfileReport.commands.length < 147)
     assert.ok(launches.some(({ position }) => position === failedPosition))
   }
 })
@@ -577,11 +577,11 @@ void test("guarded local execution preserves all hosted obligations and spends t
       return remaining
     }
   })
-  assert.equal(launches.length, 146)
+  assert.equal(launches.length, 147)
   assert.deepEqual(report.profile, profile)
   assert.deepEqual(
     launches.map(({ timeoutMilliseconds }) => timeoutMilliseconds),
-    Array.from({ length: 146 }, (_, position) => 1699000 - position * 1000)
+    Array.from({ length: 147 }, (_, position) => 1699000 - position * 1000)
   )
 })
 
