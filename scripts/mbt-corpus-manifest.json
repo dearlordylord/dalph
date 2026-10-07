@@ -2221,7 +2221,7 @@
     "scripts/mbt-corpus-loader.mjs": "c680a5488d20ea80c08fd546c1eb1c48448b74029723d322011c98367fd9562b",
     "scripts/mbt-corpus-process-custody.mjs": "1712a518764b1060f0fff9218bae2e5c9d63308fdf5bf708cbb3b245bff76917",
     "scripts/mbt-corpus-replay.mjs": "6d7c0a08b9350c4b9ad6b87f0477d831eb98e84d5f2a8b05993198ef2e084bae",
-    "scripts/measure-mbt-corpus.mjs": "c7f00c847c25036150772670bc1b03afeb0773962dad946ffc58d24ddb382253",
+    "scripts/measure-mbt-corpus.mjs": "18150cb6edebdc5e5014c25d09975d0cd924af259580f3f5839ac0e1634dd144",
     "scripts/replay-mbt-corpus.mjs": "bea18d51c265fd98918f4a2ec3fdf478b1901f915637077332354265cbd4c7b1",
     "scripts/resolve-quality-gate-base.d.mts": "0a427f3ad0af1e973e8463ba4d8cca77643e15aef9f01cd27bd93265de7ed626",
     "specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt": "7c33f3253ce8293bc7a73d13668be979ba4e1320dba3bd1219234f1f3bd9ecd5",

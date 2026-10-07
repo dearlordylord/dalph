@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "lane": "integration-finality/1",
+  "provenanceSha256": "b6e27e37cd59b1c60e8f6cc43c3a029e24548a0c8cf817f6bc92846b42d31e45",
+  "corpusSha256": "ec70f67d7883d0a0477c5a8fd75d1ad7cf1574c153619d48bdcae03299fea7be"
+}

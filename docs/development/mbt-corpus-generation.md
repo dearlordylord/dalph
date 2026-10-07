@@ -1,6 +1,6 @@
 # Generate and replay an explicit MBT corpus
 
-**Corpus acceptance remains pending fresh generation and complete replay.**
+**Corpus acceptance is blocked by the task-fact driver/model mismatch below.**
 The original detached-generator custody blocker has a controlled repair in this
 candidate. Before importing the existing `TraceGeneration` service, the Linux
 worker proves it is its bounded supervisor's group leader and durably records
@@ -83,7 +83,7 @@ MBT gate selection and source migration remain separate acceptance boundaries.
 | Tooling chronology | Focused acceptance control |
 | --- | --- |
 | The maintainer supplies current inputs and a selected lane; the producer records intent, generates with the declared options, validates complete traces, then publishes bytes and receipt. Unknown/duplicate selections refuse before generation. | `pnpm mbt:generate --all`; manifest freshness and lane inventory controls in `scripts/mbt-corpus-contract.test.mjs` |
-| A replay consumer has a matching artifact and options; the layer validates provenance and decoding, then the existing driver replays every state. Repeated loads return the same traces without process or network effects. | `scripts/mbt-corpus-loader.test.mjs`; `pnpm mbt:replay`; `scripts/measure-mbt-corpus.mjs` compares live and corpus states and exact replay outcomes |
+| A replay consumer has a matching artifact and options; the layer validates provenance and decoding, then the existing driver replays every state. Repeated loads return the same traces without process or network effects. | `scripts/mbt-corpus-loader.test.mjs`; `pnpm mbt:replay`; `scripts/measure-mbt-corpus.mjs` compares supplied-trace baseline and corpus states and exact replay outcomes |
 | A replay consumer encounters missing bytes/receipt, corruption, stale model/tool/options with a rehashed receipt, malformed ITF, wrong options or unknown lane. It fails before exposing traces, without generation or network effects. | `scripts/mbt-corpus-loader.test.mjs`; stale imported-model, seed, depth and byte controls in `scripts/mbt-corpus-contract.test.mjs` |
 | A generation lane fails or exceeds its bounds; the producer retains raw evidence and the failed outcome and does not launch the next lane. A crash during publication cannot authorize partial replay. | Failed generation evidence plus receipt/hash/count negatives in the contract controls; process custody remains owned by `scripts/run-bounded-command.mjs` |
 
@@ -118,11 +118,14 @@ corpus paths, with zero replay generator/process/fetch calls. Its exact outcomes
 remain in `.scratch/mbt-fixture/measurement.json`. It does not qualify this changed
 draft or replace complete corpus replay. No full `mbt:replay` pass is claimed.
 
-The next discriminating action belongs at the pinned generator's actual spawn
-boundary: expose exact process/group intent, observation and stopped-writer
-proof through the existing seam; then exercise forced-worker-stop/crash controls
-before another explicit generation batch. Do not substitute another worker
-watchdog, lower budgets, rerun the unchanged generator, or wire mandatory gates.
+The original custody prerequisite was subsequently repaired at the pinned
+spawn boundary as described below. A review also found redundant live generation
+inside the representative Vitest fixture. The fixture now reads the exact
+explicitly generated lane bytes and receipt, supplies those traces directly
+through `TraceGeneration` as its baseline, then runs the validated corpus layer
+with the same existing driver and options. It compares all trace states and
+exact driver outcomes. It performs no live generation. Generation timing and
+custody evidence belong to the explicit producer's retained command records.
 
 ## Generation custody repair evidence
 
@@ -134,3 +137,42 @@ and missing/foreign custody refusal. The retained draft's 38/39 artifact pairs
 remain unqualified; changed producer, patch, lockfile and custody fingerprints
 require a newly derived manifest and complete regeneration before acceptance.
 No full gate or complete corpus is credited by these focused controls.
+
+## Complete generation and blocked replay, 2026-10-07 UTC
+
+The current producer generated all 39 lanes with unchanged seeds, samples,
+trace counts and depths. Batch `.scratch/mbt-generation/batch-4VCT6m/` recorded
+39 passed outcomes, 171,921,812 corpus bytes and 412,752 milliseconds. Each lane
+has a generator-group record and stopped-group observation before publication.
+The batch started at 06:45:07 UTC; its recorded command-level outer hard stop
+was 06:55:30 UTC. It completed before that stop. The 39 artifact/receipt pairs
+under `corpora/mbt/` now pass current provenance, complete inventory and ITF
+validation under zero-process/zero-network instrumentation.
+
+The representative controlled fixture uses the exact generated
+`result-recovery-direction/1` bytes (276,227 bytes, ten traces, 160 states).
+Direct supplied-trace baseline and validated corpus replay both return
+`{ "tracesReplayed": 10, "seed": "428" }`; the replay records one corpus seam
+call and zero generator/process/network calls. Exact outcomes are retained in
+`.scratch/mbt-fixture/measurement.json`.
+
+Complete replay was attempted with a 07:02:30 UTC outer hard stop, after full
+inventory validation. It stopped on an ordinary child test failure with
+stopped writers proven. Thirteen ordinary suites passed; all nine task-fact
+replay lanes failed at initialization. The model expects
+`independentTaskEligible: true`, while the unchanged driver's production-frontier
+projection reports `false`. The focused lifecycle re-establishment test (seed
+2815) reproduces that same mismatch in 3.84 seconds. Evidence is retained in
+`.scratch/mbt-complete-replay.log` and
+`.scratch/mbt-task-fact-focused-mismatch.log`. Temporary consumer files were
+removed after stopped-writer proof; no generation was attempted during replay.
+The serial accepted-result replay child was not reached and is not credited.
+
+This is a blocking acceptance conflict at the existing driver/model boundary,
+not missing or stale corpus data. No state predicate, model, trace, runtime
+behavior or acceptance lane has been weakened or skipped to force success.
+The next discriminating action is an accepted chronological scenario resolving
+independent-task eligibility at initialization, followed by its owner's focused
+runtime/driver/model repair. Only after that repair passes should this corpus be
+regenerated with the new fingerprints and complete replay attempted again.
+No mandatory automatic-gate migration or parent-issue closure is claimed.

@@ -21,26 +21,26 @@ const selected = syntax.statements.find(
 if (!selected) throw new Error("Representative production replay is missing")
 const imports = 'import { quintIt } from "@firfi/quint-connect/vitest"'
 if (!source.includes(imports)) throw new Error("Representative import contract changed")
-const wrapper = `import { generateTraces, quintRunWithTraceGeneration, TraceGeneration } from "@firfi/quint-connect/effect"
+const wrapper = `import { quintRunWithTraceGeneration, TraceGeneration } from "@firfi/quint-connect/effect"
 import { Layer } from "effect"
 import { readFileSync, writeFileSync } from "node:fs"
 import { corpusTraceGenerationLayer, loadCorpus } from "../../../../scripts/mbt-corpus-loader.mjs"
 import assert from "node:assert/strict"
 import childProcess from "node:child_process"
 import { vi } from "vitest"
-import { corpusProvenanceDigest, digest, validateCorpus } from "../../../../scripts/mbt-corpus-contract.mjs"
+import { validateCorpus } from "../../../../scripts/mbt-corpus-contract.mjs"
 const quintIt = (itEffect: typeof it.effect, name: string, opts: Parameters<typeof quintRunWithTraceGeneration>[0], timeout: number) => {
   itEffect(name, () => Effect.gen(function* () {
     const start = performance.now()
-    const traces = yield* generateTraces(opts)
-    const generated = performance.now()
-    const bytes = JSON.stringify(traces)
     const manifest = JSON.parse(readFileSync(".scratch/mbt-fixture/manifest.json", "utf8"))
-    const receipt = {version: 1, lane: "result-recovery-direction/1", provenanceSha256: corpusProvenanceDigest(manifest), corpusSha256: digest(bytes)}
-    validateCorpus(receipt, Buffer.from(bytes), manifest, manifest, receipt.lane)
+    const lane = manifest.lanes.find(({id}) => id === "result-recovery-direction/1")
+    const bytes = readFileSync(lane.corpus)
+    const receipt = JSON.parse(readFileSync(lane.corpus + ".receipt.json", "utf8"))
+    const traces = validateCorpus(receipt, bytes, manifest, manifest, lane.id)
     const live = yield* quintRunWithTraceGeneration(opts).pipe(Effect.provide(Layer.succeed(TraceGeneration, { generate: () => Effect.succeed(traces) })))
+    const baselineReplayed = performance.now()
     const corpus = yield* Effect.promise(() => loadCorpus(receipt.lane))
-    assert.deepEqual(corpus.map(({vars,states}) => ({vars,states})), traces.map(({vars,states}) => ({vars,states})))
+    assert.deepEqual(corpus, traces)
     let replayCalls = 0
     const corpusLayer = corpusTraceGenerationLayer(receipt.lane)
     const replay = Effect.gen(function* () {
@@ -64,7 +64,7 @@ const quintIt = (itEffect: typeof it.effect, name: string, opts: Parameters<type
     assert.deepEqual(result, live)
     assert.equal(replayCalls, 1)
     const replayed = performance.now()
-    writeFileSync(".scratch/mbt-fixture/measurement.json", JSON.stringify({generationMilliseconds: generated-start, replayMilliseconds: replayed-generated, bytes: Buffer.byteLength(bytes), traces: traces.length, states: traces.reduce((sum, trace) => sum+trace.states.length,0), live, replayCalls, generatorCallsDuringReplay: 0, processCallsDuringReplay: 0, networkCallsDuringReplay: 0, result}, null, 2))
+    writeFileSync(".scratch/mbt-fixture/measurement.json", JSON.stringify({suppliedTraceReplayMilliseconds: baselineReplayed-start, validatedReplayMilliseconds: replayed-baselineReplayed, bytes: bytes.length, traces: traces.length, states: traces.reduce((sum, trace) => sum+trace.states.length,0), live, replayCalls, generatorCallsDuringReplay: 0, processCallsDuringReplay: 0, networkCallsDuringReplay: 0, result}, null, 2))
     writeFileSync(".scratch/mbt-fixture/traces.json", bytes)
   }), { timeout })
 }`

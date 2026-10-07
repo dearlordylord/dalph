@@ -66,7 +66,7 @@ await work;
   return { directory, group, quint, result, error }
 }
 
-test(
+void test(
   "generation refuses a worker outside its bounded group before starting Quint",
   { skip: process.platform !== "linux" },
   () => {
@@ -80,7 +80,7 @@ test(
   }
 )
 
-test(
+void test(
   "the real pinned TraceGeneration adapter inherits its recorded worker group",
   { skip: process.platform !== "linux" },
   async () => {
@@ -97,7 +97,7 @@ test(
   }
 )
 
-test(
+void test(
   "negative control exposes the original detached Quint group without orphaning a process",
   { skip: process.platform !== "linux" },
   async () => {
@@ -112,7 +112,7 @@ test(
   }
 )
 
-test(
+void test(
   "forced worker termination retains exact custody and proves the inherited Quint group absent",
   { skip: process.platform !== "linux" },
   async () => {
@@ -128,17 +128,21 @@ test(
   }
 )
 
-test("a missing or foreign custody record cannot authorize publication", { skip: process.platform !== "linux" }, () => {
-  const directory = mkdtempSync(join(tmpdir(), "dalph-mbt-missing-"))
-  try {
-    assert.throws(() => proveMbtGenerationProcessGroupAbsent(directory), { code: "ENOENT" })
-    writeFileSync(
-      join(directory, "generator-group.json"),
-      JSON.stringify({ version: 1, pid: 1, groupId: 1, startTicks: "1", bootId: "foreign" })
-    )
-    assert.throws(() => proveMbtGenerationProcessGroupAbsent(directory), /another boot/)
-    assert.equal(existsSync(join(directory, "generator-stopped.json")), false)
-  } finally {
-    rmSync(directory, { recursive: true })
+void test(
+  "a missing or foreign custody record cannot authorize publication",
+  { skip: process.platform !== "linux" },
+  () => {
+    const directory = mkdtempSync(join(tmpdir(), "dalph-mbt-missing-"))
+    try {
+      assert.throws(() => proveMbtGenerationProcessGroupAbsent(directory), { code: "ENOENT" })
+      writeFileSync(
+        join(directory, "generator-group.json"),
+        JSON.stringify({ version: 1, pid: 1, groupId: 1, startTicks: "1", bootId: "foreign" })
+      )
+      assert.throws(() => proveMbtGenerationProcessGroupAbsent(directory), /another boot/)
+      assert.equal(existsSync(join(directory, "generator-stopped.json")), false)
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
   }
-})
+)
