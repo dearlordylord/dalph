@@ -48,6 +48,35 @@ The core S10 correction has its own maintained chronology and test mapping in
 proof remains required here; neither this document nor a successful core test
 qualifies either public adapter.
 
+## HTTP transport composition
+
+The listener uses the repository-pinned `NodeHttpServer` for binding, request
+fibers and disconnect interruption, and Effect HTTP responses for unary/page
+output. The application and response flush are explicitly interruptible because
+this pinned transport otherwise masks interruption. Admitted commands keep the
+existing host-scope command owner; disconnect cancels only the result waiter.
+A request-scope timer destroys a stalled unary/page socket at the advertised
+write deadline and is canceled when the response finishes.
+
+The bounded body reader and watch writer remain Dalph adapters. The pinned
+platform body-size reader destroys the incoming socket on overflow, preventing
+Dalph's correlated JSON 413 response; its stream response uses drain-based
+backpressure without Dalph's per-frame callback deadline. These adapters retain
+the existing byte-limit and watch-stage semantics rather than changing that
+public contract. Listener finalization closes exact sockets before waiting for
+platform shutdown; the application lifecycle still owns command and observation
+draining and proof that owned writers stopped.
+
+This composition preserves the accepted chronologies below. The focused mapping
+is S1/S11/S12 → `running-host-http.test.ts` (passivity, identity/framing,
+pre-admission disconnect, terminal refusal and command response loss);
+S4/S5 → `running-host-command-ownership.test.ts` (independent command lifetime
+and bounded Exit); S8 → `running-host-watch-http.test.ts` and
+`running-host-watch-shutdown.test.ts` (leases, deadlines, Closed and actual Exit).
+The graph-page origin/assets boundary remains mapped in
+[its accepted scenarios](live-task-graph-page.md) to `running-host-page-http.test.ts`.
+No workflow decision, durable event, retry rule or formal-model obligation changes.
+
 ## Compact diagnostics
 
 Snapshot, CLI, MCP and bounded watch use the same
