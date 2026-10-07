@@ -6,6 +6,7 @@ integration facts. This map does not mirror issue status.
 
 | Question | First owner | Source locator |
 | --- | --- | --- |
+| How do I prepare, resume, or close an isolated dogfood Run? | [Dogfood run lessons](../DOGFOOD-RUNS.md) | Ordered preparation and retained-run evidence; links to current production commands |
 | What must a Run, attempt, publication, or cleanup do? | [Scenario catalog](scenarios/README.md), then the named chronology | Follow that scenario's source and test mapping |
 | What does a domain term mean? | [Context glossary](CONTEXT.md#language) | Search the exact term in the glossary; read [architecture](ARCHITECTURE.md#protected-compositions) for exported symbols |
 | Where is delivery description, planning, or live execution composed? | [Protected compositions](ARCHITECTURE.md#protected-compositions) | The symbol/source table points directly to the current module |
