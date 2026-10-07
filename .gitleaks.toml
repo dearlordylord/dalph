@@ -2,3 +2,7 @@ title = "Dalph secret scanning"
 
 [extend]
 useDefault = true
+
+[[allowlists]]
+description = "Generated MBT corpus manifest"
+paths = ['''^scripts/mbt-corpus-manifest\.json$''']

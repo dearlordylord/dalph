@@ -14,12 +14,12 @@ import {
 import { expect, it } from "vitest"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { observeJournalRecordSequenceOperations } from "../../../orchestrator/src/workflow-journal/record-sequence.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { appliedOccurrencePosition } from "../../src/cassettes/recorded-semantic-state.js"
 
 it("reads exact accepted occurrence cardinality without materializing records or changing an earlier prefix", () => {
   const runId = RunId.make("recorded-semantic-count")
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("recorded-semantic-count-target"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

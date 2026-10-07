@@ -1,7 +1,8 @@
 /* eslint-disable max-lines -- One driver keeps the model action-to-production-boundary map auditable. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import { isCoverageMode } from "../../test-support/vitest-mode.js"
-import { defineDriver, ITFBigInt, quintRun, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import {
   AcceptedResult,
   AcceptedResultEvidenceManifest,
@@ -153,6 +154,8 @@ import { AuthoritativeTaskClaimReleased } from "../../../orchestrator/src/workfl
 import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
 
+const { quintRun } = corpusReplayFor("packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts")
+
 const runId = RunId.make("task-fact-model-run")
 const otherRunId = RunId.make("task-fact-model-other-run")
 const taskId = TaskId.make("task-fact-model-A")
@@ -193,7 +196,7 @@ const successorAttempt = PlannedTaskAttempt.make({
 })
 const independentPlannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("task-fact-model-B-attempt"),
-  baseSha: GitCommitSha.make("3".repeat(40)),
+  baseSha: plannedAttempt.baseSha,
   branch: TaskBranchRef.make("refs/heads/dalph/task-fact-model-B"),
   executor: TaskExecutorLocator.make("executor:task-fact-model-B"),
   runId,
@@ -440,7 +443,8 @@ const makeTaskFactAcceptedSeed = (): ReadonlyArray<JournalRecord> => {
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-      remotePublicationTarget
+      remotePublicationTarget,
+      { _tag: "ExplicitFixedBase", baseSha: plannedAttempt.baseSha }
     )
   ]
   const append = (event: JournalRecord["event"]): void => {
@@ -2412,6 +2416,8 @@ const makeTaskFactReconciliationDriver = (runtime: ScopedRef.ScopedRef<TaskFactR
               return yield* Effect.die("independent task B must select its fresh graph-read decision")
             if (selected.step._tag !== "RecordTaskAttemptPlan")
               return yield* Effect.die(`unexpected independent task B step ${selected.step._tag}`)
+            expect(selected.step.baseSha).toBe(independentPlannedAttempt.baseSha)
+            expect(selected.step.ordinal).toBe(0)
             const operation = makeTaskAttemptPlanOperation({
               operationId: OperationId.make("task-fact-model-independent-B-selection"),
               plannedAttempt: independentPlannedAttempt,
@@ -2867,6 +2873,37 @@ it.effect("imports task-fact history once, preserves it across recovery, and res
       expect(yield* reset.journal.read(runId)).toEqual(seed)
     })
   )
+)
+
+it.effect("a contemporary fixed-base run initially admits the independent task", () =>
+  Effect.gen(function* () {
+    const driver = yield* taskFactReconciliationDriver.create()
+    const init = driver.actions["init"]
+    const getState = driver.getState
+    if (init === undefined || getState === undefined) return yield* Effect.die("missing task-fact driver observation")
+    yield* init.handler({})
+    const state = yield* getState()
+    expect(state.independentTaskEligible).toBe(true)
+  })
+)
+
+it.effect("stopping A preserves its artifacts while independent B receives the fixed-base plan", () =>
+  Effect.gen(function* () {
+    const driver = yield* taskFactReconciliationDriver.create()
+    for (const name of ["init", "observeF2Change", "applyStopF2", "abandonImplementation", "selectIndependentTaskB"]) {
+      const action = driver.actions[name]
+      if (action === undefined) return yield* Effect.die(`missing scenario action ${name}`)
+      yield* action.handler({})
+    }
+    const getState = driver.getState
+    if (getState === undefined) return yield* Effect.die("missing task-fact driver observation")
+    const state = yield* getState()
+    expect(state.independentTaskSelected).toBe(true)
+    expect(state.worktreePreserved).toBe(true)
+    expect(state.wipPreserved).toBe(true)
+    expect(state.cleanupSelected).toBe(false)
+    expect(state.resumeCommandIntentCount).toBe(0n)
+  })
 )
 
 it.effect("a cached live activation sees a newly recorded closed lifecycle before selecting suspension", () =>

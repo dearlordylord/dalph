@@ -19,7 +19,7 @@ import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journa
 import { reduceWorkflowJournalHistory } from "../../coordination/reconstruction/history.js"
 import { liveJournalTestLayer } from "../../coordination/delivery/live-journal-test-layer.js"
 import { Journal } from "../../coordination/delivery/journal.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import {
   CompleteTaskTrackerFactsObserved,
   type TaskTrackerFactsReadUnavailable,
@@ -70,7 +70,9 @@ const initialControlPolicy = InitialControlPolicy.make({ taskExecutionCapacity: 
 
 const liveObservationJournalLayer = (runId: RunId, target: FixtureTarget) =>
   liveJournalTestLayer({
-    records: [makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest)],
+    records: [
+      makeHistoricalWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest)
+    ],
     runId,
     target
   })
@@ -1166,7 +1168,7 @@ it("fails replay with a typed error when recorded facts cannot reconstruct the p
     })
   )
   const graphRecords = [
-    makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest),
+    makeHistoricalWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest),
     {
       event: taskTrackerReadIntent(graphRead),
       key: intentRecordKey(graphRead.operationId),
@@ -1372,7 +1374,9 @@ it("keeps live and replayed target-A focused reads on target A across a Journal 
     })
   )
   const journalLayer = liveJournalTestLayer({
-    records: [makeWorkflowRunBeganRecord(runId, targetA, initialControlPolicy, remotePublicationTargetForTest)],
+    records: [
+      makeHistoricalWorkflowRunBeganRecord(runId, targetA, initialControlPolicy, remotePublicationTargetForTest)
+    ],
     runId,
     target: targetA
   })

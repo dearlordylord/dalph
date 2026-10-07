@@ -513,7 +513,7 @@ it.effect("ends Alice's task Pause observation without claiming confirmation aft
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     const { observation: controller, resources: runtimeResources } =
       yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
-    yield* controller.publish(evaluation(true), [])
+    yield* controller.updateLatest(evaluation(true), [])
     const firstView = yield* Deferred.make<void>()
     const observed = yield* observePauseProgress(runtimeResources, runId, null, {
       _tag: "Task",
@@ -525,7 +525,7 @@ it.effect("ends Alice's task Pause observation without claiming confirmation aft
       Effect.forkChild
     )
     yield* Deferred.await(firstView)
-    yield* controller.publish(evaluation(false), [])
+    yield* controller.updateLatest(evaluation(false), [])
     expect(Array.from(yield* Fiber.join(observed)).map(({ _tag }) => _tag)).toEqual([
       "PauseWaiting",
       "PauseNoLongerApplied"
@@ -539,7 +539,7 @@ it.effect("waits for the runtime view that includes every accepted fact present 
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     const { observation: controller, resources: runtimeResources } =
       yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
-    yield* controller.publish(evaluation(false), [])
+    yield* controller.updateLatest(evaluation(false), [])
     const observed = yield* observePauseProgress(
       runtimeResources,
       runId,
@@ -547,12 +547,12 @@ it.effect("waits for the runtime view that includes every accepted fact present 
       { _tag: "Task", runId, taskId: TaskId.make("A") }
     ).pipe(Stream.runHead, Effect.forkChild)
     yield* Effect.yieldNow
-    yield* controller.publish(
+    yield* controller.updateLatest(
       { ...evaluation(true, { aIsSafelySuspended: true, proposals: [] }), acceptedAt: JournalPosition.make(6) },
       []
     )
     yield* Effect.yieldNow
-    yield* controller.publish({ ...evaluation(true), acceptedAt: JournalPosition.make(9) }, [])
+    yield* controller.updateLatest({ ...evaluation(true), acceptedAt: JournalPosition.make(9) }, [])
     expect(yield* Fiber.join(observed)).toMatchObject({
       _tag: "Some",
       value: { _tag: "PauseWaiting", subject: { _tag: "Task", taskId: "A" } }
@@ -566,7 +566,7 @@ it.effect("does not emit a stale Pause view when Alice subscribes just after acc
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     const { observation: controller, resources: runtimeResources } =
       yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
-    yield* controller.publish(evaluation(true), [])
+    yield* controller.updateLatest(evaluation(true), [])
     const observed = yield* observePauseProgress(
       runtimeResources,
       runId,
@@ -574,7 +574,7 @@ it.effect("does not emit a stale Pause view when Alice subscribes just after acc
       { _tag: "Task", runId, taskId: TaskId.make("A") }
     ).pipe(Stream.runDrain, Effect.flip, Effect.forkChild)
     yield* Effect.yieldNow
-    yield* controller.publish({ ...evaluation(false), acceptedAt: JournalPosition.make(6) }, [])
+    yield* controller.updateLatest({ ...evaluation(false), acceptedAt: JournalPosition.make(6) }, [])
     expect(yield* Fiber.join(observed)).toMatchObject({
       _tag: "PauseNotApplied",
       subject: { _tag: "Task", taskId: "A" }
@@ -588,7 +588,7 @@ it.effect("delivers the final accepted confirmation before the activation observ
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     const { observation: controller, resources: runtimeResources } =
       yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
-    yield* controller.publish(evaluation(true), [])
+    yield* controller.updateLatest(evaluation(true), [])
     const waiting = yield* Deferred.make<void>()
     const observed = yield* observePauseProgress(runtimeResources, runId, null, {
       _tag: "Task",
@@ -600,7 +600,7 @@ it.effect("delivers the final accepted confirmation before the activation observ
       Effect.forkChild
     )
     yield* Deferred.await(waiting)
-    yield* controller.publish(evaluation(true, { aIsSafelySuspended: true, proposals: [] }), [])
+    yield* controller.updateLatest(evaluation(true, { aIsSafelySuspended: true, proposals: [] }), [])
     yield* controller.close
     expect(Array.from(yield* Fiber.join(observed)).map(({ _tag }) => _tag)).toEqual(["PauseWaiting", "PauseConfirmed"])
     yield* integrationTargets.releaseAll
@@ -612,7 +612,7 @@ it.effect("fails with typed absence before creating a wait when Alice has no app
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     const { observation: controller, resources: runtimeResources } =
       yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
-    yield* controller.publish(evaluation(false), [])
+    yield* controller.updateLatest(evaluation(false), [])
     const failure = yield* observePauseProgress(runtimeResources, runId, null, {
       _tag: "Task",
       runId,
@@ -629,9 +629,9 @@ it.effect("does not let a late runtime publication reopen a closed observation",
     const { observation: controller } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
     const finalEvaluation = evaluation(true)
 
-    yield* controller.publish(finalEvaluation, [])
+    yield* controller.updateLatest(finalEvaluation, [])
     yield* controller.close
-    yield* controller.publish(evaluation(false), [])
+    yield* controller.updateLatest(evaluation(false), [])
 
     const state = yield* controller.signal.get
     expect(state._tag).toBe("Closed")

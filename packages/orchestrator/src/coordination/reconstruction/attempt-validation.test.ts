@@ -36,7 +36,7 @@ import {
   validateAttemptStop
 } from "./attempt-validation.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -151,7 +151,7 @@ it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-t
 })
 
 it.each([64, 256])("bounds checking a new direction after %i same-attempt Continue records", (size) => {
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("choice-count"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

@@ -67,7 +67,7 @@ describe("hosted formal-model contract", () => {
     expect(packageJson.scripts["check:ci:formal:shard"]).toBe(
       "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs"
     )
-    expect(packageJson.scripts["test:mbt"]).toBe("vitest run --mode mbt")
+    expect(packageJson.scripts["test:mbt"]).toBe("node scripts/replay-mbt-corpus.mjs")
     expect(packageJson.engines.node).toBe("^24.20.0")
 
     const jobs = parseWorkflowJobs(ciWorkflow)
@@ -326,7 +326,7 @@ describe("hosted formal-model contract", () => {
       fullQualityGateManifest("0".repeat(40))
         .filter(({ boundary }: { boundary: string }) => boundary === "qualification")
         .map(({ id }: { id: string }) => id)
-    ).toEqual(["recorded-catalog", "coverage"])
+    ).toEqual(["mbt-replay", "recorded-catalog", "coverage"])
   })
 
   it("preserves required application checks in the candidate-local runner", () => {
@@ -346,7 +346,7 @@ describe("hosted formal-model contract", () => {
     const manifest = fullQualityGateManifest("fixture-base")
     const reducerLab = manifest.find((stage: { readonly id: string }) => stage.id === "reducer-lab")
     expect(structuralCommands).not.toContain("test:mbt")
-    expect(stageCommands).not.toContain("test:mbt")
+    expect(stageCommands.filter((command: string) => command === "test:mbt")).toHaveLength(1)
     expect(stageCommands).not.toContain("check:quint")
     expect(structuralCommands.indexOf("check:lab")).toBe(structuralCommands.indexOf("lint:code") + 1)
     expect(reducerLab).toMatchObject({
@@ -358,7 +358,7 @@ describe("hosted formal-model contract", () => {
       manifest
         .filter((stage: { readonly boundary: string }) => stage.boundary === "qualification")
         .map((stage: { readonly args: ReadonlyArray<string> }) => stage.args[0])
-    ).toEqual(["test:recorded-catalog", "test"])
+    ).toEqual(["test:mbt", "test:recorded-catalog", "test"])
     expect(packageJson.scripts["check:ci:quality"]).not.toContain("test:mbt")
   })
 

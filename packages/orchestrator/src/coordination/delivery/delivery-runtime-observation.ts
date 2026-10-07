@@ -300,7 +300,7 @@ export const DeliveryRuntimeObservationState = Data.taggedEnum<DeliveryRuntimeOb
 
 export interface DeliveryRuntimeObservationPublicationService {
   readonly close: Effect.Effect<void>
-  readonly publish: (
+  readonly updateLatest: (
     evaluation: DeliveryRuntimeEvaluation,
     liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
   ) => Effect.Effect<void>
@@ -337,13 +337,13 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
           })
         })
       ),
-      publish: (evaluation, liveOwners) =>
+      updateLatest: (evaluation, liveOwners) =>
         Effect.gen(function* () {
           const observation = observationOf(evaluation, liveOwners)
-          const published = yield* SubscriptionRef.modify(state, (current) =>
+          const updated = yield* SubscriptionRef.modify(state, (current) =>
             current._tag === "Closed" ? [false, current] : [true, observation]
           )
-          if (published) yield* observer.observe(observation)
+          if (updated) yield* observer.observe(observation)
         }),
       signal: currentSignalFromCurrentFirstStream(
         SubscriptionRef.changes(state).pipe(Stream.takeUntil(({ _tag }) => _tag === "Closed"))

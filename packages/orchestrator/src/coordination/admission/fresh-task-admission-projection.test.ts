@@ -28,7 +28,7 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -119,7 +119,7 @@ const worktreeProof = PlannedWorktreeReady.make({
 type EventRow = Pick<JournalRecord, "event" | "key">
 
 const recordsFrom = (rows: ReadonlyArray<EventRow>): ReadonlyArray<JournalRecord> => [
-  makeWorkflowRunBeganRecord(
+  makeHistoricalWorkflowRunBeganRecord(
     runId,
     target,
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

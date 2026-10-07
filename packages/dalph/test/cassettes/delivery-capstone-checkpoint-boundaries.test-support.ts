@@ -133,9 +133,9 @@ export const assertReopenedCapacityWait = (run: AuthoredScenarioCassetteRun, cur
   const bundle = publication.publication.bundle
   expect(bundle.actionInputs.runtimeFacts.acceptedAt).toBe(cursor.position)
   expect(publication.activationOrdinal).toBe(marker.activationOrdinal)
-  expect(bundle.publication.graph).toMatchObject({ _tag: "GraphEstablished" })
-  if (bundle.publication.graph._tag !== "GraphEstablished") return expect.fail("DS18: actual publication graph absent")
-  expect(bundle.publication.graph.observation.snapshot.revision).toBe("G4")
+  expect(bundle.graphView.graph).toMatchObject({ _tag: "GraphEstablished" })
+  if (bundle.graphView.graph._tag !== "GraphEstablished") return expect.fail("DS18: actual publication graph absent")
+  expect(bundle.graphView.graph.observation.snapshot.revision).toBe("G4")
   const eligibility = requireValue(
     bundle.actionInputs.runtimeFacts.taskWork.safeContinuationRevalidations.find(
       ({ plannedAttempt }) => plannedAttempt.runId === run.runId && plannedAttempt.attemptId === attempts.C
@@ -420,7 +420,7 @@ export const executorStanding = (
 export const coherentFor = (run: AuthoredScenarioCassetteRun, publication: Publication) => {
   const frame = frameFor(run, publication)
   const bundle = publication.publication.bundle
-  const graph = bundle.publication.graph
+  const graph = bundle.graphView.graph
   if (frame.graph._tag !== "Established" || graph._tag !== "GraphEstablished" || frame.acceptedAt === null) return false
   if (
     frame.activationOrdinal !== publication.activationOrdinal ||

@@ -1,6 +1,6 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import { Effect, Schema } from "effect"
 import {
   RemotePublicationBranchRef,
@@ -22,6 +22,8 @@ import {
   WorkflowRunBeganEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/control-direction-application.mbt.test.ts")
 
 const runId = RunId.make("control-direction-model-run")
 const taskA = TaskId.make("task-A")

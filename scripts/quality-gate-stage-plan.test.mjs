@@ -21,14 +21,14 @@ import {
 const baseSha = "b".repeat(40)
 const candidateSha = "c".repeat(40)
 
-void test("the shared manifest names the two independent suffix obligations once", () => {
+void test("the shared manifest names the three independent suffix obligations once", () => {
   const manifestIds = fullQualityGateManifest(baseSha)
     .filter(({ boundary }) => boundary === "qualification")
     .map(({ id }) => id)
   assert.deepEqual(manifestIds, qualityGateQualificationStageIds)
   assert.deepEqual(
     qualificationQualityGates().map(({ id }) => id),
-    ["recorded-catalog", "coverage"]
+    ["mbt-replay", "recorded-catalog", "coverage"]
   )
   assert.deepEqual(qualityGateCleanRunnerPreparation, {
     artifactTransfer: "none",
@@ -47,13 +47,15 @@ void test("generates one exact candidate/Base/policy plan entry for every Node a
 
   assert.deepEqual(plan.expectedStageIds, qualityGateQualificationStageIds)
   assert.deepEqual(plan.expectedCells, [
+    { nodeVersion: "24.20.0", stageId: "mbt-replay" },
     { nodeVersion: "24.20.0", stageId: "recorded-catalog" },
     { nodeVersion: "24.20.0", stageId: "coverage" },
+    { nodeVersion: "25.1.0", stageId: "mbt-replay" },
     { nodeVersion: "25.1.0", stageId: "recorded-catalog" },
     { nodeVersion: "25.1.0", stageId: "coverage" }
   ])
   assert.deepEqual(plan.nodeVersions, ["24.20.0", "25.1.0"])
-  assert.equal(plan.stages.length, 4)
+  assert.equal(plan.stages.length, 6)
   assert.equal(plan.policyDigest, qualityGateStagePlanPolicyDigest)
   assert.match(plan.configurationDigest, /^[0-9a-f]{64}$/u)
   assert.equal(plan.configDigest, plan.configurationDigest)
@@ -66,7 +68,14 @@ void test("generates one exact candidate/Base/policy plan entry for every Node a
   )
   assert.deepEqual(
     plan.stages.map(({ nodeVersion, stageId }) => `${nodeVersion}:${stageId}`),
-    ["24.20.0:recorded-catalog", "24.20.0:coverage", "25.1.0:recorded-catalog", "25.1.0:coverage"]
+    [
+      "24.20.0:mbt-replay",
+      "24.20.0:recorded-catalog",
+      "24.20.0:coverage",
+      "25.1.0:mbt-replay",
+      "25.1.0:recorded-catalog",
+      "25.1.0:coverage"
+    ]
   )
 
   const coverage = plan.stages.find(({ stageId }) => stageId === "coverage")
@@ -144,7 +153,7 @@ void test("ordinary hosted changes select the same coverage policy as local chec
   const changedPaths = ["packages/dalph/src/application/cli.ts"]
   const plan = createQualityGateStagePlan({ baseSha, candidateSha, nodeVersions: ["24.20.0", "25.1.0"], changedPaths })
   assert.deepEqual(plan.nodeVersions, ["24.20.0"])
-  assert.deepEqual(plan.expectedStageIds, ["coverage"])
+  assert.deepEqual(plan.expectedStageIds, ["mbt-replay", "coverage"])
   const local = fullQualityGateManifest(baseSha, { changedPaths }).filter(
     ({ boundary }) => boundary === "qualification"
   )
@@ -162,7 +171,7 @@ void test("ordinary hosted changes select the same coverage policy as local chec
     nodeVersions: ["24.20.0", "25.1.0"],
     changedPaths: ["scripts/run-bounded-command.mjs"]
   })
-  assert.equal(broad.stages.length, 4)
+  assert.equal(broad.stages.length, 6)
 })
 
 void test("the hosted suffix job budget contains preparation, child stop, and evidence export", () => {

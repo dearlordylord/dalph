@@ -6,7 +6,7 @@ import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workfl
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { taskWorkCapacityPolicyRecordKey } from "../../workflow-journal/record-key.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacityChangedEvent } from "../../workflow/registry/event.js"
@@ -67,7 +67,7 @@ it.each([64, 256])(
   (size) => {
     const { qualifiedCandidate, runId, target } = integrationFinalityFixture
     const records: Array<JournalRecord> = [
-      makeWorkflowRunBeganRecord(
+      makeHistoricalWorkflowRunBeganRecord(
         runId,
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -132,7 +132,7 @@ it.each([64, 256])(
 
 it("exposes accepted reconstruction only as indexed evidence, with no implicit record export", () => {
   const runId = RunId.make("explicit-history-export")
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("explicit-history-export"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -147,7 +147,7 @@ it("exposes accepted reconstruction only as indexed evidence, with no implicit r
 
 it("rejects a fabricated valid-history shape without replaying its accepted prefix", () => {
   const runId = RunId.make("fabricated-history")
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("fabricated-history"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -175,7 +175,7 @@ it.each([64, 256])(
   "Alice changes capacity after %i accepted records without materializing or traversing the prefix",
   (size) => {
     const runId = RunId.make("capacity-scaling")
-    const began = makeWorkflowRunBeganRecord(
+    const began = makeHistoricalWorkflowRunBeganRecord(
       runId,
       FixtureTarget.make("capacity-scaling"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),

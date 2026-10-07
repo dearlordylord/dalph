@@ -89,7 +89,7 @@ import { taskClaimReacquisitionOperationId } from "../task-claim-reacquisition/p
 import { observeSettledCompletionClaimReplacementLookup } from "../../../workflow-journal/settled-completion-claim-replacement.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import {
   RemotePublicationAttemptIntendedEvent,
@@ -271,7 +271,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   return [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       fixture.runId,
       fixture.target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -732,7 +732,7 @@ it("accepts a completion claim authorized by the exact post-plan reacquisition",
     version: workflowJournalEventVersion
   })
   const records = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       fixture.runId,
       fixture.target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

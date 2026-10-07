@@ -65,7 +65,8 @@ const appendRetainedPrefix = Effect.fn("RecoveryStoreLanes.appendRetainedPrefix"
     runId,
     first.event.target,
     first.event.initialControlPolicy,
-    first.event.remotePublicationTarget
+    first.event.remotePublicationTarget,
+    first.event.attemptBasePolicy
   )
   for (const record of prefix.slice(1)) {
     if (record.event._tag === "WorkflowRunBegan") {

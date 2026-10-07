@@ -1,5 +1,6 @@
 import { GitCommitSha, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
 import {
+  AttemptBasePolicy,
   ClaimOwner,
   controlledWorkflowInterpreterLayer,
   deterministicOperationIdAllocatorLayer,
@@ -26,8 +27,13 @@ export const dryRunTaskClaimPlannerLayer = deterministicTaskClaimAcquisitionPlan
   tokenPrefix: "dry-run-claim"
 })
 
+/** The fresh dry Run and its deterministic planner share this controlled Base. */
+export const dryRunAttemptBasePolicy = AttemptBasePolicy.cases.ExplicitFixedBase.make({
+  baseSha: GitCommitSha.make("0000000000000000000000000000000000000000")
+})
+
 export const dryRunPlannedTaskAttemptLayer = deterministicPlannedTaskAttemptLayer({
-  baseSha: GitCommitSha.make("0000000000000000000000000000000000000000"),
+  baseSha: dryRunAttemptBasePolicy.baseSha,
   executor: TaskExecutorLocator.make("executor:dry-run"),
   runId: RunId.make("dry-run"),
   worktreeRoot: WorktreeLocator.make("/dalph/dry-run")

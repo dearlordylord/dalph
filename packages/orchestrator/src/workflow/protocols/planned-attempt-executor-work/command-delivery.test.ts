@@ -16,7 +16,7 @@ import {
 import { InRunJournal, JournalStorageUnavailable, type JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { memoryJournalTestLayerFromPartitionRecords } from "../../../workflow-journal/adapters/memory-store.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -72,7 +72,7 @@ const redelivery = PlannedAttemptExecutorResumeRedeliveryIntendedEvent.make({
 })
 const journalLayer = memoryJournalTestLayerFromPartitionRecords({
   hot: [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       plannedAttempt.runId,
       FixtureTarget.make("receipt-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -104,7 +104,7 @@ const alteredResults: ReadonlyArray<readonly [string, (record: JournalRecord) =>
     "non-command event",
     (record) => ({
       ...record,
-      event: makeWorkflowRunBeganRecord(
+      event: makeHistoricalWorkflowRunBeganRecord(
         plannedAttempt.runId,
         FixtureTarget.make("foreign-returned-record"),
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

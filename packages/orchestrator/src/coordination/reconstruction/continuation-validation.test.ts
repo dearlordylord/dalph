@@ -23,7 +23,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { journalEvidenceFrom, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -82,7 +82,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
 // Decoded evidence for this semantic seam, deliberately not certified as a whole accepted workflow prefix.
 const fixture = (unrelatedReads: number) => {
   const records: Array<JournalRecord> = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

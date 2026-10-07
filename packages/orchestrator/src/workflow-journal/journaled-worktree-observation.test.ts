@@ -43,7 +43,7 @@ import { sqliteJournalStoreLayer } from "./adapters/sqlite-store.js"
 import { JournalDatabaseLocator, JournalPosition } from "./identity.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalHistoryInvalid, JournalStore } from "./store.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const testInterpreter = (
@@ -97,7 +97,7 @@ const journaledTestLayer = (
   ).pipe(
     Layer.provideMerge(
       liveJournalTestLayer({
-        records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+        records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
         runId,
         target
       })

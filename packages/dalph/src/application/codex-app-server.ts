@@ -562,6 +562,8 @@ export interface CodexAppServerService {
   ) => Effect.Effect<ReadonlyArray<CodexThreadListSummary>, CodexAppServerFailure>
   /** True only when every persistent and loaded-thread page was completed. */
   readonly listThreadsComplete?: true
+  /** Complete bounded census of this incarnation's loaded registry, never a writer-absence proof. */
+  readonly listLoadedThreadIds?: () => Effect.Effect<ReadonlyArray<CodexThreadId>, CodexAppServerFailure>
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
     threadId: CodexThreadId,
@@ -3932,8 +3934,8 @@ export const codexAppServerLayer = (
           parsePage: threadListPage,
           failure: operationFailure
         })
-      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* (cwd?: CodexThreadWorkingDirectory) {
-        let threads = yield* listPersistentThreads(cwd)
+      const listLoadedThreadIds = Effect.fn("CodexAppServer.listLoadedThreadIds")(function* () {
+        let ids: ReadonlyArray<CodexThreadId> = []
         let cursors: ReadonlySet<string> = new Set()
         let cursor: string | undefined
         for (let page = 0; page < maximumThreadListPages; page += 1) {
@@ -3945,21 +3947,8 @@ export const codexAppServerLayer = (
           const loaded = yield* Schema.decodeUnknownEffect(CodexLoadedThreadListEnvelope)(response).pipe(
             Effect.mapError(preserveAppServerFailure("thread/loaded/list", "Malformed"))
           )
-          for (const id of loaded.data) {
-            const source = yield* readThreadMetadata(id)
-            const prior = threads.find((thread) => thread.id === id)
-            if (prior !== undefined && prior.cwd !== source.cwd) {
-              return yield* Effect.fail(
-                operationFailure("thread/loaded/list", "Ownership", "loaded and persisted thread directories disagree")
-              )
-            }
-            if (prior === undefined) {
-              threads = [...threads, CodexThreadListSummary.IdentityOnly({ id, cwd: source.cwd })]
-            }
-          }
-          if (loaded.nextCursor === null) {
-            return cwd === undefined ? threads : threads.filter((thread) => thread.cwd === cwd)
-          }
+          ids = [...ids, ...loaded.data]
+          if (loaded.nextCursor === null) return ids
           if (cursors.has(loaded.nextCursor)) {
             return yield* Effect.fail(
               operationFailure("thread/loaded/list", "Malformed", "loaded thread list cursor repeated")
@@ -3971,6 +3960,20 @@ export const codexAppServerLayer = (
         return yield* Effect.fail(
           operationFailure("thread/loaded/list", "Malformed", "loaded thread list exceeded page bound")
         )
+      })
+      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* (cwd?: CodexThreadWorkingDirectory) {
+        let threads = yield* listPersistentThreads(cwd)
+        for (const id of yield* listLoadedThreadIds()) {
+          const source = yield* readThreadMetadata(id)
+          const prior = threads.find((thread) => thread.id === id)
+          if (prior !== undefined && prior.cwd !== source.cwd) {
+            return yield* Effect.fail(
+              operationFailure("thread/loaded/list", "Ownership", "loaded and persisted thread directories disagree")
+            )
+          }
+          if (prior === undefined) threads = [...threads, CodexThreadListSummary.IdentityOnly({ id, cwd: source.cwd })]
+        }
+        return cwd === undefined ? threads : threads.filter((thread) => thread.cwd === cwd)
       })
       const listThreadTurns = Effect.fn("CodexAppServer.listThreadTurns")(function* (threadId: CodexThreadId) {
         let turns: ReadonlyArray<CodexTurnSnapshot> = []
@@ -4165,6 +4168,7 @@ export const codexAppServerLayer = (
         startThread,
         listThreads,
         listThreadsComplete: true,
+        listLoadedThreadIds,
         readThread,
         resumeThread,
         listThreadTurns,

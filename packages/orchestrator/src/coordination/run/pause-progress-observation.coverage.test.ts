@@ -536,7 +536,7 @@ it.effect("re-emits Pause progress when only accepted integration-target activit
       queuedAt: queued.queuedAt
     })
     const { observation: runtime, resources } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
-    yield* runtime.publish(evaluation([{ _tag: "QueuedIntegration", responsibility: queued }]), [])
+    yield* runtime.updateLatest(evaluation([{ _tag: "QueuedIntegration", responsibility: queued }]), [])
 
     const initialObserved = yield* Deferred.make<void>()
     const activeObserved = yield* observePauseProgress(resources, runId, null, taskSubject).pipe(
@@ -606,7 +606,7 @@ it.effect("reads both closed runtime variants and covers a whole-Run Pause from 
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     const { observation: runtime, resources } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
 
-    yield* runtime.publish(evaluation([executorEvidence(false)], [], true), [])
+    yield* runtime.updateLatest(evaluation([executorEvidence(false)], [], true), [])
     const firstView = yield* Deferred.make<void>()
     const observing = yield* observePauseProgress(
       resources,

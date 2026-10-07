@@ -20,7 +20,8 @@ const liveLaunchPreflightIntegrationTestPattern =
 // These process-heavy files passed focused coverage but crossed their own
 // deadlines when competing with other files in a broad coverage run.
 const lateCoverageTestPatterns = ["packages/dalph/test/conformance/disposition-cleanup-recovery-prefixes.test.ts"]
-const serialCoverageTestPatterns = [
+const serialResourceSensitiveTestPatterns = [
+  publicRecoveryProcessBoundaryTestPattern,
   "packages/dalph/test/scenarios/running-host-death.acceptance.test.ts",
   "packages/dalph/src/application/running-host-command.acceptance.test.ts",
   "packages/dalph/src/application/running-host-client-parity.test.ts",
@@ -29,12 +30,22 @@ const serialCoverageTestPatterns = [
   "packages/dalph/src/application/production-changing-graph-finality.test.ts",
   "packages/dalph/test/cassettes/maintained-observations.test.ts",
   "packages/dalph/test/cassettes/normal-termination.test.ts",
-  "packages/dalph/test/scenarios/hermetic-mvp.test.ts"
+  "packages/dalph/test/scenarios/hermetic-mvp.test.ts",
+  "packages/dalph/src/application/production-complete-delivery.acceptance.test.ts",
+  "packages/dalph/test/conformance/completion-task-recovery-prefixes.test.ts",
+  "packages/dalph/test/conformance/recovery-store-lanes.property.test.ts",
+  "packages/dalph/src/application/codex-app-server.test.ts",
+  "packages/dalph/test/scenarios/production.test.ts",
+  "packages/dalph/src/application/production-publication-control.acceptance.test.ts",
+  "packages/orchestrator/src/workflow-journal/termination-preconditions.property.test.ts"
 ]
-const resourceSensitiveCoverageTestPatterns = [...lateCoverageTestPatterns, ...serialCoverageTestPatterns]
+const resourceSensitiveCoverageTestPatterns = [...lateCoverageTestPatterns, ...serialResourceSensitiveTestPatterns]
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
-const ordinaryWorkerCount = 4
+// Native process/storage fixtures and synchronous budget proofs share the host
+// with other workspaces. One ordinary worker preserves their existing deadlines.
+const ordinaryWorkerCount = 1
+const mbtWorkerCount = 4
 // V8 instrumentation and process-custody tests compete for CPU and memory. Two
 // workers keep individual 30-second test budgets meaningful on the supported
 // local/hosted runners without starving bounded Git process reconciliation.
@@ -97,7 +108,7 @@ export default defineConfig(({ mode }) => ({
     environment: "node",
     exclude: selectedTestExcludes(mode),
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
-    maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
+    maxWorkers: mode === "coverage" ? coverageWorkerCount : mode === "mbt" ? mbtWorkerCount : ordinaryWorkerCount,
     experimental: {
       // Persist transformed ordinary modules so fresh focused Vitest
       // processes in a bootstrapped worktree do not repeat cold transforms.
@@ -135,11 +146,44 @@ export default defineConfig(({ mode }) => ({
               test: {
                 exclude: selectedTestExcludes(mode),
                 fileParallelism: false,
-                include: serialCoverageTestPatterns,
+                include: serialResourceSensitiveTestPatterns,
                 maxWorkers: 1,
                 name: "coverage-serial",
                 sequence: { groupOrder: 2 },
                 testTimeout: coverageTestTimeoutMilliseconds
+              }
+            }
+          ]
+        }
+      : {}),
+    ...(mode !== "coverage" && mode !== "mbt"
+      ? {
+          // Real Git/SQLite and native client fixtures keep their existing deadlines
+          // meaningful by running after the ordinary batch, without competing files.
+          // Vitest moves isolated one-worker group 0 behind numbered groups.
+          // Positive orders preserve ordinary completion before sensitive startup.
+          projects: [
+            {
+              resolve: currentSourceResolution,
+              test: {
+                exclude: [...selectedTestExcludes(mode), ...resourceSensitiveCoverageTestPatterns],
+                include: ordinaryTestIncludes,
+                maxWorkers: ordinaryWorkerCount,
+                name: "ordinary",
+                sequence: { groupOrder: 1 },
+                testTimeout: ordinaryTestTimeoutMilliseconds
+              }
+            },
+            {
+              resolve: currentSourceResolution,
+              test: {
+                exclude: selectedTestExcludes(mode),
+                fileParallelism: false,
+                include: resourceSensitiveCoverageTestPatterns,
+                maxWorkers: 1,
+                name: "ordinary-serial",
+                sequence: { groupOrder: 2 },
+                testTimeout: ordinaryTestTimeoutMilliseconds
               }
             }
           ]
@@ -156,7 +200,7 @@ export default defineConfig(({ mode }) => ({
               test: {
                 exclude: [acceptedResultIntegrationMbtTestPattern],
                 include: [mbtTestPattern],
-                maxWorkers: ordinaryWorkerCount,
+                maxWorkers: mbtWorkerCount,
                 name: "mbt",
                 sequence: { groupOrder: 0 }
               }

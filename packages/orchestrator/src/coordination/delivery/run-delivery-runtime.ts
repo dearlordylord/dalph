@@ -57,10 +57,7 @@ import {
   type DeliveryRuntimeLocalDeferral
 } from "./delivery-runtime-local-deferral.js"
 import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
-import {
-  DeliveryAcceptedFactPublication,
-  type DeliveryAcceptedPublicationBoundary
-} from "./delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp, type DeliveryPlanningCatchUpBoundary } from "./delivery-planning-catch-up.js"
 import type { FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
 import { DeliveryCleanupBoundary } from "./delivery-cleanup-boundary.js"
 
@@ -106,21 +103,38 @@ export class DeliveryActionCompletionPublicationMismatch extends Schema.TaggedEr
   {
     expectedProposalId: DeliveryProposalId,
     expectedRunId: RunId,
-    publicationRunId: RunId,
+    catchUpRunId: RunId,
     resultProposalId: DeliveryProposalId
   }
 ) {}
 
 type LiveOwner = RuntimeObservation.DeliveryRuntimeLiveOwnerSource
 
-interface PublishedDeliveryActionResult {
-  readonly publicationThrough: DeliveryAcceptedPublicationBoundary
+/**
+ * One phase owns one queued occurrence. Suspended offers are not accepted;
+ * scope closure abandons volatile handoffs without acknowledging completions.
+ */
+export const makeRuntimeEventMailbox = <Event>() =>
+  Effect.gen(function* () {
+    const queue = yield* Effect.acquireRelease(Queue.bounded<Event>(1), Queue.shutdown)
+    const offer = (event: Event) =>
+      Queue.offer(queue, event).pipe(Effect.flatMap((accepted) => (accepted ? Effect.void : Effect.interrupt)))
+    return {
+      offer,
+      take: Queue.take(queue),
+      offerAndAwaitAcknowledgement: (event: Event, acknowledged: Deferred.Deferred<void>) =>
+        offer(event).pipe(Effect.andThen(Deferred.await(acknowledged)))
+    }
+  })
+
+interface CaughtUpDeliveryActionResult {
+  readonly caughtUpThrough: DeliveryPlanningCatchUpBoundary
   readonly result: DeliveryActionResult
 }
 
 interface Completion {
   readonly acknowledged: Deferred.Deferred<void>
-  readonly exit: Exit.Exit<PublishedDeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
+  readonly exit: Exit.Exit<CaughtUpDeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
   readonly proposalId: DeliveryProposalId
 }
 
@@ -150,7 +164,7 @@ export type RunDeliveryRuntimePhaseEffect<E> = Effect.Effect<
   | DeliveryRuntimeRunMismatch
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
-  | DeliveryAcceptedFactPublication
+  | DeliveryPlanningCatchUp
   | RuntimeObservation.DeliveryRuntimeObservationPublication
   | DeliveryRuntimeResources
   | OperationIdAllocator
@@ -221,7 +235,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
   | DeliveryRuntimeRunMismatch
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
-  | DeliveryAcceptedFactPublication
+  | DeliveryPlanningCatchUp
   | RuntimeObservation.DeliveryRuntimeObservationPublication
   | DeliveryRuntimeResources
   | OperationIdAllocator
@@ -232,7 +246,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
     Effect.gen(function* () {
       const scope = yield* Effect.scope
       const executor = yield* DeliveryActionExecutor
-      const acceptedFactPublication = yield* DeliveryAcceptedFactPublication
+      const planningCatchUp = yield* DeliveryPlanningCatchUp
       const resources = yield* DeliveryRuntimeResources
       const runtimeObservation = yield* RuntimeObservation.DeliveryRuntimeObservationPublication
       const operationAllocator = yield* OperationIdAllocator
@@ -246,7 +260,9 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
       const semanticTrace = Context.getOption(ambient, DeliverySemanticTrace)
       const emit = (event: DeliverySemanticTraceEvent) =>
         Option.match(semanticTrace, { onNone: () => Effect.void, onSome: ({ emit }) => emit(event) })
-      const events = yield* Queue.unbounded<RuntimeEvent<E>>()
+      // One queued occurrence is enough: offers never hold selectionGate, and
+      // the consumer never joins a child waiting for space or acknowledgement.
+      const events = yield* makeRuntimeEventMailbox<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
       const localDeferrals = yield* Ref.make<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>(new Map())
       const pendingCompletions = yield* Ref.make<ReadonlyMap<DeliveryProposalId, Completion>>(new Map())
@@ -257,7 +273,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
       yield* validateRuntimeEvaluationRun(expectedRunId, attachment.current)
       const first = evaluationForPhase(phase, attachment.current)
       yield* Ref.set(latest, Option.some(first))
-      yield* runtimeObservation.publish(first, [])
+      yield* runtimeObservation.updateLatest(first, [])
       const admission = yield* resources.makeAdmissionController(first.taskWork)
       yield* admission.synchronize(first.taskWork, freshTaskCandidateObservationOf(first.proposedActions))
       const evaluationsSubscribed = yield* Deferred.make<void>()
@@ -266,22 +282,24 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         Stream.fromEffect(Deferred.succeed(evaluationsSubscribed, undefined)).pipe(Stream.drain),
         attachment.changes
       ).pipe(
-        Stream.runForEach((evaluation) => Queue.offer(events, { _tag: "EvaluationChanged", evaluation })),
-        Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
+        Stream.runForEach((evaluation) => events.offer({ _tag: "EvaluationChanged", evaluation })),
+        // Cause handlers may run during cancellation. Do not mask interruption
+        // while waiting for the consumer to free a saturated slot.
+        Effect.catchCause((cause) => events.offer({ _tag: "RelationFailed", cause }).pipe(Effect.interruptible)),
         Effect.forkIn(scope)
       )
       yield* Deferred.await(evaluationsSubscribed)
 
-      const publishRuntimeObservationInsideGate = Effect.fn("DeliveryRuntime.publishObservationInsideGate")(
+      const updateLatestRuntimeObservationInsideGate = Effect.fn("DeliveryRuntime.updateLatestObservationInsideGate")(
         function* () {
           const evaluation = Option.getOrThrow(yield* Ref.get(latest))
           const liveOwnerSources = yield* Ref.get(owners)
           const liveOwners = yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(liveOwnerSources)
-          yield* runtimeObservation.publish(evaluation, liveOwners)
+          yield* runtimeObservation.updateLatest(evaluation, liveOwners)
         }
       )
-      const publishRuntimeObservation = Effect.fn("DeliveryRuntime.publishObservation")(() =>
-        selectionGate.withPermit(publishRuntimeObservationInsideGate())
+      const updateLatestRuntimeObservation = Effect.fn("DeliveryRuntime.updateLatestObservation")(() =>
+        selectionGate.withPermit(updateLatestRuntimeObservationInsideGate())
       )
 
       const journalAppendMayHaveAccepted = (cause: Cause.Cause<unknown>): boolean =>
@@ -312,13 +330,13 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         return intentRecorded ? "AfterDurableClaimIntentOrAmbiguity" : "BeforeDurableClaimIntent"
       }
 
-      yield* publishRuntimeObservation()
+      yield* updateLatestRuntimeObservation()
 
       const start = Effect.fn("DeliveryRuntime.startProposal")(function* (reservation: DeliveryAdmissionReservation) {
         const proposal = reservation.proposal
         const owner = yield* RuntimeObservation.makeDeliveryRuntimeLiveOwner(reservation)
         yield* Ref.update(owners, (current) => new Map(current).set(proposal.id, owner))
-        yield* publishRuntimeObservationInsideGate()
+        yield* updateLatestRuntimeObservationInsideGate()
         yield* emit({ _tag: "ProposalAdmitted", proposalId: proposal.id })
         const run = Effect.gen(function* () {
           const action = yield* materializeDeliveryAction(proposal).pipe(
@@ -333,11 +351,11 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
                   yield* admission.bindFreshTaskClaimOperation(reservation, operationId)
                 }
                 yield* owner.materialize(operationId)
-                yield* publishRuntimeObservationInsideGate()
+                yield* updateLatestRuntimeObservationInsideGate()
               })
             )
           } else {
-            yield* publishRuntimeObservation()
+            yield* updateLatestRuntimeObservation()
           }
           return yield* executor.execute(
             action,
@@ -345,7 +363,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
               admission,
               integrationTargets,
               owner,
-              publishRuntimeObservation()
+              updateLatestRuntimeObservation()
             )
           )
         })
@@ -361,7 +379,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
                     Effect.andThen(
                       Ref.update(owners, (current) => new Map([...current].filter(([id]) => id !== proposal.id)))
                     ),
-                    Effect.andThen(publishRuntimeObservationInsideGate())
+                    Effect.andThen(updateLatestRuntimeObservationInsideGate())
                   )
             )
           )
@@ -370,18 +388,17 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
           const exit = yield* Effect.exit(
             run.pipe(
               Effect.flatMap((result) =>
-                acceptedFactPublication.awaitCurrent.pipe(
-                  Effect.map((publicationThrough) => ({ publicationThrough, result }))
+                planningCatchUp.awaitJournalPosition.pipe(
+                  Effect.map((caughtUpThrough) => ({ caughtUpThrough, result }))
                 )
               )
             )
           )
           const acknowledged = yield* Deferred.make<void>()
-          yield* Queue.offer(events, {
-            _tag: "ActionCompleted",
-            completion: { acknowledged, exit, proposalId: proposal.id }
-          })
-          yield* Deferred.await(acknowledged)
+          yield* events.offerAndAwaitAcknowledgement(
+            { _tag: "ActionCompleted", completion: { acknowledged, exit, proposalId: proposal.id } },
+            acknowledged
+          )
         })
         return yield* installInterruptibleDeliveryChild(scope, child, releaseInterruptedOwner)
       })
@@ -419,7 +436,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         emit,
         latest,
         owners,
-        publishRuntimeObservationInsideGate,
+        updateLatestRuntimeObservationInsideGate,
         reserveAndStart,
         reserveFreshAndStart,
         selectionGate
@@ -454,24 +471,21 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
               freshTaskCandidateObservationOf(phaseEvaluation.proposedActions)
             )
             yield* admissionLoop.pruneSettledOwners(phaseEvaluation.proposedActions)
-            yield* publishRuntimeObservationInsideGate()
+            yield* updateLatestRuntimeObservationInsideGate()
           })
         )
       })
 
-      const validatePublishedCompletion = Effect.fn("DeliveryRuntime.validatePublishedCompletion")(function* (
+      const validateCaughtUpCompletion = Effect.fn("DeliveryRuntime.validateCaughtUpCompletion")(function* (
         completion: Completion,
-        published: PublishedDeliveryActionResult
+        caughtUp: CaughtUpDeliveryActionResult
       ) {
-        if (
-          expectedRunId !== published.publicationThrough.runId ||
-          completion.proposalId !== published.result.proposalId
-        ) {
+        if (expectedRunId !== caughtUp.caughtUpThrough.runId || completion.proposalId !== caughtUp.result.proposalId) {
           return yield* new DeliveryActionCompletionPublicationMismatch({
             expectedProposalId: completion.proposalId,
             expectedRunId,
-            publicationRunId: published.publicationThrough.runId,
-            resultProposalId: published.result.proposalId
+            catchUpRunId: caughtUp.caughtUpThrough.runId,
+            resultProposalId: caughtUp.result.proposalId
           })
         }
       })
@@ -479,23 +493,23 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
       const successfulCompletionMustRemainPending = (
         current: DeliveryRuntimeEvaluation,
         completion: Completion,
-        published: PublishedDeliveryActionResult,
+        caughtUp: CaughtUpDeliveryActionResult,
         localDeferral: Option.Option<DeliveryRuntimeLocalDeferral>
       ): boolean =>
         current.acceptedAt === null ||
-        current.acceptedAt < published.publicationThrough.acceptedThrough ||
+        current.acceptedAt < caughtUp.caughtUpThrough.acceptedThrough ||
         (Option.isNone(localDeferral) && proposalIsPresent(current.proposedActions, completion.proposalId))
 
       const retainPendingCompletion = Effect.fn("DeliveryRuntime.retainPendingCompletion")(function* (
         completion: Completion,
-        published: PublishedDeliveryActionResult
+        caughtUp: CaughtUpDeliveryActionResult
       ) {
         const pending = yield* Ref.get(pendingCompletions)
         yield* Ref.set(pendingCompletions, new Map(pending).set(completion.proposalId, completion))
         if (!pending.has(completion.proposalId)) {
           yield* emit({
             _tag: "ActionCompletionPublicationPending",
-            acceptedThrough: published.publicationThrough.acceptedThrough,
+            acceptedThrough: caughtUp.caughtUpThrough.acceptedThrough,
             proposalId: completion.proposalId
           })
         }
@@ -511,7 +525,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         Ref.update(
           owners,
           (current) => new Map([...current].filter(([ownerProposalId]) => ownerProposalId !== proposalId))
-        ).pipe(Effect.andThen(publishRuntimeObservationInsideGate()))
+        ).pipe(Effect.andThen(updateLatestRuntimeObservationInsideGate()))
 
       const proposalIdsForLocalDeferral = (
         current: DeliveryRuntimeEvaluation,
@@ -551,7 +565,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
             rollbackDispositionFor(owner.reservation, intentRecorded, completion.exit.cause)
           )
           yield* owner.settle
-          yield* publishRuntimeObservationInsideGate()
+          yield* updateLatestRuntimeObservationInsideGate()
           yield* removeOwnerInsideGate(completion.proposalId)
           return
         }
@@ -560,7 +574,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         yield* admission.complete(owner.reservation)
         yield* emit({ _tag: "ActionOutcome", result: actionResult })
         yield* owner.settle
-        yield* publishRuntimeObservationInsideGate()
+        yield* updateLatestRuntimeObservationInsideGate()
         // Sample the accepted signal before deciding whether this owner coalesces with the next proposal.
         const current = Option.getOrThrow(yield* Ref.get(latest))
         yield* Ref.set(latest, Option.some(current))
@@ -582,10 +596,10 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
               ? deliveryRuntimeLocalDeferralAfter(completion.exit.value.result, owner.proposal, current.acceptedAt)
               : Option.none<DeliveryRuntimeLocalDeferral>()
             if (Exit.isSuccess(completion.exit)) {
-              const published = completion.exit.value
-              yield* validatePublishedCompletion(completion, published)
-              if (successfulCompletionMustRemainPending(current, completion, published, localDeferral)) {
-                yield* retainPendingCompletion(completion, published)
+              const caughtUp = completion.exit.value
+              yield* validateCaughtUpCompletion(completion, caughtUp)
+              if (successfulCompletionMustRemainPending(current, completion, caughtUp, localDeferral)) {
+                yield* retainPendingCompletion(completion, caughtUp)
                 return Option.none<
                   Exit.Exit<DeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
                 >()
@@ -600,12 +614,12 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         return applied
       })
 
-      const applyPublishedCompletions = Effect.fn("DeliveryRuntime.applyPublishedCompletions")(function* () {
+      const applyCaughtUpCompletions = Effect.fn("DeliveryRuntime.applyCaughtUpCompletions")(function* () {
         const acceptedAt = Option.getOrThrow(yield* Ref.get(latest)).acceptedAt
         if (acceptedAt === null) return
         const ready = [...(yield* Ref.get(pendingCompletions)).values()].filter(
           (completion) =>
-            Exit.isSuccess(completion.exit) && completion.exit.value.publicationThrough.acceptedThrough <= acceptedAt
+            Exit.isSuccess(completion.exit) && completion.exit.value.caughtUpThrough.acceptedThrough <= acceptedAt
         )
         for (const completion of ready) {
           const applied = yield* applyCompletion(completion)
@@ -747,7 +761,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         if (event._tag === "RelationFailed") return yield* Effect.failCause(event.cause)
         if (event._tag === "EvaluationChanged") {
           yield* applyEvaluation(event.evaluation)
-          yield* applyPublishedCompletions()
+          yield* applyCaughtUpCompletions()
           return
         }
         const exit = yield* applyCompletion(event.completion)
@@ -761,7 +775,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         "DeliveryRuntime.capacityWaitHasNewerAcceptedPublication"
       )(function* (quiescence: DeliveryRuntimeQuiescence) {
         if (quiescence._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") return false
-        const through = yield* acceptedFactPublication.awaitCurrent
+        const through = yield* planningCatchUp.awaitJournalPosition
         if (through.runId !== expectedRunId) {
           return yield* new DeliveryRuntimeRunMismatch({ actualRunIds: [through.runId], expectedRunId })
         }
@@ -781,13 +795,13 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         const quiescence = yield* runtimeQuiescence()
         if (Option.isSome(quiescence)) {
           if (yield* capacityWaitHasNewerAcceptedPublication(quiescence.value)) {
-            yield* applyRuntimeEvent(yield* Queue.take(events))
+            yield* applyRuntimeEvent(yield* events.take)
             continue
           }
-          yield* publishRuntimeObservation()
+          yield* updateLatestRuntimeObservation()
           return quiescence.value
         }
-        yield* applyRuntimeEvent(yield* Queue.take(events))
+        yield* applyRuntimeEvent(yield* events.take)
       }
     })
   )

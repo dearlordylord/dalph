@@ -1,3 +1,4 @@
+import { makeRunningHostAttachedCommand } from "./running-host-cli-attached.js"
 import { makeRunningHostBaseRetryCommand } from "./running-host-cli-base-retry.js"
 import { makeRunningHostGuidanceCommand } from "./running-host-cli-guidance.js"
 import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
@@ -109,47 +110,7 @@ export const makeRunningHostCommands = <E, R>(
       )
   )
   const attached = (name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume") =>
-    Command.make(
-      name,
-      { host: Flag.string("host"), run: Flag.string("run"), json: Flag.boolean("json") },
-      ({ host, json, run }) =>
-        Effect.gen(function* () {
-          if (!json)
-            return yield* Effect.fail<RunningHostError>({
-              _tag: "InvalidRequest",
-              fieldPath: "/json",
-              code: "JsonRequired"
-            })
-          const decoded = yield* decodeClient(host, run)
-          if (decoded.runId === null)
-            return yield* Effect.fail<RunningHostError>({
-              _tag: "InvalidRequest",
-              fieldPath: "/run",
-              code: "RunRequired"
-            })
-          yield* presentEnvelope(
-            yield* callRunningHost(decoded.address, decoded.runId, {
-              _tag:
-                name === "snapshot"
-                  ? "ReadSnapshot"
-                  : name === "control"
-                    ? "ReadRunControl"
-                    : name === "capacity"
-                      ? "ReadCapacity"
-                      : name === "start"
-                        ? "StartWork"
-                        : "Unpause"
-            })
-          )
-        }).pipe(
-          Effect.catch((error) =>
-            error instanceof DalphCommandExit
-              ? Effect.fail(error)
-              : presentEnvelope(runningHostFailureEnvelope(null, error))
-          ),
-          Effect.provide(outputLayer)
-        )
-    )
+    makeRunningHostAttachedCommand(name, outputLayer)
   const guide = makeRunningHostGuidanceCommand(outputLayer)
   const setCapacity = Command.make(
     "set-capacity",

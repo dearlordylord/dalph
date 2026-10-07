@@ -14,6 +14,7 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
+  AttemptBasePolicy,
   attemptPlanRecordKey,
   AuthoritativeTaskClaimAcquired,
   AuthoritativeTaskWorktreeReady,
@@ -68,7 +69,8 @@ const runBegan = makeWorkflowRunBeganRecord(
   runId,
   target,
   InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-  remotePublicationTargetForTest
+  remotePublicationTargetForTest,
+  AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha: plannedAttempt.baseSha })
 )
 
 it.effect("journals claim, plan, and Git worktree boundaries without executor internals", () => {

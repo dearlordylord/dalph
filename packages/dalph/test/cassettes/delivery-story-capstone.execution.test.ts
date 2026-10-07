@@ -972,7 +972,7 @@ historicalIt(
         const graphReads = new Map<JournalPosition, { activationOrdinal: number; cause: string }>()
         for (const capture of run.observationCaptures) {
           if (capture._tag !== "DeliveryPublicationCaptured" || capture.activationOrdinal < 3) continue
-          const graph = capture.publication.bundle.publication.graph
+          const graph = capture.publication.bundle.graphView.graph
           if (graph._tag !== "GraphEstablished") continue
           graphReads.set(graph.observation.recordedAt, {
             activationOrdinal: capture.activationOrdinal,
@@ -1362,7 +1362,9 @@ historicalIt(
 it.effect("DS-01 derives A, B, and C inside capacity while D and E stay outside", () =>
   Effect.gen(function* () {
     const run = yield* runControlledDs01Characterization
-    const establishedBundle = run.publications.find(({ publication }) => publication.graph._tag === "GraphEstablished")
+    const establishedBundle = run.publications.find(
+      ({ graphView: publication }) => publication.graph._tag === "GraphEstablished"
+    )
     if (establishedBundle === undefined) return expect.fail("DS-01 must publish the established G0 graph")
     const established = yield* evaluateDeliveryRuntimeInputBundle(establishedBundle)
     const placements = established.current.ticketDeliveries.source.placements.map(({ placement, taskId }) => ({
@@ -1707,7 +1709,7 @@ it.effect("DS-03 accepts Alice's B/F2 and G1 tracker edit without triggering Dal
     expect(ds03.after).toEqual(ds03.before)
     expect(
       ds03.after.publications.some(
-        ({ publication }) =>
+        ({ graphView: publication }) =>
           publication.graph._tag === "GraphEstablished" &&
           publication.graph.observation.snapshot.revision === controlledScenario.graphs.G1.revision
       )
@@ -1778,7 +1780,7 @@ it.effect(
       const heldAttemptsByPublication = timerPublications.map(({ actionInputs }) =>
         actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
       )
-      const bSuspensionPublications = timerPublications.filter(({ publication }) =>
+      const bSuspensionPublications = timerPublications.filter(({ graphView: publication }) =>
         publication.exactEvidence.some(
           (evidence) =>
             evidence._tag === "ResponsibilityFacts" &&
@@ -2374,7 +2376,7 @@ historicalIt(
       expect(p2Publications.length).toBeGreaterThan(0)
       expect(p2Publications).toEqual(expect.arrayContaining([ds07.p2Publication]))
       for (const publication of p2Publications) {
-        expect(publication.publication.policy).toEqual(ds07.returned)
+        expect(publication.graphView.policy).toEqual(ds07.returned)
         expect(held(publication)).toEqual(expectedHeld)
       }
       expect(held(ds07.p2Publication)).toEqual(expectedHeld)
@@ -2456,7 +2458,7 @@ it.effect(
           actionInputs.runtimeFacts.acceptedAt >= ds08.beforeLoss.ds07.capacityRecord.position
       )
       expect(held).toEqual(expectedHeld)
-      expect(ds08.beforeLoss.ds07.p2Publication.publication.policy).toEqual(ds08.beforeLoss.ds07.returned)
+      expect(ds08.beforeLoss.ds07.p2Publication.graphView.policy).toEqual(ds08.beforeLoss.ds07.returned)
       expect(ds08.beforeLoss.ds07.after.records).toContainEqual(ds08.beforeLoss.ds07.capacityRecord)
       expect(ds08.firstProcessInterruptionCount).toBe(1)
       expect(ds08.childScopeFinalizationCount).toBe(1)
@@ -2467,7 +2469,7 @@ it.effect(
       expect(after.records).toEqual(before.records)
       expect(p2EraPublicationsAtCut).toContainEqual(ds08.beforeLoss.ds07.p2Publication)
       for (const publication of p2EraPublicationsAtCut) {
-        expect(publication.publication.policy).toEqual(ds08.beforeLoss.ds07.returned)
+        expect(publication.graphView.policy).toEqual(ds08.beforeLoss.ds07.returned)
         expect(
           publication.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
         ).toEqual(expectedHeld)
@@ -2547,7 +2549,7 @@ it.effect(
       expect(observations.every(({ purpose }) => purpose._tag === "PassiveLifecycleObservation")).toBe(true)
       for (const { currentGraphPublication } of observations) {
         expect(currentGraphPublication).toMatchObject({
-          publication: {
+          graphView: {
             graph: { _tag: "GraphEstablished", observation: { snapshot: controlledScenario.graphs.G1 } },
             policy: ds09.beforeLoss.ds07.returned
           }
@@ -2593,9 +2595,9 @@ it.effect(
       expect(trackerRequestSuffix).toEqual([controlledScenario.target])
       expect(secondPublications.length).toBeGreaterThan(0)
       for (const publication of secondPublications) {
-        expect(publication.publication.policy).toEqual(ds09.beforeLoss.ds07.returned)
+        expect(publication.graphView.policy).toEqual(ds09.beforeLoss.ds07.returned)
         expect(held(publication)).toEqual(expectedHeld)
-        expect(publication.publication.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
+        expect(publication.graphView.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
       }
     }),
   capstoneTimeout
@@ -2801,13 +2803,13 @@ it.effect(
           .map(({ correlation }) => ({ attemptId: correlation.attemptId, runId: correlation.runId }))
           .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))
       ).toEqual(expectedHeldAttemptIds.map((attemptId) => ({ attemptId, runId: controlledScenario.runId })))
-      expect(ds10.checkpointPublication.publication.policy).toEqual(ds09.beforeLoss.ds07.returned)
-      expect(ds10.checkpointPublication.publication.graph).toMatchObject({
+      expect(ds10.checkpointPublication.graphView.policy).toEqual(ds09.beforeLoss.ds07.returned)
+      expect(ds10.checkpointPublication.graphView.graph).toMatchObject({
         _tag: "GraphEstablished",
         observation: { snapshot: controlledScenario.graphs.G2 }
       })
       expect(
-        ds10.checkpointPublication.publication.exactEvidence.some(
+        ds10.checkpointPublication.graphView.exactEvidence.some(
           (evidence) =>
             evidence._tag === "ResponsibilityFacts" &&
             evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
@@ -2815,7 +2817,7 @@ it.effect(
             evidence.facts.disposition._tag === "PlannedAttemptExecutorSuspensionRequested"
         )
       ).toBe(true)
-      expect(ds10.checkpointPublication.publication.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
+      expect(ds10.checkpointPublication.graphView.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
       const runtime = yield* evaluateDeliveryRuntimeInputBundle(ds10.checkpointPublication)
       expect(
         runtime.current.ticketDeliveries.source.placements.find(({ taskId }) => taskId === controlledScenario.taskIds.E)
@@ -2886,14 +2888,14 @@ it.effect(
       const held = ds11.checkpointPublication.actionInputs.runtimeFacts.taskWork.held
         .map(({ correlation }) => ({ attemptId: correlation.attemptId, runId: correlation.runId }))
         .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))
-      const cResponsibilityBefore = ds10.checkpointPublication.publication.exactEvidence.find(
+      const cResponsibilityBefore = ds10.checkpointPublication.graphView.exactEvidence.find(
         (evidence) =>
           evidence._tag === "ResponsibilityFacts" &&
           evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
           evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
           evidence.facts.responsibility.plannedAttempt.runId === controlledScenario.runId
       )
-      const cResponsibilityAfter = ds11.checkpointPublication.publication.exactEvidence.find(
+      const cResponsibilityAfter = ds11.checkpointPublication.graphView.exactEvidence.find(
         (evidence) =>
           evidence._tag === "ResponsibilityFacts" &&
           evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
@@ -2943,11 +2945,11 @@ it.effect(
         stabilizationResult?.position ?? Number.MAX_SAFE_INTEGER
       )
       expect(held).toEqual(expectedHeld)
-      expect(ds11.checkpointPublication.publication.graph).toMatchObject({
+      expect(ds11.checkpointPublication.graphView.graph).toMatchObject({
         _tag: "GraphEstablished",
         observation: { snapshot: controlledScenario.graphs.G2 }
       })
-      expect(ds11.checkpointPublication.publication.policy).toEqual(ds10.checkpointPublication.publication.policy)
+      expect(ds11.checkpointPublication.graphView.policy).toEqual(ds10.checkpointPublication.graphView.policy)
       expect(cResponsibilityAfter).toMatchObject({
         facts: {
           disposition: { _tag: "TaskLifecycleConstraint", lifecycle: "TerminalWithoutSuccess" },
@@ -2957,7 +2959,7 @@ it.effect(
               : undefined
         }
       })
-      expect(ds11.checkpointPublication.publication.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
+      expect(ds11.checkpointPublication.graphView.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
       expect(cResponsibilityAfter).toBeDefined()
       expect(ds11.after.requestedTargets.slice(ds10.after.requestedTargets.length)).toEqual([controlledScenario.target])
       expect(ds11.after.claimRequests).toEqual(ds10.after.claimRequests)
@@ -3199,13 +3201,13 @@ it.effect(
       const lineageResult = recordSuffix.find(
         ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === lineageOperationId
       )
-      const cResponsibility = ds12.checkpointPublication.publication.exactEvidence.find(
+      const cResponsibility = ds12.checkpointPublication.graphView.exactEvidence.find(
         (evidence) =>
           evidence._tag === "ResponsibilityFacts" &&
           evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
           evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.C1
       )
-      const bResponsibilities = ds12.checkpointPublication.publication.exactEvidence.filter(
+      const bResponsibilities = ds12.checkpointPublication.graphView.exactEvidence.filter(
         (evidence) =>
           evidence._tag === "ResponsibilityFacts" &&
           evidence.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
@@ -3444,14 +3446,14 @@ it.effect(
       const occupied = [...ds13.checkpointPublication.actionInputs.runtimeFacts.taskWork.occupied.values()]
         .flatMap((position) => (position._tag === "ExactAttemptHeld" ? [position.plannedAttempt.attemptId] : []))
         .toSorted()
-      const bEvidence = ds13.checkpointPublication.publication.exactEvidence.filter(
+      const bEvidence = ds13.checkpointPublication.graphView.exactEvidence.filter(
         (evidence) =>
           evidence._tag === "ResponsibilityFacts" &&
           evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
           evidence.facts.responsibility.plannedAttempt.runId === controlledScenario.runId &&
           evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.B1
       )
-      const cEvidence = ds13.checkpointPublication.publication.exactEvidence.filter(
+      const cEvidence = ds13.checkpointPublication.graphView.exactEvidence.filter(
         (evidence) =>
           evidence._tag === "ResponsibilityFacts" &&
           evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
@@ -3658,7 +3660,7 @@ it.effect(
       const executorReports = finalRecords.flatMap(({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report] : []
       )
-      const finalEvidence = ds13.checkpointPublication.publication.exactEvidence
+      const finalEvidence = ds13.checkpointPublication.graphView.exactEvidence
       const finalClaimResponsibilities = finalEvidence.flatMap((evidence) =>
         evidence._tag === "ResponsibilityFacts" && evidence.facts.responsibility._tag === "TaskClaimResponsibility"
           ? [evidence.facts.responsibility.acquisition]
@@ -3781,7 +3783,7 @@ historicalIt(
       const { ds09, ds10, ds11, ds12, ds13 } = run.characterization
       const { ds01, ds02, ds03, ds04, ds05, ds06, ds07 } = ds09.beforeLoss
       const ds01Publication = ds01.snapshot.publications.find(
-        ({ publication }) => publication.graph._tag === "GraphEstablished"
+        ({ graphView: publication }) => publication.graph._tag === "GraphEstablished"
       )
       if (ds01Publication === undefined) return expect.fail("DS-01 checkpoint lacks its accepted G0 publication")
       const ds01Runtime = yield* evaluateDeliveryRuntimeInputBundle(ds01Publication)

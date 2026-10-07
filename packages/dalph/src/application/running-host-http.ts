@@ -4,8 +4,9 @@ import { readRunningHostCapacity } from "./running-host-capacity.js"
 import { integrationActivationReadFailure } from "./running-host-activation-failure.js"
 /* eslint-disable import/no-nodejs-modules -- This scoped adapter owns the local HTTP listener and exact sockets. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import { NodeCrypto } from "@effect/platform-node"
-import { Crypto, Effect, FiberSet, Option, Schema, Scope } from "effect"
+import { NodeCrypto, NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node"
+import { Crypto, Effect, Option, Schema, Scope } from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { type ProductionRunningHostObservation } from "./production-host.js"
 import {
   decodeRunningHostRequest,
@@ -13,7 +14,6 @@ import {
   HostInstanceId,
   type LocalHostAddress,
   RunningHostDescriptor,
-  type RequestId,
   RunningHostError,
   runningHostLimits,
   runningHostFailureEnvelope,
@@ -74,50 +74,6 @@ const body = Effect.fn("RunningHostHttp.readBody")((request: IncomingMessage) =>
     Effect.timeout("5 seconds"),
     Effect.catchTag("TimeoutError", () => Effect.fail(invalid("RequestBodyTimedOut")))
   )
-)
-
-const write = Effect.fn("RunningHostHttp.write")(
-  (
-    response: ServerResponse,
-    text: string | Uint8Array,
-    status = httpStatus.success,
-    requestId: RequestId | null = null,
-    contentType = "application/json"
-  ) =>
-    Effect.tryPromise({
-      try: () =>
-        new Promise<void>((resolve, reject) => {
-          response.once("error", reject)
-          response.once("close", () => {
-            if (!response.writableFinished) reject(new Error("ResponseClosed"))
-          })
-          response.writeHead(status, {
-            "content-type": contentType,
-            connection: "close",
-            "x-content-type-options": "nosniff"
-          })
-          response.end(text, () => resolve())
-        }),
-      catch: (): RunningHostError => ({ _tag: "TransportFailed", phase: "Write", reason: "ResponseClosed" })
-    }).pipe(
-      Effect.timeout("5 seconds"),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.fail<RunningHostError>(
-          requestId === null
-            ? { _tag: "TransportFailed", phase: "Write", reason: "WriteTimedOut" }
-            : {
-                _tag: "WriteTimedOut",
-                subject: { _tag: "Request", requestId },
-                deadlineMillis: runningHostLimits.writeDeadlineMillis
-              }
-        )
-      ),
-      Effect.onError(() =>
-        Effect.sync(() => {
-          response.destroy()
-        })
-      )
-    )
 )
 
 /** One listener dispatches passive requests against the already acquired host. */
@@ -365,11 +321,19 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         )
       })
     )
-    if (outcome._tag === "Watch") return
-    if (outcome._tag === "Page") {
-      yield* write(response, outcome.bytes, httpStatus.success, null, outcome.contentType)
-      return
+    if (outcome._tag === "Watch") return HttpServerResponse.empty()
+    // Keep the deadline alive through the platform's response flush. Closing
+    // the request scope cancels it after successful completion.
+    yield* Effect.sleep(runningHostLimits.writeDeadlineMillis).pipe(
+      Effect.andThen(Effect.sync(() => response.destroy())),
+      Effect.forkScoped
+    )
+    const headers = {
+      "content-type": outcome._tag === "Page" ? outcome.contentType : "application/json",
+      connection: "close",
+      "x-content-type-options": "nosniff"
     }
+    if (outcome._tag === "Page") return HttpServerResponse.raw(outcome.bytes, { headers })
     const error =
       outcome._tag === "Envelope" && outcome.envelope.result._tag === "Failure" ? outcome.envelope.result.error : null
     const status =
@@ -382,45 +346,34 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
             : error?._tag === "HostClosing"
               ? httpStatus.unavailable
               : httpStatus.success
-    yield* write(response, outcome.text, status, outcome._tag === "Envelope" ? outcome.envelope.requestId : null)
+    return HttpServerResponse.raw(outcome.text, { status, headers })
   })
-  const runRequest = yield* FiberSet.makeRuntime<never, void, never>()
-  const server = yield* Effect.acquireRelease(
-    Effect.tryPromise({
-      try: () =>
-        new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
-          const listener = createServer((request, response) =>
-            runRequest(
-              handle(request, response).pipe(
-                Effect.raceFirst(
-                  Effect.callback<never>((resume) => {
-                    const disconnected = () => resume(Effect.interrupt)
-                    response.once("close", disconnected)
-                    return Effect.sync(() => response.removeListener("close", disconnected))
-                  })
-                ),
-                Effect.catch(() =>
-                  Effect.sync(() => {
-                    response.destroy()
-                  })
-                )
-              )
-            )
-          )
-          listener.once("error", reject)
-          const origin = new URL(address)
-          listener.listen(Number(origin.port || defaultHttpPort), origin.hostname, () => resolve(listener))
-        }),
-      catch: (): RunningHostError => ({ _tag: "HostUnavailable", address, reason: "ListenerBindFailed" })
-    }),
-    (listener) =>
-      Effect.promise(
-        () =>
-          new Promise<void>((resolve) => {
-            listener.closeAllConnections()
-            listener.close(() => resolve())
+  // Effect owns request fibers and disconnect interruption. Commands admitted by
+  // dispatch still run in the independent host scope above.
+  const handler = yield* NodeHttpServer.makeHandler(
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const response = NodeHttpServerRequest.toServerResponse(request)
+      return yield* handle(NodeHttpServerRequest.toIncomingMessage(request), response).pipe(
+        Effect.catch(() =>
+          Effect.sync(() => {
+            response.destroy()
+            return HttpServerResponse.empty()
           })
+        )
       )
+    }),
+    { scope: hostScope, middleware: (app) => Effect.interruptible(app) }
   )
+  const server = createServer(handler)
+  const origin = new URL(address)
+  yield* NodeHttpServer.make(() => server, {
+    host: origin.hostname,
+    port: Number(origin.port || defaultHttpPort),
+    disablePreemptiveShutdown: true
+  }).pipe(Effect.mapError((): RunningHostError => ({ _tag: "HostUnavailable", address, reason: "ListenerBindFailed" })))
+  // Registered after the platform finalizer: terminate exact sockets before
+  // its close wait. The host's existing observation/command drain owns Exit.
+  yield* Effect.addFinalizer(() => Effect.sync(() => server.closeAllConnections()))
   return { descriptor, address, server }
 }, Effect.provide(NodeCrypto.layer))

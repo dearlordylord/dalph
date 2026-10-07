@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@firfi/quint-connect@2.0.2-effect4.1':
-    hash: 144cc09f77ba5364fe273a8842caa15a4598a5937bd41b0cdeb851333eefffb2
+    hash: c5c55c94ad72e77ca2bffa8a3dae156a8c50bac382f53bb5198ba95e917c6d66
     path: patches/@firfi__quint-connect@2.0.2-effect4.1.patch
   '@informalsystems/quint@0.32.0':
     hash: 45e9e1046beda69ccabbdc6c70e3ffb676e609797aae617d74896c39458b148c
@@ -33,7 +33,7 @@ importers:
         version: 4.0.0-beta.106(effect@4.0.0-beta.106)(vitest@4.1.10)
       '@firfi/quint-connect':
         specifier: 2.0.2-effect4.1
-        version: 2.0.2-effect4.1(patch_hash=144cc09f77ba5364fe273a8842caa15a4598a5937bd41b0cdeb851333eefffb2)(effect@4.0.0-beta.106)(vitest@4.1.10)(zod@4.1.12)
+        version: 2.0.2-effect4.1(patch_hash=c5c55c94ad72e77ca2bffa8a3dae156a8c50bac382f53bb5198ba95e917c6d66)(effect@4.0.0-beta.106)(vitest@4.1.10)(zod@4.1.12)
       '@informalsystems/quint':
         specifier: 0.32.0
         version: 0.32.0(patch_hash=45e9e1046beda69ccabbdc6c70e3ffb676e609797aae617d74896c39458b148c)
@@ -2540,7 +2540,7 @@ snapshots:
       effect: 4.0.0-beta.106
       zod: 4.1.12
 
-  '@firfi/quint-connect@2.0.2-effect4.1(patch_hash=144cc09f77ba5364fe273a8842caa15a4598a5937bd41b0cdeb851333eefffb2)(effect@4.0.0-beta.106)(vitest@4.1.10)(zod@4.1.12)':
+  '@firfi/quint-connect@2.0.2-effect4.1(patch_hash=c5c55c94ad72e77ca2bffa8a3dae156a8c50bac382f53bb5198ba95e917c6d66)(effect@4.0.0-beta.106)(vitest@4.1.10)(zod@4.1.12)':
     dependencies:
       '@firfi/itf-trace-parser': 0.2.0-effect4.1(effect@4.0.0-beta.106)(zod@4.1.12)
       '@standard-schema/spec': 1.1.0

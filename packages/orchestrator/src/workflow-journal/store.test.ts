@@ -79,7 +79,7 @@ import {
 } from "../workflow/registry/operation.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { makeRunFinalityEvidence } from "../coordination/frontier/run-finality.js"
-import { makeWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "./run-lifecycle.js"
 import { memoryJournalTestLayerFromPartitionRecords } from "./adapters/memory-store.js"
 import { encodeJournalEvent } from "./event-codec.js"
 import { journalAppendFailureDisposition, type JournalRecord } from "./store.js"
@@ -270,7 +270,7 @@ const appendTerminalDisposition = (
 const terminalRecordsFor = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>) => {
   const fixture = completedRunFinalityFixture({ runId, target })
   return [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
+    makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
     {
       event: fixture.intent,
       key: intentRecordKey(fixture.operation.operationId),
@@ -375,7 +375,7 @@ it.effect(
 it.effect("rejects exact reads and recovery of a nonterminal memory Cold history", () => {
   const runId = RunId.make("memory-nonterminal-cold-read")
   const target = FixtureTarget.make("memory-nonterminal-cold-read-target")
-  const records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)]
+  const records = [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)]
   return Effect.gen(function* () {
     const journal = yield* JournalStore
     const fixture = completedRunFinalityFixture({ runId, target })
@@ -1191,7 +1191,12 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             const runId = RunId.make("schema-v1-preserved-run")
             const target = FixtureTarget.make("schema-v1-target")
-            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)
+            const record = makeHistoricalWorkflowRunBeganRecord(
+              runId,
+              target,
+              initialPolicy,
+              remotePublicationTargetForTest
+            )
             yield* seedSchemaV1(filename, record)
             const history = yield* Effect.gen(function* () {
               const journal = yield* JournalStore
@@ -1435,7 +1440,12 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             const runId = RunId.make("schema-v1-rollback-run")
             const target = FixtureTarget.make("schema-v1-rollback-target")
-            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)
+            const record = makeHistoricalWorkflowRunBeganRecord(
+              runId,
+              target,
+              initialPolicy,
+              remotePublicationTargetForTest
+            )
             yield* seedSchemaV1(filename, record)
             const failure = yield* Effect.flip(
               Effect.gen(function* () {
@@ -1478,7 +1488,12 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             const runId = RunId.make("schema-v1-reopen-run")
             const target = FixtureTarget.make("schema-v1-reopen-target")
-            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)
+            const record = makeHistoricalWorkflowRunBeganRecord(
+              runId,
+              target,
+              initialPolicy,
+              remotePublicationTargetForTest
+            )
             yield* seedSchemaV1(filename, record)
             yield* Effect.gen(function* () {
               yield* JournalStore

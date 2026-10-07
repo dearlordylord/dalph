@@ -34,8 +34,8 @@ import { deriveFreshTaskCandidateEvaluation } from "./fresh-task-candidate.js"
 import { projectDeliveryDiagnostics } from "./delivery-diagnostics.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
-import { DeliveryRelationPublicationObserver } from "./delivery-publication-observer.js"
+import { DeliveryPlanningCatchUp } from "./delivery-planning-catch-up.js"
+import { DeliveryRelationInputObserver } from "./delivery-relation-input-observer.js"
 import {
   activeWorkAuthorityRefreshSubjectsContain,
   RunActivationOpportunity,
@@ -248,7 +248,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   activationGraphBaseline: JournalPosition,
   opportunity: RunActivationOpportunityValue = RunActivationOpportunity.OrdinaryRunEntry()
 ) {
-  const publicationObserver = yield* DeliveryRelationPublicationObserver
+  const inputObserver = yield* DeliveryRelationInputObserver
   // Each delivery activation must establish its own tracker view before its
   // one post-quiescence reconfirmation. The process-lifetime Journal retains
   // the older observation as evidence, but it is not this activation's G1.
@@ -391,7 +391,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         },
         trackerGraphProposals
       },
-      publication: { exactEvidence, graph: journal.graph, policy }
+      graphView: { exactEvidence, graph: journal.graph, policy }
     } satisfies ReactiveDeliveryBundle
   })
 
@@ -415,32 +415,32 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
 
   const initial = yield* deriveBundle()
   const state = yield* SubscriptionRef.make<ReactiveDeliveryStatus>({ _tag: "ReactiveDeliveryOpen", bundle: initial })
-  yield* publicationObserver.observe(initial)
+  yield* inputObserver.observe(initial)
   const gate = yield* Semaphore.make(1)
-  type PublicationWaiter = {
+  type CatchUpWaiter = {
     readonly completed: Deferred.Deferred<void, DeliveryRelationReconciliationError>
     readonly targetPosition: JournalPosition
   }
-  const publicationWaiters = yield* Ref.make<ReadonlyArray<PublicationWaiter>>([])
-  const completePublicationWaiters = Effect.fn("DeliveryRelations.completePublicationWaiters")(function* (
+  const catchUpWaiters = yield* Ref.make<ReadonlyArray<CatchUpWaiter>>([])
+  const completeCatchUpWaiters = Effect.fn("DeliveryRelations.completeCatchUpWaiters")(function* (
     acceptedAt: JournalPosition
   ) {
-    const completed = yield* Ref.modify(publicationWaiters, (current) => [
+    const completed = yield* Ref.modify(catchUpWaiters, (current) => [
       current.filter(({ targetPosition }) => targetPosition <= acceptedAt),
       current.filter(({ targetPosition }) => targetPosition > acceptedAt)
     ])
     yield* Effect.forEach(completed, ({ completed }) => Deferred.succeed(completed, undefined), { discard: true })
   })
-  const failPublicationWaiters = Effect.fn("DeliveryRelations.failPublicationWaiters")(function* (
+  const failCatchUpWaiters = Effect.fn("DeliveryRelations.failCatchUpWaiters")(function* (
     cause: Cause.Cause<ReactiveDeliveryFailure>
   ) {
     const failure = new DeliveryRelationReconciliationError({ cause })
-    const failed = yield* Ref.getAndSet(publicationWaiters, [])
+    const failed = yield* Ref.getAndSet(catchUpWaiters, [])
     yield* Effect.forEach(failed, ({ completed }) => Deferred.fail(completed, failure), { discard: true })
   })
   const failReactiveDeliveryWhileHoldingGate = (cause: Cause.Cause<ReactiveDeliveryFailure>) =>
     SubscriptionRef.set(state, { _tag: "ReactiveDeliveryFailed" as const, cause }).pipe(
-      Effect.andThen(failPublicationWaiters(cause))
+      Effect.andThen(failCatchUpWaiters(cause))
     )
   const refresh = gate.withPermit(
     deriveBundle().pipe(
@@ -448,8 +448,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         onFailure: failReactiveDeliveryWhileHoldingGate,
         onSuccess: (bundle) =>
           SubscriptionRef.set(state, { _tag: "ReactiveDeliveryOpen", bundle }).pipe(
-            Effect.andThen(publicationObserver.observe(bundle)),
-            Effect.andThen(completePublicationWaiters(bundle.actionInputs.runtimeFacts.acceptedAt))
+            Effect.andThen(inputObserver.observe(bundle)),
+            Effect.andThen(completeCatchUpWaiters(bundle.actionInputs.runtimeFacts.acceptedAt))
           )
       })
     )
@@ -486,8 +486,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   yield* Deferred.await(resourceSubscribed)
 
   const bundleSignal = <A>(project: (bundle: ReactiveDeliveryBundle) => A) => statusSignal(project)
-  const acceptedFactPublication = DeliveryAcceptedFactPublication.of({
-    awaitCurrent: Effect.gen(function* () {
+  const planningCatchUp = DeliveryPlanningCatchUp.of({
+    awaitJournalPosition: Effect.gen(function* () {
       const targetPosition = (yield* journal.state.get.pipe(
         Effect.mapError((failure) => new DeliveryRelationReconciliationError({ cause: Cause.fail(failure) }))
       )).position
@@ -500,18 +500,18 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           }
           const acceptedAt = current.bundle.actionInputs.runtimeFacts.acceptedAt
           if (acceptedAt !== null && acceptedAt >= targetPosition) return false
-          yield* Ref.update(publicationWaiters, (waiters) => [...waiters, { completed, targetPosition }])
+          yield* Ref.update(catchUpWaiters, (waiters) => [...waiters, { completed, targetPosition }])
           return true
         })
       )
       if (awaiting) {
         yield* Deferred.await(completed).pipe(
           Effect.onInterrupt(() =>
-            Ref.update(publicationWaiters, (waiters) => waiters.filter((waiter) => waiter.completed !== completed))
+            Ref.update(catchUpWaiters, (waiters) => waiters.filter((waiter) => waiter.completed !== completed))
           )
         )
       }
-      return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough: targetPosition, runId }
+      return { _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough: targetPosition, runId }
     })
   })
   return Layer.merge(
@@ -519,7 +519,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       publicationConsistency: { withStablePublication: (effect) => gate.withPermit(effect) },
       coherent: bundleSignal((bundle) => bundle)
     }),
-    Layer.succeed(DeliveryAcceptedFactPublication, acceptedFactPublication)
+    Layer.succeed(DeliveryPlanningCatchUp, planningCatchUp)
   )
 })
 

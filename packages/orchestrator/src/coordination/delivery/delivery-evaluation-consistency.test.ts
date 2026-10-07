@@ -110,7 +110,7 @@ const samePositionProposals = (
     transitions: [aTransition, samePositionClaimTransition]
   }).ticketDelivery
 
-const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): DeliveryRelationInputBundle => ({
+const bundle = (graph: DeliveryRelationInputBundle["graphView"]["graph"]): DeliveryRelationInputBundle => ({
   actionInputs: {
     freshTaskCandidates: [],
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
@@ -129,7 +129,7 @@ const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): Del
     },
     trackerGraphProposals: graph._tag === "GraphNotEstablished" ? [proposal] : []
   },
-  publication: { exactEvidence: [], graph, policy }
+  graphView: { exactEvidence: [], graph, policy }
 })
 
 it.effect("publishes graph and planned frontier as one coherent runtime evaluation", () =>

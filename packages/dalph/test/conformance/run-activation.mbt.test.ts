@@ -1,3 +1,4 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { deriveFreshWorkflowEntryCapableTaskIds } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
 import {
   AttemptBasePolicy,
@@ -9,7 +10,6 @@ import { taskAttemptBaseReadOperationIdFor } from "../../../orchestrator/src/wor
 import { it } from "@effect/vitest"
 import { isCoverageMode } from "../../test-support/vitest-mode.js"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -85,7 +85,7 @@ import {
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { deliveryRuntime } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-adapter.js"
 import { DeliveryActionExecutor } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
-import { DeliveryAcceptedFactPublication } from "../../../orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "../../../orchestrator/src/coordination/delivery/delivery-planning-catch-up.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
@@ -158,6 +158,8 @@ import {
   executeTrackerGraphRead
 } from "../../../orchestrator/src/coordination/delivery/delivery-action-adapter-common.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/run-activation.mbt.test.ts")
 
 const HistoryVariant = Schema.Struct({
   tag: Schema.Literals([
@@ -1072,7 +1074,7 @@ const makeRunActivationDriverImplementation = () => {
               yield* RunActivationGraphBaseline
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
-            const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
+            const acceptedFactPublication = yield* DeliveryPlanningCatchUp.pipe(Effect.provide(relations))
             const productionAdmissionBasis = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead)).taskWork
             const reconstructedAdmissionBasis = {
               capacity: policy.taskExecutionCapacity,
@@ -1530,7 +1532,7 @@ const makeRunActivationDriverImplementation = () => {
                     ).length
                     finalityProof = yield* runStabilizedDelivery(target, runId, relation).pipe(
                       Effect.provideService(DeliveryActionExecutor, finalityExecutor),
-                      Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
+                      Effect.provideService(DeliveryPlanningCatchUp, acceptedFactPublication),
                       Effect.provideService(PlannedTaskAttemptPlanner, finalityPlanner)
                     )
                     trackerCalls +=

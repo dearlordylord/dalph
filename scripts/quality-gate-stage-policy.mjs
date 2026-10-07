@@ -9,7 +9,7 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 11, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 12, version: 1 })
 
 // Local Vitest-backed obligations are admitted under the highest fixed cap
 // proven safe by the pairwise memory campaign recorded for issue #336.  This
@@ -134,6 +134,18 @@ export const preflightQualityGates = (baseSha) => [
  * so local ordered/resume execution and hosted stage planning cannot drift.
  */
 export const qualificationQualityGates = () => [
+  {
+    artifactObligations: Object.freeze([]),
+    artifactRoots: Object.freeze([]),
+    args: Object.freeze(["test:mbt"]),
+    boundary: "qualification",
+    cleanRunnerPreparation: qualityGateCleanRunnerPreparation,
+    id: "mbt-replay",
+    name: "required MBT corpus replay",
+    processGroupAbsenceTimeout: DEFAULT_PROCESS_GROUP_ABSENCE_TIMEOUT,
+    terminationGrace: DEFAULT_TERMINATION_GRACE,
+    timeout: 10 * 60 * SECOND
+  },
   {
     artifactObligations: Object.freeze([]),
     artifactRoots: Object.freeze([]),

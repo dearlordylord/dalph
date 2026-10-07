@@ -11,12 +11,13 @@ import { projectRecordedCassette, verifyRecordedCassetteRoundTrip } from "../cas
 import { withDecodedProductionRepositoryHost } from "./production-host.js"
 import { ProductionRunReactivationInterval } from "./production.js"
 import { serveRunningHost } from "./running-host-http.js"
+import { observeAcceptanceScope, waitForAcceptanceBoundary } from "../../test-support/coverage-wait.js"
 const lastRecordOffset = -1
 const builtEntry = fileURLToPath(new URL("../../dist/bin/dalph.js", import.meta.url))
 it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as const)(
   "public clients follow A, B and E discovered by %s through delivery before C completes",
   (discovery) =>
-    Effect.scoped(
+    observeAcceptanceScope(`complete-delivery:${discovery}`)(
       Effect.gen(function* () {
         const holdGraph = yield* Ref.make(false)
         const graphEntered = yield* Deferred.make<void>()
@@ -51,8 +52,12 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                   )
                 )
                 yield* serveRunningHost(address, observation)
-                yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout("20 seconds"))
-                yield* Deferred.await(fixture.activationFinalizing).pipe(Effect.timeout("20 seconds"))
+                yield* Deferred.await(fixture.turnEntered).pipe(
+                  waitForAcceptanceBoundary(discovery, "ExecutorTurnEntered", "20 seconds")
+                )
+                yield* Deferred.await(fixture.activationFinalizing).pipe(
+                  waitForAcceptanceBoundary(discovery, "ActivationFinalizing", "20 seconds")
+                )
                 const runId = observation.selection.runId
                 const [c, a, b, e] = fixture.taskIds
                 if (c === undefined || a === undefined || b === undefined || e === undefined)
@@ -73,7 +78,9 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                 yield* Ref.set(holdGraph, true)
                 yield* fixture.releaseObservationCut
                 // The next ordinary timer read holds its real runtime lease while the native client starts.
-                yield* Deferred.await(graphEntered).pipe(Effect.timeout("20 seconds"))
+                yield* Deferred.await(graphEntered).pipe(
+                  waitForAcceptanceBoundary(discovery, "GraphReadLeaseEntered", "20 seconds")
+                )
                 const operatorAdapter = discovery.startsWith("MCP") ? "MCP" : "CLI"
                 expect(yield* publicDeliveryClient(operatorAdapter, address, runId, "set-capacity")).toMatchObject({
                   _tag: "Success",
@@ -96,7 +103,7 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                       state._tag === "Ready" && state.evaluation.taskWork.held.length === 2
                     if (!holdsBoth(signal.current)) yield* signal.changes.pipe(Stream.filter(holdsBoth), Stream.runHead)
                   })
-                ).pipe(Effect.timeout("20 seconds"))
+                ).pipe(waitForAcceptanceBoundary(discovery, "TwoAttemptsHeld", "20 seconds"))
                 const afterCapacityPlans = (yield* fixture.readHistory(runId)).filter(
                   ({ event }) => event._tag === "TaskAttemptPlanned"
                 )
@@ -124,13 +131,15 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
                       state.evaluation.current.trackerGraph.observation.snapshot.taskIds().includes(e)
                     if (!includesE(signal.current)) yield* signal.changes.pipe(Stream.filter(includesE), Stream.runHead)
                   })
-                ).pipe(Effect.timeout("20 seconds"))
+                ).pipe(waitForAcceptanceBoundary(discovery, "AuthoredTaskEObserved", "20 seconds"))
                 expect(
                   (yield* fixture.readHistory(runId)).filter(({ event }) => event._tag === "TaskAttemptPlanned")
                 ).toEqual(afterCapacityPlans)
                 // The ordinary owner's timer reads the authored tracker graph; no client controls task selection.
                 yield* fixture.release
-                const termination = yield* observation.runTermination.await.pipe(Effect.timeout("30 seconds"))
+                const termination = yield* observation.runTermination.await.pipe(
+                  waitForAcceptanceBoundary(discovery, "RunTermination", "30 seconds")
+                )
                 expect(termination.disposition).toBe("Completed")
                 const expected = {
                   _tag: "Success",

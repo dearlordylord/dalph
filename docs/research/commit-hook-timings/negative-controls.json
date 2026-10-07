@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "observedAt": "2026-10-07T05:01:56.161Z",
+  "candidate": "98bc8a3265c06454a3cf566b6acb921ad7a28ca4",
+  "platform": "linux",
+  "architecture": "arm64",
+  "node": "v24.20.0",
+  "sampleLimit": 2,
+  "timeoutMilliseconds": 60000,
+  "samples": [
+    {
+      "kind": "lint",
+      "path": "packages/dalph/src/hook-refusal.ts",
+      "diagnostic": "dalph(no-throw-statement)",
+      "result": "exit:1",
+      "stoppedWritersProven": true,
+      "timings": [
+        {
+          "version": 1,
+          "kind": "hook-timing",
+          "stage": "discovery",
+          "milliseconds": 30.098096,
+          "exitCode": 0
+        },
+        {
+          "version": 1,
+          "kind": "hook-timing",
+          "stage": "oxlint",
+          "milliseconds": 339.077118,
+          "exitCode": 1
+        },
+        {
+          "version": 1,
+          "kind": "hook-timing",
+          "stage": "lint-staged",
+          "milliseconds": 798,
+          "exitCode": 1
+        }
+      ]
+    },
+    {
+      "kind": "secret",
+      "path": "hook-refusal.txt",
+      "diagnostic": "leaks found: 1",
+      "result": "exit:1",
+      "stoppedWritersProven": true,
+      "timings": [
+        {
+          "version": 1,
+          "kind": "hook-timing",
+          "stage": "lint-staged",
+          "milliseconds": 277,
+          "exitCode": 0
+        },
+        {
+          "version": 1,
+          "kind": "hook-timing",
+          "stage": "gitleaks",
+          "milliseconds": 434,
+          "exitCode": 1
+        }
+      ]
+    }
+  ],
+  "fixtureBaselineTree": "3facee95a9ea06f962689451a84544c76792ab24",
+  "instrumentationSha256": {
+    ".husky/pre-commit": "ae4f57e4c80588a06db0cdc740e984c67dafa04c356567eae987613700a6fa4e",
+    "scripts/run-quality-lint.mjs": "158af5668c785f701431515354deee8e7e118fd288d5f1722b37c6950af913d0"
+  },
+  "versions": {
+    "pnpm": "10.29.3",
+    "lint-staged": "17.3.0",
+    "oxlint": "Version: 1.76.0",
+    "dprint": "dprint 0.55.2",
+    "gitleaks": "8.30.0"
+  },
+  "stoppedWritersProven": true,
+  "fixtureDisposition": "removed",
+  "kind": "hook-refusal-controls",
+  "fixtureMethod": "Same tracked-file copy and bounded runner as measure-commit-hook.mjs; reset to disposable baseline before each individually staged negative control; assert expected diagnostic and exit:1."
+}

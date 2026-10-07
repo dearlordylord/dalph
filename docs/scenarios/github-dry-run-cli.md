@@ -68,6 +68,8 @@ Alice has an existing fixture locator such as a path to
 `orchestrator/fixtures/singleton.json`. It is not a GitHub target and may have
 no `GITHUB_TOKEN`. The fixture reader owns the serialized normalized task graph
 for this dry-run; the GitHub reader must not be consulted.
+The dry composition also owns one explicit controlled Base (the zero SHA),
+shared by its deterministic attempt planner and fresh Run construction.
 
 ### Trigger and chronological behavior
 
@@ -77,6 +79,13 @@ for this dry-run; the GitHub reader must not be consulted.
    runs the existing controlled dry workflow, preserving its deterministic
    planner and trace behavior. It never guesses GitHub ownership from a path,
    repository-looking text, or a failed fixture read.
+3. Before fresh task admission, controlled construction records that exact
+   explicit Base policy in `WorkflowRunBegan`. The ordinary admission guard
+   selects the task at the same Base, then the interpreter records the claim,
+   plan and controlled worktree/executor boundaries and completes the existing
+   seventeen-item dry trace. No production Git, provider process, or GitHub
+   mutation is installed. A historical Run without a recorded policy still
+   cannot admit a fresh attempt; this invocation does not backfill old history.
 
 Alice sees the established fixture dry-run trace. Dalph must not redirect an
 ordinary fixture to GitHub, require a token for it, or change fixture behavior
@@ -86,11 +95,15 @@ There is no crash or retry boundary specific to target selection: no external
 mutation occurs before the selected fixture read, and a fresh invocation can
 repeat the same fixture read. Fixture reader failures remain the existing typed
 fixture failures.
+All simulated effects and Run history are in memory, so process loss has no
+ambiguous external write to reconcile; a new invocation creates a fresh dry
+Run with the same explicit policy. External crash/retry custody is inapplicable.
 
 ### Acceptance test
 
 `runs the complete dry CLI with only Stdio left to supply` preserves the
-existing fixture trace, and `replaces fixture reads at the complete dry CLI
+existing seventeen-item fixture trace and its matching Base admission, and
+`replaces fixture reads at the complete dry CLI
 boundary` proves an injected fixture reader receives the fixture target rather
 than the GitHub reader.
 

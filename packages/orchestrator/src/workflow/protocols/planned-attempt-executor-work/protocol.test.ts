@@ -118,7 +118,7 @@ import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
   TaskTrackerFactsObservedEvent,
   makeCompleteTaskTrackerFactsObserved,
@@ -301,7 +301,7 @@ const appendTaskWorkSpecification = (specification = currentSpecification, suffi
     )
   })
 const recoveryTarget = FixtureTarget.make("planned-attempt-executor-recovery-target")
-const runBegan = makeWorkflowRunBeganRecord(
+const runBegan = makeHistoricalWorkflowRunBeganRecord(
   plannedAttempt.runId,
   recoveryTarget,
   InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

@@ -7,7 +7,7 @@ import {
   CoordinatorOwnership,
   controlDirectionApplicationLayer,
   controlledTrackerMutationLayerFrom,
-  DeliveryRelationPublicationObserver,
+  DeliveryRelationInputObserver,
   deterministicOperationIdAllocatorLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
   EvidenceStore,
@@ -338,7 +338,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
           Layer.mergeAll(
             Layer.succeed(JournaledRunBootstrap, Context.get(applicationContext, JournaledRunBootstrap)),
             sharedPlanning,
-            Layer.succeed(DeliveryRelationPublicationObserver, {
+            Layer.succeed(DeliveryRelationInputObserver, {
               observe: (bundle) =>
                 Ref.update(publications, (all) => [...all, bundle]).pipe(
                   Effect.andThen(Queue.offer(publicationQueue, bundle)),

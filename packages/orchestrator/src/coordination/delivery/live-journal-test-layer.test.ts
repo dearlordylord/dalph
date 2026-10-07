@@ -10,7 +10,7 @@ import { observeWorkflowJournalValidationSteps } from "../reconstruction/history
 import { TaskWorkCapacityChangedEvent } from "../../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { taskWorkCapacityPolicyRecordKey } from "../../workflow-journal/record-key.js"
 import { InRunJournal, JournalStore } from "../../workflow-journal/store.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
@@ -20,7 +20,7 @@ import { memoryJournalTestLayerFromPartitionRecords } from "../../workflow-journ
 
 const runId = RunId.make("live-journal-test-layer")
 const target = FixtureTarget.make("live-journal-test-layer")
-const began = makeWorkflowRunBeganRecord(
+const began = makeHistoricalWorkflowRunBeganRecord(
   runId,
   target,
   InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

@@ -1,8 +1,8 @@
 /* eslint-disable functional/no-mixed-types -- The executable Quint driver exposes imperative action controls. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { expect, it } from "@effect/vitest"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Deferred, Effect, Fiber, FileSystem, Layer, ManagedRuntime, Path, Ref, Schema } from "effect"
 import type { AcceptedResult } from "@dalph/contracts"
 import {
@@ -182,6 +182,8 @@ import {
   integrationResponsibilityIdentity
 } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
 
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts")
+
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/accepted-result-integration.git"),
@@ -221,7 +223,8 @@ const attempts = new Map(
     id,
     PlannedTaskAttempt.make({
       attemptId: AttemptId.make(`accepted-result-integration-attempt-${id}`),
-      baseSha: commitOf(id),
+      // Both tasks are admitted in the same explicitly fixed-base Run.
+      baseSha: commitOf(1n),
       branch: TaskBranchRef.make(`refs/heads/dalph/accepted-result-integration-${id}`),
       executor: TaskExecutorLocator.make("executor:model"),
       runId,

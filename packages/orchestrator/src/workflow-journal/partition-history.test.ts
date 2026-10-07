@@ -5,11 +5,11 @@ import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { decideJournalPartitionHistory } from "./partition-history.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const runId = RunId.make("cold-partition-export")
 const records = [
-  makeWorkflowRunBeganRecord(
+  makeHistoricalWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("cold-partition-export-target"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

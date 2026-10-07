@@ -14,7 +14,7 @@
     "bootstrap:worktree": "node scripts/bootstrap-worktree.mjs",
     "prewarm:vitest": "node scripts/prewarm-vitest.mjs",
     "test:preflight": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/preflight-census.test.mjs scripts/quality-lint-census.test.mjs scripts/candidate-secret-history.test.mjs scripts/quality-check-selection.test.mjs scripts/candidate-checks.test.mjs",
-    "test:ci-change-classification": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/classify-docs-only-change.test.mjs scripts/quality-gate-stage-plan.test.mjs scripts/hosted-quality-evidence.test.mjs",
+    "test:ci-change-classification": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/classify-docs-only-change.test.mjs scripts/quality-gate-stage-plan.test.mjs scripts/mbt-automatic-routing.test.mjs scripts/hosted-quality-evidence.test.mjs",
     "typecheck": "node scripts/run-clean-typecheck.mjs",
     "typecheck:dev": "node node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit --incremental --tsBuildInfoFile .scratch/typecheck-dev.tsbuildinfo",
     "typecheck:effect": "node scripts/run-effect-diagnostics.mjs",
@@ -66,9 +66,9 @@
     "test": "node scripts/run-tests.mjs",
     "coverage:explain": "node scripts/explain-coverage.mjs",
     "test:coverage:explanation": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/explain-coverage.test.mjs scripts/changed-files.test.mjs scripts/coverage-advisory.test.mjs",
-    "coverage:body": "vitest run --mode coverage --reporter=dot --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=json && node scripts/verify-coverage-summary.mjs && node scripts/verify-changed-coverage.mjs",
+    "coverage:body": "vitest run --mode coverage --reporter=dot --reporter=./scripts/coverage-lifecycle-reporter.ts --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=json && node scripts/verify-coverage-summary.mjs && node scripts/verify-changed-coverage.mjs",
     "test:coverage": "pnpm test",
-    "test:mbt": "vitest run --mode mbt",
+    "test:mbt": "node scripts/replay-mbt-corpus.mjs",
     "test:watch": "vitest",
     "check:ci:quality": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --hosted-quality",
     "check:ci:quality:preflight": "pnpm check:preflight",
@@ -82,7 +82,9 @@
     "test:formal:integration": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-gate.integration.test.mjs",
     "test:delivery-smoke": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-smoke.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "test:docs": "node --test scripts/check-docs.test.mjs"
+    "test:docs": "node --test scripts/check-docs.test.mjs",
+    "mbt:generate": "node scripts/generate-mbt-corpus.mjs",
+    "mbt:replay": "node scripts/replay-mbt-corpus.mjs"
   },
   "lint-staged": {
     "*.{js,mjs,ts,tsx}": "node scripts/run-quality-lint.mjs --staged --fix"

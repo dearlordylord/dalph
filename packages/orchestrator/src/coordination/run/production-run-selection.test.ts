@@ -14,7 +14,10 @@ import {
   outcomeRecordKey,
   runCancellationAppliedRecordKey
 } from "../../workflow-journal/record-key.js"
-import { makeWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "../../workflow-journal/run-lifecycle.js"
+import {
+  makeHistoricalWorkflowRunBeganRecord,
+  makeWorkflowRunTerminatedRecord
+} from "../../workflow-journal/run-lifecycle.js"
 import { RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { cancelledRunFinalityFixture, completedRunFinalityFixture } from "../../../test/run-finality.js"
 import { StartupRecoveryBlocked } from "./startup-recovery.js"
@@ -36,7 +39,7 @@ const cancelledAuditRun = (runId: RunId, target: FixtureTarget) => {
   return {
     partition: JournalPartition.make("Cold"),
     records: [
-      makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
+      makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
       { event: fixture.cancellation, key: runCancellationAppliedRecordKey, position: JournalPosition.make(2), runId },
       {
         event: fixture.intent,
@@ -84,7 +87,7 @@ it.effect("selects the sole exact unfinished production Run without allocating a
         runs: [
           {
             records: [
-              makeWorkflowRunBeganRecord(
+              makeHistoricalWorkflowRunBeganRecord(
                 RunId.make("existing-production-run"),
                 FixtureTarget.make("production-host-recovered"),
                 policy,
@@ -116,7 +119,9 @@ it.effect("rejects one unfinished production Run for another target", () => {
         issues: [],
         runs: [
           {
-            records: [makeWorkflowRunBeganRecord(runId, recordedTarget, policy, remotePublicationTargetForTest)],
+            records: [
+              makeHistoricalWorkflowRunBeganRecord(runId, recordedTarget, policy, remotePublicationTargetForTest)
+            ],
             runId
           }
         ]
@@ -144,7 +149,7 @@ it.effect("excludes a valid terminal history and allocates one fresh production 
         runs: [
           {
             records: [
-              makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
+              makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
               {
                 event: fixture.intent,
                 key: intentRecordKey(fixture.operation.operationId),
@@ -182,7 +187,7 @@ it.effect("redelivers the exact cancelled production Run after its terminal hist
           {
             partition: JournalPartition.make("Cold"),
             records: [
-              makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
+              makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
               {
                 event: fixture.cancellation,
                 key: runCancellationAppliedRecordKey,
@@ -233,7 +238,7 @@ it.effect("ignores completed production history during cancellation discovery", 
           {
             partition: JournalPartition.make("Cold"),
             records: [
-              makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
+              makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
               {
                 event: fixture.intent,
                 key: intentRecordKey(fixture.operation.operationId),
@@ -297,7 +302,7 @@ it.effect("fails cancellation discovery when the complete audit is malformed", (
 it.effect("fails when a cancellation audit contains an invalid journal history", () => {
   const target = FixtureTarget.make("production-host-invalid-cancellation-history")
   const runId = RunId.make("invalid-cancellation-history-run")
-  const beginning = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
+  const beginning = makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   return Effect.gen(function* () {
     const failure = yield* discoverProductionCancellationRun(target).pipe(Effect.flip)
 
@@ -326,7 +331,9 @@ it.effect("prefers one unfinished Run over retired cancellation history", () => 
         runs: [
           {
             partition: JournalPartition.make("Hot"),
-            records: [makeWorkflowRunBeganRecord(unfinishedRunId, target, policy, remotePublicationTargetForTest)],
+            records: [
+              makeHistoricalWorkflowRunBeganRecord(unfinishedRunId, target, policy, remotePublicationTargetForTest)
+            ],
             runId: unfinishedRunId
           },
           cancelledAuditRun(retiredRunId, target)
@@ -378,7 +385,7 @@ it.effect("names every unfinished Run when production discovery is unsafe", () =
         runs: [
           {
             records: [
-              makeWorkflowRunBeganRecord(
+              makeHistoricalWorkflowRunBeganRecord(
                 RunId.make("first-unfinished-run"),
                 FixtureTarget.make("production-host-requested"),
                 policy,
@@ -389,7 +396,7 @@ it.effect("names every unfinished Run when production discovery is unsafe", () =
           },
           {
             records: [
-              makeWorkflowRunBeganRecord(
+              makeHistoricalWorkflowRunBeganRecord(
                 RunId.make("second-unfinished-run"),
                 FixtureTarget.make("another-target"),
                 policy,
@@ -432,7 +439,7 @@ it.effect("fails malformed production discovery before allocating a Run", () =>
 it.effect("fails when a discovered Hot Run has an invalid journal history", () => {
   const target = FixtureTarget.make("production-host-invalid-hot-history")
   const runId = RunId.make("invalid-hot-history-run")
-  const beginning = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
+  const beginning = makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   return Effect.gen(function* () {
     const failure = yield* discoverProductionRun(target).pipe(Effect.flip)
 

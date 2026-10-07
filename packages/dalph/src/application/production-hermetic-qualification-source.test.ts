@@ -72,7 +72,7 @@ import {
   makeFocusedTaskWorkSpecificationFactsObserved,
   makeTaskWorkSpecificationObservationOperation,
   makeTraceReader,
-  makeWorkflowRunBeganRecord,
+  makeHistoricalWorkflowRunBeganRecord,
   OperationId,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -864,7 +864,7 @@ const specificationHistory = (context: QualificationContext, specification: Task
     key: describeJournalEvent(event).expectedKey
   })
   const records = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       context.runId,
       context.configuration.target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -917,7 +917,7 @@ const executorHistory = (context: QualificationContext, taskId: QualificationCon
     })
   ]
   const records: ReadonlyArray<JournalRecord> = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       context.runId,
       context.configuration.target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -1209,7 +1209,7 @@ const lookupHistory = (context: QualificationContext, detail: string, acknowledg
     ? events.slice(0, events.findIndex((event) => event._tag === "CompletionTaskAcknowledged") + 1)
     : events
   const records: Array<JournalRecord> = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       context.runId,
       context.configuration.target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -3175,7 +3175,7 @@ describe("qualification original source boundary", () => {
       taskTrackerFactsObservedEvent(graphOperation.operationId, circuitOpen)
     ]
     const circuitRecords: ReadonlyArray<JournalRecord> = [
-      makeWorkflowRunBeganRecord(
+      makeHistoricalWorkflowRunBeganRecord(
         runId,
         configuration.target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -3748,7 +3748,7 @@ describe("qualification original source boundary", () => {
       })
     ]
     const records: ReadonlyArray<JournalRecord> = [
-      makeWorkflowRunBeganRecord(
+      makeHistoricalWorkflowRunBeganRecord(
         runId,
         configuration.target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

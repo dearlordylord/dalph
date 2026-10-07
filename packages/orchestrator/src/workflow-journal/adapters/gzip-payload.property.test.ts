@@ -27,10 +27,11 @@ it("round-trips generated JSON payloads through plain or gzip without increasing
       const stored = encodeJournalGzipPayload(original)
       expect(Buffer.byteLength(stored)).toBeLessThanOrEqual(Buffer.byteLength(original))
       const decoded = await Effect.runPromise(decodeJournalGzipPayload(parse(stored)))
-      expect(decoded).toEqual(payload)
+      // The codec receives JSON text; stringify has already normalized signed zero.
+      expect(decoded).toEqual(JSON.parse(original))
       expect(encodeJournalGzipPayload(JSON.stringify(decoded))).toBe(stored)
     }),
-    { numRuns: 100 }
+    { examples: [[-0], [{ "": -0 }]], numRuns: 100 }
   )
 })
 

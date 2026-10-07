@@ -50,7 +50,7 @@ import {
 } from "../../workflow/registry/event.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { makeRunRecoveryProjection, RunRecoveryProjection } from "../run/recovery-activation.js"
 import {
   recoverTaskClaimOperation,
@@ -177,7 +177,7 @@ it.effect("replays only the exact recorded claim-release intent", () => {
   }).pipe(
     Effect.provide(
       liveJournalTestLayer({
-        records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+        records: [makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
         runId,
         target
       })
@@ -248,7 +248,7 @@ it.effect("settles a recovered generic claim through run recovery activation", (
   }).pipe(
     Effect.provide(
       liveJournalTestLayer({
-        records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+        records: [makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
         runId,
         target
       })
@@ -527,7 +527,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             RunId.make("membership-constraint-run"),
             FixtureTarget.make("membership-constraint-target"),
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -620,7 +620,7 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     ),
     Effect.provide(
       liveJournalTestLayer({
-        records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+        records: [makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
         runId,
         target
       })
@@ -1008,7 +1008,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         liveJournalTestLayer({
-          records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+          records: [makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
           runId,
           target
         })
@@ -1583,7 +1583,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             RunId.make("executor-membership-constraint-run"),
             FixtureTarget.make("executor-membership-constraint-target"),
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -1786,7 +1786,7 @@ it.effect("replays the exact durable claim and worktree intents", () => {
   }).pipe(
     Effect.provide(
       liveJournalTestLayer({
-        records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+        records: [makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
         runId,
         target
       })

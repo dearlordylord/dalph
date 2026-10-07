@@ -9,7 +9,7 @@ import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
 import { unpublishedAcceptedJournalReaderTestLayer } from "../../../workflow-journal/test-accepted-reader.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import {
   TaskClaimReacquisitionControl,
@@ -65,7 +65,7 @@ it.effect("coalesces exact request redelivery and rejects identity reuse for ano
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             redeliveryRunId,
             FixtureTarget.make("claim-reacquisition-redelivery-target"),
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

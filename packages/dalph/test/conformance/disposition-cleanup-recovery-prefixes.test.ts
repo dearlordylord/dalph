@@ -72,7 +72,7 @@ import {
 import type { JournalRecord } from "@dalph/orchestrator"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { journalLayer } from "../../../orchestrator/src/coordination/delivery/journal.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
@@ -241,7 +241,7 @@ const maintainedSource = Effect.scoped(
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             runId,
             FixtureTarget.make("cleanup-recovery-target"),
             initialPolicy,
@@ -578,7 +578,7 @@ const branchMaintainedSource = Effect.scoped(
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             runId,
             FixtureTarget.make("cleanup-branch-recovery-target"),
             initialPolicy,
@@ -621,7 +621,7 @@ const candidateMaintainedSource = Effect.scoped(
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             runId,
             FixtureTarget.make("cleanup-candidate-recovery-target"),
             initialPolicy,

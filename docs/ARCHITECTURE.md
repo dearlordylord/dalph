@@ -63,6 +63,16 @@ The governing design and chronology are specified by
 implementation status; this document records the architecture rather than
 mirroring ticket state.
 
+Dalph appends accepted workflow events to the Journal. `DeliveryPlanningCatchUp.awaitJournalPosition`
+captures the current position and waits until planning incorporates that prefix,
+returning a `DeliveryPlanningCatchUpBoundary`. `DeliveryGraphView` is the derived
+current descriptive value; `DeliveryRelationInputObserver` observes its coherent
+input bundle without writing history. `DeliveryRuntimeEvaluation` is the derived
+value consumed through the in-process current signal. The runtime's
+`DeliveryRuntimeObservationPublication.updateLatest` replaces the latest passive
+observation; its paired signal actually publishes changes to subscribers.
+These are distinct boundaries, with no additional transport or durable authority.
+
 ## Protected Compositions
 
 The following Effects are the readable account of delivery at their respective

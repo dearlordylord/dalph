@@ -91,7 +91,7 @@ import {
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { Journal, journalLayer } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision } from "../../../orchestrator/src/authorities/task-tracker/task.js"
 import {
@@ -890,7 +890,7 @@ const storedPromotionStalePrefix = Effect.fn("RestartPrefixAcceptanceMatrix.stor
     position: JournalPosition.make(position),
     runId
   })
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("promotion-stale-storage-prefix"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

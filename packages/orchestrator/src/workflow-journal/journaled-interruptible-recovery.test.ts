@@ -53,7 +53,7 @@ import {
 import { validSnapshot } from "../../test/task-dag.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 import { JournalStore } from "./store.js"
 
 const unused = () => Effect.die("unused")
@@ -154,7 +154,7 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             RunId.make("interruptible-tracker-recovery-run"),
             FixtureTarget.make("interruptible-tracker-recovery-target"),
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -327,7 +327,7 @@ it.effect("rebuilds the Git application from its recovery projection and records
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             RunId.make("interruptible-git-recovery-run"),
             FixtureTarget.make("interruptible-git-recovery-target"),
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

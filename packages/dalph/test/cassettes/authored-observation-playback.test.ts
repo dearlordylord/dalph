@@ -47,7 +47,7 @@ const bundle: DeliveryRelationInputBundle = {
       trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
     ]
   },
-  publication: { exactEvidence: [], graph: { _tag: "GraphNotEstablished" }, policy }
+  graphView: { exactEvidence: [], graph: { _tag: "GraphNotEstablished" }, policy }
 }
 
 const captureAt = (order: number): AuthoredObservationCapture => {

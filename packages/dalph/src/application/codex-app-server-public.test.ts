@@ -205,9 +205,9 @@ const controlledProcessGroupNative = () => {
       ...nodeCodexProcessNativeService,
       readFile,
       readdir: async (directory: string) =>
-        facts === undefined || directory !== "/proc"
+        directory !== "/proc"
           ? nodeCodexProcessNativeService.readdir(directory)
-          : signaled
+          : facts === undefined || signaled
             ? []
             : [String(facts.pid)],
       kill

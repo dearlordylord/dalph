@@ -9,7 +9,7 @@ const expectedHeldCorrelations = [scenario.attempts.A1, scenario.attempts.D1]
   .toSorted()
 
 const retainsExactC = (publication: DeliveryRelationInputBundle, plannedAttempt: PlannedTaskAttempt) =>
-  publication.publication.exactEvidence.some(
+  publication.graphView.exactEvidence.some(
     (evidence) =>
       evidence._tag === "ResponsibilityFacts" &&
       evidence.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
@@ -98,7 +98,7 @@ export const isControlledDs11CompleteCheckpoint = (
     graphIntent === undefined ||
     graphResult === undefined ||
     acceptedAt === null ||
-    publication.publication.graph._tag !== "GraphEstablished"
+    publication.graphView.graph._tag !== "GraphEstablished"
   ) {
     return false
   }
@@ -110,12 +110,12 @@ export const isControlledDs11CompleteCheckpoint = (
     report.position < graphIntent.position &&
     graphIntent.position < graphResult.position &&
     acceptedAt >= graphResult.position &&
-    publication.publication.graph.observation.snapshot.revision === scenario.graphs.G2.revision &&
-    publication.publication.policy.revision === capacityChange.event.revision &&
-    publication.publication.policy.taskExecutionCapacity === scenario.policies.P2 &&
+    publication.graphView.graph.observation.snapshot.revision === scenario.graphs.G2.revision &&
+    publication.graphView.policy.revision === capacityChange.event.revision &&
+    publication.graphView.policy.taskExecutionCapacity === scenario.policies.P2 &&
     acceptedAt >= capacityChange.position &&
     held.join(",") === expectedHeldCorrelations.join(",") &&
-    publication.publication.exactEvidence.some(isControlledRetainedBResponsibility) &&
+    publication.graphView.exactEvidence.some(isControlledRetainedBResponsibility) &&
     retainsExactC(publication, cResponsibility.event.plannedAttempt)
   )
 }

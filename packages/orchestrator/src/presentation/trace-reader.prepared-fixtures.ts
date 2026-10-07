@@ -8,7 +8,7 @@ import { TaskWorkCapacityChangedEvent } from "../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
-import { makeWorkflowRunBeganRecord } from "../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../workflow-journal/run-lifecycle.js"
 import type { JournalRecord } from "../workflow-journal/store.js"
 import { makeTraceReader } from "./trace-reader.js"
 
@@ -16,7 +16,7 @@ export const runId = RunId.make("prepared-trace-run")
 const firstControlPosition = 2
 const deliberatelyGappedTailDistance = 2
 export const capacitiesThrough = (capacities: ReadonlyArray<number>): ReadonlyArray<JournalRecord> => [
-  makeWorkflowRunBeganRecord(
+  makeHistoricalWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("prepared-trace-target"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -48,7 +48,7 @@ export const coldReaderFor = (records: ReadonlyArray<JournalRecord>) =>
   readerFor([
     ...records,
     {
-      ...makeWorkflowRunBeganRecord(
+      ...makeHistoricalWorkflowRunBeganRecord(
         runId,
         FixtureTarget.make("cold-oracle-unvisited-tail"),
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

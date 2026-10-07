@@ -18,6 +18,54 @@ import {
 
 const home = CodexProviderHomeNamespace.make("/tmp/startup-home")
 
+it.effect("Exit timeout cannot abandon initialized startup scope finalizers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const store = yield* CodexAttemptStore
+      const startup = yield* prepareCodexServerStartup(store, home)
+      const cleanupStarted = yield* Deferred.make<void>()
+      const permitCleanup = yield* Deferred.make<void>()
+      const allReleased = yield* Deferred.make<void>()
+      const released = yield* Ref.make(0)
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        { requestEnd: () => Effect.void }
+      )
+      yield* boundCodexServerStartup(
+        startup,
+        Effect.gen(function* () {
+          yield* Effect.acquireRelease(Effect.void, () =>
+            Ref.update(released, (count) => count + 1).pipe(Effect.andThen(Deferred.succeed(allReleased, undefined)))
+          )
+          yield* Effect.acquireRelease(Effect.void, () =>
+            Deferred.succeed(cleanupStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(permitCleanup)),
+              Effect.andThen(Ref.update(released, (count) => count + 1))
+            )
+          )
+          return "initialized"
+        }),
+        {
+          requested: shell.awaitExitRequested,
+          registerDrain: (close) => shell.registerProcessLocalDrain({ closeProcessLocalResources: close })
+        }
+      )
+      yield* Effect.gen(function* () {
+        const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+        yield* Deferred.await(cleanupStarted)
+        yield* TestClock.adjust("5 seconds")
+        expect((yield* Fiber.join(exiting))._tag).toBe("TimedOut")
+        expect(yield* Ref.get(released)).toBe(0)
+        const completion = yield* Deferred.await(allReleased).pipe(Effect.timeoutOption("1 second"), Effect.forkChild)
+        yield* Deferred.succeed(permitCleanup, undefined)
+        yield* TestClock.adjust("1 second")
+        expect(Option.isSome(yield* Fiber.join(completion))).toBe(true)
+        expect(yield* Ref.get(released)).toBe(2)
+      }).pipe(Effect.ensuring(Deferred.succeed(permitCleanup, undefined)))
+    })
+  ).pipe(Effect.provide(memoryCodexAttemptStoreLayer()), Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("expired startup reconciles its prior launch before refusing without a new deadline", () =>
   Effect.gen(function* () {
     const store = yield* CodexAttemptStore

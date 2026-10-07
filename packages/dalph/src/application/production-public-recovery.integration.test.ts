@@ -1,4 +1,3 @@
-import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 /* eslint-disable import/no-nodejs-modules, max-lines -- This qualification controls real Node processes over the shipped composition. */
 import nodeProcess from "node:process"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
@@ -26,6 +25,9 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedTaskAttempt,
+  RemotePublicationTarget,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -36,6 +38,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Context, Effect, Fiber, FileSystem, Layer, Path, Queue, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { ProductionCliRecord, type ProductionCliRecord as ProductionCliRecordType } from "./production-cli.js"
+import { CodexAttemptStore, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { DalphRuntimeDiagnostic } from "./runtime-diagnostic.js"
 
 type CurrentStatusRecord = Extract<ProductionCliRecordType, { readonly _tag: "CurrentStatus" }>
@@ -95,6 +98,7 @@ interface PublicProcess {
   readonly eventLog: Ref.Ref<ReadonlyArray<FixtureEvent>>
   readonly recordLog: Ref.Ref<ReadonlyArray<ProductionCliRecordType>>
   readonly records: Queue.Queue<ProductionCliRecordType>
+  readonly stderrLines: Ref.Ref<ReadonlyArray<string>>
   readonly stderrFiber: Fiber.Fiber<void, unknown>
   readonly stdoutFiber: Fiber.Fiber<void, unknown>
 }
@@ -126,7 +130,9 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   gitFixtureDirectory: string,
   mode: "first" | "recovered" | "terminal" | "exit-during-attachment" | "cancellation",
   operation: "run" | "cancel" = "run",
-  failSuspension = false
+  failSuspension = false,
+  processEacces = false,
+  dirtyStdout = false
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const command = ChildProcess.make(
@@ -144,6 +150,8 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
         DALPH_QUALIFICATION_COMMON_DIRECTORY: commonDirectory,
         DALPH_QUALIFICATION_MODE: mode,
         DALPH_QUALIFICATION_FAIL_SUSPENSION: String(failSuspension),
+        DALPH_QUALIFICATION_PROCESS_EACCES: String(processEacces),
+        DALPH_QUALIFICATION_DIRTY_STDOUT: String(dirtyStdout),
         GITHUB_TOKEN: "controlled-github-token",
         PATH: `${gitFixtureDirectory}:${nodeProcess.env["PATH"] ?? ""}`
       }
@@ -180,9 +188,11 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   )
   const exitDiagnostics = yield* Ref.make<ReadonlyArray<ApplicationExitResult>>([])
   const completionTraces = yield* Ref.make<ReadonlyArray<string>>([])
+  const stderrLines = yield* Ref.make<ReadonlyArray<string>>([])
   const stderrFiber = yield* handle.stderr.pipe(
     Stream.decodeText(),
     Stream.splitLines,
+    Stream.tap((line) => Ref.update(stderrLines, (current) => [...current, line])),
     Stream.filter((line) => line.length > 0),
     Stream.runForEach((line) =>
       line.startsWith(fixturePrefix)
@@ -214,6 +224,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
     Effect.forkScoped
   )
   return {
+    stderrLines,
     exitDiagnostics,
     completionTraces,
     outputCount,
@@ -313,6 +324,10 @@ const publicFixture = Effect.gen(function* () {
     })
   )
   return {
+    remotePublicationTarget: RemotePublicationTarget.make({
+      branch: RemotePublicationBranchRef.make("refs/heads/master"),
+      endpoint: RemotePublicationEndpoint.make(remote)
+    }),
     baseSha,
     claimState,
     codexTranscript: `${claimState}.codex`,
@@ -328,6 +343,21 @@ const publicFixture = Effect.gen(function* () {
   }
 }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
 
+const assertPublicLaunchCustody = (stateFile: string, unreadable: boolean) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(
+        nodeCodexAttemptStoreLayer({ stateDirectory: stateFile.slice(0, stateFile.lastIndexOf("/")) })
+      )
+      const store = Context.get(context, CodexAttemptStore)
+      const launch = yield* store.readServerLaunch()
+      expect(launch._tag).toBe(unreadable ? "Some" : "None")
+      if (launch._tag === "Some") expect(launch.value).toMatchObject({ phase: "Live", pid: expect.any(Number) })
+      if (store.hasRetainedAttempts === undefined) return yield* Effect.die("private store inventory is unavailable")
+      expect(yield* store.hasRetainedAttempts()).toBe(false)
+    })
+  )
+
 it.effect("the shipped binary and recovery qualification select the same CLI and host composition", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
@@ -342,7 +372,7 @@ it.effect("the shipped binary and recovery qualification select the same CLI and
     expect(composition).toContain("withDecodedProductionRepositoryHost(")
     expect(composition).toContain("productionRepositoryHostGraph(adapters)")
     expect(qualification).toContain('import { makeProductionCliApplication } from "../src/application/live-cli.js"')
-    expect(qualification).toContain("codexProcessNative: isolatedCodexProcessNativeService")
+    expect(qualification).toContain("codexProcessNative: processNative")
     expect(qualification).toContain("githubClient: () => publicRecoveryGithubLayer")
   }).pipe(Effect.provide(NodeServices.layer))
 )
@@ -652,47 +682,8 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* publicFixture
+        const { child: first, fixture, selected } = yield* startExecutingPublicRun()
         const fileSystem = yield* FileSystem.FileSystem
-        const first = yield* spawnPublicProcess(
-          fixture.config,
-          fixture.claimState,
-          fixture.cleanupObservation,
-          fixture.cleanupRelease,
-          fixture.cleanupWorktree,
-          fixture.commonDirectory,
-          fixture.gitFixtureDirectory,
-          "cancellation"
-        )
-        const selected = yield* takeMatching(first.records, ({ _tag }) => _tag === "RunSelected")
-        if (selected._tag !== "RunSelected") return
-        const turnStarted = yield* Effect.gen(function* () {
-          for (;;) {
-            if (
-              (yield* fileSystem.exists(fixture.executorState)) &&
-              (yield* fileSystem.readFileString(fixture.executorState)).includes('\\"_tag\\":\\"Running\\"')
-            ) {
-              return
-            }
-            yield* Effect.sleep("20 millis")
-          }
-        }).pipe(Effect.timeoutOption("10 seconds"))
-        if (turnStarted._tag === "None") {
-          const executorState = (yield* fileSystem.readFileString(fixture.executorState))
-            .split("\n")
-            .filter((line) => line.length > 0)
-            .at(-1)
-          yield* stopAbruptly(first)
-          return expect.fail(
-            `fixture did not start a turn: executor=${executorState} events=${JSON.stringify(yield* Ref.get(first.eventLog))} diagnostics=${JSON.stringify(yield* Ref.get(first.diagnostics))}`
-          )
-        }
-        yield* takeMatching(
-          first.records,
-          (record) =>
-            record._tag === "HistoricalSnapshot" &&
-            record.snapshot.items.some(({ occurrence }) => occurrence._tag === "PlannedAttemptExecutorWorkReported")
-        )
         expect(yield* fileSystem.exists(fixture.claimState)).toBe(true)
         yield* stopAbruptly(first)
 
@@ -816,133 +807,288 @@ it.live(
   60_000
 )
 
-it.live(
-  "already-terminal tracker state exits the public command once without active-refresh reactivation",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fixture = yield* publicFixture
-        const child = yield* spawnPublicProcess(
-          fixture.config,
-          fixture.claimState,
-          fixture.cleanupObservation,
-          fixture.cleanupRelease,
-          fixture.cleanupWorktree,
-          fixture.commonDirectory,
-          fixture.gitFixtureDirectory,
-          "terminal"
-        )
-        const selectedOrExit = yield* Effect.raceFirst(
-          takeMatching(child.records, ({ _tag }) => _tag === "RunSelected").pipe(
-            Effect.map((record) => ({ _tag: "Selected" as const, record }))
-          ),
-          child.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
-        )
-        expect(selectedOrExit._tag).toBe("Selected")
-        if (selectedOrExit._tag !== "Selected") return
-        const selected = selectedOrExit.record
-        const exitCode = yield* awaitGraceful(child)
-        const records = yield* Ref.get(child.recordLog)
-        expect(exitCode).toBe(0)
-        if (selected._tag !== "RunSelected") return
-        expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toHaveLength(1)
-        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toHaveLength(0)
-        const closed = records.filter(isClosedStatusRecord)
-        expect(closed).toHaveLength(1)
-        expect(closed[0]).toMatchObject({
-          _tag: "CurrentStatus",
-          status: { _tag: "DeliveryStatusClosed", final: { subject: { _tag: "Run", runId: selected.runId } } }
-        })
-        const selectedIndex = records.findIndex(({ _tag }) => _tag === "RunSelected")
-        const firstStatusIndex = records.findIndex(({ _tag }) => _tag === "CurrentStatus")
-        const closedIndex = records.findIndex(
-          (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusClosed"
-        )
-        const dispositionIndex = records.findIndex(({ _tag }) => _tag === "RunDisposition")
-        expect(selectedIndex).toBeLessThan(firstStatusIndex)
-        expect(firstStatusIndex).toBeLessThan(closedIndex)
-        expect(closedIndex).toBeLessThan(dispositionIndex)
-        const events = yield* Ref.get(child.eventLog)
-        expect(events.filter(({ _tag }) => _tag === "CreateClaimLabelStarted")).toHaveLength(0)
-        expect(events).toContainEqual({
-          _tag: "ReadIssueReturned",
-          issueNodeId: "production-public-recovery-issue",
-          state: "CLOSED"
-        })
-        const journalContext = yield* Layer.build(
-          sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
-        )
-        const journal = yield* Context.get(journalContext, JournalStore).read(selected.runId)
-        expect(journal.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
-      }).pipe(Effect.provide(NodeServices.layer))
-    ),
-  60_000
+for (const processEacces of [false, true])
+  it.live(
+    `already-terminal tracker state exits the public command once without active-refresh reactivation${processEacces ? " with injected process EACCES" : ""}`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* publicFixture
+          const child = yield* spawnPublicProcess(
+            fixture.config,
+            fixture.claimState,
+            fixture.cleanupObservation,
+            fixture.cleanupRelease,
+            fixture.cleanupWorktree,
+            fixture.commonDirectory,
+            fixture.gitFixtureDirectory,
+            "terminal",
+            "run",
+            false,
+            processEacces
+          )
+          const selectedOrExit = yield* Effect.raceFirst(
+            takeMatching(child.records, ({ _tag }) => _tag === "RunSelected").pipe(
+              Effect.map((record) => ({ _tag: "Selected" as const, record }))
+            ),
+            child.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
+          )
+          expect(selectedOrExit._tag).toBe("Selected")
+          if (selectedOrExit._tag !== "Selected") return
+          const selected = selectedOrExit.record
+          const exitCode = yield* child.handle.exitCode
+          yield* Effect.all([Fiber.join(child.stdoutFiber), Fiber.join(child.stderrFiber)])
+          const diagnostics = yield* Ref.get(child.diagnostics)
+          if (processEacces) {
+            expect(diagnostics).toHaveLength(1)
+            expect(diagnostics[0]).toMatchObject({ boundary: "NodeMainExit", outcome: "Failed", version: 1 })
+            expect(
+              diagnostics[0]?.reasons.every(
+                (reason) =>
+                  reason.error.errorTag === "CodexAppServerFailure" &&
+                  reason.error.category === "Ownership" &&
+                  reason.error.operation === "initialize"
+              )
+            ).toBe(true)
+            expect(JSON.stringify(diagnostics)).toContain("CodexAppServerFailure")
+            expect((yield* Ref.get(child.stderrLines)).join("\n")).not.toContain("controlled-github-token")
+            expect((yield* Ref.get(child.stderrLines)).join("\n")).not.toContain("controlled-codex-credential")
+          } else expect(diagnostics).toEqual([])
+          const records = yield* Ref.get(child.recordLog)
+          expect(exitCode).toBe(processEacces ? 1 : 0)
+          yield* assertPublicLaunchCustody(fixture.executorState, processEacces)
+          if (selected._tag !== "RunSelected") return
+          expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toHaveLength(1)
+          expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toHaveLength(0)
+          const closed = records.filter(isClosedStatusRecord)
+          expect(closed).toHaveLength(1)
+          expect(closed[0]).toMatchObject({
+            _tag: "CurrentStatus",
+            status: { _tag: "DeliveryStatusClosed", final: { subject: { _tag: "Run", runId: selected.runId } } }
+          })
+          const selectedIndex = records.findIndex(({ _tag }) => _tag === "RunSelected")
+          const firstStatusIndex = records.findIndex(({ _tag }) => _tag === "CurrentStatus")
+          const closedIndex = records.findIndex(
+            (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusClosed"
+          )
+          const dispositionIndex = records.findIndex(({ _tag }) => _tag === "RunDisposition")
+          expect(selectedIndex).toBeLessThan(firstStatusIndex)
+          expect(firstStatusIndex).toBeLessThan(closedIndex)
+          expect(closedIndex).toBeLessThan(dispositionIndex)
+          const events = yield* Ref.get(child.eventLog)
+          expect(events.filter(({ _tag }) => _tag === "CreateClaimLabelStarted")).toHaveLength(0)
+          expect(events).toContainEqual({
+            _tag: "ReadIssueReturned",
+            issueNodeId: "production-public-recovery-issue",
+            state: "CLOSED"
+          })
+          const journalContext = yield* Layer.build(
+            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
+          )
+          const journal = yield* Context.get(journalContext, JournalStore).read(selected.runId)
+          expect(journal.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+        }).pipe(Effect.provide(NodeServices.layer))
+      ),
+    60_000
+  )
+
+for (const processEacces of [false, true])
+  it.live(
+    `application Exit during recovered Git cleanup closes the attached public status without claiming Run completion${processEacces ? " with injected process EACCES" : ""}`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* publicFixture
+          const fileSystem = yield* FileSystem.FileSystem
+          const trackerTarget = GithubIssueTarget.make({
+            issueNumber: GithubIssueNumber.make(42),
+            owner: GithubRepositoryOwner.make("octo"),
+            repository: GithubRepositoryName.make("dalph")
+          })
+          const runId = yield* freshWorkflowRunId(trackerTarget)
+          const cleanupTaskRevision = encodeTaskRevisionFingerprint(
+            JSON.stringify({ body: "cleanup provenance predecessor", title: "cleanup provenance predecessor" })
+          )
+          const plannedAttempt = PlannedTaskAttempt.make({
+            attemptId: AttemptId.make("issue-300-closed-null"),
+            baseSha: fixture.baseSha,
+            branch: TaskBranchRef.make("refs/heads/task/issue-300-closed-null"),
+            executor: TaskExecutorLocator.make("codex:issue-300-closed-null"),
+            runId,
+            taskId: TaskId.make("issue-300-closed-null"),
+            taskRevision: cleanupTaskRevision,
+            worktree: WorktreeLocator.make(fixture.cleanupWorktree)
+          })
+          const successorAttempt = PlannedTaskAttempt.make({
+            ...plannedAttempt,
+            attemptId: AttemptId.make("issue-300-closed-null-successor"),
+            branch: TaskBranchRef.make("refs/heads/task/issue-300-closed-null-successor"),
+            taskRevision: encodeTaskRevisionFingerprint(
+              JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
+            ),
+            worktree: WorktreeLocator.make(`${fixture.cleanupWorktree}-successor`)
+          })
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const storageContext = yield* Layer.build(
+                sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
+              )
+              const storage = Context.get(storageContext, JournalStore)
+              yield* storage.beginRun(
+                runId,
+                trackerTarget,
+                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+                fixture.remotePublicationTarget
+              )
+              const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+              if (initial._tag === "InvalidWorkflowJournalHistory") {
+                return yield* Effect.die(
+                  `replacement fixture initial history is invalid: ${JSON.stringify(initial.issues)}`
+                )
+              }
+              const journalContext = yield* Layer.build(journalLayer(runId, trackerTarget, initial, storage))
+              yield* appendReplacementProvenance(plannedAttempt, successorAttempt, "StartupValid").pipe(
+                Effect.provide(journalContext)
+              )
+              const accepted = yield* Context.get(journalContext, AcceptedJournalReader).readAccepted(runId)
+              expect(accepted.runId).toBe(runId)
+              const reduced = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+              expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
+            })
+          )
+
+          const child = yield* spawnPublicProcess(
+            fixture.config,
+            fixture.claimState,
+            fixture.cleanupObservation,
+            fixture.cleanupRelease,
+            fixture.cleanupWorktree,
+            fixture.commonDirectory,
+            fixture.gitFixtureDirectory,
+            "exit-during-attachment",
+            "run",
+            false,
+            processEacces
+          )
+          const selectedOrExit = yield* Effect.raceFirst(
+            takeMatching(child.records, ({ _tag }) => _tag === "RunSelected").pipe(
+              Effect.map((record) => ({ _tag: "Selected" as const, record }))
+            ),
+            child.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
+          )
+          if (selectedOrExit._tag !== "Selected") {
+            yield* awaitGraceful(child)
+            expect.fail(
+              `the recovered command exited with status ${selectedOrExit.exitCode} before RunSelected: ${JSON.stringify(yield* Ref.get(child.recordLog))}`
+            )
+          }
+          const selected = selectedOrExit.record
+          expect(selected).toMatchObject({ runId, selection: "Recovered" })
+          while (!(yield* fileSystem.exists(fixture.cleanupObservation))) {
+            yield* Effect.sleep("10 millis")
+          }
+          const cleanupStarted = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CleanupGitObservation))(
+            yield* fileSystem.readFileString(fixture.cleanupObservation)
+          )
+          expect(cleanupStarted).toEqual({
+            _tag: "CleanupGitObservationStarted",
+            cleanupWorktree: fixture.cleanupWorktree,
+            commonDirectory: fixture.commonDirectory
+          })
+          yield* takeMatching(
+            child.records,
+            (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusNotReady"
+          )
+          yield* Effect.sync(() => nodeProcess.kill(child.handle.pid, "SIGTERM"))
+          yield* fileSystem.writeFileString(fixture.cleanupRelease, "release after application Exit request")
+          const exitCode = yield* child.handle.exitCode
+          yield* Effect.all([Fiber.join(child.stdoutFiber), Fiber.join(child.stderrFiber)])
+          const diagnostics = yield* Ref.get(child.diagnostics)
+          if (processEacces) {
+            expect(diagnostics).toHaveLength(1)
+            expect(diagnostics[0]).toMatchObject({ boundary: "NodeMainExit", outcome: "Failed", version: 1 })
+            expect(
+              diagnostics[0]?.reasons.every(
+                (reason) =>
+                  reason.error.errorTag === "ProductionCliLifecycleError" &&
+                  reason.error.code === "lifecycle.exit_failed"
+              )
+            ).toBe(true)
+            expect(yield* Ref.get(child.exitDiagnostics)).toMatchObject([{ _tag: "Failed" }])
+            expect((yield* Ref.get(child.stderrLines)).join("\n")).not.toContain("controlled-github-token")
+            expect((yield* Ref.get(child.stderrLines)).join("\n")).not.toContain("controlled-codex-credential")
+          } else expect(diagnostics).toEqual([])
+          expect(exitCode).toBe(processEacces ? 1 : 0)
+          yield* assertPublicLaunchCustody(fixture.executorState, processEacces)
+          if (selected._tag !== "RunSelected") return
+          const events = yield* Ref.get(child.eventLog)
+          expect(
+            events.filter(
+              ({ _tag }) =>
+                _tag === "CreateClaimLabelStarted" || _tag === "DeleteClaimLabelApplied" || _tag === "CodexTurnStarted"
+            )
+          ).toEqual([])
+          const records = yield* Ref.get(child.recordLog)
+          expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toHaveLength(0)
+          expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+            {
+              _tag: "ApplicationExitDisposition",
+              disposition: processEacces
+                ? { _tag: "Failed", requestedStatus: 1 }
+                : { _tag: "Succeeded", requestedStatus: 0 },
+              runId: selected.runId,
+              version: 1
+            }
+          ])
+          const closed = records.filter(isClosedStatusRecord)
+          expect(closed).toHaveLength(processEacces ? 0 : 1)
+          if (processEacces) {
+            expect(records.findIndex(({ _tag }) => _tag === "RunSelected")).toBeLessThan(
+              records.findIndex(({ _tag }) => _tag === "ApplicationExitDisposition")
+            )
+            return
+          }
+          expect(closed[0]).toMatchObject({
+            _tag: "CurrentStatus",
+            status: {
+              _tag: "DeliveryStatusClosed",
+              final: { _tag: "DeliveryStatusAvailable", subject: { _tag: "Run", runId: selected.runId } },
+              subject: { _tag: "Run", runId: selected.runId }
+            },
+            version: 1
+          })
+          if (closed[0]?.status.final?._tag !== "DeliveryStatusAvailable") return
+          expect(closed[0].status.final.entries.length).toBeGreaterThan(0)
+          expect(closed[0].status.final.entries.filter(({ _tag }) => _tag === "LiveDeliveryAction")).toEqual([])
+          const notReadyIndex = records.findIndex(
+            (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusNotReady"
+          )
+          const closedIndex = records.findIndex(
+            (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusClosed"
+          )
+          const exitIndex = records.findIndex(({ _tag }) => _tag === "ApplicationExitDisposition")
+          expect(notReadyIndex).toBeLessThan(closedIndex)
+          expect(closedIndex).toBeLessThan(exitIndex)
+        }).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer))
+      ),
+    60_000
+  )
+
+it.effect("public stdout decoder rejects a runtime cause dump instead of filtering it", () =>
+  Effect.gen(function* () {
+    const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ProductionCliRecord))(
+      "[01:47:52.275] ERROR (#3): CodexAppServerFailure: controlled EACCES"
+    ).pipe(Effect.result)
+    expect(result._tag).toBe("Failure")
+  })
 )
 
 it.live(
-  "application Exit during recovered Git cleanup closes the attached public status without claiming Run completion",
+  "built public recovery rejects a dirty stdout negative control",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* publicFixture
-        const fileSystem = yield* FileSystem.FileSystem
-        const trackerTarget = GithubIssueTarget.make({
-          issueNumber: GithubIssueNumber.make(42),
-          owner: GithubRepositoryOwner.make("octo"),
-          repository: GithubRepositoryName.make("dalph")
-        })
-        const runId = yield* freshWorkflowRunId(trackerTarget)
-        const cleanupTaskRevision = encodeTaskRevisionFingerprint(
-          JSON.stringify({ body: "cleanup provenance predecessor", title: "cleanup provenance predecessor" })
-        )
-        const plannedAttempt = PlannedTaskAttempt.make({
-          attemptId: AttemptId.make("issue-300-closed-null"),
-          baseSha: fixture.baseSha,
-          branch: TaskBranchRef.make("refs/heads/task/issue-300-closed-null"),
-          executor: TaskExecutorLocator.make("codex:issue-300-closed-null"),
-          runId,
-          taskId: TaskId.make("issue-300-closed-null"),
-          taskRevision: cleanupTaskRevision,
-          worktree: WorktreeLocator.make(fixture.cleanupWorktree)
-        })
-        const successorAttempt = PlannedTaskAttempt.make({
-          ...plannedAttempt,
-          attemptId: AttemptId.make("issue-300-closed-null-successor"),
-          branch: TaskBranchRef.make("refs/heads/task/issue-300-closed-null-successor"),
-          taskRevision: encodeTaskRevisionFingerprint(
-            JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
-          ),
-          worktree: WorktreeLocator.make(`${fixture.cleanupWorktree}-successor`)
-        })
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const storageContext = yield* Layer.build(
-              sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
-            )
-            const storage = Context.get(storageContext, JournalStore)
-            yield* storage.beginRun(
-              runId,
-              trackerTarget,
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-              remotePublicationTargetForTest
-            )
-            const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
-            if (initial._tag === "InvalidWorkflowJournalHistory") {
-              return yield* Effect.die(
-                `replacement fixture initial history is invalid: ${JSON.stringify(initial.issues)}`
-              )
-            }
-            const journalContext = yield* Layer.build(journalLayer(runId, trackerTarget, initial, storage))
-            yield* appendReplacementProvenance(plannedAttempt, successorAttempt, "StartupValid").pipe(
-              Effect.provide(journalContext)
-            )
-            const accepted = yield* Context.get(journalContext, AcceptedJournalReader).readAccepted(runId)
-            expect(accepted.runId).toBe(runId)
-            const reduced = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
-            expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
-          })
-        )
-
         const child = yield* spawnPublicProcess(
           fixture.config,
           fixture.claimState,
@@ -951,76 +1097,18 @@ it.live(
           fixture.cleanupWorktree,
           fixture.commonDirectory,
           fixture.gitFixtureDirectory,
-          "exit-during-attachment"
+          "terminal",
+          "run",
+          false,
+          true,
+          true
         )
-        const selectedOrExit = yield* Effect.raceFirst(
-          takeMatching(child.records, ({ _tag }) => _tag === "RunSelected").pipe(
-            Effect.map((record) => ({ _tag: "Selected" as const, record }))
-          ),
-          child.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
-        )
-        if (selectedOrExit._tag !== "Selected") {
-          yield* awaitGraceful(child)
-          expect.fail(
-            `the recovered command exited with status ${selectedOrExit.exitCode} before RunSelected: ${JSON.stringify(yield* Ref.get(child.recordLog))}`
-          )
-        }
-        const selected = selectedOrExit.record
-        expect(selected).toMatchObject({ runId, selection: "Recovered" })
-        while (!(yield* fileSystem.exists(fixture.cleanupObservation))) {
-          yield* Effect.sleep("10 millis")
-        }
-        const cleanupStarted = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CleanupGitObservation))(
-          yield* fileSystem.readFileString(fixture.cleanupObservation)
-        )
-        expect(cleanupStarted).toEqual({
-          _tag: "CleanupGitObservationStarted",
-          cleanupWorktree: fixture.cleanupWorktree,
-          commonDirectory: fixture.commonDirectory
-        })
-        yield* takeMatching(
-          child.records,
-          (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusNotReady"
-        )
-        yield* Effect.sync(() => nodeProcess.kill(child.handle.pid, "SIGTERM"))
-        yield* fileSystem.writeFileString(fixture.cleanupRelease, "release after application Exit request")
-        const exitCode = yield* awaitGraceful(child)
-        expect(exitCode).toBe(0)
-        if (selected._tag !== "RunSelected") return
-        const records = yield* Ref.get(child.recordLog)
-        expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toHaveLength(0)
-        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
-          {
-            _tag: "ApplicationExitDisposition",
-            disposition: { _tag: "Succeeded", requestedStatus: 0 },
-            runId: selected.runId,
-            version: 1
-          }
-        ])
-        const closed = records.filter(isClosedStatusRecord)
-        expect(closed).toHaveLength(1)
-        expect(closed[0]).toMatchObject({
-          _tag: "CurrentStatus",
-          status: {
-            _tag: "DeliveryStatusClosed",
-            final: { _tag: "DeliveryStatusAvailable", subject: { _tag: "Run", runId: selected.runId } },
-            subject: { _tag: "Run", runId: selected.runId }
-          },
-          version: 1
-        })
-        if (closed[0]?.status.final?._tag !== "DeliveryStatusAvailable") return
-        expect(closed[0].status.final.entries.length).toBeGreaterThan(0)
-        expect(closed[0].status.final.entries.filter(({ _tag }) => _tag === "LiveDeliveryAction")).toEqual([])
-        const notReadyIndex = records.findIndex(
-          (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusNotReady"
-        )
-        const closedIndex = records.findIndex(
-          (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusClosed"
-        )
-        const exitIndex = records.findIndex(({ _tag }) => _tag === "ApplicationExitDisposition")
-        expect(notReadyIndex).toBeLessThan(closedIndex)
-        expect(closedIndex).toBeLessThan(exitIndex)
-      }).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer))
+        expect(yield* child.handle.exitCode).toBe(1)
+        const stdout = yield* Fiber.join(child.stdoutFiber).pipe(Effect.result)
+        expect(stdout._tag).toBe("Failure")
+        if (stdout._tag === "Failure") expect(stdout.failure).toMatchObject({ _tag: "InvalidPublicStdoutRecord" })
+        yield* Fiber.join(child.stderrFiber)
+      }).pipe(Effect.provide(NodeServices.layer))
     ),
-  60_000
+  15_000
 )

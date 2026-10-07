@@ -1,10 +1,13 @@
 import { it } from "@effect/vitest"
-import { RunId, TaskId, TaskRevision } from "@dalph/contracts"
+import { GitCommitSha, RunId, TaskId, TaskRevision } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
 import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-tracker/graph.js"
-import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
+import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
+import { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -240,10 +243,17 @@ const hostileCandidateFrame = (): CurrentDeliveryFrame => {
     [candidateTask.id]
   )
   const records = [
+    makeWorkflowRunBeganRecord(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest,
+      AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha: GitCommitSha.make("1".repeat(40)) })
+    ),
     {
       event: taskTrackerReadIntent(graphOperation),
       key: intentRecordKey(graphOperation.operationId),
-      position: JournalPosition.make(1),
+      position: JournalPosition.make(2),
       runId
     },
     {
@@ -252,13 +262,13 @@ const hostileCandidateFrame = (): CurrentDeliveryFrame => {
         makeCompleteTaskTrackerFactsObserved(graphOperation, graphProjection.snapshot)
       ),
       key: outcomeRecordKey(graphOperation.operationId),
-      position: JournalPosition.make(2),
+      position: JournalPosition.make(3),
       runId
     }
   ]
   Object.defineProperty(graphProjection.snapshot, "eligibleTasks", { value: () => [candidateTask, candidateTask] })
   return {
-    acceptedAt: JournalPosition.make(2),
+    acceptedAt: JournalPosition.make(3),
     currentGraph: graphProjection.snapshot,
     currentGraphOperationId: graphOperation.operationId,
     pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },

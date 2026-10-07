@@ -345,7 +345,7 @@ export {
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent
 } from "./workflow/registry/event.js"
-export { makeWorkflowRunBeganRecord } from "./workflow-journal/run-lifecycle.js"
+export { makeWorkflowRunBeganRecord, makeHistoricalWorkflowRunBeganRecord } from "./workflow-journal/run-lifecycle.js"
 export {
   AttemptWorktreeLost,
   PlannedAttemptWorktreeObservation
@@ -930,13 +930,13 @@ export {
 } from "./coordination/delivery/delivery-action-executor.js"
 export { PlannedAttemptExecutorResponsibilityLineageMissing } from "./workflow/protocols/planned-attempt-executor-work/errors.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
-export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
+export { DeliveryPlanningCatchUp } from "./coordination/delivery/delivery-planning-catch-up.js"
 export {
-  DeliveryRelationPublicationObserver,
+  DeliveryRelationInputObserver,
   evaluateDeliveryRelationAndRuntimeInputBundle,
   evaluateDeliveryRelationInputBundle,
   evaluateDeliveryRuntimeInputBundle
-} from "./coordination/delivery/delivery-publication-observer.js"
+} from "./coordination/delivery/delivery-relation-input-observer.js"
 export {
   DeliveryRuntimeObservationObserver,
   type DeliveryRuntimeLiveOwnerSnapshot,
@@ -981,7 +981,7 @@ export {
   type JournaledTrackerGraphObservation,
   type DeliveryConsequences,
   BoundedTicketRank,
-  type DeliveryGraphPublication,
+  type DeliveryGraphView,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeSnapshot,

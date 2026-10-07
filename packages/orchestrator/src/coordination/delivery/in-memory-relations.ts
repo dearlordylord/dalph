@@ -22,7 +22,7 @@ import {
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeFacts,
   type DeliveryRelationInputBundle,
-  type DeliveryGraphPublication,
+  type DeliveryGraphView,
   type TicketDeliveryEvidence,
   type DeliveryConsequences,
   type DeliveryRelationSourceError,
@@ -101,7 +101,7 @@ const publicationKeyPartOf = (value: string | number): string => {
   return `${typeof value}:${text.length}:${text}`
 }
 
-const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string => {
+const deliveryPublicationKeyOf = (publication: DeliveryGraphView): string => {
   const graph = publication.graph
   const graphKey =
     graph._tag === "GraphNotEstablished"
@@ -125,11 +125,11 @@ const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string
 }
 
 const deduplicatedPublicationSignal = (
-  signal: CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError>
-): CurrentSignal<DeliveryGraphPublication, DeliveryRelationSourceError> =>
+  signal: CurrentSignal<DeliveryGraphView, DeliveryRelationSourceError>
+): CurrentSignal<DeliveryGraphView, DeliveryRelationSourceError> =>
   currentSignalFromCurrentFirstStream(
     signal.changes.pipe(
-      Stream.mapAccum<string | undefined, DeliveryGraphPublication, DeliveryGraphPublication>(
+      Stream.mapAccum<string | undefined, DeliveryGraphView, DeliveryGraphView>(
         () => undefined,
         (previousKey, publication) => {
           const nextKey = deliveryPublicationKeyOf(publication)
@@ -162,7 +162,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     bundle: DeliveryRelationInputBundle,
     contributions: DeliveryProposalContributions
   ): DeliveryProposalContributions =>
-    releaseEligibleProposalContributionsOf(boundedParallelTicketsOf(frontierOf(bundle.publication)), contributions)
+    releaseEligibleProposalContributionsOf(boundedParallelTicketsOf(frontierOf(bundle.graphView)), contributions)
   const proposalContributions =
     input.proposalContributions === undefined
       ? mapCurrentSignal(input.coherent, (bundle) =>
@@ -240,7 +240,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         )
       )
   const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
-  const publication = deduplicatedPublicationSignal(mapCurrentSignal(input.coherent, ({ publication }) => publication))
+  const publication = deduplicatedPublicationSignal(mapCurrentSignal(input.coherent, ({ graphView }) => graphView))
   const trackerGraphService = TrackerGraphRelation.of({
     proposedActions: actionPlanTrackerGraphProposals,
     signal: publication
@@ -254,7 +254,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
     TicketDeliveryProjection,
     TicketDeliveryProjection.of({
       of: (tickets) => ({
-        current: mapCurrentSignal(tickets, (current) => ticketDeliveriesOf(current, current.publication.exactEvidence)),
+        current: mapCurrentSignal(tickets, (current) => ticketDeliveriesOf(current, current.graphView.exactEvidence)),
         proposalContributions,
         proposedActions: mapCurrentSignal(proposalContributions, ({ ticketDelivery }) => ticketDelivery),
         source: tickets

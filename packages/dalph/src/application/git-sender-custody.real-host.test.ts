@@ -91,6 +91,8 @@ it("replacement stops the escaped Git sender after exact host SIGKILL before a l
   let hostIdentity: LinuxProcessStat | undefined
   let escapedIdentity: LinuxProcessStat | undefined
   let nextRemoteCalls = 0
+  let primaryFailure: unknown
+  let cleanupFailure: AggregateError | undefined
   try {
     if (host.pid === undefined) throw new Error("fixture host did not spawn")
     hostIdentity = await observe(host.pid)
@@ -128,18 +130,40 @@ it("replacement stops the escaped Git sender after exact host SIGKILL before a l
     expect(nextRemoteCalls).toBe(1)
     const escapedGroupId = escapedIdentity.processGroupId
     expect(() => nodeProcess.kill(-escapedGroupId, 0)).toThrow()
+  } catch (error) {
+    primaryFailure = error
   } finally {
     if (timer !== undefined) cancel(timer)
     watcher.close()
     await signalExact(hostIdentity)
     await hostClosed
-    await Effect.runPromise(
-      Effect.flatMap(GitSenderCustody, (custody) => custody.reconcile(subject)).pipe(
-        Effect.provide(fileGitSenderCustodyLayer(directory))
+    let reconciliationFailure: unknown
+    try {
+      await Effect.runPromise(
+        Effect.flatMap(GitSenderCustody, (custody) => custody.reconcile(subject)).pipe(
+          Effect.provide(fileGitSenderCustodyLayer(directory))
+        )
       )
-    )
-    await signalExact(escapedIdentity)
-    if (escapedIdentity !== undefined) await proveAbsent(escapedIdentity)
-    await rm(directory, { recursive: true, force: true })
+    } catch (error) {
+      reconciliationFailure = error
+    }
+    let escapedCleanupFailure: unknown
+    try {
+      // Failed custody observation must not skip stopping the exact fixture child.
+      await signalExact(escapedIdentity)
+      if (escapedIdentity !== undefined) await proveAbsent(escapedIdentity)
+    } catch (error) {
+      escapedCleanupFailure = error
+    }
+    if (reconciliationFailure !== undefined || escapedCleanupFailure !== undefined) {
+      cleanupFailure = new AggregateError(
+        [primaryFailure, reconciliationFailure, escapedCleanupFailure].filter((failure) => failure !== undefined),
+        `sender fixture cleanup failed; retained ${directory}`
+      )
+    } else {
+      await rm(directory, { recursive: true, force: true })
+    }
   }
+  if (cleanupFailure !== undefined) throw cleanupFailure
+  if (primaryFailure !== undefined) throw primaryFailure
 }, 15000)

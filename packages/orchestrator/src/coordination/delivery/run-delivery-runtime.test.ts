@@ -72,7 +72,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent, WorkflowInterpreter } from "../../workflow/interpretation/interpreter.js"
 import { journaledTrackerGraphRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { Journal } from "./journal.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
@@ -236,7 +236,7 @@ import {
 } from "../../../test/support/prepared-begin-proposal.js"
 import { makeFreshTaskCandidateFrontierForTest } from "../../../test/support/fresh-task-candidate.js"
 import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "./delivery-planning-catch-up.js"
 import { deliveryRuntimeLocalDeferralAfter, DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
 import { executeFreshPlannedAttempt } from "./planned-attempt-delivery-action-adapter.js"
@@ -268,9 +268,9 @@ const runId = RunId.make("runtime-test-run")
 const freshTaskCandidateFrontierOf = (input: Parameters<typeof makeFreshTaskCandidateFrontierForTest>[0]) =>
   Effect.succeed(makeFreshTaskCandidateFrontierForTest(input))
 
-const defaultAcceptedFactPublication = DeliveryAcceptedFactPublication.of({
-  awaitCurrent: Effect.succeed({
-    _tag: "DeliveryAcceptedPublicationBoundary",
+const defaultAcceptedFactPublication = DeliveryPlanningCatchUp.of({
+  awaitJournalPosition: Effect.succeed({
+    _tag: "DeliveryPlanningCatchUpBoundary",
     acceptedThrough: JournalPosition.make(1),
     runId
   })
@@ -278,8 +278,8 @@ const defaultAcceptedFactPublication = DeliveryAcceptedFactPublication.of({
 
 const runDeliveryRuntimeQuiescence = <E>(
   relation: DeliveryRuntimeInput<E>,
-  publication: DeliveryAcceptedFactPublication["Service"] = defaultAcceptedFactPublication
-) => runDeliveryRuntime(runId, relation).pipe(Effect.provideService(DeliveryAcceptedFactPublication, publication))
+  publication: DeliveryPlanningCatchUp["Service"] = defaultAcceptedFactPublication
+) => runDeliveryRuntime(runId, relation).pipe(Effect.provideService(DeliveryPlanningCatchUp, publication))
 
 const runDeliveryRuntimeDecision = <E>(relation: DeliveryRuntimeInput<E>) =>
   runDeliveryRuntimeQuiescence(relation).pipe(
@@ -303,10 +303,10 @@ const identitySupportLayers = Layer.mergeAll(
   plannerLayer,
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(
-    DeliveryAcceptedFactPublication,
-    DeliveryAcceptedFactPublication.of({
-      awaitCurrent: Effect.succeed({
-        _tag: "DeliveryAcceptedPublicationBoundary",
+    DeliveryPlanningCatchUp,
+    DeliveryPlanningCatchUp.of({
+      awaitJournalPosition: Effect.succeed({
+        _tag: "DeliveryPlanningCatchUpBoundary",
         acceptedThrough: JournalPosition.make(1),
         runId
       })
@@ -446,7 +446,7 @@ const baseEvaluation = Effect.gen(function* () {
             },
             trackerGraphProposals: []
           },
-          publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
+          graphView: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
         } satisfies DeliveryRelationInputBundle)
       })
     )
@@ -1307,7 +1307,7 @@ it.effect("keeps the original graph-read owner while its acknowledged intent adv
         runId,
         target,
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             runId,
             target,
             InitialControlPolicy.make({ taskExecutionCapacity: policy.taskExecutionCapacity }),
@@ -2740,7 +2740,7 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
         },
         trackerGraphProposals: []
       },
-      publication: {
+      graphView: {
         exactEvidence: [
           {
             _tag: "ResponsibilityFacts" as const,
@@ -3835,10 +3835,10 @@ it.effect("keeps an action owner until its accepted successor publication reache
             : Effect.void
         }
       })
-      const publication = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Ref.get(executions).pipe(
+      const publication = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Ref.get(executions).pipe(
           Effect.map((current) => ({
-            _tag: "DeliveryAcceptedPublicationBoundary" as const,
+            _tag: "DeliveryPlanningCatchUpBoundary" as const,
             acceptedThrough: current.at(-1) === predecessor.id ? position23 : position24,
             runId
           }))
@@ -4028,10 +4028,10 @@ it.effect("keeps a same-position worktree completion pending until its lineage s
             return yield* Effect.die("capacity-full D/E must not cross the executor boundary")
           })
       })
-      const publication = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Ref.get(publicationPosition).pipe(
+      const publication = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Ref.get(publicationPosition).pipe(
           Effect.map((acceptedThrough) => ({
-            _tag: "DeliveryAcceptedPublicationBoundary" as const,
+            _tag: "DeliveryPlanningCatchUpBoundary" as const,
             acceptedThrough,
             runId
           }))
@@ -4158,8 +4158,8 @@ it.effect("keeps a completion pending when newer accepted facts still retain its
       )
       const runtime = yield* runDeliveryRuntimeQuiescence(
         relation,
-        DeliveryAcceptedFactPublication.of({
-          awaitCurrent: Effect.succeed({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId })
+        DeliveryPlanningCatchUp.of({
+          awaitJournalPosition: Effect.succeed({ _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId })
         })
       ).pipe(
         Effect.provide(plannerLayer),
@@ -4243,11 +4243,11 @@ it.effect("settles pending completions in their publication arrival order when o
             return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult
           })
       })
-      const publication = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Effect.gen(function* () {
+      const publication = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Effect.gen(function* () {
           const proposalId = yield* Ref.get(completing)
           yield* Queue.offer(publicationReturned, proposalId)
-          return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId }
+          return { _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId }
         })
       })
       const runtime = yield* runDeliveryRuntimeQuiescence(relation, publication).pipe(
@@ -4321,9 +4321,9 @@ it.effect("fails closed when an action completion proof differs from the exact a
           const relation = yield* dynamicEvaluationSignal(initial)
           const outcomes = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
           const unexpectedProposalId = DeliveryProposalId.make(`publication-mismatch-unexpected-${mismatch}`)
-          const publication = DeliveryAcceptedFactPublication.of({
-            awaitCurrent: Effect.succeed({
-              _tag: "DeliveryAcceptedPublicationBoundary",
+          const publication = DeliveryPlanningCatchUp.of({
+            awaitJournalPosition: Effect.succeed({
+              _tag: "DeliveryPlanningCatchUpBoundary",
               acceptedThrough,
               runId: mismatch === "ResultProposal" ? runId : RunId.make("publication-mismatch-foreign-run")
             })
@@ -4388,8 +4388,8 @@ it.effect("rolls back an owner when its pending completion loses the relation", 
       const executor = DeliveryActionExecutor.of({
         execute: ({ proposal: action }) => Effect.succeed({ _tag: "ActionCompleted", proposalId: action.id } as const)
       })
-      const publication = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Effect.succeed({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId })
+      const publication = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Effect.succeed({ _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId })
       })
       const integrationTargets = yield* makeIntegrationTargetResourceController()
       const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
@@ -4460,11 +4460,11 @@ it.effect("cuts admission for cleanup but drains an existing owner through its a
               return { _tag: "ActionCompleted", proposalId: proposal.id } satisfies DeliveryActionResult
             })
         }),
-        Effect.provideService(DeliveryAcceptedFactPublication, {
-          awaitCurrent: Deferred.succeed(publishing, undefined).pipe(
+        Effect.provideService(DeliveryPlanningCatchUp, {
+          awaitJournalPosition: Deferred.succeed(publishing, undefined).pipe(
             Effect.andThen(Deferred.await(published)),
             Effect.as({
-              _tag: "DeliveryAcceptedPublicationBoundary" as const,
+              _tag: "DeliveryPlanningCatchUpBoundary" as const,
               acceptedThrough: JournalPosition.make(12),
               runId
             })
@@ -5241,13 +5241,13 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
         : Effect.void
   })
   const acceptedPublicationMade = yield* Ref.make(false)
-  const publication = DeliveryAcceptedFactPublication.of({
-    awaitCurrent: Effect.gen(function* () {
+  const publication = DeliveryPlanningCatchUp.of({
+    awaitJournalPosition: Effect.gen(function* () {
       yield* Deferred.succeed(journalCountAtPublication, (yield* acceptedScenarioRecords).length)
       // Like the production boundary, rereading an already published prefix
       // does not publish the same facts again or rewind the later guard.
       if (!(yield* Ref.getAndSet(acceptedPublicationMade, true))) yield* relation.publish(accepted)
-      return { _tag: "DeliveryAcceptedPublicationBoundary" as const, acceptedThrough, runId }
+      return { _tag: "DeliveryPlanningCatchUpBoundary" as const, acceptedThrough, runId }
     })
   })
 
@@ -5257,7 +5257,7 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
     Effect.provide(plannedAttemptProtocolControllerLayer),
     Effect.provide(deliveryRuntimeResourceCapabilitiesLayer({ ...capabilities, resources }).pipe(Layer.fresh)),
     Effect.provideService(DeliveryActionExecutor, actionExecutor),
-    Effect.provideService(DeliveryAcceptedFactPublication, publication),
+    Effect.provideService(DeliveryPlanningCatchUp, publication),
     Effect.provideService(DeliverySemanticTrace, trace)
   )
   return {
@@ -5515,7 +5515,7 @@ it.effect(
             },
             trackerGraphProposals: []
           },
-          publication: { exactEvidence: [], graph, policy: capacityPolicy }
+          graphView: { exactEvidence: [], graph, policy: capacityPolicy }
         })
         const relation = yield* deliveryRuntime.pipe(
           Effect.provide(
@@ -5824,10 +5824,10 @@ it.effect(
             )
           }
         })
-        const publication = DeliveryAcceptedFactPublication.of({
-          awaitCurrent: Ref.get(acceptedThrough).pipe(
+        const publication = DeliveryPlanningCatchUp.of({
+          awaitJournalPosition: Ref.get(acceptedThrough).pipe(
             Effect.map((acceptedThrough) => ({
-              _tag: "DeliveryAcceptedPublicationBoundary" as const,
+              _tag: "DeliveryPlanningCatchUpBoundary" as const,
               acceptedThrough,
               runId: fixture.runId
             }))
@@ -5837,7 +5837,7 @@ it.effect(
           deterministicOperationIdAllocatorLayer("automatic-successor-baseline-activation"),
           plannerLayer,
           plannedAttemptProtocolControllerLayer,
-          Layer.succeed(DeliveryAcceptedFactPublication, publication)
+          Layer.succeed(DeliveryPlanningCatchUp, publication)
         )
         const trace = DeliverySemanticTrace.of({
           emit: (event) =>
@@ -6100,8 +6100,8 @@ it.effect("keeps three publication-through passive attachments across a post-com
             : Effect.void
         }
       })
-      const publication = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Effect.succeed({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId })
+      const publication = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Effect.succeed({ _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId })
       })
       const integrationTargets = yield* makeIntegrationTargetResourceController()
       const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets).pipe(
@@ -6656,11 +6656,11 @@ for (const { acceptedThrough, publishChange } of [
             DeliveryRuntimePhase.ActiveRefreshPostG2([boundary])
           ).pipe(
             Effect.provideService(
-              DeliveryAcceptedFactPublication,
-              DeliveryAcceptedFactPublication.of({
-                awaitCurrent: Effect.gen(function* () {
+              DeliveryPlanningCatchUp,
+              DeliveryPlanningCatchUp.of({
+                awaitJournalPosition: Effect.gen(function* () {
                   if (publishChange) yield* relation.publish({ ...initial, acceptedAt: acceptedThrough })
-                  return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId: foreignRunId } as const
+                  return { _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId: foreignRunId } as const
                 })
               })
             ),
@@ -6719,15 +6719,15 @@ it.effect("consumes an already accepted publication before returning a post-G2 c
       const firstCut = yield* Deferred.make<void>()
       const publishAcceptedControl = yield* Deferred.make<void>()
       const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
-      const publication = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Effect.gen(function* () {
+      const publication = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Effect.gen(function* () {
           // Capture the durable prefix before awaiting its projection, as the
           // production publication boundary does; no future fact is required.
           const acceptedThrough = yield* Ref.get(durablePosition)
           yield* Ref.update(freshnessCuts, (cuts) => [...cuts, acceptedThrough])
           yield* Deferred.succeed(firstCut, undefined)
           yield* Deferred.await(publishAcceptedControl)
-          return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId } as const
+          return { _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId } as const
         })
       })
       const runtime = yield* runDeliveryRuntimePhase(
@@ -6735,7 +6735,7 @@ it.effect("consumes an already accepted publication before returning a post-G2 c
         relation,
         DeliveryRuntimePhase.ActiveRefreshPostG2([boundary])
       ).pipe(
-        Effect.provideService(DeliveryAcceptedFactPublication, publication),
+        Effect.provideService(DeliveryPlanningCatchUp, publication),
         Effect.provide(identityLayers),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -6913,10 +6913,10 @@ for (const { capturedBoundary, phase } of [
           const freshnessCuts = yield* Ref.make(0)
           const result = yield* runDeliveryRuntimePhase(runId, relation, phase).pipe(
             Effect.provideService(
-              DeliveryAcceptedFactPublication,
-              DeliveryAcceptedFactPublication.of({
-                awaitCurrent: Ref.update(freshnessCuts, (count) => count + 1).pipe(
-                  Effect.andThen(defaultAcceptedFactPublication.awaitCurrent)
+              DeliveryPlanningCatchUp,
+              DeliveryPlanningCatchUp.of({
+                awaitJournalPosition: Ref.update(freshnessCuts, (count) => count + 1).pipe(
+                  Effect.andThen(defaultAcceptedFactPublication.awaitJournalPosition)
                 )
               })
             ),
@@ -7426,9 +7426,9 @@ it.effect("retains an occupied promotion exclusion across unrelated progress unt
             return result
           })
       })
-      const publicationBoundary = DeliveryAcceptedFactPublication.of({
-        awaitCurrent: Ref.get(acceptedThrough).pipe(
-          Effect.map((acceptedThrough) => ({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId }))
+      const publicationBoundary = DeliveryPlanningCatchUp.of({
+        awaitJournalPosition: Ref.get(acceptedThrough).pipe(
+          Effect.map((acceptedThrough) => ({ _tag: "DeliveryPlanningCatchUpBoundary", acceptedThrough, runId }))
         )
       })
       const resources = yield* Layer.build(testDeliveryRuntimeResourcesLayer)
@@ -7440,7 +7440,7 @@ it.effect("retains an occupied promotion exclusion across unrelated progress unt
         return yield* runDeliveryRuntime(runId, relation).pipe(
           Effect.provideContext(resources),
           Effect.provide(identitySupportLayers),
-          Effect.provideService(DeliveryAcceptedFactPublication, publicationBoundary),
+          Effect.provideService(DeliveryPlanningCatchUp, publicationBoundary),
           Effect.provideService(DeliveryActionExecutor, executor),
           Effect.timeout(Duration.seconds(2))
         )

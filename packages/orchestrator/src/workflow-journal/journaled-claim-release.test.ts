@@ -31,7 +31,7 @@ import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 import { releaseTaskClaimThrough, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const controlledRecoveryLease: Pick<DeliveryActionExecutionLease, "forwardBoundary" | "recordIntent"> = {
@@ -81,7 +81,7 @@ const provider = Layer.effect(
 const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
   Layer.provideMerge(
     liveJournalTestLayer({
-      records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+      records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
       runId,
       target
     })
@@ -253,7 +253,7 @@ it.effect("recovers an unfinished exact release intent after throttle and reread
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             RunId.make("journaled-throttled-release-recovery"),
             FixtureTarget.make("journaled-throttled-release-target"),
             initialPolicy,

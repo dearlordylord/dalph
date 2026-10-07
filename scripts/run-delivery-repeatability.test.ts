@@ -425,6 +425,8 @@ test("bounds a hung persistent warm close by its total timeout", async () => {
         runTestSpecifications: passedWarmResult
       }),
       iterations: 1,
+      // Keep setup outside the deadline calculation; the real timer still bounds the hung close.
+      now: () => 0,
       totalTimeoutMilliseconds: 20
     })
   ).rejects.toThrow(/total timeout.*closing Vitest/u)

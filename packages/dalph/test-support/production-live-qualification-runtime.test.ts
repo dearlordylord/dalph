@@ -48,7 +48,7 @@ import {
   makeRunFinalityEvidence,
   makeTaskAttemptPlanOperation,
   makeTargetLineageObservationOperation,
-  makeWorkflowRunBeganRecord,
+  makeHistoricalWorkflowRunBeganRecord,
   nodeGitCommandLayer,
   OperationId,
   PlannedAttemptExecutorReportOrdinal,
@@ -382,7 +382,7 @@ const completedEvidenceObservationFixture = () => {
     runId
   })
   const journal = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

@@ -21,7 +21,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import {
   AcceptedResultNotDurable,
   AcceptedResultEvidenceUnavailable,
@@ -51,7 +51,7 @@ const integrationJournalLayer = (plannedAttempt: PlannedTaskAttempt) => {
   const target = FixtureTarget.make(`${plannedAttempt.runId}-target`)
   return liveJournalTestLayer({
     records: [
-      makeWorkflowRunBeganRecord(
+      makeHistoricalWorkflowRunBeganRecord(
         plannedAttempt.runId,
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

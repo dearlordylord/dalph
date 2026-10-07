@@ -72,7 +72,7 @@ import {
   type JournalState,
   type JournalStorageBoundary
 } from "../delivery/journal.js"
-import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
+import { DeliveryRelationInputObserver } from "../delivery/delivery-relation-input-observer.js"
 import {
   DeliveryRuntimeResources,
   deliveryRuntimeResourceCapabilitiesLayer,
@@ -725,8 +725,8 @@ export const journaledRunBootstrapLayer = (
               const reactivationObservers = yield* Ref.get(acceptedRunReactivationObservers)
               const acceptedPublicationWatermark = yield* Ref.make<JournalPosition | null>(initialState.position)
               const acceptedPublicationOrder = yield* Semaphore.make(1)
-              const ambientPublicationObserver = yield* DeliveryRelationPublicationObserver
-              const publicationObserver = DeliveryRelationPublicationObserver.of({
+              const ambientPublicationObserver = yield* DeliveryRelationInputObserver
+              const publicationObserver = DeliveryRelationInputObserver.of({
                 observe: (bundle) =>
                   Effect.gen(function* () {
                     yield* ambientPublicationObserver.observe(bundle)
@@ -755,7 +755,7 @@ export const journaledRunBootstrapLayer = (
               })
               const downstream = runtimeLayer({ runId, opportunity }).pipe(
                 // Delivery creates reactive relations while running the program, after Layer.build returns.
-                Layer.provideMerge(Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)),
+                Layer.provideMerge(Layer.succeed(DeliveryRelationInputObserver, publicationObserver)),
                 Layer.provideMerge(processRuntimeLayer),
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))

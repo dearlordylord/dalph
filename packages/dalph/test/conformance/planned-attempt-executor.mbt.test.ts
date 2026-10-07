@@ -3,18 +3,16 @@
 /* eslint-disable no-restricted-globals -- Conformance instrumentation records process provenance and CPU. */
 /* eslint-disable no-magic-numbers -- Focused conformance seeds, ordinals, and timeout bounds are protocol fixtures. */
 /* eslint-disable functional/no-throw-statements -- Invalid directed observations fail closed. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import {
   defineDriver,
   ITFBigInt,
   stateCheck,
-  quintRun,
   quintRunWithTraceGeneration,
-  generateTraces,
   TraceGeneration
 } from "@firfi/quint-connect/effect"
 import { expect } from "vitest"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -54,7 +52,7 @@ import { Cause, Clock, Context, Deferred, Duration, Effect, Fiber, Layer, Ref, S
 import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { makeExecutorResumeModelFixture } from "./planned-attempt-executor-resume-fixture.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { runPlannedAttemptExecutorResumeRedelivery } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/resume-redelivery.js"
 import type { PlannedAttemptContinuationWitness } from "../../../orchestrator/src/workflow/protocols/planned-attempt-continuation/events.js"
@@ -143,6 +141,10 @@ import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { currentSourceInputDigest, repositoryHead } from "./gate-run-identity-adapter.js"
 
+const { generateTraces, quintIt, quintRun } = corpusReplayFor(
+  "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts"
+)
+
 const specification = makeTaskWorkSpecification({
   body: "Complete the model task.",
   taskId: TaskId.make("model-task"),
@@ -164,7 +166,7 @@ const remotePublicationTarget = RemotePublicationTarget.make({
   branch: RemotePublicationBranchRef.make("refs/heads/main"),
   endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
 })
-const modelRunBegan = makeWorkflowRunBeganRecord(
+const modelRunBegan = makeHistoricalWorkflowRunBeganRecord(
   plannedAttempt.runId,
   modelTarget,
   InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

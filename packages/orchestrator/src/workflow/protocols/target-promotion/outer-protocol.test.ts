@@ -23,7 +23,7 @@ import { observeJournalRecordSequenceOperations } from "../../../workflow-journa
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -298,14 +298,14 @@ it.effect("rejects an unqualified intent during the live Journal append before c
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             runId,
             FixtureTarget.make("promotion-wrapper"),
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
             remotePublicationTargetForTest
           ),
           ...publicationRecordsFor(qualifiedCandidate, [
-            makeWorkflowRunBeganRecord(
+            makeHistoricalWorkflowRunBeganRecord(
               runId,
               FixtureTarget.make("promotion-wrapper"),
               InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

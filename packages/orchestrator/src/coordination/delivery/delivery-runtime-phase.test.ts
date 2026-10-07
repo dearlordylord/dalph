@@ -104,7 +104,7 @@ const baseEvaluation = Effect.gen(function* () {
             },
             trackerGraphProposals: []
           },
-          publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
+          graphView: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
         } satisfies DeliveryRelationInputBundle)
       })
     )

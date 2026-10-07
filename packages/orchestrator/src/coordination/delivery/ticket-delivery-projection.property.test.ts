@@ -21,7 +21,7 @@ import {
   TrackerGraphState,
   type ExactTicketDeliveryEvidence,
   type JournaledTrackerGraphObservation,
-  type DeliveryGraphPublication
+  type DeliveryGraphView
 } from "./relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import {
@@ -36,7 +36,7 @@ const fixtureObservation = (snapshot: TaskDagSnapshot): JournaledTrackerGraphObs
   return makeTestJournaledTrackerGraphObservation({ snapshot, operationId, recordedAt: JournalPosition.make(1) })
 }
 
-const publication = (graph: TrackerGraphState, policy: RunControlPolicy): DeliveryGraphPublication => ({
+const graphView = (graph: TrackerGraphState, policy: RunControlPolicy): DeliveryGraphView => ({
   exactEvidence: [],
   graph,
   policy
@@ -73,7 +73,7 @@ it("keeps bounded selection invariant under tracker task permutation", () => {
           taskExecutionCapacity: TaskWorkCapacity.make(capacity)
         })
 
-        expect(selectedTicketIds(boundedParallelTicketsOf(frontierOf(publication(graph, policy))))).toEqual(
+        expect(selectedTicketIds(boundedParallelTicketsOf(frontierOf(graphView(graph, policy))))).toEqual(
           ids.toSorted().slice(0, capacity)
         )
       }
@@ -174,7 +174,7 @@ it("retains an exact planned-attempt obligation across every graph placement and
           revision: initialRunPolicyRevision,
           taskExecutionCapacity: TaskWorkCapacity.make(capacity)
         })
-        const projected = ticketDeliveriesOf(boundedParallelTicketsOf(frontierOf(publication(graph, currentPolicy))), [
+        const projected = ticketDeliveriesOf(boundedParallelTicketsOf(frontierOf(graphView(graph, currentPolicy))), [
           evidence
         ])
 

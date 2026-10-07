@@ -65,7 +65,7 @@ import {
   type DeliveryActionExecutorService
 } from "../delivery/delivery-action-executor.js"
 import type { DeliveryActionProposal } from "../delivery/delivery-action-proposal.js"
-import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
+import { DeliveryPlanningCatchUp } from "../delivery/delivery-planning-catch-up.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { frontierOf } from "../delivery/ticket-delivery-projection.js"
 import {
@@ -178,7 +178,7 @@ const baseEvaluation = Effect.gen(function* () {
             },
             trackerGraphProposals: []
           },
-          publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
+          graphView: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy }
         } satisfies DeliveryRelationInputBundle)
       })
     )
@@ -212,10 +212,10 @@ const supportWithoutResources = Layer.mergeAll(
   }),
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(
-    DeliveryAcceptedFactPublication,
-    DeliveryAcceptedFactPublication.of({
-      awaitCurrent: Effect.succeed({
-        _tag: "DeliveryAcceptedPublicationBoundary",
+    DeliveryPlanningCatchUp,
+    DeliveryPlanningCatchUp.of({
+      awaitJournalPosition: Effect.succeed({
+        _tag: "DeliveryPlanningCatchUpBoundary",
         acceptedThrough: JournalPosition.make(1),
         runId
       })
@@ -252,10 +252,10 @@ const supportWithoutAllocator = Layer.mergeAll(
   }),
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(
-    DeliveryAcceptedFactPublication,
-    DeliveryAcceptedFactPublication.of({
-      awaitCurrent: Effect.succeed({
-        _tag: "DeliveryAcceptedPublicationBoundary",
+    DeliveryPlanningCatchUp,
+    DeliveryPlanningCatchUp.of({
+      awaitJournalPosition: Effect.succeed({
+        _tag: "DeliveryPlanningCatchUpBoundary",
         acceptedThrough: JournalPosition.make(1),
         runId
       })

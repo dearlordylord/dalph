@@ -14,7 +14,7 @@ import { makeTaskClaimObservationOperation } from "../workflow/registry/operatio
 import { Journal } from "../coordination/delivery/journal.js"
 import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const runId = RunId.make("journaled-claim-observation-run")
@@ -22,7 +22,7 @@ const taskId = TaskId.make("journaled-claim-observation-task")
 const target = FixtureTarget.make("journaled-claim-observation-target")
 const journalLayer = liveJournalTestLayer({
   records: [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

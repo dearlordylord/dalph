@@ -35,7 +35,7 @@ import {
   makeDeliverySettlements,
   TrackerGraphState,
   type BoundedParallelTickets,
-  type DeliveryGraphPublication,
+  type DeliveryGraphView,
   type DeliveryRuntimeEvaluation,
   type TicketDelivery,
   type TicketDeliveries,
@@ -103,7 +103,7 @@ const deliveryOf = (taskId: TaskId, rank: number, reversed: boolean): TicketDeli
 
 const ticketDeliveriesOf = (reverseA: boolean, reverseB: boolean): TicketDeliveries => {
   const graph = TrackerGraphState.cases.GraphNotEstablished.make({})
-  const publication: DeliveryGraphPublication = { exactEvidence: [], graph, policy }
+  const graphView: DeliveryGraphView = { exactEvidence: [], graph, policy }
   const source: BoundedParallelTickets = {
     _tag: "BoundedParallelTickets",
     placements: [
@@ -111,8 +111,8 @@ const ticketDeliveriesOf = (reverseA: boolean, reverseB: boolean): TicketDeliver
       { placement: { _tag: "Selected", rank: BoundedTicketRank.make(1) }, taskId: TaskId.make("B") }
     ],
     policy,
-    publication,
-    source: { _tag: "DeliveryFrontier", publication, source: graph, standings: [] }
+    graphView,
+    source: { _tag: "DeliveryFrontier", graphView, source: graph, standings: [] }
   }
   return {
     _tag: "TicketDeliveries",
@@ -157,7 +157,7 @@ const stateOf = (
     reflection: makeDeliveryReflection(settlements),
     settlements,
     ticketDeliveries,
-    trackerGraph: ticketDeliveries.source.publication.graph,
+    trackerGraph: ticketDeliveries.source.graphView.graph,
     runId,
     cancellationApplied: false
   }
@@ -298,7 +298,7 @@ const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntim
     settlementTaskB,
     ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" })
   )
-  const proposal = proposalOf("property-publication", capacityTask, 3)
+  const proposal = proposalOf("property-graphView", capacityTask, 3)
   const settledOwner = ticketOwnerSnapshotForTest(proposal, { _tag: "SettledBeforeMaterialization" })
   const extraDeliveries: ReadonlyArray<TicketDelivery> = [
     {

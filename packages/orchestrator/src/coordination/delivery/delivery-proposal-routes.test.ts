@@ -121,7 +121,7 @@ import {
   plannedAttemptContinuationAuthorizedRecordKey,
   runCancellationAppliedRecordKey
 } from "../../workflow-journal/record-key.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   GitReadIntentRecordedEvent,
@@ -980,7 +980,7 @@ effectIt.effect("executes cancellation settlement through suspension, abandonmen
       correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
     })
     const harness = yield* makeLiveJournalHarness([
-      makeWorkflowRunBeganRecord(
+      makeHistoricalWorkflowRunBeganRecord(
         runId,
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

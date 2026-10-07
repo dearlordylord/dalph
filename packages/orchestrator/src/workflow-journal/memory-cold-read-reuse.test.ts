@@ -14,7 +14,7 @@ import { JournalPosition } from "./identity.js"
 import { decideJournalPartitionHistory } from "./partition-history.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { observeJournalRecordSequenceOperations } from "./record-sequence.js"
-import { makeWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "./run-lifecycle.js"
 import { JournalStore, type JournalRecord } from "./store.js"
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
@@ -25,7 +25,7 @@ const terminalRecordsFor = (
 ): ReadonlyArray<JournalRecord> => {
   const fixture = completedRunFinalityFixture({ runId, target })
   return [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
+    makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
     {
       event: fixture.intent,
       key: intentRecordKey(fixture.operation.operationId),

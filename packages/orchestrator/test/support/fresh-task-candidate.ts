@@ -1,4 +1,6 @@
-import { compareTaskIds, type RunId } from "@dalph/contracts"
+import { makeWorkflowRunBeganRecord } from "../../src/workflow-journal/run-lifecycle.js"
+import { remotePublicationTargetForTest } from "./direct-publication.js"
+import { compareTaskIds, GitCommitSha, type RunId } from "@dalph/contracts"
 import { Effect, Option } from "effect"
 import { FixtureTarget } from "../../src/authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../src/authorities/task-tracker/graph.js"
@@ -28,6 +30,8 @@ import { OperationId } from "../../src/workflow/identity.js"
 
 const target = FixtureTarget.make("controlled-test-frontier-authority")
 const acceptedGraphReadRecordCount = 2
+const firstGraphReadPosition = 2
+const controlledBaseSha = GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 const completedPrerequisitesFor = (decisions: ReadonlyArray<FreshTaskEntryDecision>): ReadonlyArray<Task> => {
   const candidateTaskIds = new Set(decisions.map(({ step }) => step.task.id))
@@ -105,9 +109,23 @@ export const makeFreshTaskCandidateFrontierForTest = (input: {
         ]
       : []
   )
-  const records = [globalOperation, ...focusedOperations].flatMap((operation, index) =>
-    acceptedGraphReadRecords(operation, projected.snapshot, index * acceptedGraphReadRecordCount + 1, input.runId)
-  )
+  const records = [
+    makeWorkflowRunBeganRecord(
+      input.runId,
+      target,
+      { taskExecutionCapacity: TaskWorkCapacity.make(Math.max(1, input.decisions.length)) },
+      remotePublicationTargetForTest,
+      { _tag: "ExplicitFixedBase", baseSha: controlledBaseSha }
+    ),
+    ...[globalOperation, ...focusedOperations].flatMap((operation, index) =>
+      acceptedGraphReadRecords(
+        operation,
+        projected.snapshot,
+        index * acceptedGraphReadRecordCount + firstGraphReadPosition,
+        input.runId
+      )
+    )
+  ]
   const frame: CurrentDeliveryFrame = {
     acceptedAt: JournalPosition.make(records.length),
     currentGraph: projected.snapshot,

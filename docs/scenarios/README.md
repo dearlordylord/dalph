@@ -16,8 +16,10 @@ Git history.
 ## Run entry, task facts, admission, and controls
 
 - [Terminate one globally settled Run](terminate-settled-run.md)
+- [Keep the host responsive after delivery](post-delivery-host-responsiveness.md)
 - [Alice's changing graph settles as Blocked](changing-graph-finality.md)
 - [CLI and MCP clients reach one separately started Dalph host](running-host-clients.md)
+- [The Operator reads a bounded Run summary](compact-run-inspection.md)
 - [Alice inspects the running host's complete task graph](live-task-graph-page.md)
 - [Alice sends information to one exact active implementation turn](operator-guidance-to-active-executor.md)
 - [Keep failures visible with actionable diagnostics](actionable-failure-diagnostics.md)
@@ -35,6 +37,7 @@ Git history.
 - [Publish independent Journal operations by their accepted outcomes](accepted-publication-operation-boundary.md)
 - [Describe delivery actions without performing them](describe-delivery-actions.md)
 - [Run delivery actions from accepted reactive facts](run-reactive-delivery-actions.md)
+- [Deliver every accepted runtime occurrence through a bounded mailbox](bounded-runtime-mailbox.md)
 - [Stabilize each Run above delivery](stabilize-each-run.md)
 - [Reactivate incomplete Runs from non-authoritative hints](reactivate-incomplete-runs.md)
 - [Admit independent work while preserving an exact retained attempt](independent-work-retained-priority.md)

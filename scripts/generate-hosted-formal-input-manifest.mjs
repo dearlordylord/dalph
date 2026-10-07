@@ -383,7 +383,12 @@ export const deriveHostedFormalInputManifest = async (worktree = repositoryRoot)
   if (quintPatches.length !== 1 || quintPatches.some((path) => typeof path !== "string"))
     throw new Error("Hosted formal manifest requires one selected Quint patch input")
   const discovered = await discoverFormalSourcePaths({
-    javascriptEntries: await hostedCommandEntries(worktree, packageJson, workspacePackages),
+    // TypeScript resolves the suite import to its declaration; bind the actual
+    // corpus adapter and its JavaScript dependency closure independently.
+    javascriptEntries: [
+      ...(await hostedCommandEntries(worktree, packageJson, workspacePackages)),
+      "scripts/mbt-corpus-replay.mjs"
+    ],
     profile: createQuintEffectiveProfile({ purpose: "hosted" }),
     worktree
   })

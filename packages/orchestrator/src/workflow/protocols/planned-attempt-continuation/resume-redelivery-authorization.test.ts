@@ -34,7 +34,7 @@ import { validSnapshot } from "../../../../test/task-dag.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -121,7 +121,7 @@ const append = (records: Array<JournalRecord>, event: JournalRecord["event"]): J
 
 const fixture = () => {
   const records: Array<JournalRecord> = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),

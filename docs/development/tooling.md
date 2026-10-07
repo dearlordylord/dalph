@@ -32,6 +32,14 @@ The generated inventories and hosted input closure are refreshed with
 `node scripts/generate-formal-command-inventory.mjs --write` and
 `node scripts/generate-hosted-formal-input-manifest.mjs --write`.
 
+## MBT corpus ownership
+
+[The MBT inventory and provenance contract](mbt-corpus.md) maps every selected
+generation option site to a corpus path, records exact model/import and runtime
+inputs, and defines bounded generation, validation controls and the next-owner
+file map. This tooling slice leaves Dalph runtime, model semantics, selected
+scenarios and state comparisons unchanged.
+
 ## Owned Apalache endpoint observations
 
 The formal verifier connects to `127.0.0.1:port`. Its Linux socket observer
@@ -48,3 +56,10 @@ Issue #451 retains the historical socket-proof refusal. The original failure
 did not capture address/inode data, so the demonstrated same-port address defect
 does not establish its cause. Future mismatches retain those fields; a passing
 fixture alone cannot close that historical diagnosis.
+
+## Focused test diagnostics
+
+[Coverage lifecycle observations](coverage-diagnostics.md) identify unfinished
+tests and scope finalization in retained child logs.
+[History-copy fixtures](history-copy-fixtures.md) describe whole-record equality
+and the explicit contemporary/historical constructor boundary.
