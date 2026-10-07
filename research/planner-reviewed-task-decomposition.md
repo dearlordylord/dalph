@@ -37,7 +37,8 @@ are locators for the next specification task to inspect, not checks run here.
 The inspected mutation seam [`TrackerMutationService`](../packages/orchestrator/src/authorities/task-tracker/claim-mutation.ts)
 is for claims; the workflow operation registry
 [`operation.ts`](../packages/orchestrator/src/workflow/registry/operation.ts)
-provides existing reads, executor, integration and settlement operations. Neither
+provides tracker reads and claims, attempt planning and Base reads, worktree
+reconciliation, and Git lineage reads. Neither
 is an existing planner-approved batch task-creation/edge-publication contract.
 This is a bounded finding about these interfaces, not a claim that GitHub lacks
 issue-authoring APIs or that external actors cannot author tasks. The accepted
