@@ -1318,7 +1318,11 @@ const makeCodexPlannedAttemptExecutorContext = (
       thread: CodexThreadSnapshot,
       settledTerminalToolItems = false
     ) {
-      const backgroundTerminals = yield* app.listBackgroundTerminals(thread.id)
+      const loaded = app.listLoadedThreadIds === undefined ? undefined : yield* app.listLoadedThreadIds()
+      // An unloaded thread has no entries in this incarnation's terminal
+      // registry. Native/token/turn custody is still checked by activityCensus.
+      const backgroundTerminals =
+        loaded !== undefined && !loaded.includes(thread.id) ? [] : yield* app.listBackgroundTerminals(thread.id)
       return yield* activityCensus.observe(thread, backgroundTerminals, "PlannedAttempt", settledTerminalToolItems)
     })
 

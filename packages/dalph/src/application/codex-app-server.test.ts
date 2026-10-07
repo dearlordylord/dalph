@@ -122,6 +122,15 @@ const onMessage = (message) => {
     return write(message.id, { turn })
   }
   if (message.method === "turn/interrupt") return write(message.id, {})
+  if (message.method === "thread/loaded/list") {
+    const mode = process.env.DALPH_QUALIFICATION_LOADED_LIST
+    if (mode === "malformed") return write(message.id, { data: [4], nextCursor: null })
+    if (mode === "repeated") return write(message.id, { data: [], nextCursor: "again" })
+    if (mode === "pages") return write(message.id, message.params.cursor === undefined
+      ? { data: ["first-loaded"], nextCursor: "next" }
+      : { data: ["second-loaded"], nextCursor: null })
+    return write(message.id, { data: [], nextCursor: null })
+  }
   if (message.method === "thread/backgroundTerminals/list") return write(message.id, { data: [] })
   if (message.method === "thread/backgroundTerminals/terminate") return write(message.id, { terminated: true })
   return write(message.id, {})
@@ -1388,5 +1397,41 @@ it.effect("reports process-local app-server cleanup failure through the Exit bou
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
       expect(Exit.isFailure(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reads all loaded-thread pages and refuses malformed or repeated census", () =>
+  Effect.forEach(["empty", "pages", "malformed", "repeated"], (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-loaded-census-" })
+        const executable = path.join(root, "fixture-codex")
+        yield* fs.writeFileString(executable, fakeServer)
+        yield* fs.chmod(executable, 0o755)
+        yield* Effect.gen(function* () {
+          const app = yield* CodexAppServer
+          if (app.listLoadedThreadIds === undefined)
+            return yield* Effect.die("native provider requires complete loaded census")
+          const observed = yield* app.listLoadedThreadIds().pipe(Effect.result)
+          if (mode === "empty") expect(observed).toMatchObject({ _tag: "Success", success: [] })
+          else if (mode === "pages")
+            expect(observed).toMatchObject({ _tag: "Success", success: ["first-loaded", "second-loaded"] })
+          else
+            expect(observed).toMatchObject({
+              _tag: "Failure",
+              failure: { kind: "Malformed", operation: "thread/loaded/list" }
+            })
+        }).pipe(
+          Effect.provide(
+            codexAppServerNodeLayer(
+              { executable, environment: { DALPH_QUALIFICATION_LOADED_LIST: mode } },
+              isolatedCodexProcessNativeService
+            ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+          )
+        )
+      }).pipe(Effect.provide(NodeServices.layer))
+    )
   )
 )

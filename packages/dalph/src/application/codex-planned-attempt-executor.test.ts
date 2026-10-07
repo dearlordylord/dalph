@@ -8082,9 +8082,37 @@ it.effect("continues an exhausted result under one durable permission without du
           // Rebuild the executor from the durable private store and a fresh transport incarnation.
           // The controlled provider retains the exact persistent thread ledger; no prior executor cache is reused.
           const nextIncarnation = CodexServerIncarnation.make("result-recovery-rehydrated-server")
+          let retainedThreadLoaded = false
+          let loadedCensusUnreadable = false
           const recoveredContext = yield* Layer.build(
             layerFor(
-              { ...harness, app: { ...harness.app, incarnation: nextIncarnation } },
+              {
+                ...harness,
+                app: {
+                  ...harness.app,
+                  incarnation: nextIncarnation,
+                  listLoadedThreadIds: () =>
+                    loadedCensusUnreadable
+                      ? Effect.fail(
+                          new CodexAppServerFailure({
+                            operation: "thread/loaded/list",
+                            kind: "Malformed",
+                            detail: "incomplete loaded registry"
+                          })
+                        )
+                      : Effect.succeed(
+                          retainedThreadLoaded && retained?._tag === "ResultRejected" ? [retained.threadId] : []
+                        ),
+                  listBackgroundTerminals: () =>
+                    Effect.fail(
+                      new CodexAppServerFailure({
+                        operation: "thread/backgroundTerminals/list",
+                        kind: "Protocol",
+                        detail: "thread not found"
+                      })
+                    )
+                }
+              },
               undefined,
               undefined,
               undefined,
@@ -8095,6 +8123,27 @@ it.effect("continues an exhausted result under one durable permission without du
           if (recoveredExecutor.continueRejectedResult === undefined)
             return yield* Effect.die("rehydrated Codex must own explicit result recovery")
           const permission = PlannedAttemptResultRecoveryAuthorization.make({ nonce: "explicit-continue", correlation })
+          expect((yield* recoveredExecutor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Exact")
+          expect(harness.turnCount()).toBe(3)
+          retainedThreadLoaded = true
+          expect((yield* recoveredExecutor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe(
+            "Unreadable"
+          )
+          retainedThreadLoaded = false
+          loadedCensusUnreadable = true
+          expect((yield* recoveredExecutor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe(
+            "Unreadable"
+          )
+          loadedCensusUnreadable = false
+          harness.setActivityCensus({ _tag: "ExactLive", activities: [] })
+          expect((yield* recoveredExecutor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe(
+            "Unreadable"
+          )
+          expect((yield* recoveredExecutor.continueRejectedResult(request, permission).pipe(Effect.result))._tag).toBe(
+            "Failure"
+          )
+          expect(harness.turnCount()).toBe(3)
+          harness.setActivityCensus({ _tag: "Absent" })
           expect(yield* recoveredExecutor.continueRejectedResult(request, permission)).toMatchObject({
             _tag: "ExecutorWorkExecuting"
           })

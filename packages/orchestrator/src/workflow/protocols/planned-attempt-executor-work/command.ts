@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- The journal-first command boundary keeps authority, reconciliation, and delivery adjacent for auditability. */
 import {
   type PlannedTaskAttempt,
+  plannedTaskAttemptEquivalence,
   PlannedAttemptExecutor,
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorRequest,
@@ -16,11 +17,13 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
   plannedAttemptExecutorCommandResponseContradictedRecordKey,
-  plannedAttemptExecutorCommandResponseObservedRecordKey
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
+  resultRecoveryContinueAuthorizedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import {
+  journalRecordByKey,
   journalRecordCountForAttemptKind,
   journalRecordsForAttemptKind,
   type JournalHistorySource
@@ -41,6 +44,7 @@ import {
   plannedAttemptExecutorEvidence,
   plannedAttemptExecutorRequestFor
 } from "./evidence.js"
+import { ResultRecoveryRequestId } from "../result-recovery/events.js"
 import type { PlannedAttemptProtocolPermit } from "./protocol-controller.js"
 import {
   PlannedAttemptExecutorAlreadyBegan,
@@ -78,6 +82,40 @@ export const reconcileUnsettledPlannedAttemptExecutorCommand = Effect.fn(
   const journal = yield* InRunJournal
   const executor = yield* PlannedAttemptExecutor
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  if (intent.command === "ContinueRejectedResult") {
+    if (
+      !plannedTaskAttemptEquivalence(intent.plannedAttempt, plannedAttempt) ||
+      !samePlannedAttemptExecutorCorrelation(permit.correlation, correlation)
+    )
+      return yield* new PlannedAttemptExecutorProjectionUnreadable({ commandOrdinal: intent.ordinal, correlation })
+    const response = journalRecordByKey(
+      records,
+      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, intent.ordinal)
+    )
+    if (response?.event._tag === "PlannedAttemptExecutorCommandResponseObserved") return response.event.report
+    const authorization = intent.recoveryAuthorization
+    if (authorization === undefined || executor.continueRejectedResult === undefined)
+      return yield* new PlannedAttemptExecutorProjectionUnreadable({ commandOrdinal: intent.ordinal, correlation })
+    const permission = journalRecordByKey(
+      records,
+      resultRecoveryContinueAuthorizedRecordKey(
+        ResultRecoveryRequestId.make({ runId: plannedAttempt.runId, nonce: authorization.nonce })
+      )
+    )
+    if (
+      permission?.event._tag !== "ResultRecoveryContinueAuthorized" ||
+      !samePlannedAttemptExecutorCorrelation(authorization.correlation, correlation) ||
+      !plannedTaskAttemptEquivalence(permission.event.plannedAttempt, plannedAttempt) ||
+      permission.event.requestId.nonce !== authorization.nonce
+    )
+      return yield* new PlannedAttemptExecutorProjectionUnreadable({ commandOrdinal: intent.ordinal, correlation })
+    // This nonce-aware boundary reconciles its private recovery history under
+    // the attempt gate before any conditional dispatch. Generic report equality
+    // cannot prove that this command crossed: a predecessor rejection may match.
+    const request = yield* plannedAttemptExecutorRequestFor(records, plannedAttempt)
+    const report = yield* executor.continueRejectedResult(request, authorization)
+    return yield* recordPlannedAttemptExecutorCommandResponse(plannedAttempt, intent.ordinal, report)
+  }
   const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
     Array.from(
       journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorCommandProjectionObserved")

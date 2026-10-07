@@ -24,6 +24,8 @@ import {
 } from "../../workflow/protocols/result-recovery/current-facts.js"
 import { deliverResultRecoveryContinue, deliverResultRecoveryRestart } from "../delivery/result-recovery-delivery.js"
 import { isAcceptedExecutorCommandDelivery } from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
+import { requiredPlannedAttemptPositionsOf } from "./required-planned-attempt-positions.js"
+import { reconcileUnsettledPlannedAttemptExecutorCommand } from "../../workflow/protocols/planned-attempt-executor-work/command.js"
 import { executeResultRecoveryContinue } from "../../workflow/protocols/result-recovery/execution.js"
 import {
   authorizeResultRecoveryContinueWithPermit,
@@ -2656,6 +2658,7 @@ it.effect("accepts only complete fresh Continue facts without appending executio
         )?.disposition
       ).toMatchObject({ _tag: "PlannedAttemptExecutorResultRejected", continueRequestId: request.requestId })
       let providerCalls = 0
+      let crashBeforePrivateIntent = true
       let positionBinds = 0
       const provider = PlannedAttemptExecutor.of({
         begin: () => Effect.die("recovery must not Begin"),
@@ -2664,6 +2667,10 @@ it.effect("accepts only complete fresh Continue facts without appending executio
         observe: () => Effect.die("settled recovery must not reconcile"),
         continueRejectedResult: (request, permission) =>
           Effect.gen(function* () {
+            if (crashBeforePrivateIntent) {
+              crashBeforePrivateIntent = false
+              return yield* Effect.die("host lost after command intent before private successor intent")
+            }
             providerCalls += 1
             expect(positionBinds).toBe(1)
             expect(request.plannedAttempt).toEqual(plannedAttempt)
@@ -2709,7 +2716,59 @@ it.effect("accepts only complete fresh Continue facts without appending executio
       expect(
         yield* deliverResultRecoveryContinue(lease, plannedAttempt, request.requestId).pipe(
           Effect.provide(context),
-          Effect.provideService(PlannedAttemptExecutor, provider)
+          Effect.provideService(PlannedAttemptExecutor, provider),
+          Effect.exit
+        )
+      ).toMatchObject({ _tag: "Failure" })
+      expect(providerCalls).toBe(0)
+      const pendingRecords = yield* accepted.readAccepted(runId)
+      const pendingCommand = Array.from(
+        journalRecordsOfKind(pendingRecords, "PlannedAttemptExecutorCommandIntended")
+      ).at(-1)
+      if (pendingCommand?.event._tag !== "PlannedAttemptExecutorCommandIntended")
+        return yield* Effect.die("expected retained Continue command")
+      const pendingIntent = pendingCommand.event
+      const pendingHistory = reduceWorkflowJournalHistory(runId, Array.from(journalRecordsAfter(pendingRecords, null)))
+      if (pendingHistory._tag !== "ValidWorkflowJournalHistory")
+        return yield* Effect.die("pending recovery must reconstruct")
+      expect(requiredPlannedAttemptPositionsOf(pendingHistory.runState)).toContainEqual({
+        runId,
+        attemptId: plannedAttempt.attemptId,
+        taskId: plannedAttempt.taskId
+      })
+      const unavailableProvider = PlannedAttemptExecutor.of({
+        begin: provider.begin,
+        resume: provider.resume,
+        requestSuspension: provider.requestSuspension,
+        observe: provider.observe
+      })
+      expect(
+        yield* protocols.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+          reconcileUnsettledPlannedAttemptExecutorCommand(permit, pendingRecords, plannedAttempt, pendingIntent).pipe(
+            Effect.provide(context),
+            Effect.provideService(PlannedAttemptExecutor, unavailableProvider),
+            Effect.result
+          )
+        )
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "PlannedAttemptExecutorProjectionUnreadable" } })
+      expect(providerCalls).toBe(0)
+      expect(
+        yield* protocols.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+          reconcileUnsettledPlannedAttemptExecutorCommand(permit, pendingRecords, plannedAttempt, pendingIntent).pipe(
+            Effect.provide(context),
+            Effect.provideService(PlannedAttemptExecutor, provider)
+          )
+        )
+      ).toMatchObject({ _tag: "ExecutorWorkExecuting" })
+      // The shared reconciliation path records the original ordinal's response;
+      // repeating it returns that response without another private/provider call.
+      const respondedRecords = yield* accepted.readAccepted(runId)
+      expect(
+        yield* protocols.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+          reconcileUnsettledPlannedAttemptExecutorCommand(permit, respondedRecords, plannedAttempt, pendingIntent).pipe(
+            Effect.provide(context),
+            Effect.provideService(PlannedAttemptExecutor, provider)
+          )
         )
       ).toMatchObject({ _tag: "ExecutorWorkExecuting" })
 

@@ -313,7 +313,11 @@ export interface PlannedAttemptExecutorService {
   readonly requestSuspension: (
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
-  /** Opens one explicitly authorized result cycle; exact redelivery reconciles without replenishing it. */
+  /**
+   * Reconciles one exact authorized result cycle under the original nonce.
+   * A private successor intent precedes dispatch; retained history forbids resend.
+   * Missing history permits conditional first delivery only after fresh stopped-writer proof.
+   */
   readonly continueRejectedResult?: (
     request: PlannedAttemptExecutorRequest,
     authorization: PlannedAttemptResultRecoveryAuthorization

@@ -55,6 +55,42 @@ attempt's receipt. The exact result-recovery authorization/execution test in
 to carry a registered accepted command receipt before the provider call. The
 public Continue/Restart production test owns the complete running composition.
 
+### S4 cold-host command cuts
+
+Issue [#476](https://github.com/dearlordylord/dalph/issues/476) refines S4/S6 after
+the maintainer's retained night-run recovery, without changing
+permission arbitration, immutable attempt authority, correction counts or deadlines.
+
+- **Cold passive read:** P1's stopped rejection and exact persistent thread survive
+  host replacement. The new app-server has not loaded that thread. Dalph reads a
+  complete bounded loaded-thread census before requesting background terminals.
+  Confirmed absence proves only absence from this server's terminal registry;
+  exact turn ownership and fresh native/token-process custody remain mandatory.
+  Incomplete, contradictory or unreadable facts refuse recovery. Passive reads
+  must neither load the thread nor start a turn. Controlled provider tests own
+  pagination and refusal; the exhausted-result executor test owns cold projection
+  with a failing background-terminal RPC and stopped/native-live negative controls.
+- **Crash before private successor intent:** the journal contains one Continue
+  permission and command, but the private store retains the stopped predecessor
+  with no matching nonce. Reconciliation invokes the existing nonce-aware recovery
+  boundary under that original authorization and command ordinal. Its private
+  gate freshly checks stopped writers and durably records the successor before
+  `turn/start`. Exactly one cycle opens; an unchanged predecessor report cannot
+  settle this command. `active-work-authority-refresh.acceptance.test.ts` owns
+  original ordinal/nonce, response recording and absence of generic observation.
+- **Crash after private successor intent or uncertain acknowledgement:** the same
+  operation reads the matching durable recovery history and exact owned turn/token;
+  it reconciles without another provider request or renewed response budget.
+  Identical successor rejection bytes remain attributable to this permission,
+  rather than report equality. The exhausted-result executor test owns exact
+  redelivery and lost acknowledgement; private-store tests own nonce/history
+  consistency. Missing, foreign or unresolved custody refuses before a new intent.
+
+Tracker/Git authority and blocking edges still follow S4's existing admission.
+No new tracker action is performed by passive observation; Git publication and
+acceptance remain separate. Cleanup uses existing S3/S6 native custody. There
+is no timer or retry-budget change in these cuts.
+
 ## S5 — Alice Restarts from fresh authority while keeping the predecessor
 
 Alice requests Restart of the retained rejection, or of a historical Failed with unknown reason. Dalph reconciles exact old custody, current tracker specification/lifecycle/dependencies/claim and current Git Base H2, records distinct replacement authorization and plans P2 with its exact new W2 from H2. W1/candidate remain reference material. Lost append/response reconciliation reuses the recorded P2 rather than allocating P3. Alice sees predecessor and successor and their distinct Base/worktree facts. Unknown historical Failed offers Restart only; no Continue or retrospective acceptance changes its seal. Forbidden: stale Base, lost reference, replacement before old writer proof, new authority inferred from old terminal-invalidated choice. Acceptance seams: existing fresh-F2/K1/W1/H2 restart and ambiguous replacement tests extended to rejection and legacy unknown reason, public action availability.
