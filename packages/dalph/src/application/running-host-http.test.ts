@@ -292,3 +292,103 @@ it.live.skipIf(configuredIpv4 === undefined)(
       expect(listening.server.listening).toBe(false)
     })
 )
+
+// Control the OS write boundary, while keeping the real request, platform
+// response encoder, Node response lifecycle and host scope.
+for (const path of ["/dalph/v1/descriptor", "/"]) {
+  it.effect(`a stalled ${path} flush closes its exact socket at five seconds and releases the host scope`, () =>
+    Effect.gen(function* () {
+      const writing = yield* Deferred.make<void>()
+      const closed = yield* Deferred.make<void>()
+      const clientClosed = yield* Deferred.make<void>()
+      const finished = yield* Deferred.make<void>()
+      const stalled = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const probe = yield* makeRunningHostReadProbe()
+          const address = yield* availableLocalHostAddress
+          const host = yield* serveRunningHost(address, probe.observation)
+          host.server.prependOnceListener("request", (_request, response) => {
+            const socket = response.socket
+            if (socket === null) return
+            const write = socket.write.bind(socket)
+            socket.write = () => {
+              Deferred.doneUnsafe(writing, Effect.void)
+              return false
+            }
+            response.once("finish", () => Deferred.doneUnsafe(finished, Effect.void))
+            response.once("close", () => {
+              socket.write = write
+              Deferred.doneUnsafe(closed, Effect.void)
+            })
+          })
+          const client = httpRequest(`${address}${path}`)
+          client.on("error", () => Deferred.doneUnsafe(clientClosed, Effect.void))
+          client.end()
+          yield* Deferred.await(writing)
+          yield* TestClock.adjust(4999)
+          expect(yield* Deferred.isDone(closed)).toBe(false)
+          expect(yield* Deferred.isDone(finished)).toBe(false)
+          yield* TestClock.adjust(1)
+          yield* Deferred.await(closed)
+          yield* Deferred.await(clientClosed)
+          expect(yield* Deferred.isDone(finished)).toBe(false)
+          // A separate connection remains usable after the stalled one closes.
+          expect(yield* readRunningHostDescriptor(address)).toEqual(host.descriptor)
+          return host.server
+        })
+      )
+      expect(stalled.listening).toBe(false)
+    })
+  )
+}
+
+for (const path of ["/dalph/v1/descriptor", "/"]) {
+  it.effect(`a completed ${path} flush cancels its socket deadline`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const probe = yield* makeRunningHostReadProbe()
+        const address = yield* availableLocalHostAddress
+        const host = yield* serveRunningHost(address, probe.observation)
+        const flushed = yield* Deferred.make<void>()
+        const observed = yield* Deferred.make<Effect.Effect<void>>()
+        host.server.prependOnceListener("request", (_request, response) => {
+          const destroy = response.destroy.bind(response)
+          let destroyed = false
+          response.destroy = (error) => {
+            destroyed = true
+            return destroy(error)
+          }
+          response.once("finish", () => {
+            Deferred.doneUnsafe(flushed, Effect.void)
+          })
+          Deferred.doneUnsafe(
+            observed,
+            Effect.succeed(
+              Effect.sync(() => {
+                expect(destroyed).toBe(false)
+                response.destroy = destroy
+              })
+            )
+          )
+        })
+        const status = yield* Effect.promise(
+          () =>
+            new Promise<number | undefined>((resolve, reject) => {
+              const request = httpRequest(`${address}${path}`, (response) => {
+                response.resume()
+                response.on("end", () => resolve(response.statusCode))
+                response.on("error", reject)
+              })
+              request.on("error", reject)
+              request.end()
+            })
+        )
+        expect(status).toBe(200)
+        yield* Deferred.await(flushed)
+        yield* TestClock.adjust(5000)
+        yield* yield* Deferred.await(observed)
+        expect(yield* readRunningHostDescriptor(address)).toEqual(host.descriptor)
+      })
+    )
+  )
+}

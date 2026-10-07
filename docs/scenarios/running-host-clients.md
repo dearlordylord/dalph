@@ -69,7 +69,10 @@ draining and proof that owned writers stopped.
 
 This composition preserves the accepted chronologies below. The focused mapping
 is S1/S11/S12 → `running-host-http.test.ts` (passivity, identity/framing,
-pre-admission disconnect, terminal refusal and command response loss);
+pre-admission disconnect, terminal refusal and command response loss; its
+`a stalled … flush closes its exact socket at five seconds and releases the host scope`
+and `a completed … flush cancels its socket deadline` cases exercise both
+unary JSON and page output at the real Node socket write boundary);
 S4/S5 → `running-host-command-ownership.test.ts` (independent command lifetime
 and bounded Exit); S8 → `running-host-watch-http.test.ts` and
 `running-host-watch-shutdown.test.ts` (leases, deadlines, Closed and actual Exit).
