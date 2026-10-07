@@ -52,7 +52,7 @@ import {
   ControlDirectionAppliedEvent
 } from "../../workflow/protocols/control-direction-application/events.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { WorkflowActor } from "../../workflow/registry/actor.js"
@@ -227,7 +227,7 @@ const provideRemoteGit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   )
 
 const publishedRecordsFor = (): ReadonlyArray<JournalRecord> => {
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     fixture.runId,
     target,
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -721,7 +721,7 @@ it.effect(
         version: workflowJournalEventVersion
       })
       const initialRecords: ReadonlyArray<JournalRecord> = [
-        makeWorkflowRunBeganRecord(
+        makeHistoricalWorkflowRunBeganRecord(
           fixture.runId,
           target,
           InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -1036,7 +1036,7 @@ it.effect("rejects a foreign S2 authorization record returned by conditional app
       version: workflowJournalEventVersion
     })
     const initialRecords: ReadonlyArray<JournalRecord> = [
-      makeWorkflowRunBeganRecord(
+      makeHistoricalWorkflowRunBeganRecord(
         fixture.runId,
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

@@ -153,7 +153,7 @@ import {
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import {
   journalEvidenceFrom,
   journalGraphObservationAt,
@@ -256,7 +256,7 @@ const coverageRunState = (
 })
 
 const coverageRecordsWithBeginning = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> => [
-  makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy, remotePublicationTargetForTest),
+  makeHistoricalWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy, remotePublicationTargetForTest),
   ...records.map((record) => ({ ...record, position: JournalPosition.make(Number(record.position) + 1) }))
 ]
 
@@ -638,7 +638,7 @@ const continuationRecords = (
       })
     )
   ]
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     coverageRunId,
     coverageTarget,
     coveragePolicy,
@@ -1387,7 +1387,7 @@ const directionProjectionFixture = (
     ),
     executorReport(16, acceptedTerminal, 2)
   ]
-  const beganRecord = makeWorkflowRunBeganRecord(
+  const beganRecord = makeHistoricalWorkflowRunBeganRecord(
     coverageRunId,
     coverageTarget,
     coveragePolicy,
@@ -2286,7 +2286,12 @@ it.each([64, 256])(
       makeCompleteTaskTrackerFactsObserved(fullOperation, coverageGraph)
     )
     const records: Array<JournalRecord> = [
-      makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy, remotePublicationTargetForTest),
+      makeHistoricalWorkflowRunBeganRecord(
+        coverageRunId,
+        coverageTarget,
+        coveragePolicy,
+        remotePublicationTargetForTest
+      ),
       coverageRecord(2, taskTrackerReadIntent(fullOperation)),
       coverageRecord(3, fullEvent)
     ]
@@ -2858,7 +2863,7 @@ it.each([
           correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
         })
         const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-        const began = makeWorkflowRunBeganRecord(
+        const began = makeHistoricalWorkflowRunBeganRecord(
           coverageRunId,
           coverageTarget,
           coveragePolicy,
@@ -2935,7 +2940,7 @@ it("reconciles one unsettled command when its prior activation recorded a non-ex
     Effect.scoped(
       Effect.gen(function* () {
         const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-        const began = makeWorkflowRunBeganRecord(
+        const began = makeHistoricalWorkflowRunBeganRecord(
           coverageRunId,
           coverageTarget,
           coveragePolicy,
@@ -3393,7 +3398,7 @@ effectIt.effect("lets durable Run cancellation override an unreadable executor p
         version: workflowJournalEventVersion
       })
     )
-    const began = makeWorkflowRunBeganRecord(
+    const began = makeHistoricalWorkflowRunBeganRecord(
       coverageRunId,
       coverageTarget,
       coveragePolicy,
@@ -3646,7 +3651,12 @@ it("derives cancellation abandonment, exact claim release, and typed no-release 
   )
   const unrelatedObservationState = coverageRunState(
     [
-      makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy, remotePublicationTargetForTest),
+      makeHistoricalWorkflowRunBeganRecord(
+        coverageRunId,
+        coverageTarget,
+        coveragePolicy,
+        remotePublicationTargetForTest
+      ),
       ...coveragePlanRecords(),
       coverageRecord(5, coverageGraphEvent),
       cancellation,
@@ -4805,7 +4815,7 @@ it("fails closed on a cold foreign-target shorthand without accepted plan lineag
     foreignGraphOperation.operationId,
     makeCompleteTaskTrackerFactsObserved(foreignGraphOperation, foreignGraph)
   )
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     coverageRunId,
     coverageTarget,
     coveragePolicy,
@@ -5427,7 +5437,7 @@ it("scopes recovery responsibility to the immutable Run target", () => {
       makeFocusedTaskClaimFactsObserved(foreignClaimOperation, foreignClaim)
     )
   ]
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     coverageRunId,
     coverageTarget,
     coveragePolicy,
@@ -5529,7 +5539,7 @@ it("does not release a cancelled claim from a foreign-target observation", () =>
     taskId: coverageAttempt.taskId,
     token: ClaimToken.make("recovery-activation-cancelled-foreign-token")
   })
-  const began = makeWorkflowRunBeganRecord(
+  const began = makeHistoricalWorkflowRunBeganRecord(
     coverageRunId,
     coverageTarget,
     coveragePolicy,
@@ -6269,7 +6279,7 @@ it("requires each active refresh to reread authorities after its own activation 
     )
     .map((record) => ({ ...record, position: JournalPosition.make(record.position + 6) }))
   const records = [
-    makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy, remotePublicationTargetForTest),
+    makeHistoricalWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy, remotePublicationTargetForTest),
     ...coveragePlanRecords(),
     executorReport(10, {
       _tag: "ExecutorWorkExecuting",
@@ -6670,7 +6680,7 @@ it("hands a pre-cancellation integration responsibility to integration settlemen
 
 effectIt.effect("uses normal-layer current state without exporting records and rejects a mismatched run", () =>
   Effect.gen(function* () {
-    const began = makeWorkflowRunBeganRecord(
+    const began = makeHistoricalWorkflowRunBeganRecord(
       coverageRunId,
       coverageTarget,
       coveragePolicy,

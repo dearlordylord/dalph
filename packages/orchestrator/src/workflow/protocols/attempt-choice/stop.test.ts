@@ -46,7 +46,7 @@ import {
   memoryJournalTestLayerFromPartitionRecords
 } from "../../../workflow-journal/adapters/memory-store.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -145,7 +145,7 @@ const taskId = TaskId.make("attempt-stop-task")
 const target = FixtureTarget.make("attempt-stop-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+  records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

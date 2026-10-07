@@ -36,7 +36,7 @@ import {
   taskClaimReacquisitionDirectedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -429,7 +429,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         liveJournalTestLayer({
-          records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+          records: [makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
           runId,
           target
         })
@@ -919,7 +919,7 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
   }).pipe(
     Effect.provide(
       liveJournalTestLayer({
-        records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+        records: [makeHistoricalWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
         runId,
         target
       })

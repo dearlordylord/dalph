@@ -15,14 +15,14 @@ import { OperationId } from "../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation } from "../workflow/registry/operation.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const runId = RunId.make("journaled-tracker-exit-run")
 const target = FixtureTarget.make("journaled-tracker-exit-target")
 const journalLayer = liveJournalTestLayer({
   records: [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

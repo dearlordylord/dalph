@@ -1,3 +1,4 @@
+import { encodeCompactRunningHostEnvelope } from "./running-host-compact.js"
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Schema } from "effect"
 import {
@@ -77,3 +78,10 @@ export const decodeClient = Effect.fn("RunningHostCli.decode")((host: string, ru
     )
   )
 )
+
+export const presentCompactEnvelope = Effect.fn("RunningHostCli.presentCompact")(function* (
+  envelope: RunningHostEnvelope
+) {
+  yield* encodeCompactRunningHostEnvelope(envelope).pipe(Effect.flatMap((text) => writeLine(text)))
+  if (envelope.result._tag === "Failure") return yield* new DalphCommandExit({ status: exitFor(envelope.result.error) })
+})

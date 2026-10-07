@@ -345,7 +345,7 @@ export {
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent
 } from "./workflow/registry/event.js"
-export { makeWorkflowRunBeganRecord } from "./workflow-journal/run-lifecycle.js"
+export { makeWorkflowRunBeganRecord, makeHistoricalWorkflowRunBeganRecord } from "./workflow-journal/run-lifecycle.js"
 export {
   AttemptWorktreeLost,
   PlannedAttemptWorktreeObservation

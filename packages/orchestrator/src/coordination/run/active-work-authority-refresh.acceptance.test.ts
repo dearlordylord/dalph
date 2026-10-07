@@ -88,7 +88,7 @@ import { InRunJournal, JournalStorageUnavailable, type JournalRecord } from "../
 import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
   GitReadIntentRecordedEvent,
@@ -341,7 +341,7 @@ const buildPrefix = (
     targetHeadSha: GitCommitSha.make("b".repeat(40))
   })
   const records = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),

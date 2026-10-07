@@ -8,13 +8,13 @@ import { liveJournalTestLayer } from "../../../coordination/delivery/live-journa
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { JournalHistoryInvalid, JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
 import type { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
 import { runId } from "./fixtures.js"
 
 const target = FixtureTarget.make("cleanup-disposition-cleanup")
-const beginning = makeWorkflowRunBeganRecord(
+const beginning = makeHistoricalWorkflowRunBeganRecord(
   runId,
   target,
   InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

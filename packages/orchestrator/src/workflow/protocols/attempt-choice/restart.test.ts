@@ -52,7 +52,7 @@ import { causalPredecessorOperationIds } from "../../causal-history.js"
 import { authorizedClaimForAttempt, causalClaimForAttempt } from "../../claim-authority-history.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
@@ -134,7 +134,7 @@ const independentTaskId = TaskId.make("attempt-restart-C")
 const target = FixtureTarget.make("attempt-restart-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+  records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

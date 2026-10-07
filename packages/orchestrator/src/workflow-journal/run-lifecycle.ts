@@ -41,7 +41,8 @@ type LifecycleTransition<A> =
   | { readonly _tag: "LifecycleTransitionAccepted"; readonly record: JournalRecord }
   | { readonly _tag: "LifecycleTransitionRejected"; readonly failure: A }
 
-export const makeWorkflowRunBeganRecord = (
+/** Reconstruct released history without inventing a Base policy. New Runs use the required-policy constructor. */
+export const makeHistoricalWorkflowRunBeganRecord = (
   runId: RunId,
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
@@ -61,6 +62,16 @@ export const makeWorkflowRunBeganRecord = (
   position: JournalPosition.make(1),
   runId
 })
+
+/** Construct a contemporary Run beginning; a Base policy is mandatory at this boundary. */
+export const makeWorkflowRunBeganRecord = (
+  runId: RunId,
+  target: TrackerTarget,
+  initialControlPolicy: InitialControlPolicy,
+  remotePublicationTarget: RemotePublicationTarget,
+  attemptBasePolicy: AttemptBasePolicy
+): JournalRecord =>
+  makeHistoricalWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTarget, attemptBasePolicy)
 
 export const makeWorkflowRunTerminatedRecord = (
   runId: RunId,
@@ -99,7 +110,7 @@ export const decideWorkflowRunBeginning = (
   return first === undefined
     ? {
         _tag: "LifecycleTransitionAccepted",
-        record: makeWorkflowRunBeganRecord(
+        record: makeHistoricalWorkflowRunBeganRecord(
           runId,
           target,
           initialControlPolicy,

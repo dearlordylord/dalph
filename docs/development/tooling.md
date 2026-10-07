@@ -56,3 +56,10 @@ Issue #451 retains the historical socket-proof refusal. The original failure
 did not capture address/inode data, so the demonstrated same-port address defect
 does not establish its cause. Future mismatches retain those fields; a passing
 fixture alone cannot close that historical diagnosis.
+
+## Focused test diagnostics
+
+[Coverage lifecycle observations](coverage-diagnostics.md) identify unfinished
+tests and scope finalization in retained child logs.
+[History-copy fixtures](history-copy-fixtures.md) describe whole-record equality
+and the explicit contemporary/historical constructor boundary.

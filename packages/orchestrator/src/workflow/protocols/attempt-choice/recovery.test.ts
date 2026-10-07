@@ -28,7 +28,7 @@ import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-ac
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
@@ -66,7 +66,7 @@ const taskId = TaskId.make("attempt-choice-recovery-task")
 const target = FixtureTarget.make("attempt-choice-recovery-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+  records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

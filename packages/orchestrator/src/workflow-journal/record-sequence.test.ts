@@ -2,7 +2,7 @@ import { remotePublicationTargetForTest } from "../../test/support/direct-public
 import { describe, expect, it } from "vitest"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition } from "./identity.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
@@ -27,7 +27,7 @@ import {
   materializeJournalRecords
 } from "./record-sequence.js"
 
-const initial = makeWorkflowRunBeganRecord(
+const initial = makeHistoricalWorkflowRunBeganRecord(
   RunId.make("retained-prefix"),
   FixtureTarget.make("retained-prefix"),
   InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),

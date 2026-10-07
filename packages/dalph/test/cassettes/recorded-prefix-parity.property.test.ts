@@ -22,7 +22,7 @@ import {
 } from "@dalph/orchestrator"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { observeWorkflowJournalValidationSteps } from "../../../orchestrator/src/coordination/reconstruction/history.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { observeJournalRecordSequenceOperations } from "../../../orchestrator/src/workflow-journal/record-sequence.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
 import {
@@ -84,7 +84,7 @@ const outcome = (run: () => ReadonlyArray<RecordedCassetteCheckpoint>) => {
 const capacityRecords = (capacities: ReadonlyArray<number>): ReadonlyArray<JournalRecord> => {
   const runId = RunId.make("recorded-prefix-capacity")
   return [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       FixtureTarget.make("recorded-prefix-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

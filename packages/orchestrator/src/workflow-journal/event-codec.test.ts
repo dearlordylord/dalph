@@ -26,14 +26,14 @@ import {
   IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
 import { JournalPosition } from "./identity.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 
 it.effect("rejects unfinished Run bytes without a pinned publication target instead of inferring a destination", () =>
   Effect.gen(function* () {
-    const { event } = makeWorkflowRunBeganRecord(
+    const { event } = makeHistoricalWorkflowRunBeganRecord(
       RunId.make("unpinned-legacy-run"),
       FixtureTarget.make("fixture"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

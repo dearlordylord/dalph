@@ -20,7 +20,7 @@ import {
   taskTrackerFactsObservedEvent
 } from "../workflow/task-tracker-facts/observation.js"
 import { JournalPosition } from "./identity.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 import type { JournalRecord } from "./store.js"
 import { terminationPreconditionIssues } from "./termination-preconditions.js"
 
@@ -32,7 +32,7 @@ type Read = { readonly completed: boolean; readonly predecessors: ReadonlyArray<
 const recordsFor = (reads: ReadonlyArray<Read>, prefix = "graph"): ReadonlyArray<JournalRecord> => {
   const identities = reads.map((_, index) => OperationId.make(`${prefix}:${index}`))
   return [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
+    makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
     ...reads.flatMap((read, index) => {
       const operation = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },

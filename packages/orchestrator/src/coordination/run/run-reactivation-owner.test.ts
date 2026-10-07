@@ -26,7 +26,7 @@ import { makeTrackerGraphObservationOperation } from "../../workflow/registry/op
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { validSnapshot } from "../../../test/task-dag.js"
@@ -498,7 +498,12 @@ it.effect("a failed accepted graph read creates no trailing activation until an 
         OperationId.make("failed-current-graph-read"),
         target
       )
-      const beginning = makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest)
+      const beginning = makeHistoricalWorkflowRunBeganRecord(
+        runId,
+        target,
+        initialControlPolicy,
+        remotePublicationTargetForTest
+      )
       const failurePrefix: ReadonlyArray<JournalRecord> = [
         beginning,
         {
@@ -670,7 +675,12 @@ it.effect("classifies an accepted unchanged root/dependant graph reconfirmation 
       target,
       [firstRead.operationId]
     )
-    const beginning = makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest)
+    const beginning = makeHistoricalWorkflowRunBeganRecord(
+      runId,
+      target,
+      initialControlPolicy,
+      remotePublicationTargetForTest
+    )
     const firstIntent = {
       event: taskTrackerReadIntent(firstRead),
       key: intentRecordKey(firstRead.operationId),

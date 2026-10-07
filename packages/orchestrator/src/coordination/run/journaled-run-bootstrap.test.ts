@@ -181,7 +181,7 @@ import {
 } from "../application-exit/application-shell.js"
 import { RunReactivationHint, RunReactivationOwner, runReactivationOwnerLayer } from "./run-reactivation-owner.js"
 import { ApplicationExitDiagnostic, ApplicationExitResult } from "../application-exit/lifecycle-decision.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -246,7 +246,7 @@ it.effect("classifies from one accepted prefix and rejects a contradictory publi
   Effect.gen(function* () {
     const target = FixtureTarget.make("journaled-bootstrap-prefix-classification")
     const runId = RunId.make("journaled-bootstrap-prefix-classification")
-    const prefix = [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)]
+    const prefix = [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)]
 
     expect(yield* acceptedRunFactPublicationFromPrefix(JournalPosition.make(1), prefix)).toEqual({
       _tag: "WorkflowProgress"

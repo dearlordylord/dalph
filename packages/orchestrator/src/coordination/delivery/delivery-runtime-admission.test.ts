@@ -62,7 +62,7 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
@@ -242,7 +242,7 @@ const safeContinuationEligibility = (
     runId
   })
   const records: Array<JournalRecord> = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -809,7 +809,7 @@ const exactHandoffFixture = (() => {
     runId
   })
   const records: ReadonlyArray<JournalRecord> = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
@@ -1132,7 +1132,7 @@ const exactRejectionProjection = (claimOperationId: OperationId): FreshTaskAdmis
   })
   const records: ReadonlyArray<JournalRecord> = [
     {
-      ...makeWorkflowRunBeganRecord(
+      ...makeHistoricalWorkflowRunBeganRecord(
         runId,
         FixtureTarget.make("admission-release-projection"),
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

@@ -13,7 +13,7 @@ import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqli
 import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
 import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
 import { unpublishedAcceptedJournalReaderTestLayer } from "../../../workflow-journal/test-accepted-reader.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { journalLayer } from "../../../coordination/delivery/journal.js"
 import { controlDirectionAppliedRecordKey } from "../../../workflow-journal/record-key.js"
@@ -29,7 +29,7 @@ const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.la
 
 const controlJournalLayer = (target: ReturnType<typeof FixtureTarget.make>) =>
   liveJournalTestLayer({
-    records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+    records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
     runId,
     target
   })

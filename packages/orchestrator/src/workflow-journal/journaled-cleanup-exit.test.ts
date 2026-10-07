@@ -29,7 +29,7 @@ import {
 } from "../workflow/registry/operation.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 import { JournalStore } from "./store.js"
 
 const runId = RunId.make("claim-cleanup-application-exit-run")
@@ -43,7 +43,7 @@ const claim = ActiveTaskClaim.make({
 const release = TaskClaimRelease.make({ claim, operationId: OperationId.make("claim-cleanup-release") })
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const journalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+  records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

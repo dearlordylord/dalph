@@ -52,7 +52,7 @@ import { Cause, Clock, Context, Deferred, Duration, Effect, Fiber, Layer, Ref, S
 import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { makeExecutorResumeModelFixture } from "./planned-attempt-executor-resume-fixture.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { runPlannedAttemptExecutorResumeRedelivery } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/resume-redelivery.js"
 import type { PlannedAttemptContinuationWitness } from "../../../orchestrator/src/workflow/protocols/planned-attempt-continuation/events.js"
@@ -166,7 +166,7 @@ const remotePublicationTarget = RemotePublicationTarget.make({
   branch: RemotePublicationBranchRef.make("refs/heads/main"),
   endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
 })
-const modelRunBegan = makeWorkflowRunBeganRecord(
+const modelRunBegan = makeHistoricalWorkflowRunBeganRecord(
   plannedAttempt.runId,
   modelTarget,
   InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

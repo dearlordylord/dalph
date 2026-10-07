@@ -33,7 +33,7 @@ import { memoryJournalTestLayer } from "../workflow-journal/adapters/memory-stor
 import { InRunJournal, JournalStore, JournalStoreContradiction } from "../workflow-journal/store.js"
 import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import { AcceptedJournalReader } from "../workflow-journal/accepted-reader.js"
-import { makeWorkflowRunBeganRecord } from "../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../workflow-journal/run-lifecycle.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
 import { journalEvidenceFrom, journalRecordByPosition } from "../workflow-journal/record-evidence.js"
 import { OperationId } from "../workflow/identity.js"
@@ -93,7 +93,7 @@ import {
 const capacityJournalLayer = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>, capacity = 2) =>
   liveJournalTestLayer({
     records: [
-      makeWorkflowRunBeganRecord(
+      makeHistoricalWorkflowRunBeganRecord(
         runId,
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(capacity) }),

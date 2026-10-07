@@ -329,3 +329,70 @@ it.live("public guidance CLI routes one exact message through host command admis
     })
   ).pipe(Effect.provide(NodeServices.layer))
 )
+
+it.live("compact snapshot reads once and explicitly preserves NotReady", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const address = yield* availableLocalHostAddress
+      const snapshotReads = yield* Ref.make(0)
+      yield* serveRunningHost(address, {
+        ...probe.observation,
+        current: {
+          ...probe.observation.current,
+          get: Ref.update(snapshotReads, (count) => count + 1).pipe(Effect.andThen(probe.observation.current.get))
+        }
+      })
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const run = application(
+        Layer.succeed(RunningHostCliOutput, { writeLine: (text) => Ref.update(lines, (all) => [...all, text]) })
+      )
+      yield* run(["attach", "snapshot", "--host", address, "--run", probe.runId, "--json", "--compact"])
+      const output = yield* Ref.get(lines)
+      expect(output).toHaveLength(1)
+      const [line] = output
+      if (line === undefined) return expect.fail("requires one compact output line")
+      expect(JSON.parse(line)).toMatchObject({
+        _tag: "CompactRunSnapshot",
+        runId: probe.runId,
+        result: { _tag: "Success", publication: "NotReady", observation: { _tag: "Unavailable" } }
+      })
+      expect(new TextEncoder().encode(line + "\n").byteLength).toBeLessThanOrEqual(8192)
+      expect(yield* Ref.get(snapshotReads)).toBe(1)
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
+
+it.live("compact is refused on commands before host effects", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const probe = yield* makeRunningHostReadProbe()
+      const address = yield* availableLocalHostAddress
+      const commands = yield* Ref.make(0)
+      yield* serveRunningHost(address, {
+        ...probe.observation,
+        executeAttachedCommand: () =>
+          Ref.update(commands, (count) => count + 1).pipe(Effect.as({ _tag: "WakeSubmitted" as const }))
+      })
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const run = application(
+        Layer.succeed(RunningHostCliOutput, { writeLine: (text) => Ref.update(lines, (all) => [...all, text]) })
+      )
+      const outcome = yield* run([
+        "attach",
+        "start",
+        "--host",
+        address,
+        "--run",
+        probe.runId,
+        "--json",
+        "--compact"
+      ]).pipe(Effect.result)
+      expect(outcome._tag).toBe("Failure")
+      expect(yield* Ref.get(commands)).toBe(0)
+      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toMatchObject([
+        { _tag: "CompactRunSnapshot", result: { _tag: "Failure", category: "InvalidRequest", detailsOmitted: true } }
+      ])
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)

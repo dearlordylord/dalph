@@ -18,7 +18,7 @@ import { InitialControlPolicy } from "../../src/control/policy.js"
 import { FixtureTarget } from "../../src/authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../src/workflow-journal/identity.js"
 import { intentRecordKey } from "../../src/workflow-journal/record-key.js"
-import { makeWorkflowRunBeganRecord } from "../../src/workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../src/workflow-journal/run-lifecycle.js"
 import type { JournalRecord } from "../../src/workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../src/workflow/kernel/event.js"
 import { TaskClaimAcquisitionIntendedEvent } from "../../src/workflow/registry/event.js"
@@ -42,7 +42,7 @@ export const projectFreshTaskAdmissionForTest = (
   operations: ReadonlyArray<TaskSelectionClaimOperation>
 ): FreshTaskAdmissionProjection => {
   const records: ReadonlyArray<JournalRecord> = [
-    makeWorkflowRunBeganRecord(
+    makeHistoricalWorkflowRunBeganRecord(
       runId,
       FixtureTarget.make(`fresh-task-admission-test:${runId}`),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(Math.max(1, operations.length)) }),

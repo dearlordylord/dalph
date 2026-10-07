@@ -25,7 +25,7 @@ import { OperationId } from "../workflow/identity.js"
 import { acquireTaskClaimThrough, WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimAcquisitionOperation } from "../workflow/registry/operation.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const controlledRecoveryLease: Pick<DeliveryActionExecutionLease, "forwardBoundary" | "recordIntent"> = {
@@ -119,7 +119,12 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
         Layer.provideMerge(
           liveJournalTestLayer({
             records: [
-              makeWorkflowRunBeganRecord(foreignRunId, foreignTarget, initialPolicy, remotePublicationTargetForTest)
+              makeHistoricalWorkflowRunBeganRecord(
+                foreignRunId,
+                foreignTarget,
+                initialPolicy,
+                remotePublicationTargetForTest
+              )
             ],
             runId: foreignRunId,
             target: foreignTarget
@@ -233,7 +238,7 @@ it.effect("recovers an unfinished exact claim intent after throttle and rereads 
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             RunId.make("journaled-throttled-claim-recovery"),
             FixtureTarget.make("journaled-throttled-claim-target"),
             initialPolicy,

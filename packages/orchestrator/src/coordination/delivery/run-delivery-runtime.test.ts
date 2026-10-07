@@ -72,7 +72,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent, WorkflowInterpreter } from "../../workflow/interpretation/interpreter.js"
 import { journaledTrackerGraphRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { Journal } from "./journal.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
@@ -1307,7 +1307,7 @@ it.effect("keeps the original graph-read owner while its acknowledged intent adv
         runId,
         target,
         records: [
-          makeWorkflowRunBeganRecord(
+          makeHistoricalWorkflowRunBeganRecord(
             runId,
             target,
             InitialControlPolicy.make({ taskExecutionCapacity: policy.taskExecutionCapacity }),

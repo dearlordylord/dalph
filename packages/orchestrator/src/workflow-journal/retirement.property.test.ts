@@ -19,7 +19,7 @@ import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { JournalDatabaseLocator } from "./identity.js"
 import { JournalStore } from "./store.js"
 import { makeTraceReader } from "../presentation/trace-reader.js"
-import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
 import type { JournalRecord } from "./store.js"
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
@@ -290,7 +290,7 @@ it("preserves generated schema-v1 Run-begin rows and leaves Cold empty through m
   await fc.assert(
     fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (runCount) => {
       const records = Array.from({ length: runCount }, (_, index) =>
-        makeWorkflowRunBeganRecord(
+        makeHistoricalWorkflowRunBeganRecord(
           RunId.make(`migration-property-run-${index}`),
           FixtureTarget.make(`migration-property-target-${index}`),
           initialPolicy,

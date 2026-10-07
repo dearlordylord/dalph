@@ -5,7 +5,7 @@ import { RunId } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { taskWorkCapacityPolicyRecordKey } from "../../workflow-journal/record-key.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacityChangedEvent } from "../../workflow/registry/event.js"
@@ -27,7 +27,7 @@ const accepted = (records: ReadonlyArray<JournalRecord>): ValidWorkflowJournalHi
 it("keeps cold, live, and explicit raw diagnostic reconstruction equivalent without sharing acceptance capabilities", () => {
   fc.assert(
     fc.property(fc.array(fc.integer({ min: 1, max: 8 }), { maxLength: 24 }), (capacities) => {
-      const began = makeWorkflowRunBeganRecord(
+      const began = makeHistoricalWorkflowRunBeganRecord(
         runId,
         FixtureTarget.make("evidence-parity"),
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),

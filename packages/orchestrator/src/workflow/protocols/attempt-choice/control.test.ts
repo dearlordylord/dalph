@@ -30,7 +30,7 @@ import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
@@ -107,7 +107,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
 const target = FixtureTarget.make("attempt-choice-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+  records: [makeHistoricalWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

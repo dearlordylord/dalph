@@ -14,7 +14,7 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeHistoricalWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
@@ -65,7 +65,9 @@ const admissionSpecification = makeTaskWorkSpecification({
 })
 const admissionAttempt = { ...fixture.plannedAttempt, taskRevision: admissionSpecification.fingerprint }
 const begunJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(fixture.runId, trackerTarget, initialPolicy, remotePublicationTargetForTest)],
+  records: [
+    makeHistoricalWorkflowRunBeganRecord(fixture.runId, trackerTarget, initialPolicy, remotePublicationTargetForTest)
+  ],
   runId: fixture.runId,
   target: trackerTarget
 })
