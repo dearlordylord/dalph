@@ -82,7 +82,9 @@
     "test:formal:integration": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-gate.integration.test.mjs",
     "test:delivery-smoke": "DALPH_RUN_HISTORICAL_CHRONOLOGY=1 node scripts/run-delivery-smoke.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "test:docs": "node --test scripts/check-docs.test.mjs"
+    "test:docs": "node --test scripts/check-docs.test.mjs",
+    "mbt:generate": "node scripts/generate-mbt-corpus.mjs",
+    "mbt:replay": "node scripts/replay-mbt-corpus.mjs"
   },
   "lint-staged": {
     "*.{js,mjs,ts,tsx}": "node scripts/run-quality-lint.mjs --staged --fix"
