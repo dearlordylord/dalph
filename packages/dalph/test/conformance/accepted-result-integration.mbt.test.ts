@@ -1,8 +1,8 @@
 /* eslint-disable functional/no-mixed-types -- The executable Quint driver exposes imperative action controls. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { expect, it } from "@effect/vitest"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import { Context, Deferred, Effect, Fiber, FileSystem, Layer, ManagedRuntime, Path, Ref, Schema } from "effect"
 import type { AcceptedResult } from "@dalph/contracts"
 import {
@@ -181,6 +181,8 @@ import {
   IntegrationResponsibilityIdentity,
   integrationResponsibilityIdentity
 } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts")
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({

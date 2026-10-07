@@ -117,6 +117,10 @@ void test("checked-in hosted formal inputs exactly match the authoritative JavaS
   const manifest = JSON.parse(readFileSync(hostedFormalInputManifestPath, "utf8"))
   for (const path of [
     "package.json",
+    "scripts/mbt-corpus-replay.mjs",
+    "scripts/mbt-corpus-replay.d.mts",
+    "scripts/mbt-corpus-loader.mjs",
+    "scripts/mbt-corpus-contract.mjs",
     "packages/contracts/package.json",
     "packages/dalph/package.json",
     "packages/orchestrator/package.json",

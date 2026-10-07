@@ -1,6 +1,6 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   PlannedAttemptExecutorReport,
@@ -28,6 +28,8 @@ import {
   type ForwardOwnerAdmission as ForwardOwnerAdmissionType
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/application-exit.mbt.test.ts")
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({

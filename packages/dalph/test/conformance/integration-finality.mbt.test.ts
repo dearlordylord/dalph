@@ -1,6 +1,6 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { expect, it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import { AcceptedResultEvidenceManifest, TaskId, TaskRevision, makeTaskWorkSpecification } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
@@ -95,6 +95,8 @@ import { TrackerGraphState } from "../../../orchestrator/src/coordination/delive
 import { frontierOf } from "../../../orchestrator/src/coordination/delivery/ticket-delivery-projection.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/test/journaled-graph-observation.js"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/integration-finality.mbt.test.ts")
 
 const RUN_ID = 141n
 const TASK_A = 1n

@@ -3,18 +3,16 @@
 /* eslint-disable no-restricted-globals -- Conformance instrumentation records process provenance and CPU. */
 /* eslint-disable no-magic-numbers -- Focused conformance seeds, ordinals, and timeout bounds are protocol fixtures. */
 /* eslint-disable functional/no-throw-statements -- Invalid directed observations fail closed. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import {
   defineDriver,
   ITFBigInt,
   stateCheck,
-  quintRun,
   quintRunWithTraceGeneration,
-  generateTraces,
   TraceGeneration
 } from "@firfi/quint-connect/effect"
 import { expect } from "vitest"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -142,6 +140,10 @@ import { version as quintVersion } from "@informalsystems/quint/dist/src/version
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { currentSourceInputDigest, repositoryHead } from "./gate-run-identity-adapter.js"
+
+const { generateTraces, quintIt, quintRun } = corpusReplayFor(
+  "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts"
+)
 
 const specification = makeTaskWorkSpecification({
   body: "Complete the model task.",

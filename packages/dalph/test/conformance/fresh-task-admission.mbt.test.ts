@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- One adapter keeps the formal action-to-production admission map auditable. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -135,6 +135,8 @@ import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+
+const { quintIt } = corpusReplayFor("packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts")
 
 const taskTags = ["TaskA", "TaskB", "TaskC", "TaskD", "TaskE"] as const
 type TaskTag = (typeof taskTags)[number]

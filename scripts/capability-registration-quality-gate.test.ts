@@ -7,7 +7,7 @@ import {
   runQualityGateFixture
 } from "./quality-gate-test-fixture.js"
 
-const broadQualificationCommands = ["test:recorded-catalog", "test"]
+const broadQualificationCommands = ["test:mbt", "test:recorded-catalog", "test"]
 
 it(
   "runs the capability audit exactly once and continues to the next quality stage",
@@ -22,7 +22,8 @@ it(
     expect(invocations).toEqual([...broadQualityGateStructuralCommands, ...broadQualificationCommands])
     expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
     expect(capabilityIndex).toBeGreaterThan(-1)
-    expect(invocations[capabilityIndex + 1]).toBe("test:recorded-catalog")
+    expect(invocations[capabilityIndex + 1]).toBe("test:mbt")
+    expect(invocations[capabilityIndex + 2]).toBe("test:recorded-catalog")
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )

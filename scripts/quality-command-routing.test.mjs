@@ -318,7 +318,7 @@ void test("unavailable local formal classification fails before the resumable qu
   assert.deepEqual(calls, [])
 })
 
-void test("hosted quality dispatch excludes local formal integration and MBT regardless lifecycle", () => {
+void test("hosted quality dispatch includes replay MBT and excludes local formal integration regardless lifecycle", () => {
   const { calls, result } = dispatch({
     arguments: ["--hosted-quality"],
     environment: { CI: "true", DALPH_COVERAGE_BASE_SHA: base, npm_lifecycle_event: "check:all" }
@@ -328,7 +328,7 @@ void test("hosted quality dispatch excludes local formal integration and MBT reg
   assert.ok(calls.every((call) => call.boundary === "hosted-stage"))
   const commands = calls.map((call) => call.command.args[2])
   assert.ok(commands.includes("test"))
-  assert.ok(!commands.includes("test:mbt"))
+  assert.equal(commands.filter((command) => command === "test:mbt").length, 1)
   assert.ok(!commands.includes("check:quint"))
   assert.ok(!commands.includes("check:ci:formal"))
 })

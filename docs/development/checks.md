@@ -106,8 +106,8 @@ Interruption costs a rerun after reconciliation; this is an explicit simplicity
 tradeoff. Formal relevance is recorded, while proof runs by explicit local
 request or in CI.
 
-After structural preflight, the local gate runs its delivery,
-recorded-catalog, and coverage suffix. Its recorded manifest contains no Quint
+After structural preflight, the local gate runs required MBT corpus replay,
+recorded-catalog, and coverage. Its recorded manifest contains no formal proof
 stage and its report says `formalDisposition: not-requested`. A maintainer can
 run `pnpm check:quint` separately; hosted formal and quality cells remain
 independent. This qualification-tooling selection changes no Dalph runtime
@@ -118,7 +118,7 @@ behavior or assertions inside the formal command.
 On a clean Linux worktree with Python 3, inotify, the pinned Node version, and
 installed workspace dependencies, run
 `pnpm check:all --candidate=<exact Base SHA>` for the exact
-committed HEAD. This runs the preflight and delivery, recorded-catalog, and
+committed HEAD. This runs the preflight and MBT replay, recorded-catalog, and
 coverage commands selected from the same stage algebra as hosted quality CI.
 For a PR, set `DALPH_PR_NUMBER` to its number and read its recorded Base and HEAD
 immediately before the local run:

@@ -10,7 +10,7 @@ import {
 } from "./quality-gate-test-fixture.js"
 
 const structuralCommands = broadQualityGateStructuralCommands
-const broadQualificationCommands = ["test:recorded-catalog", "test"]
+const broadQualificationCommands = ["test:mbt", "test:recorded-catalog", "test"]
 const pinnedSourceOnlyPaths = [
   "docs/ISSUE-386-ACCEPTANCE-AUDIT.md",
   "docs/scenarios/production-codex-integrator.md",
@@ -32,6 +32,7 @@ it("selects the exact narrow inventory for the pinned Base paths and the broad s
     "check:circular",
     "check:secrets",
     "test:capability-registration",
+    "test:mbt",
     "test"
   ])
   expect(selectedCommands(["scripts/run-quality-gate.mjs"])).toEqual([

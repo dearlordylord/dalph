@@ -1,6 +1,6 @@
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, quintRun, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
+import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -30,6 +30,8 @@ import {
   evaluateResultRecoveryDirectionApplication,
   resultRecoveryDirectionProblem
 } from "../../../orchestrator/src/workflow/protocols/result-recovery/protocol.js"
+
+const { quintIt, quintRun } = corpusReplayFor("packages/dalph/test/conformance/result-recovery-direction.mbt.test.ts")
 
 const fixture = integrationFinalityFixture
 const attempt = fixture.plannedAttempt

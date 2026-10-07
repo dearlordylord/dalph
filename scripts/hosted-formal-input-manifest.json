@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "67dd64346aa5be834d4a8cf28641e7effe1926517baff32fd6dd53cd64d4cb21",
+  "digest": "88d29b9400dae8e7a0f850fb52bb86e839e62d090cd3c14961a2ba7d313dc4f4",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -509,6 +509,10 @@
     "scripts/generate-hosted-formal-input-manifest.mjs",
     "scripts/hosted-formal-input-manifest.json",
     "scripts/hosted-formal-input-manifest.mjs",
+    "scripts/mbt-corpus-contract.mjs",
+    "scripts/mbt-corpus-loader.mjs",
+    "scripts/mbt-corpus-replay.d.mts",
+    "scripts/mbt-corpus-replay.mjs",
     "scripts/quality-check-selection.mjs",
     "scripts/quality-gate-failure-policy.mjs",
     "scripts/quality-output-budget.mjs",

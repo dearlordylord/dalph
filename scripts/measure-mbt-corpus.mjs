@@ -19,12 +19,13 @@ const selected = syntax.statements.find(
     node.expression.expression.getText(syntax) === "quintIt"
 )
 if (!selected) throw new Error("Representative production replay is missing")
-const imports = 'import { quintIt } from "@firfi/quint-connect/vitest"'
+const imports = `const { quintIt, quintRun } = corpusReplayFor("${owner}")`
 if (!source.includes(imports)) throw new Error("Representative import contract changed")
-const wrapper = `import { quintRunWithTraceGeneration, TraceGeneration } from "@firfi/quint-connect/effect"
+const wrapper = `const { quintRun } = corpusReplayFor("${owner}")
+import { quintRunWithTraceGeneration, TraceGeneration } from "@firfi/quint-connect/effect"
 import { Layer } from "effect"
 import { readFileSync, writeFileSync } from "node:fs"
-import { corpusTraceGenerationLayer, loadCorpus } from "../../../../scripts/mbt-corpus-loader.mjs"
+import { loadCorpus } from "../../../../scripts/mbt-corpus-loader.mjs"
 import assert from "node:assert/strict"
 import childProcess from "node:child_process"
 import { vi } from "vitest"
@@ -41,15 +42,7 @@ const quintIt = (itEffect: typeof it.effect, name: string, opts: Parameters<type
     const baselineReplayed = performance.now()
     const corpus = yield* Effect.promise(() => loadCorpus(receipt.lane))
     assert.deepEqual(corpus, traces)
-    let replayCalls = 0
-    const corpusLayer = corpusTraceGenerationLayer(receipt.lane)
-    const replay = Effect.gen(function* () {
-      const service = yield* TraceGeneration
-      return yield* quintRunWithTraceGeneration(opts).pipe(Effect.provide(Layer.succeed(TraceGeneration, { generate: (options) => {
-        replayCalls++
-        return service.generate(options)
-      }})))
-    }).pipe(Effect.provide(corpusLayer))
+    const replay = corpusReplayFor("${owner}").quintRun(opts)
     const traps = ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"].map((name) => vi.spyOn(childProcess, name).mockImplementation(() => { throw new Error("Replay attempted a generator/process") }))
     const fetchTrap = vi.spyOn(globalThis, "fetch").mockImplementation(() => { throw new Error("Replay attempted network") })
     let result
@@ -62,9 +55,8 @@ const quintIt = (itEffect: typeof it.effect, name: string, opts: Parameters<type
       fetchTrap.mockRestore()
     }
     assert.deepEqual(result, live)
-    assert.equal(replayCalls, 1)
     const replayed = performance.now()
-    writeFileSync(".scratch/mbt-fixture/measurement.json", JSON.stringify({suppliedTraceReplayMilliseconds: baselineReplayed-start, validatedReplayMilliseconds: replayed-baselineReplayed, bytes: bytes.length, traces: traces.length, states: traces.reduce((sum, trace) => sum+trace.states.length,0), live, replayCalls, generatorCallsDuringReplay: 0, processCallsDuringReplay: 0, networkCallsDuringReplay: 0, result}, null, 2))
+    writeFileSync(".scratch/mbt-fixture/measurement.json", JSON.stringify({suppliedTraceReplayMilliseconds: baselineReplayed-start, validatedReplayMilliseconds: replayed-baselineReplayed, bytes: bytes.length, traces: traces.length, states: traces.reduce((sum, trace) => sum+trace.states.length,0), live, generatorCallsDuringReplay: 0, processCallsDuringReplay: 0, networkCallsDuringReplay: 0, result}, null, 2))
     writeFileSync(".scratch/mbt-fixture/traces.json", bytes)
   }), { timeout })
 }`

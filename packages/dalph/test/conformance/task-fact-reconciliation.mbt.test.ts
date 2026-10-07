@@ -1,7 +1,8 @@
 /* eslint-disable max-lines -- One driver keeps the model action-to-production-boundary map auditable. */
+import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { it } from "@effect/vitest"
 import { isCoverageMode } from "../../test-support/vitest-mode.js"
-import { defineDriver, ITFBigInt, quintRun, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import {
   AcceptedResult,
   AcceptedResultEvidenceManifest,
@@ -152,6 +153,8 @@ import {
 import { AuthoritativeTaskClaimReleased } from "../../../orchestrator/src/workflow/protocols/task-claim-release/protocol.js"
 import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
+
+const { quintRun } = corpusReplayFor("packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts")
 
 const runId = RunId.make("task-fact-model-run")
 const otherRunId = RunId.make("task-fact-model-other-run")

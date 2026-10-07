@@ -28,6 +28,8 @@ const candidateSha = "b".repeat(40)
 const baseSha = "a".repeat(40)
 const binding = { candidateSha, baseSha, runId: "901", runAttempt: "2" }
 const nodeVersion = hostedQualityNodeVersions[0]
+const stageIndices = hostedQualityStageIds.map((_stage, index) => index)
+const coverageIndex = hostedQualityStageIds.indexOf("coverage")
 const tool = { pnpmSha256: "c".repeat(64) }
 const plan = createQualityGateStagePlan({
   baseSha,
@@ -157,17 +159,17 @@ void test("aggregates a complete exact suffix and retains every artifact locatio
     assert.equal(result.succeeded, true)
     assert.deepEqual(
       result.rows.map(({ outcome }) => outcome),
-      ["passed", "passed"]
+      hostedQualityStageIds.map(() => "passed")
     )
-    assert.ok(result.rows[1].artifacts.some((path) => path.endsWith("/coverage/coverage-final.json")))
-    assert.ok(result.rows[1].artifacts.some((path) => path.endsWith("/coverage/coverage-summary.json")))
+    assert.ok(result.rows[coverageIndex].artifacts.some((path) => path.endsWith("/coverage/coverage-final.json")))
+    assert.ok(result.rows[coverageIndex].artifacts.some((path) => path.endsWith("/coverage/coverage-summary.json")))
   } finally {
     f.cleanup()
   }
 })
 
 void test("reports each independent failure and retains passing-stage evidence fail-slow", () => {
-  for (const failedIndices of [[0], [1], [0, 1]]) {
+  for (const failedIndices of [...stageIndices.map((index) => [index]), stageIndices]) {
     const f = fixture()
     try {
       for (const index of failedIndices)
@@ -179,7 +181,7 @@ void test("reports each independent failure and retains passing-stage evidence f
       assert.equal(result.succeeded, false)
       assert.deepEqual(
         result.rows.map(({ outcome }) => outcome),
-        [0, 1].map((index) => (failedIndices.includes(index) ? "failed" : "passed"))
+        stageIndices.map((index) => (failedIndices.includes(index) ? "failed" : "passed"))
       )
       assert.ok(result.rows.every(({ artifacts }) => artifacts.some((path) => path.endsWith("/stage.log"))))
     } finally {
@@ -211,7 +213,7 @@ void test("rejects missing, duplicate, malformed, changed-candidate, and mixed-t
         envelope.outcome = "failed"
         envelope.terminal = { ...envelope.terminal, childOutcome: "timed-out", exitCode: "none", signal: "SIGKILL" }
       }),
-    (f) => writeFileSync(join(dirname(f.reports[1]), "coverage", "coverage-final.json"), "changed\n"),
+    (f) => writeFileSync(join(dirname(f.reports[coverageIndex]), "coverage", "coverage-final.json"), "changed\n"),
     (f) => writeFileSync(join(dirname(f.reports[0]), "unlisted-artifact.txt"), "unexpected\n")
   ]
   for (const mutate of cases) {
@@ -221,7 +223,7 @@ void test("rejects missing, duplicate, malformed, changed-candidate, and mixed-t
       const result = aggregateHostedQualityStages({ binding, reports: f.reports })
       assert.equal(result.succeeded, false)
       assert.ok(result.failures.length > 0)
-      assert.equal(result.rows.length, 2)
+      assert.equal(result.rows.length, hostedQualityStageIds.length)
     } finally {
       f.cleanup()
     }
@@ -239,11 +241,11 @@ void test("keeps malformed structured artifact entries unproven while reporting 
       assert.equal(result.succeeded, false)
       assert.deepEqual(
         result.rows.map(({ outcome }) => outcome),
-        ["UNPROVEN", "passed"]
+        stageIndices.map((index) => (index === 0 ? "UNPROVEN" : "passed"))
       )
-      assert.equal(result.rows.length, 2)
+      assert.equal(result.rows.length, hostedQualityStageIds.length)
       assert.ok(result.rows[0].failures.some((failure) => failure.includes("malformed portable artifact")))
-      assert.ok(result.failures.some((failure) => failure.startsWith("recorded-catalog:")))
+      assert.ok(result.failures.some((failure) => failure.startsWith(`${hostedQualityStageIds[0]}:`)))
     } finally {
       f.cleanup()
     }
@@ -253,7 +255,7 @@ void test("keeps malformed structured artifact entries unproven while reporting 
 void test("keeps directory artifact entries unproven without aborting the other rows", () => {
   for (const [index, path] of [
     [0, "."],
-    [1, "coverage"]
+    [coverageIndex, "coverage"]
   ]) {
     const f = fixture()
     try {
@@ -263,10 +265,10 @@ void test("keeps directory artifact entries unproven without aborting the other 
       assert.doesNotThrow(() => aggregateHostedQualityStages({ binding, reports: f.reports }))
       const result = aggregateHostedQualityStages({ binding, reports: f.reports })
       assert.equal(result.succeeded, false)
-      assert.equal(result.rows.length, 2)
+      assert.equal(result.rows.length, hostedQualityStageIds.length)
       assert.deepEqual(
         result.rows.map(({ outcome }) => outcome),
-        [0, 1].map((row) => (row === index ? "UNPROVEN" : "passed"))
+        stageIndices.map((row) => (row === index ? "UNPROVEN" : "passed"))
       )
       assert.ok(result.rows[index].failures.some((failure) => failure.includes("regular file")))
       assert.ok(
@@ -306,11 +308,11 @@ void test("uses the checked-in command when a sealed stage contract is malformed
     })
     const result = aggregateHostedQualityStages({ binding, reports: f.reports })
     assert.equal(result.succeeded, false)
-    assert.equal(result.rows.length, 2)
+    assert.equal(result.rows.length, hostedQualityStageIds.length)
     assert.equal(result.rows[0].outcome, "UNPROVEN")
     assert.deepEqual(
       result.rows[0].command,
-      plan.stages.find((cell) => cell.nodeVersion === nodeVersion && cell.stageId === "recorded-catalog")?.command
+      plan.stages.find((cell) => cell.nodeVersion === nodeVersion && cell.stageId === hostedQualityStageIds[0])?.command
     )
   } finally {
     f.cleanup()
