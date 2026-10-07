@@ -31,11 +31,24 @@ void test("lint census preserves all tool failures while ordinary lint stops at 
     const run = (args) =>
       spawnSync(process.execPath, [runner, ...args], {
         cwd: directory,
-        env: { ...process.env, DALPH_LINT_CENSUS_LOG: log },
+        env: { ...process.env, DALPH_LINT_CENSUS_LOG: log, DALPH_HOOK_TIMINGS: "1" },
         encoding: "utf8"
       })
     const census = run(["--census"])
     assert.equal(census.status, 1, census.stderr)
+    const timings = census.stderr
+      .split("\n")
+      .filter((line) => line.startsWith('{"version":1,"kind":"hook-timing"'))
+      .map((line) => JSON.parse(line))
+    assert.deepEqual(
+      timings.map((timing) => timing.stage),
+      ["discovery", "oxlint", "dprint"]
+    )
+    assert.deepEqual(
+      timings.map((timing) => timing.exitCode),
+      [0, 23, 23]
+    )
+    assert.ok(timings.every((timing) => timing.milliseconds >= 0))
     assert.equal(await readFile(log, "utf8"), "oxlint\ndprint\n")
     for (const name of ["oxlint", "dprint"]) assert.ok(census.stderr.includes(`.bin/${name}`))
     await writeFile(log, "")

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "observedAt": "2026-10-07T04:47:59.083Z",
+  "candidate": "893505ffb2bfc9a04dc4f4342feb12070dddf649",
+  "platform": "linux",
+  "architecture": "arm64",
+  "node": "v24.20.0",
+  "sampleLimit": 2,
+  "timeoutMilliseconds": 60000,
+  "samples": [
+    {
+      "input": "fresh Git fixture; ambient tool/OS caches",
+      "startedAt": "2026-10-07T04:48:00.994Z",
+      "stopAt": "2026-10-07T04:49:00.994Z",
+      "exitCode": 0,
+      "timings": [
+        {
+          "version": 1,
+          "kind": "hook-timing",
+          "stage": "lint-staged",
+          "milliseconds": 1024,
+          "exitCode": 0
+        },
+        {
+          "version": 1,
+          "kind": "hook-timing",
+          "stage": "gitleaks",
+          "milliseconds": 327,
+          "exitCode": 0
+        }
+      ],
+      "failure": "measurement-failed",
+      "totalMilliseconds": 1389.933678,
+      "stoppedWritersProven": true
+    }
+  ],
+  "stagedPaths": [
+    "scripts/hook-timing-fixture.ts"
+  ],
+  "versions": {
+    "pnpm": "10.29.3",
+    "lint-staged": "17.3.0",
+    "oxlint": "Version: 1.76.0",
+    "dprint": "dprint 0.55.2",
+    "gitleaks": "8.30.0"
+  }
+}

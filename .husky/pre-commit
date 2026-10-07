@@ -1,4 +1,20 @@
 set -eu
 
-pnpm exec lint-staged
-gitleaks git --pre-commit --staged --redact --no-banner
+run_stage() {
+  stage="$1"
+  shift
+  if [ "${DALPH_HOOK_TIMINGS:-}" = "1" ]; then
+    started=$(node -e 'console.log(Date.now())')
+    if "$@"; then status=0; else status=$?; fi
+    node -e 'console.error(JSON.stringify({version:1,kind:"hook-timing",stage:process.argv[1],milliseconds:Date.now()-Number(process.argv[2]),exitCode:Number(process.argv[3])}))' "$stage" "$started" "$status"
+    return "$status"
+  fi
+  "$@"
+}
+
+if [ "${DALPH_HOOK_TIMINGS:-}" = "1" ]; then
+  run_stage lint-staged pnpm exec lint-staged --verbose
+else
+  run_stage lint-staged pnpm exec lint-staged
+fi
+run_stage gitleaks gitleaks git --pre-commit --staged --redact --no-banner

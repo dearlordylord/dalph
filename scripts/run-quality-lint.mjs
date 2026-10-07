@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks"
 import { spawnSync } from "node:child_process"
 import { extname, join } from "node:path"
 import { changedRepositoryFileSelection } from "./changed-files.mjs"
@@ -11,6 +12,13 @@ const census = options.has("--census")
 let failedChecks = 0
 const changedOnly = options.has("--changed")
 const diagnosticBase = diagnosticBaseInput()
+const reportTiming = (stage, started, exitCode = 0) => {
+  if (process.env.DALPH_HOOK_TIMINGS === "1")
+    console.error(
+      JSON.stringify({ version: 1, kind: "hook-timing", stage, milliseconds: performance.now() - started, exitCode })
+    )
+}
+const discoveryStarted = performance.now()
 const allFiles = await discoverQualityFiles()
 const changedSelection =
   changedOnly && explicitFiles.length === 0
@@ -26,12 +34,19 @@ if (changedSelection !== undefined)
     selectedPaths: selectedFiles,
     source: diagnosticBase.source
   })
+reportTiming("discovery", discoveryStarted)
 const lintableExtensions = new Set([".js", ".mjs", ".ts", ".tsx"])
 const executable = (name) =>
   join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? `${name}.cmd` : name)
 
 const run = (command, arguments_, environment = process.env) => {
+  const started = performance.now()
   const result = spawnSync(command, arguments_, { env: environment, stdio: "inherit" })
+  reportTiming(
+    command.endsWith("oxlint") || command.endsWith("oxlint.cmd") ? "oxlint" : "dprint",
+    started,
+    result.status ?? 1
+  )
   if (result.error !== undefined) {
     if (!census) throw result.error
     failedChecks += 1
