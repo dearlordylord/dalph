@@ -1,9 +1,14 @@
 # Generate and replay an explicit MBT corpus
 
-**The pre-migration source below passed all 39 lanes; automatic replay wiring
-requires its own refreshed corpus and validation.**
-Focused controls, `check:fast` and `check:submit` pass; historical failed
-attempts are retained below. Pre-migration generation/replay evidence binds source commit
+**All 39 current corpus lanes pass provenance validation and complete replay.**
+The replay-only implementation is source commit
+`65e88ca892aead74f4f4dc494936b46f2f2b15da`; its refreshed manifest provenance is
+`375828764bbd69a68a431bb1ebdb42cfd282311c0056cc1924bd34e49ce6deba`.
+The focused observations below ran against those source bytes before committing,
+with Git HEAD still at planned Base `08fa36605900f9edb59fc4bdc79b07d51d64593f`.
+They are source/corpus qualification, not a frozen candidate gate or hosted CI.
+
+Pre-migration generation/replay evidence binds source commit
 `87a897ebf2496ac32b07cb9b0bb3e1afe64a4476` and manifest provenance digest
 `c7ae0604d8fbb64ae3628d9ba530cc10b1ba34f808368839561fcf6d8b5c4359`.
 The original detached-generator custody blocker has a controlled repair in this
@@ -268,3 +273,44 @@ no fingerprinted implementation or model input, no corpus bytes, and no runtime
 behavior. Its affected check is `check:docs`; unchanged source qualification is
 not rerun. Integration, publication and parent issue disposition remain with
 Dalph and the Integrator as described above.
+
+## Automatic replay migration evidence, 2026-10-07 UTC
+
+The source/corpus snapshot identified above passed complete replay through the
+routine `pnpm test:mbt` entry point: all 14 ordinary suites / 87 tests, followed
+by the serial accepted-result suite / 14 tests. No required MBT test was skipped;
+the sentinel recorded zero generator invocations. Every inventory-approved lane
+option, driver expression, state-check expression, seed, trace/state budget and
+replay call expression equals the planned Base inventory; source line locations
+changed with the imports. Explicit generation batch
+`.scratch/mbt-generation/batch-HjM79u/` published all 39 pairs before its
+08:15:40 UTC outer stop. No receipt was relabeled to accept old artifacts.
+
+All artifacts passed current provenance/ITF validation under process/network
+traps. The representative fixture now invokes the actual `corpusReplayFor`
+adapter; supplied-trace baseline and corpus replay both return ten traces with
+seed 428, with zero generator/process/network calls. Isolated copies of the
+routine replay entry point refused missing corpus in 3.0 seconds and stale
+manifest in 1.6 seconds, before any child launch; process spies recorded zero.
+The maintained loader controls cover missing receipts, rehashed stale provenance,
+corruption, wrong options and malformed ITF without self-healing.
+
+Routing/aggregation controls, 150 formal controls, fresh typecheck and lint,
+`check:fast`, documentation links, and one coherent `check:submit` passed.
+Submission included 49 cassette files / 506 tests with the 21 existing cassette
+skips unchanged. Exact local evidence is retained in
+`.scratch/mbt-automatic-generation-final.log`,
+`.scratch/mbt-automatic-inventory.log`, `.scratch/mbt-automatic-replay.log`,
+`.scratch/mbt-automatic-measurement.log`,
+`.scratch/mbt-automatic-command-negatives.json`,
+`.scratch/mbt-inventory-preservation.json`,
+`.scratch/mbt-automatic-ci-controls.log`,
+`.scratch/mbt-automatic-formal-controls.log`, and
+`.scratch/mbt-automatic-check-submit.log`.
+
+An earlier partial batch was stopped to correct the adapter declaration's error
+contract. Its producer and every launched worker/generator group were proven
+absent before the complete batch above; its partial artifacts are not credited.
+Shared selection still requires hosted CI after integration, and the Integrator
+must refresh provenance and corpora for its exact merged source as described
+above. This bounded slice does not close #363 or claim hosted qualification.
