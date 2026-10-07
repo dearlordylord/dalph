@@ -1,5 +1,5 @@
 diff --git a/dist/cli/errors.js b/dist/cli/errors.js
-index c2798a8001198d76c44e2fe02d41dde18cecde04..0eedc3432ab7f31e41d0acd8b8f116767c4bb8ac 100644
+index c2798a8001198d76c44e2fe02d41dde18cecde04..3f23e3ee202308e3a10e452a64b3930b2bcfb32c 100644
 --- a/dist/cli/errors.js
 +++ b/dist/cli/errors.js
 @@ -1,11 +1,11 @@
@@ -17,7 +17,7 @@ index c2798a8001198d76c44e2fe02d41dde18cecde04..0eedc3432ab7f31e41d0acd8b8f11676
  }) {
  }
 diff --git a/dist/cli/managed-process.js b/dist/cli/managed-process.js
-index 8bc2e16286ad8d4701e427e19a2da31b5894c676..2c3a97d23b73225944fb7233f6d67cc4e0a5b915 100644
+index 8bc2e16286ad8d4701e427e19a2da31b5894c676..b69fa960b9b1c67cfbaa765db6a785fa7289edfc 100644
 --- a/dist/cli/managed-process.js
 +++ b/dist/cli/managed-process.js
 @@ -1,5 +1,5 @@
@@ -27,8 +27,40 @@ index 8bc2e16286ad8d4701e427e19a2da31b5894c676..2c3a97d23b73225944fb7233f6d67cc4
      message: Schema.String,
      code: Schema.optional(Schema.String)
  }) {
+diff --git a/dist/cli/platform-process.js b/dist/cli/platform-process.js
+index 3bb6def84f1c6130a5aa99803fc49cba05903068..af83d6dae29b737c08f27a5f46e736dcc70d21cb 100644
+--- a/dist/cli/platform-process.js
++++ b/dist/cli/platform-process.js
+@@ -42,12 +42,17 @@ const parseWindowsProcessCount = (stdout) => {
+ };
+ export const makePlatformProcessBoundary = (deps = defaultDeps) => {
+     const isWindows = deps.platform === "win32";
++    // Dalph's generation worker validates its Linux group and records custody
++    // before importing this adapter. Its bounded parent owns the whole group;
++    // this scope owns only the exact child, never the parent process group.
++    const inheritParentGroup = deps === defaultDeps &&
++        process.env["DALPH_QUINT_PARENT_OWNED_GROUP"] === String(process.pid);
+     const terminateImmediately = (processHandle) => {
+         if (processHandle.pid === undefined) {
+             return;
+         }
+         try {
+-            deps.killProcess(isWindows ? processHandle.pid : -processHandle.pid, "SIGKILL");
++            deps.killProcess(isWindows || inheritParentGroup ? processHandle.pid : -processHandle.pid, "SIGKILL");
+         }
+         catch {
+             // The process has already exited.
+@@ -139,7 +144,7 @@ export const makePlatformProcessBoundary = (deps = defaultDeps) => {
+     return {
+         commandName: (name) => isWindows ? `${name}.cmd` : name,
+         executableName: (name) => isWindows ? `${name}.exe` : name,
+-        detached: !isWindows,
++        detached: !isWindows && !inheritParentGroup,
+         makeLifecycle,
+         countEvaluatorProcesses,
+         evaluatorCleanupHint: isWindows
 diff --git a/dist/runner/replay-errors.js b/dist/runner/replay-errors.js
-index 270c5e66bce438215dbf076274187be6fa32beca..2d032ae0bed996a9d8b3c2934a2094d5d00d2b2e 100644
+index 270c5e66bce438215dbf076274187be6fa32beca..7b0e70244b4fc788841f7cab9fcd2d4af740c4f1 100644
 --- a/dist/runner/replay-errors.js
 +++ b/dist/runner/replay-errors.js
 @@ -1,5 +1,5 @@

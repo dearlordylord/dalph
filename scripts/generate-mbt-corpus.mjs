@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { corpusManifestPath, deriveCorpusManifest, validateCorpusManifest } from "./mbt-corpus-contract.mjs"
 import { checkRawCorpusBudget } from "./mbt-corpus-controls.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { proveMbtGenerationProcessGroupAbsent } from "./mbt-corpus-process-custody.mjs"
 
 const now = () => Effect.runSync(Clock.currentTimeMillis)
 const root = fileURLToPath(new URL("../", import.meta.url))
@@ -87,6 +88,7 @@ for (const lane of lanes) {
     await sample()
     await writeFile(join(directory, "command.json"), JSON.stringify(result, null, 2))
     if (budgetFailures.length > 0) throw new Error(budgetFailures.join("\n"))
+    proveMbtGenerationProcessGroupAbsent(directory)
     validateCorpusManifest(manifest, await deriveCorpusManifest(root))
     const bytes = (await stat(join(directory, "corpus.json"))).size
     totalBytes += bytes

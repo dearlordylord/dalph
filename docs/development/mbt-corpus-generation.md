@@ -1,13 +1,22 @@
 # Generate and replay an explicit MBT corpus
 
-**Unaccepted draft — do not use for unattended generation.** The bounded worker
-runner does not own the pinned library's separately detached Quint group.
-Worker crash or forced termination can bypass the library's signal hooks;
-worker-group absence cannot prove that the exact generator stopped. The public
-`TraceGeneration` service exposes neither its child identity nor a stopped-group
-receipt. Exact custody at that existing spawn boundary is a prerequisite for
-qualification. This draft does not add an alternate generation/model engine.
+**Corpus acceptance remains pending fresh generation and complete replay.**
+The original detached-generator custody blocker has a controlled repair in this
+candidate. Before importing the existing `TraceGeneration` service, the Linux
+worker proves it is its bounded supervisor's group leader and durably records
+its exact PID, group, start ticks and boot. A narrow installed-library patch
+honors that worker's opt-in group binding. Quint and compiled-evaluator children
+inherit the existing worker group; the adapter's scope signals its exact child,
+while the bounded supervisor owns group termination and absence observation.
+Other library consumers retain the default detached behavior. This changes no
+Dalph workflow, journal, Git/tracker effect or model-generation algorithm.
 
+A failed, missing, foreign-boot or still-present group observation cannot
+authorize corpus publication. The producer preserves raw evidence and custody;
+it never turns worker disappearance into proof of generator disappearance.
+Repeated launch into a retained custody namespace is refused before importing
+the generator. Linux generation is the currently proved host boundary; other
+platforms fail explicitly rather than inventing ownership proof.
 
 The maintainer invokes `mise exec -- pnpm mbt:generate --all` in the prepared
 worktree. The producer first derives and validates the current
@@ -114,3 +123,14 @@ boundary: expose exact process/group intent, observation and stopped-writer
 proof through the existing seam; then exercise forced-worker-stop/crash controls
 before another explicit generation batch. Do not substitute another worker
 watchdog, lower budgets, rerun the unchanged generator, or wire mandatory gates.
+
+## Generation custody repair evidence
+
+`scripts/mbt-corpus-process-custody.test.mjs` exercises the actual pinned
+TraceGeneration adapter with a controlled executable. Its five controls prove
+unowned-worker refusal, inherited exact group identity and stopped receipt,
+the original detached-group negative, forced worker/Quint group termination,
+and missing/foreign custody refusal. The retained draft's 38/39 artifact pairs
+remain unqualified; changed producer, patch, lockfile and custody fingerprints
+require a newly derived manifest and complete regeneration before acceptance.
+No full gate or complete corpus is credited by these focused controls.

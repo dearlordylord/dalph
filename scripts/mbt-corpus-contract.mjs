@@ -34,6 +34,8 @@ export const deriveCorpusManifest = async (worktree = root) => {
     "scripts/measure-mbt-corpus.mjs",
     "scripts/mbt-corpus-loader.mjs",
     "scripts/mbt-corpus-controls.mjs",
+    "scripts/mbt-corpus-process-custody.mjs",
+    "scripts/gate-custody-records.mjs",
     "scripts/generate-mbt-corpus.mjs",
     "scripts/generate-mbt-corpus-worker.mjs",
     "scripts/mbt-corpus-replay.mjs",

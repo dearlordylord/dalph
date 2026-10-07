@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { Effect } from "effect"
-import { TraceGeneration, traceGenerationLayer } from "@firfi/quint-connect/effect"
+import { bindMbtGenerationProcessGroup } from "./mbt-corpus-process-custody.mjs"
 import {
   corpusProvenanceDigest,
   deriveCorpusManifest,
@@ -9,9 +9,11 @@ import {
   validateCorpus,
   validateCorpusManifest
 } from "./mbt-corpus-contract.mjs"
-import { decodeCorpusTraces } from "./mbt-corpus-loader.mjs"
 
 const [manifestPath, laneId, directory, milliseconds] = process.argv.slice(2)
+bindMbtGenerationProcessGroup(directory)
+const { TraceGeneration, traceGenerationLayer } = await import("@firfi/quint-connect/effect")
+const { decodeCorpusTraces } = await import("./mbt-corpus-loader.mjs")
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
 validateCorpusManifest(manifest, await deriveCorpusManifest())
 const lane = manifest.lanes.find(({ id }) => id === laneId)
