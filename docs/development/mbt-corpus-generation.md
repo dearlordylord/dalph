@@ -1,6 +1,10 @@
 # Generate and replay an explicit MBT corpus
 
-**Corpus acceptance is blocked by the task-fact driver/model mismatch below.**
+**All 39 corpus lanes pass current provenance validation and complete replay.**
+Focused controls, `check:fast` and `check:submit` pass; historical failed
+attempts are retained below. Current generation/replay evidence binds source commit
+`87a897ebf2496ac32b07cb9b0bb3e1afe64a4476` and manifest provenance digest
+`c7ae0604d8fbb64ae3628d9ba530cc10b1ba34f808368839561fcf6d8b5c4359`.
 The original detached-generator custody blocker has a controlled repair in this
 candidate. Before importing the existing `TraceGeneration` service, the Linux
 worker proves it is its bounded supervisor's group leader and durably records
@@ -91,7 +95,7 @@ The representative fixture and loader instrumentation are focused proof of this
 seam. They do not claim automatic `test:mbt` migration, gate qualification,
 or acceptance of a partially generated corpus.
 
-## Current attempt evidence and open review
+## Historical attempts before custody and fixed-base repairs
 
 At Base `72a197658092c2e65e902a15e898ec70264e3937`, review of tooling commit
 `bf8b71512305be56a3093d0d49665f897607c5d5` on 2026-10-07 UTC found the
@@ -103,20 +107,22 @@ qualification or full replay evidence.
 
 The explicit batch recorded a 05:25:15 UTC outer stop and was stopped for review
 before it. It published 38 of the 39 required corpus/receipt pairs before stop;
-`task-fact-reconciliation/9` is missing. Raw traces, intents, child outputs and
+`task-fact-reconciliation/9` was missing in that batch. Raw traces, intents, child outputs and
 outcomes are retained under `.scratch/mbt-generation/batch-Bs76Py/`; the captured
 stop inventory and proof are `.scratch/mbt-generation-review-stop-processes.txt`
 and `.scratch/mbt-generation-review-stop-proof.json`. The exact observed producer,
 worker and Quint process groups were proven absent. That actual stop evidence
 cannot qualify the unsupported future worker-crash boundary. The partial files
-under `corpora/mbt/` remain untracked evidence, and their receipts are stale after
-review repairs; they have not been silently rehashed or credited as accepted.
+under `corpora/mbt/` were untracked evidence with stale receipts after
+review repairs. Those files were subsequently replaced by explicit regeneration;
+the historical batch was not rehashed or credited as accepted.
 
 The representative pre-review fixture replayed the same ten traces/160 states
 and returned `{ "tracesReplayed": 10, "seed": "428" }` in both live and validated
 corpus paths, with zero replay generator/process/fetch calls. Its exact outcomes
 remain in `.scratch/mbt-fixture/measurement.json`. It does not qualify this changed
-draft or replace complete corpus replay. No full `mbt:replay` pass is claimed.
+draft or replace complete corpus replay. No full `mbt:replay` pass was claimed
+for that historical candidate.
 
 The original custody prerequisite was subsequently repaired at the pinned
 spawn boundary as described below. A review also found redundant live generation
@@ -133,20 +139,21 @@ custody evidence belong to the explicit producer's retained command records.
 TraceGeneration adapter with a controlled executable. Its five controls prove
 unowned-worker refusal, inherited exact group identity and stopped receipt,
 the original detached-group negative, forced worker/Quint group termination,
-and missing/foreign custody refusal. The retained draft's 38/39 artifact pairs
-remain unqualified; changed producer, patch, lockfile and custody fingerprints
-require a newly derived manifest and complete regeneration before acceptance.
+and missing/foreign custody refusal. The earlier draft's 38/39 artifact pairs
+were unqualified; the changed producer, patch, lockfile and custody fingerprints
+required a newly derived manifest and complete regeneration, now completed.
 No full gate or complete corpus is credited by these focused controls.
 
-## Complete generation and blocked replay, 2026-10-07 UTC
+## Historical complete generation and blocked replay, 2026-10-07 UTC
 
-The current producer generated all 39 lanes with unchanged seeds, samples,
+The producer at source commit `1e7daef051a2866e183f44bade8d42b35b160fc3`
+generated all 39 lanes with unchanged seeds, samples,
 trace counts and depths. Batch `.scratch/mbt-generation/batch-4VCT6m/` recorded
 39 passed outcomes, 171,921,812 corpus bytes and 412,752 milliseconds. Each lane
 has a generator-group record and stopped-group observation before publication.
 The batch started at 06:45:07 UTC; its recorded command-level outer hard stop
 was 06:55:30 UTC. It completed before that stop. The 39 artifact/receipt pairs
-under `corpora/mbt/` now pass current provenance, complete inventory and ITF
+under `corpora/mbt/` then passed that candidate's provenance, complete inventory and ITF
 validation under zero-process/zero-network instrumentation.
 
 The representative controlled fixture uses the exact generated
@@ -168,13 +175,13 @@ projection reports `false`. The focused lifecycle re-establishment test (seed
 removed after stopped-writer proof; no generation was attempted during replay.
 The serial accepted-result replay child was not reached and is not credited.
 
-This is a blocking acceptance conflict at the existing driver/model boundary,
+This was a blocking acceptance conflict at the existing driver/model boundary,
 not missing or stale corpus data. No state predicate, model, trace, runtime
 behavior or acceptance lane has been weakened or skipped to force success.
-The next discriminating action is an accepted chronological scenario resolving
-independent-task eligibility at initialization, followed by its owner's focused
-runtime/driver/model repair. Only after that repair passes should this corpus be
-regenerated with the new fingerprints and complete replay attempted again.
+The subsequent fixed-base fixture repair below resolved the starting facts
+without changing runtime behavior, model state or the eligibility predicate.
+A fresh explicit generation batch then replaced the artifacts with current
+fingerprints, and complete replay passed.
 No mandatory automatic-gate migration or parent-issue closure is claimed.
 
 ## Controlled task-fact fixture repair
@@ -239,3 +246,23 @@ Exact evidence is in `.scratch/fixture-combined-generation.log`,
 `.scratch/fixture-combined-replay.log`. This qualifies that replay boundary only;
 the task owner still must complete required submission checks and the Integrator
 must qualify its exact merged source as described above.
+
+## Submission qualification, 2026-10-07 UTC
+
+Source candidate `87a897ebf2496ac32b07cb9b0bb3e1afe64a4476` passed fresh
+manifest/inventory validation and five focused fixed-base fixture controls.
+`check:fast` and one coherent `check:submit` passed before the 07:55:50 UTC
+hard stop (expected five minutes). Submission covered production artifacts,
+formal controls, typechecking, changed lint, the full lint census, and the
+in-memory cassette suite: 49 files passed, 506 tests passed, and 21 existing
+cassette skips. Required MBT lanes were not skipped. Exact command evidence is
+retained in `.scratch/mbt-fresh-fixture-control-repaired.log`,
+`.scratch/mbt-fresh-inventory.log`, `.scratch/mbt-revised-check-fast.log` and
+`.scratch/mbt-revised-check-submit.log`.
+
+The subsequent documentation correction only labels superseded negative
+attempts as historical and pins the current passing source/provenance. It changes
+no fingerprinted implementation or model input, no corpus bytes, and no runtime
+behavior. Its affected check is `check:docs`; unchanged source qualification is
+not rerun. Integration, publication and parent issue disposition remain with
+Dalph and the Integrator as described above.
