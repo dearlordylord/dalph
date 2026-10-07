@@ -5068,7 +5068,14 @@ Schema.decodeUnknownSync(Schema.Literal(true))(
     completionTaskConflictUnwindowed.story[completionConflictALineageIndex].operation._tag === "ReadTargetLineage" &&
     completionTaskConflictUnwindowed.story[completionConflictALineageIndex].operation.taskId === "A"
 )
-/** This story's integrator session identity names the journal position after C's durable plan. */
+const completionConflictCProjectionIndex = completionTaskConflictUnwindowed.story.findIndex(
+  (item) => item._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === "attempt:C:0"
+)
+Schema.decodeUnknownSync(Schema.Literal(true))(completionConflictCProjectionIndex > completionConflictALineageIndex)
+/**
+ * A's integration and independent C's execution may interleave. Each keeps
+ * its own boundary order; A's session still starts after C's durable plan.
+ */
 export const completionTaskConflictAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
@@ -5076,16 +5083,31 @@ export const completionTaskConflictAuthoredCassette: ScenarioCassette = Schema.d
   causalWindows: [
     Schema.decodeUnknownSync(AuthoredCausalWindow)({
       startIndex: completionConflictCPlanIndex,
-      endIndex: completionConflictALineageIndex + 1,
-      occurrences: [
-        { id: "conflict-C-plan", storyIndex: completionConflictCPlanIndex, predecessorIds: [] },
-        {
-          id: "A-integration-lineage",
-          storyIndex: completionConflictALineageIndex,
-          predecessorIds: ["conflict-C-plan"],
-          waitForPredecessors: true
-        }
-      ]
+      endIndex: completionConflictCProjectionIndex + 1,
+      occurrences: (() => {
+        let previousA = "conflict-C-plan"
+        let previousC = ""
+        return completionTaskConflictUnwindowed.story
+          .slice(completionConflictCPlanIndex, completionConflictCProjectionIndex + 1)
+          .map((item, offset) => {
+            const storyIndex = completionConflictCPlanIndex + offset
+            const belongsToC =
+              (item._tag === "DalphSelects" && "taskId" in item.operation && item.operation.taskId === "C") ||
+              ((item._tag === "PlannedAttemptExecutorWorkReported" ||
+                item._tag === "PlannedAttemptExecutorProjectionReturned") &&
+                item.report.attemptId === "attempt:C:0")
+            const id = offset === 0 ? "conflict-C-plan" : `conflict-${belongsToC ? "C" : "A"}-${offset}`
+            const previous = belongsToC ? previousC : previousA
+            if (belongsToC) previousC = id
+            else previousA = id
+            return {
+              id,
+              storyIndex,
+              predecessorIds: previous === "" ? [] : [previous],
+              ...(storyIndex === completionConflictALineageIndex ? { waitForPredecessors: true } : {})
+            }
+          })
+      })()
     })
   ]
 })

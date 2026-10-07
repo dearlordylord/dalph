@@ -156,15 +156,23 @@ it.effect("consumes each idle-boundary process death once before installing the 
     )
     expect(deaths).toHaveLength(2)
     expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
-    // Each process may admit its owed trailing entry before the authored death
-    // or terminal cut closes it. Only four entries select authored boundaries.
-    expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7])
+    // A process may admit an idle trailing activation before its death or
+    // terminal cut. Those entries have no selected boundary and are not owners.
     const selectedActivationOrdinals = run.observationCaptures.flatMap((capture) =>
       capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrence._tag === "DalphSelects"
         ? [capture.activationOrdinal]
         : []
     )
-    expect([...new Set(selectedActivationOrdinals)]).toEqual([1, 3, 5, 6])
-    expect(deaths.map(({ activationOrdinal }) => activationOrdinal)).toEqual([1, 3])
+    const selectedOwners = [...new Set(selectedActivationOrdinals)]
+    expect(selectedOwners).toHaveLength(4)
+    expect(selectedOwners[0]).toBe(1)
+    expect(selectedOwners).toEqual(selectedOwners.toSorted((left, right) => left - right))
+    // Each of the first two owners dies exactly once. The two later owners
+    // select the authored restart and Timer work under strictly newer identities.
+    expect(deaths.map(({ activationOrdinal }) => activationOrdinal)).toEqual(selectedOwners.slice(0, 2))
+    expect(selectedActivationOrdinals).toEqual(selectedActivationOrdinals.toSorted((left, right) => left - right))
+    const lastActivation = run.activationOrdinals.at(-1)
+    expect(lastActivation).toBeDefined()
+    expect(run.activationOrdinals).toEqual(Array.from({ length: Number(lastActivation) }, (_, index) => index + 1))
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
