@@ -6,7 +6,9 @@ The hook still selects paths through lint-staged, runs Oxlint and dprint with
 `--staged --fix`, then runs staged gitleaks with redaction. No rule, secret check,
 path-selection predicate, or process cleanup is removed. This is tooling only:
 no Dalph command, workflow, provider, Journal, retry or cleanup behavior changes.
-The host-liveness prerequisite #466 and parent #334 remain separate work.
+The tracker reports host-liveness prerequisite #466 closed on 2026-10-07; its
+repair is integrated in the acceptance Base below. Parent #334 remains Dalph-owned
+tracker work; this evidence does not itself close it.
 
 ## Reproduce
 
@@ -110,3 +112,52 @@ ESLint diagnosis.
 
 These affected checks, full type-aware lint census, and documentation link check
 are the tooling acceptance lanes. No Dalph runtime acceptance lane is changed.
+
+## Acceptance of the integrated measurements
+
+On 2026-10-07, the maintainer consumed the integrated measurements at Base
+`98bc8a3265c06454a3cf566b6acb921ad7a28ca4`. Both retained complete invocations
+(1.195 and 1.257 seconds) meet the documented reference target of <=30 seconds.
+The current hook and lint-runner SHA-256 values exactly match
+[the measured inputs](linux-arm64.json). No implementation repair is justified.
+This slice changes only this evidence note and its JSON evidence: no executable,
+rule, selection, dependency, formatter or cleanup policy changes, and no Dalph
+runtime behavior can change. Timing remains limited to the reference fixture,
+prepared dependencies and ambient caches described above; it is not a hardware,
+cold-install, large-edit or full-commit guarantee.
+
+[Real negative controls](negative-controls.json) bind observations to that Base,
+the same tool versions and measured hook hashes. The disposable repository setup
+and bounded command ownership came from `scripts/measure-commit-hook.mjs`.
+Instead of running its success-sample loop, the diagnostic reset the disposable
+repository to its baseline before each control, wrote and staged exactly the
+named file, verified `git diff --cached --name-only`, and invoked the real
+`sh .husky/pre-commit` with `DALPH_HOOK_TIMINGS=1` and a 60-second bound.
+The overall stop was 2026-10-07T05:05:00Z; both completed before it.
+
+- Lint: `packages/dalph/src/hook-refusal.ts` contained
+  `throw new Error("hook refusal")` plus newline. Oxlint reported
+  `dalph(no-throw-statement)` and exited 1. The hook exited 1 without reaching
+  dprint or gitleaks, preserving first-failure behavior.
+- Secret: `hook-refusal.txt` contained `token=`, the synthetic GitHub PAT prefix
+  `ghp_`, and 36 mixed-case alphanumeric characters plus newline. No lint task
+  matched the text file; lint-staged exited 0 and staged gitleaks reported
+  `leaks found: 1`, exited 1, and made the hook exit 1. The token and tool output
+  are not retained. A first diagnostic incorrectly expected a rule ID in normal
+  redacted output; the observed leak count corrected that assertion before the
+  passing diagnostic. No hook change was made.
+
+Both controls proved stopped writers before removing the exact temporary
+repository. These are refusal controls, not additional positive timing samples.
+The existing command/order and cancellation controls passed with:
+
+```sh
+mise exec -- node --test scripts/commit-hook-timing.test.mjs scripts/quality-lint-census.test.mjs
+```
+
+All four tests passed. Since this slice preserves every executable input, there
+are no changed-tool consumers to requalify; documentation formatting and
+`mise exec -- pnpm check:docs` qualify the changed documentation boundary.
+The unchanged positive fixture, actual lint/secret refusal and controlled
+command/cancellation checks together support this bounded acceptance slice.
+Original #334 still requires Dalph's own integration and tracker closure.
