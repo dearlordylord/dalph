@@ -351,7 +351,7 @@ it.effect("rejects initialize before the app-server transport runs when composit
       expect(Exit.isFailure(result)).toBe(true)
       if (Exit.isFailure(result)) {
         const failure = Cause.findErrorOption(result.cause)
-        expect(Option.isSome(failure)).toBe(true)
+        expect(Option.isSome(failure), Cause.pretty(result.cause)).toBe(true)
         if (Option.isSome(failure)) {
           expect(failure.value).toMatchObject({ kind: "CircuitOpen", operation: "initialize" })
         }
