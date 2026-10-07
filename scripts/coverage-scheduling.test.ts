@@ -15,7 +15,10 @@ const resourceSensitiveFiles = [
   "packages/dalph/src/application/production-complete-delivery.acceptance.test.ts",
   "packages/dalph/test/conformance/completion-task-recovery-prefixes.test.ts",
   "packages/dalph/test/conformance/recovery-store-lanes.property.test.ts",
-  "packages/dalph/src/application/codex-app-server.test.ts"
+  "packages/dalph/src/application/codex-app-server.test.ts",
+  "packages/dalph/test/scenarios/production.test.ts",
+  "packages/dalph/src/application/production-publication-control.acceptance.test.ts",
+  "packages/orchestrator/src/workflow-journal/termination-preconditions.property.test.ts"
 ]
 
 it("runs resource-sensitive coverage files once after the ordinary batch without dropping root exclusions", () => {

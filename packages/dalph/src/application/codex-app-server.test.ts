@@ -1400,8 +1400,10 @@ it.effect("reports process-local app-server cleanup failure through the Exit bou
   )
 )
 
-it.effect("reads all loaded-thread pages and refuses malformed or repeated census", () =>
-  Effect.forEach(["empty", "pages", "malformed", "repeated"], (mode) =>
+// Each native provider startup owns its real clock and original per-test budget.
+it.live.each(["empty", "pages", "malformed", "repeated"] as const)(
+  "reads loaded-thread census %s and refuses malformed or repeated pages",
+  (mode) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1433,5 +1435,4 @@ it.effect("reads all loaded-thread pages and refuses malformed or repeated censu
         )
       }).pipe(Effect.provide(NodeServices.layer))
     )
-  )
 )
