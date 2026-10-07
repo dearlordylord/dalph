@@ -351,7 +351,13 @@ const exerciseProductionAutomaticSuccessorLifecycleCut = (
         const journal = yield* JournalStore
         const began = authorizedRecords[0]
         if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("automatic S2 fixture lacks Run begin")
-        yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
+        yield* journal.beginRun(
+          runId,
+          target,
+          began.event.initialControlPolicy,
+          began.event.remotePublicationTarget,
+          began.event.attemptBasePolicy
+        )
         for (const record of authorizedRecords.slice(1)) {
           if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
             return yield* Effect.die("automatic S2 fixture contains an invalid Run lifecycle suffix")

@@ -17,6 +17,7 @@ import {
   runControlledWorkflow
 } from "@dalph/orchestrator"
 import {
+  dryRunAttemptBasePolicy,
   dryRunOperationIdAllocatorLayer,
   dryRunPlannedTaskAttemptLayer,
   dryRunTaskClaimPlannerLayer,
@@ -106,7 +107,8 @@ const executeFixtureDryRun = Effect.fn("Cli.executeFixtureDryRun")(function* (ta
   yield* runControlledWorkflow(
     target,
     InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }),
-    RunId.make("dry-run")
+    RunId.make("dry-run"),
+    dryRunAttemptBasePolicy
   ).pipe(
     // Fixture simulation owns its controlled mutation capability locally. The
     // CLI composition therefore never installs TrackerMutation for GitHub reads.

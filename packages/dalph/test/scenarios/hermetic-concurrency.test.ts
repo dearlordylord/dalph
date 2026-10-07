@@ -25,6 +25,7 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
   ActiveTaskClaim,
+  AttemptBasePolicy,
   AllocatedWorkflowRunId,
   ClaimOwner,
   ClaimToken,
@@ -678,6 +679,7 @@ it.effect(
           hermeticCandidateProviderAuthority,
           {
             acceptedResultEvidenceStore: evidenceStore,
+            attemptBasePolicy: AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha }),
             completionTask,
             integrationFinality: completionClaim,
             integrator,

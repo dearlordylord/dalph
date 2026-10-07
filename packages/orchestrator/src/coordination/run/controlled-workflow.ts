@@ -26,6 +26,7 @@ import { validatedRunActivationLayer } from "./startup-recovery.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { ApplicationExitRequestBoundary, makeApplicationExitShell } from "../application-exit/application-shell.js"
 import { defaultJournalMaintenanceObservation } from "../../workflow-journal/maintenance.js"
+import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import {
   RemotePublicationAdmissionObservation,
   RemotePublicationGit,
@@ -81,7 +82,7 @@ const controlledRemoteBaselineLayer = Layer.succeed(
 )
 
 /** Installs an in-memory journal around otherwise ordinary workflow boundary implementations. */
-const controlledJournaledRunLayer = (runId: RunId) =>
+const controlledJournaledRunLayer = (runId: RunId, attemptBasePolicy: AttemptBasePolicy) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
@@ -126,7 +127,10 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           applicationExit,
           defaultJournalMaintenanceObservation,
           undefined,
-          controlledRemotePublicationTarget
+          controlledRemotePublicationTarget,
+          true,
+          undefined,
+          attemptBasePolicy
         ).pipe(
           Layer.provide(memoryJournalStoreLayer),
           Layer.provide(controlledOwnershipLayer),
@@ -141,7 +145,8 @@ const controlledJournaledRunLayer = (runId: RunId) =>
 export type RunControlledWorkflow = (
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
-  runId: RunId
+  runId: RunId,
+  attemptBasePolicy: AttemptBasePolicy
 ) => Effect.Effect<
   Effect.Success<RunWorkflowEffect<never, never>>,
   Effect.Error<RunWorkflowEffect<never, never>>,
@@ -155,8 +160,9 @@ export type RunControlledWorkflow = (
 export const runControlledWorkflow: RunControlledWorkflow = (
   target: TrackerTarget,
   initialControlPolicy: InitialControlPolicy,
-  runId: RunId
+  runId: RunId,
+  attemptBasePolicy: AttemptBasePolicy
 ) =>
   runWorkflow(target, Effect.succeed(initialControlPolicy), AllocatedWorkflowRunId.make(runId)).pipe(
-    Effect.provide(controlledJournaledRunLayer(runId))
+    Effect.provide(controlledJournaledRunLayer(runId, attemptBasePolicy))
   )

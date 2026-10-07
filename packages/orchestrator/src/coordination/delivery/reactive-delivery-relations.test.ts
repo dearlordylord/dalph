@@ -28,6 +28,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
+import { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -205,7 +206,13 @@ const recoveredExecutorResponsibilityFixture: ExecutorResponsibilityFixture = {
 
 const makeJournalService = Effect.gen(function* () {
   const storage = yield* JournalStore
-  yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
+  yield* storage.beginRun(
+    runId,
+    target,
+    policy,
+    remotePublicationTargetForTest,
+    AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha: recoveredAttempt.baseSha })
+  )
   const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
   return yield* makeJournal(runId, target, initial, storage)

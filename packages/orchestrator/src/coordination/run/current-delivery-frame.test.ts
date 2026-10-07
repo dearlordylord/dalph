@@ -1,6 +1,6 @@
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
-import { RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
+import { GitCommitSha, RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import type { JournalState } from "../delivery/journal.js"
@@ -8,6 +8,7 @@ import { TrackerGraphState } from "../delivery/relations.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
+import { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -29,6 +30,8 @@ import { makeJournal } from "../delivery/journal.js"
 import { journaledCurrentDeliveryFrameOf } from "./current-delivery-frame.js"
 import { deriveFreshWorkflowDecisions } from "./fresh-workflow.js"
 
+const fixtureBasePolicy = AttemptBasePolicy.cases.ExplicitFixedBase.make({ baseSha: GitCommitSha.make("1".repeat(40)) })
+
 it.effect("rejects an accepted prefix before its current tracker graph exists", () =>
   Effect.gen(function* () {
     const accepted = { graph: TrackerGraphState.cases.GraphNotEstablished.make({}) } as JournalState
@@ -45,7 +48,7 @@ it.effect("keeps the immutable run target graph in the public delivery frame", (
     const foreignTarget = FixtureTarget.make("current-delivery-frame-target-B")
     const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
+    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest, fixtureBasePolicy)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
@@ -129,7 +132,7 @@ it.effect("keeps claim acquisition closed after a focused current graph read fai
     const taskId = TaskId.make("B")
     const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
+    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest, fixtureBasePolicy)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
@@ -200,7 +203,7 @@ it.effect("uses every returned task from a complete target closure, not only its
     const returnedTaskId = TaskId.make("B")
     const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
+    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest, fixtureBasePolicy)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)

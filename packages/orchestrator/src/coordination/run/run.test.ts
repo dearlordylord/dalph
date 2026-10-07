@@ -1,7 +1,13 @@
 /* eslint-disable import/no-nodejs-modules -- The source-boundary test reads its neighboring module. */
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation, RunId, TaskId } from "@dalph/contracts"
+import {
+  GitCommitSha,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  RunId,
+  TaskId
+} from "@dalph/contracts"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -255,7 +261,10 @@ it.effect("lets the public controlled workflow terminate from its settled curren
     if (projected._tag === "Invalid") return yield* Effect.die("the controlled root graph must be valid")
     const target = FixtureTarget.make("controlled-settled-target")
     const operationOrdinal = yield* Ref.make(0)
-    const finality = yield* runControlledWorkflow(target, policy, RunId.make("controlled-settled-run")).pipe(
+    const finality = yield* runControlledWorkflow(target, policy, RunId.make("controlled-settled-run"), {
+      _tag: "ExplicitFixedBase",
+      baseSha: GitCommitSha.make("0".repeat(40))
+    }).pipe(
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(

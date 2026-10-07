@@ -1935,7 +1935,7 @@
     "packages/orchestrator/src/coordination/run/accepted-run-fact-publication.ts": "feab696e14108d0dc340937c7946582ea3f7f7e96976696842fa9c4f248a4caa",
     "packages/orchestrator/src/coordination/run/activation-graph-baseline.ts": "edf9eb8c34db44fdfa48c20ac4667f7aa52f2c693b1bfc6b8ad0d7753b9490e9",
     "packages/orchestrator/src/coordination/run/base-retry-workflow.ts": "68776f7ff37a856a4beea09742efd95b19604d25d0f37196f03aab6fc2b474d1",
-    "packages/orchestrator/src/coordination/run/controlled-workflow.ts": "933ad24ae78c873b90bd2bedd8968df077b6ccaaffe555f38e0e02180ae58372",
+    "packages/orchestrator/src/coordination/run/controlled-workflow.ts": "ceb6565d4304bd2aed6a5e0b2d9fec41ac83367a7ebd5e787cfc022c9483f1f9",
     "packages/orchestrator/src/coordination/run/current-delivery-frame.ts": "3e5b94b1c77c181f3bea92d711b5caf54a546a59f7efd8abb9fb9985cfa1ae5c",
     "packages/orchestrator/src/coordination/run/fresh-run-identity.ts": "a9346c150dd9508465cdc316d21a1b55c9e432a20c1afd776881d131cc70174f",
     "packages/orchestrator/src/coordination/run/fresh-workflow.ts": "75e670b6059f7c9e6b2d706ff70d2d7baa737efbb5b020a5f052eb85bffe4cde",
