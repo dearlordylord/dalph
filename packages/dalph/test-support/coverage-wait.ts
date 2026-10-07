@@ -16,13 +16,28 @@ export const waitForAcceptanceBoundary =
     emit: (observation: CoverageLifecycleObservation) => void = writeCoverageLifecycle
   ) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.sync(() => emit({ phase: "WaitStarted", owner: testCase, boundary })).pipe(
+    Effect.sync(() =>
+      emit({
+        phase: "WaitStarted",
+        owner: testCase,
+        boundary,
+        timeoutMilliseconds: Duration.toMillis(Duration.fromInputUnsafe(duration))
+      })
+    ).pipe(
       Effect.andThen(
         effect.pipe(
           Effect.timeoutOrElse({
             duration,
             orElse: () =>
-              Effect.sync(() => emit({ phase: "WaitTimedOut", owner: testCase, boundary, outcome: "TimedOut" })).pipe(
+              Effect.sync(() =>
+                emit({
+                  phase: "WaitTimedOut",
+                  owner: testCase,
+                  boundary,
+                  timeoutMilliseconds: Duration.toMillis(Duration.fromInputUnsafe(duration)),
+                  outcome: "TimedOut"
+                })
+              ).pipe(
                 Effect.andThen(
                   Effect.fail(
                     new AcceptanceWaitTimedOut({
@@ -35,7 +50,15 @@ export const waitForAcceptanceBoundary =
               )
           }),
           Effect.onExit((exit) =>
-            Effect.sync(() => emit({ phase: "WaitFinished", owner: testCase, boundary, outcome: exit._tag }))
+            Effect.sync(() =>
+              emit({
+                phase: "WaitFinished",
+                owner: testCase,
+                boundary,
+                timeoutMilliseconds: Duration.toMillis(Duration.fromInputUnsafe(duration)),
+                outcome: exit._tag
+              })
+            )
           )
         )
       )

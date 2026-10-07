@@ -30,6 +30,7 @@ test("retains bounded lifecycle edges and the named controlled timeout in child 
   const started = observations.filter(({ phase }) => phase === "TestStarted")
   const finished = observations.filter(({ phase }) => phase === "TestFinished")
   expect(started).toHaveLength(5)
+  expect(started.every(({ file }) => file === "packages/dalph/test-support/coverage-wait.test.ts")).toBe(true)
   expect(finished).toHaveLength(5)
   expect(finished.map(({ testId }) => testId).sort((a, b) => a.localeCompare(b))).toEqual(
     started.map(({ testId }) => testId).sort((a, b) => a.localeCompare(b))
@@ -44,6 +45,7 @@ test("retains bounded lifecycle edges and the named controlled timeout in child 
       observedAt: expect.any(String),
       owner: "MCPAdvisory",
       boundary: "AuthoredTaskEObserved",
+      timeoutMilliseconds: 20000,
       outcome: "TimedOut",
       omittedCharacters: 0
     }

@@ -43,7 +43,7 @@ it.live.each(["CLIWhole", "CLIAdvisory", "MCPWhole", "MCPAdvisory", "Timer"] as 
           },
           fixture.graph,
           (observation) =>
-            Effect.scoped(
+            observeAcceptanceScope(`complete-delivery-host:${discovery}`)(
               Effect.gen(function* () {
                 yield* Effect.addFinalizer(() =>
                   Deferred.succeed(graphRelease, undefined).pipe(

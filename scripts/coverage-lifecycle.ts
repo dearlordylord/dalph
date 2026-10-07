@@ -19,6 +19,7 @@ export interface CoverageLifecycleObservation {
   readonly testId?: string
   readonly file?: string
   readonly boundary?: string
+  readonly timeoutMilliseconds?: number
   readonly outcome?: string
 }
 
@@ -41,6 +42,7 @@ export const encodeCoverageLifecycle = (observation: CoverageLifecycleObservatio
     file: bounded(observation.file, 256),
     boundary: bounded(observation.boundary, 128),
     outcome: bounded(observation.outcome, 32),
+    timeoutMilliseconds: observation.timeoutMilliseconds,
     omittedCharacters
   })
 }
