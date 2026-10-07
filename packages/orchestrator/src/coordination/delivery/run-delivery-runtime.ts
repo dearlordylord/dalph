@@ -113,6 +113,23 @@ export class DeliveryActionCompletionPublicationMismatch extends Schema.TaggedEr
 
 type LiveOwner = RuntimeObservation.DeliveryRuntimeLiveOwnerSource
 
+/**
+ * One phase owns one queued occurrence. Suspended offers are not accepted;
+ * scope closure abandons volatile handoffs without acknowledging completions.
+ */
+export const makeRuntimeEventMailbox = <Event>() =>
+  Effect.gen(function* () {
+    const queue = yield* Effect.acquireRelease(Queue.bounded<Event>(1), Queue.shutdown)
+    const offer = (event: Event) =>
+      Queue.offer(queue, event).pipe(Effect.flatMap((accepted) => (accepted ? Effect.void : Effect.interrupt)))
+    return {
+      offer,
+      take: Queue.take(queue),
+      offerAndAwaitAcknowledgement: (event: Event, acknowledged: Deferred.Deferred<void>) =>
+        offer(event).pipe(Effect.andThen(Deferred.await(acknowledged)))
+    }
+  })
+
 interface PublishedDeliveryActionResult {
   readonly publicationThrough: DeliveryAcceptedPublicationBoundary
   readonly result: DeliveryActionResult
@@ -246,7 +263,9 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
       const semanticTrace = Context.getOption(ambient, DeliverySemanticTrace)
       const emit = (event: DeliverySemanticTraceEvent) =>
         Option.match(semanticTrace, { onNone: () => Effect.void, onSome: ({ emit }) => emit(event) })
-      const events = yield* Queue.unbounded<RuntimeEvent<E>>()
+      // One queued occurrence is enough: offers never hold selectionGate, and
+      // the consumer never joins a child waiting for space or acknowledgement.
+      const events = yield* makeRuntimeEventMailbox<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
       const localDeferrals = yield* Ref.make<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>(new Map())
       const pendingCompletions = yield* Ref.make<ReadonlyMap<DeliveryProposalId, Completion>>(new Map())
@@ -266,8 +285,10 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         Stream.fromEffect(Deferred.succeed(evaluationsSubscribed, undefined)).pipe(Stream.drain),
         attachment.changes
       ).pipe(
-        Stream.runForEach((evaluation) => Queue.offer(events, { _tag: "EvaluationChanged", evaluation })),
-        Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
+        Stream.runForEach((evaluation) => events.offer({ _tag: "EvaluationChanged", evaluation })),
+        // Cause handlers may run during cancellation. Do not mask interruption
+        // while waiting for the consumer to free a saturated slot.
+        Effect.catchCause((cause) => events.offer({ _tag: "RelationFailed", cause }).pipe(Effect.interruptible)),
         Effect.forkIn(scope)
       )
       yield* Deferred.await(evaluationsSubscribed)
@@ -377,11 +398,10 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
             )
           )
           const acknowledged = yield* Deferred.make<void>()
-          yield* Queue.offer(events, {
-            _tag: "ActionCompleted",
-            completion: { acknowledged, exit, proposalId: proposal.id }
-          })
-          yield* Deferred.await(acknowledged)
+          yield* events.offerAndAwaitAcknowledgement(
+            { _tag: "ActionCompleted", completion: { acknowledged, exit, proposalId: proposal.id } },
+            acknowledged
+          )
         })
         return yield* installInterruptibleDeliveryChild(scope, child, releaseInterruptedOwner)
       })
@@ -781,13 +801,13 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
         const quiescence = yield* runtimeQuiescence()
         if (Option.isSome(quiescence)) {
           if (yield* capacityWaitHasNewerAcceptedPublication(quiescence.value)) {
-            yield* applyRuntimeEvent(yield* Queue.take(events))
+            yield* applyRuntimeEvent(yield* events.take)
             continue
           }
           yield* publishRuntimeObservation()
           return quiescence.value
         }
-        yield* applyRuntimeEvent(yield* Queue.take(events))
+        yield* applyRuntimeEvent(yield* events.take)
       }
     })
   )
