@@ -26,8 +26,9 @@ cache must already contain the configured plugin; otherwise the normal tool may
 fetch it, within the sample deadline.
 
 Each sample has a hard 60-second execution limit and prints its absolute UTC
-stop before spawning. The shared bounded runner owns detached process groups,
-relays parent signals, and permits up to five seconds for termination and two
+stop before spawning. The harness owns parent-signal cancellation through report publication and
+fixture disposition, then propagates the original signal. The shared bounded
+runner owns detached process groups and permits up to five seconds for termination and two
 seconds to prove absence. It removes only its exact temporary directory after
 stopped-writer proof; ambiguous outcomes retain that directory. Setup Git and
 version calls each stop after ten seconds. Record a three-minute overall stop
@@ -97,7 +98,9 @@ ESLint diagnosis.
 ## Acceptance checks
 
 - `scripts/commit-hook-timing.test.mjs` controls hook commands, timing opt-in,
-  order, lint failure refusal of gitleaks, and secret failure propagation.
+  order, lint failure refusal of gitleaks, and secret failure propagation. Its controlled interruption fixture proves
+  that the actual harness stops its Git child, publishes evidence, removes its
+  exact temporary directory and only then propagates SIGTERM.
 - `scripts/quality-lint-census.test.mjs` proves discovery/tool timing fields,
   nonzero statuses, unchanged census versus ordinary first-failure behavior,
   and unchanged dprint incremental routing.

@@ -8,13 +8,36 @@ import { runBoundedCommand } from "./run-bounded-command.mjs"
 // No commit is made in the invoking worktree. Only this newly created Git repository is mutated.
 const root = process.cwd()
 const output = resolve(process.argv[2] ?? ".scratch/commit-hook-timings.json")
-const fixture = await mkdtemp(join(tmpdir(), "dalph-hook-timing-"))
+let fixture
 const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
-let stopped = true
-const git = async (args, cwd = fixture) => {
-  stopped = false
+/** @type {{ stopped: boolean, parentSignal: "SIGTERM" | "SIGINT" | undefined }} */
+const ownership = { stopped: true, parentSignal: undefined }
+const cancellation = new AbortController()
+const signalListeners = new Map()
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  const listener = () => {
+    ownership.parentSignal ??= signal
+    cancellation.abort(new Error(`Timing fixture interrupted by ${signal}`))
+  }
+  signalListeners.set(signal, listener)
+  process.on(signal, listener)
+}
+// Keep signal ownership until asynchronous evidence publication and exact fixture disposition finish.
+const runOwnedCommand = async (command) => {
+  cancellation.signal.throwIfAborted()
+  ownership.stopped = false
   try {
-    const result = await runBoundedCommand({
+    const result = await runBoundedCommand({ ...command, signal: cancellation.signal })
+    ownership.stopped = true
+    return result
+  } catch (error) {
+    ownership.stopped = error.stoppedWritersProven === true
+    throw error
+  }
+}
+const git = async (args, cwd = fixture) =>
+  (
+    await runOwnedCommand({
       executable: "git",
       args,
       cwd,
@@ -22,16 +45,9 @@ const git = async (args, cwd = fixture) => {
       name: "Timing fixture Git",
       timeoutMilliseconds: 10_000,
       captureOutput: true,
-      forwardOutput: false,
-      relayParentSignals: true
+      forwardOutput: false
     })
-    stopped = true
-    return result.output
-  } catch (error) {
-    stopped = error.stoppedWritersProven === true
-    throw error
-  }
-}
+  ).output
 const report = {
   version: 1,
   observedAt: new Date(performance.timeOrigin + performance.now()).toISOString(),
@@ -44,9 +60,11 @@ const report = {
   samples: []
 }
 try {
+  fixture = await mkdtemp(join(tmpdir(), "dalph-hook-timing-"))
   report.candidate = (await git(["rev-parse", "HEAD"], root)).trim()
   const paths = (await git(["ls-files", "-z"], root)).split("\0").filter(Boolean)
   for (const path of paths) {
+    cancellation.signal.throwIfAborted()
     await mkdir(dirname(join(fixture, path)), { recursive: true })
     await copyFile(join(root, path), join(fixture, path))
   }
@@ -86,25 +104,17 @@ try {
     { name: "dprint", executable: join(root, "node_modules/.bin/dprint"), args: ["--version"] },
     { name: "gitleaks", executable: "gitleaks", args: ["version"] }
   ]) {
-    stopped = false
-    try {
-      const result = await runBoundedCommand({
-        executable,
-        args,
-        cwd: fixture,
-        environment,
-        name: `${name} version`,
-        timeoutMilliseconds: 10_000,
-        captureOutput: true,
-        forwardOutput: false,
-        relayParentSignals: true
-      })
-      report.versions[name] = result.output.trim()
-    } catch (error) {
-      stopped = error.stoppedWritersProven === true
-      throw error
-    }
-    stopped = true
+    const result = await runOwnedCommand({
+      executable,
+      args,
+      cwd: fixture,
+      environment,
+      name: `${name} version`,
+      timeoutMilliseconds: 10_000,
+      captureOutput: true,
+      forwardOutput: false
+    })
+    report.versions[name] = result.output.trim()
   }
   for (let index = 0; index < report.sampleLimit; index += 1) {
     const startedAt = new Date(performance.timeOrigin + performance.now()).toISOString()
@@ -117,9 +127,8 @@ try {
     }
     report.samples.push(sample)
     console.error(`Sample ${index + 1}: expected <30s; hard stop ${sample.stopAt} (then bounded descendant cleanup)`)
-    stopped = false
     try {
-      const result = await runBoundedCommand({
+      const result = await runOwnedCommand({
         executable: "sh",
         args: [".husky/pre-commit"],
         cwd: fixture,
@@ -127,10 +136,9 @@ try {
         name: "One-file commit hook",
         timeoutMilliseconds: report.timeoutMilliseconds,
         captureOutput: true,
-        forwardOutput: false,
-        relayParentSignals: true
+        forwardOutput: false
       })
-      stopped = true
+      ownership.stopped = true
       sample.exitCode = result.exitCode
       sample.timings = result.output
         .split("\n")
@@ -143,17 +151,29 @@ try {
       sample.lintStagedOrchestrationMilliseconds =
         elapsed("lint-staged") - elapsed("discovery") - elapsed("oxlint") - elapsed("dprint")
     } catch (error) {
-      stopped = error.stoppedWritersProven === true || stopped
+      ownership.stopped = error.stoppedWritersProven === true || ownership.stopped
       sample.failure = error.quintCommandResult ?? "measurement-failed"
       throw error
     } finally {
       sample.totalMilliseconds = performance.now() - started
-      sample.stoppedWritersProven = stopped
+      sample.stoppedWritersProven = ownership.stopped
     }
   }
+} catch (error) {
+  report.failure =
+    error.quintCommandResult ?? (ownership.parentSignal === undefined ? "measurement-failed" : "interrupted")
+  throw error
 } finally {
-  await mkdir(dirname(output), { recursive: true })
-  await writeFile(output, `${JSON.stringify(report, null, 2)}\n`)
-  if (stopped) await rm(fixture, { recursive: true, force: true })
-  else console.error(`Retained fixture; stopped writers unproven: ${fixture}`)
+  try {
+    if (ownership.stopped && fixture !== undefined) await rm(fixture, { recursive: true, force: true })
+    if (!ownership.stopped) console.error(`Retained fixture; stopped writers unproven: ${fixture}`)
+    report.stoppedWritersProven = ownership.stopped
+    report.fixtureDisposition = fixture === undefined ? "not-created" : ownership.stopped ? "removed" : "retained"
+    report.interruptedBy = ownership.parentSignal
+    await mkdir(dirname(output), { recursive: true })
+    await writeFile(output, `${JSON.stringify(report, null, 2)}\n`)
+  } finally {
+    for (const [signal, listener] of signalListeners) process.removeListener(signal, listener)
+    if (ownership.parentSignal !== undefined) process.kill(process.pid, ownership.parentSignal)
+  }
 }
