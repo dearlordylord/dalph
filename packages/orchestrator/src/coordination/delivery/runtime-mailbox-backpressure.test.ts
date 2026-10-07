@@ -172,6 +172,8 @@ for (const cancel of [false, true]) {
           yield* Deferred.await(held)
           yield* Deferred.succeed(produce, undefined)
           yield* Deferred.await(secondPulled)
+          // Let the subscriber finish the second handoff if capacity permits it.
+          yield* Effect.yieldNow
           expect(yield* Deferred.isDone(thirdPulled)).toBe(false)
           expect(yield* Ref.get(applied)).toEqual([])
           if (cancel) {

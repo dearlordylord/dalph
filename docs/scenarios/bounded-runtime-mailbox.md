@@ -240,33 +240,43 @@ ordering does not impose global journal publication order on independent work.
 Cancellation and crash at any boundary preserve S4 and existing journal-first
 recovery; this specification adds no retry route.
 
-## Scenario-to-test ownership and blocking handoff
+## Scenario-to-test mapping
 
-All additions call `runDeliveryRuntimePhase` or `runDeliveryRuntime` through the
-existing production service boundaries in the linked runtime test file. Use
-Deferred barriers, exact occurrence counters and scoped fibers, not sleeps,
-module patches or a production test-only switch. Existing tests are preservation
-anchors, not evidence that the new saturated cases already pass.
+The joined tests call `runDeliveryRuntimePhase` or `runDeliveryRuntime` through
+production service boundaries. Controlled Layers, Deferred barriers and exact
+occurrence counters hold the consumer; no provider fixture is needed.
 
-| Scenario | Owner and required new production-boundary proof | Existing preservation anchors in runtime tests |
+The focused files are
+[backpressure tests](../../packages/orchestrator/src/coordination/delivery/runtime-mailbox-backpressure.test.ts)
+and [independent preservation tests](../../packages/orchestrator/src/coordination/delivery/runtime-mailbox-preservation.test.ts).
+The latter does not use queue capacity as its oracle.
+
+| Scenario | Joined production-boundary tests | Preservation anchors in run-delivery-runtime.test.ts |
 | --- | --- | --- |
-| S1 | Implementation task: held consumer, capacity-one accepted offer, next offer/pull demonstrably blocked, then exact FIFO drain; documents the wait proof above | `processes a changed frontier without a caller-supplied runtime boundary` |
-| S2 bound | Implementation task: full-slot independent completion offers plus lagged successor evaluation; proves no gate/acknowledgement cycle and exact once settlement | `keeps an action owner until its accepted successor publication reaches the runtime`; `settles pending completions in their publication arrival order when one evaluation releases both` |
-| S2 preservation | Parallel test task: independent results/identities, pending ownership and causal successor prohibition, independent of the implementation's queue assertions | `does not start a causal successor before its live operation owner is acknowledged`; `does not start a causal successor before its accepted operation owner is acknowledged` |
-| S3 | Parallel test task: saturated relation failure with an active owner, exact Cause and rollback; retain direct attachment failure | `fails with the exact relation cause before admitting any proposal`; `returns a relation failure published after actions have started`; `rolls back an owner when its pending completion loses the relation` |
-| S4 | Parallel test task: all three blocked/waiting states, stopped fibers/subscription and exact rollback responsibilities; compose existing Exit cutoff | `interrupts every scoped live action without manufacturing completion`; `releases acquired integration ownership and its relation subscriber on interruption`; `interrupts an admitted tracker owner under Exit and starts no successor action`; `retains fresh admission when the first claim-intent append outcome is unknown` |
-| S5 | Parallel test task: ordinary production admission/publication/quiescence preservation, including newer-publication capacity wait | `does not allocate an operation or attempt identity before admission`; `reacts to an accepted action result through its owning fact signal`; `consumes an already accepted publication before returning a post-G2 capacity wait`; `cuts admission for cleanup but drains an existing owner through its accepted completion` |
-| S1–S5 join | Join task: run the merged production composition and all independent preservation cases; audit every wait edge after integration | Linked runtime tests plus actual reactive relation/publication and Exit composition; protocol-only queue tests do not suffice |
+| S1 | Backpressure: `backpressures the real relation subscriber and applies every evaluation in FIFO order`; holds the consumer, allows the subscriber to continue with `Effect.yieldNow`, forbids the third pull, then asserts occurrences 2, 3, 4 exactly | `processes a changed frontier without a caller-supplied runtime boundary` |
+| S2 | Backpressure: `drains independent completions and acknowledges lagged publications exactly once`. Preservation: `S2/S5: distinct completions retain owners until publication, settle once, then admit the successor`; asserts exact result objects and successful predecessor child exits while the successor stays live | `keeps an action owner until its accepted successor publication reaches the runtime`; `settles pending completions in their publication arrival order when one evaluation releases both`; both causal-successor acknowledgement cases |
+| S3 | Preservation: `S3/S4: a held consumer preserves preceding occurrences and stops live producers on failure or cancellation` (Failure branch), `S3/S4: relation failure or phase cancellation abandons a pending completion without an outcome`, and `S3: attachment failure preserves the exact cause and admits no action` | `fails with the exact relation cause before admitting any proposal`; `returns a relation failure published after actions have started`; `rolls back an owner when its pending completion loses the relation` |
+| S4 | Backpressure: `interrupts a full-mailbox subscriber without draining or acknowledging`, `cancels independent completion offers blocked behind a relation occurrence`, and `interrupts children awaiting acknowledgement of retained completions`. Preservation: the two S3/S4 cases above, `S4: application Exit interrupts the registered authority wait and forbids successor admission`, and `S4: fresh claim cancellation releases before-intent admission and retains recorded-intent responsibility` | `interrupts every scoped live action without manufacturing completion`; `releases acquired integration ownership and its relation subscriber on interruption`; `interrupts an admitted tracker owner under Exit and starts no successor action`; `retains fresh admission when the first claim-intent append outcome is unknown` |
+| S5 | Preservation: the S2/S5 case above, `S5: a newer accepted capacity publication admits its ordinary read before exact quiescence`, and `S5: accepted journal facts pass through production reactive publication before runtime quiescence` | `does not allocate an operation or attempt identity before admission`; `reacts to an accepted action result through its owning fact signal`; `consumes an already accepted publication before returning a post-G2 capacity wait`; `cuts admission for cleanup but drains an existing owner through its accepted completion` |
 
-The join task also runs the S1 backpressure assertion against the old unbounded
-implementation in an isolated test candidate: it must fail because the next
-handoff/pull completes while the consumer remains held. Retain that expected
-failure and restore the bounded candidate before checking the complete
-composition. Do not add a queue-selection switch to production. The negative
-control must fail the intended bound assertion, not fixture setup or a timeout.
+The helper-only tests `returns a completion producer only after its exact
+acknowledgement` and `interrupts rejected offers after scope closure instead of
+waiting for acknowledgement` supplement these actual-runtime proofs. They do
+not replace them. Scope interruption joins the runtime and its scoped children;
+subscriber finalizers, closed observation and empty integration ownership are
+asserted independently. Successful predecessor fiber exits prove actual
+acknowledgement rather than an executor-body finalizer alone.
 
-Implementation is blocked on this chronological contract; join acceptance is
-blocked on both implementation bound proofs and independent S2–S5 preservation
-proofs. No aggregate passing count replaces those mappings. A failed assumption
-in the causal graph is a concrete design blocker, not permission to drop events,
-raise a policy-dependent bound or weaken shutdown preservation.
+The join negative control replaces only `Queue.bounded<Event>(1)` with
+`Queue.unbounded<Event>()` in the production mailbox, runs the S1 test, and
+restores the original source in a `finally` block. It must exit 1 at the
+`thirdPulled` missing-backpressure assertion (`expected true to be false`),
+then the restored focused files must pass. A setup failure, timeout or unrelated
+assertion supplies no negative-control evidence. No production selection switch
+is introduced.
+
+The shared fresh-frontier fixture records an accepted `WorkflowRunBegan` with
+an explicit fixed Base before graph observations. This supplies the existing
+production fresh-work eligibility requirement; it changes no runtime policy.
+Affected runtime completion and admission tests remain required at the joined
+candidate. No aggregate count substitutes for the named scenario assertions.
