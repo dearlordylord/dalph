@@ -2242,6 +2242,6 @@
     "specs/taskFactReconciliation.qnt": "a64e5fe5d0b244a986c14d75f224d4ea872ce2d7a732389d9a8eaec1df76a57e",
     "tsconfig.base.json": "8b76e2e47483aaf0ffc7d1c416d7ad7d21f48ab1934c7b006a48ecd6a46fd7f1",
     "tsconfig.json": "9878fe7230650d0b3700365d0ed4f9823162ef007c2d8b2ed118ddf5bb095d47",
-    "vitest.config.ts": "c1e85f4b3bb1117cddb79b269e4920abc1233e12c873191605d9d70225f8a3c5"
+    "vitest.config.ts": "b27f737899101dd0c4b5a089fa5430dff016d4495d8bc135f799117f70bf9aaf"
   }
 }

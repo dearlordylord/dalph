@@ -1587,6 +1587,45 @@ describe("qualification original source boundary", () => {
     )
     const acceptedContext = await Effect.runPromise(qualificationContextWithBaseSelections(snapshot, context))
     expect(acceptedContext.acceptedBaseSelections).toEqual([{ taskId: context.taskId, baseSha: selected }])
+    const baseRead = snapshot.items.find(
+      ({ occurrence }) => occurrence._tag === "TaskAttemptBaseReadInitiated"
+    )?.occurrence
+    if (baseRead?._tag !== "TaskAttemptBaseReadInitiated") return expect.fail("fixture requires its Base read")
+    const task = TrackerTask.make({
+      id: context.taskId,
+      lifecycle: { _tag: "Open" },
+      parentTaskId: null,
+      prerequisiteIds: []
+    })
+    const step = {
+      _tag: "RecordTaskAttemptPlan" as const,
+      baseSha: selected,
+      ordinal: PlannedTaskAttemptOrdinal.make(0),
+      predecessorOperationId: baseRead.operation.operationId,
+      claimOperationId: baseRead.operation.claimOperationId,
+      specification: context.specification,
+      task
+    }
+    const proposal = proposalForRoute({ _tag: "FreshWorkflowRoute", step }, context)
+    const checkedStatus = await Effect.runPromise(
+      validateHermeticQualificationStatus(manifest, configuration, readyFor(context, [proposal]), runId, snapshot)
+    )
+    expect(checkedStatus.status._tag).toBe("DeliveryStatusAvailable")
+    const foreignProposal = proposalForRoute(
+      { _tag: "FreshWorkflowRoute", step: { ...step, predecessorOperationId: OperationId.make("foreign-base-read") } },
+      context
+    )
+    expect(
+      await Effect.runPromise(
+        validateHermeticQualificationStatus(
+          manifest,
+          configuration,
+          readyFor(context, [foreignProposal]),
+          runId,
+          snapshot
+        ).pipe(Effect.flip)
+      )
+    ).toMatchObject({ _tag: "HermeticQualificationSourceRejected", code: "InvalidOperationIdentity" })
     expect(await Effect.runPromise(validatePlannedAttempt(plannedAttempt, acceptedContext))).toEqual(plannedAttempt)
     expect(
       await Effect.runPromise(

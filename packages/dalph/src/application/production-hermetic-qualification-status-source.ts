@@ -359,12 +359,13 @@ const validateStatusSnapshot = Effect.fn("HermeticQualification.validateStatusSn
 ) {
   const snapshot = status._tag === "DeliveryStatusClosed" ? status.final : status
   if (snapshot?._tag === "DeliveryStatusAvailable") {
-    const focusedContext = { ...context, derivedOperationIds: focusedOperationIds }
+    const focusedContext = { ...context, derivedOperationIds: [...context.derivedOperationIds, ...focusedOperationIds] }
     const releaseIds = yield* completionReleaseOperationIds(snapshot.entries, focusedContext)
     yield* Effect.forEach(snapshot.entries, (entry) =>
-      validateEntry(entry, { ...context, derivedOperationIds: [...focusedOperationIds, ...releaseIds] }).pipe(
-        Effect.mapError(sourceRejectedAt(entryDiagnosticTag(entry)))
-      )
+      validateEntry(entry, {
+        ...focusedContext,
+        derivedOperationIds: [...focusedContext.derivedOperationIds, ...releaseIds]
+      }).pipe(Effect.mapError(sourceRejectedAt(entryDiagnosticTag(entry))))
     )
   }
   if (snapshot?._tag === "TaskAbsentFromCurrentGraph") return yield* sourceRejected()

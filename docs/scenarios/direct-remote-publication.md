@@ -3,11 +3,14 @@
 Issue: [Specify final remote publication before task completion](https://github.com/dearlordylord/dalph/issues/383).
 
 **Status: specification accepted on 2026-09-19; implementation children
-#384–#389 are closed. Parent #383 remains open for acceptance reconciliation.
+#384–#389 are closed. Parent #383 acceptance is reconciled on 2026-10-07.
 The [integrated-candidate row ledger](../ISSUE-383-ACCEPTANCE-RECONCILIATION.md)
-audits Base `da34ab698aa01cf488aab254d06c569e5c896613` on 2026-10-07,
-separating historical controlled/formal qualification, hosted S1, and current
-candidate gaps. The #414 live graph proves ordinary publication and tracker
+audits planned Base `01fbaf48f2e300280ee6b57d41d7e39454f1d678` on 2026-10-07,
+binding named retained checks, current CLI qualification and human early-closure
+coverage to the accepted rows. Required submission, both current conformance
+owners and scoped reviews passed; all 39 refreshed corpus pairs were validated.
+The ledger preserves historical failures and the limits of the selected checks.
+The #414 live graph proves ordinary publication and tracker
 delivery, not every crash/race/grant boundary. Historical passing results below
 retain their exact candidate scope; they do not qualify the current integrated
 application automatically.**
@@ -981,6 +984,17 @@ proof is retained, not erased by the contradiction. Existing current local Git,
 revision/claim/dependency requirements remain independent. Human early closure
 is tracker evidence, never publication proof, and cannot silently settle an
 outstanding publication responsibility.
+
+The composed acceptance owner is
+`packages/dalph/test/scenarios/production.test.ts::S8 human early closure retains unpublished responsibility without proof or Run termination`.
+Starting facts are one retained Run, its exact claim/candidate, two denied
+publication intents and no publication proof. A person closes the tracker task
+before ordinary Run reconstruction over the reopened SQLite journal. Admission
+may be read, but no new push, Begin, Integrator session, promotion, completion
+mutation or cleanup may occur. The original prefix, claim, candidate ownership
+and ordinals remain; no proof, completion acknowledgement, finality settlement
+or Run termination is manufactured. This is a restart cut, not native host
+death; no completion retry applies because no close request was made.
 
 Git and GitHub closure are separate transactions. Neither a push acknowledgement
 nor a subsequent read prevents an outside rewrite before closure applies or

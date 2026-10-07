@@ -22,7 +22,7 @@ import { makeTestJournaledTrackerGraphObservation } from "../../orchestrator/tes
 const graphObservationPosition = 3
 const gitShaLength = 40
 
-/** A passive, complete runtime publication evaluated through the real delivery relations. */
+/** A passive, complete runtime graph view evaluated through the real delivery relations. */
 export const runningHostPageObservation = Effect.fn("RunningHostTest.pageObservation")(function* (
   runId: RunId,
   snapshot: TaskDagSnapshot,
@@ -38,7 +38,7 @@ export const runningHostPageObservation = Effect.fn("RunningHostTest.pageObserva
     snapshot
   })
   const bundle: DeliveryRelationInputBundle = {
-    publication: { exactEvidence: [], graph: { _tag: "GraphEstablished", observation }, policy },
+    graphView: { exactEvidence: [], graph: { _tag: "GraphEstablished", observation }, policy },
     actionInputs: {
       freshTaskCandidates: [],
       proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },

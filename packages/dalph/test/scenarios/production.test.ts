@@ -4203,7 +4203,9 @@ it.effect("retains remote delivery across Pause and Exit", () =>
   )
 )
 
-const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision" | "claim" | "denial") =>
+const exerciseResumedFinality = (
+  premise: "unchanged" | "dependency" | "revision" | "claim" | "denial" | "early-closure"
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -4376,7 +4378,9 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         ...publicationPrefix,
         retainedRecord,
         receiptRecord,
-        ...(premise === "denial" ? [resumedAttemptRecord, resumedDenialRecord] : [resumedProofRecord])
+        ...(premise === "denial" || premise === "early-closure"
+          ? [resumedAttemptRecord, resumedDenialRecord]
+          : [resumedProofRecord])
       ]
       const reduced = reduceWorkflowJournalHistory(runId, resumedRecords)
       if (reduced._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die("resumed fixture must reduce")
@@ -4400,7 +4404,9 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         }
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
-      const lifecycle = yield* Ref.make<"Open" | "CompletedSuccessfully">("Open")
+      const lifecycle = yield* Ref.make<"Open" | "CompletedSuccessfully">(
+        premise === "early-closure" ? "CompletedSuccessfully" : "Open"
+      )
       const trackerClaim = yield* Ref.make<ActiveTaskClaim | UnclaimedTask>(claim)
       const foreignClaim = ActiveTaskClaim.make({
         operationId: OperationId.make("resumed-finality-foreign-claim"),
@@ -4670,7 +4676,7 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
         )
       const remoteGit = RemotePublicationGit.of({
         admit: () =>
-          premise === "denial"
+          premise === "denial" || premise === "early-closure"
             ? Ref.update(remoteCalls, (calls) => [...calls, "admit"]).pipe(
                 Effect.as(RemotePublicationAdmissionObservation.cases.ExistingBranch.make({ remoteHead: baseSha }))
               )
@@ -4921,6 +4927,29 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       expect(after).toEqual(capturedAfter)
       expect(reduceWorkflowJournalHistory(runId, after)._tag).toBe("ValidWorkflowJournalHistory")
+      if (premise === "early-closure") {
+        expect(after.slice(0, resumedRecords.length)).toEqual(resumedRecords)
+        expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toEqual([])
+        expect(after.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toEqual([])
+        expect(after.filter(({ event }) => event._tag === "CompletionTaskAcknowledged")).toEqual([])
+        expect(after.filter(({ event }) => event._tag === "IntegrationFinalitySettled")).toEqual([])
+        expect(after.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toEqual([])
+        expect(
+          after.flatMap(({ event }) =>
+            event._tag === "RemotePublicationAttemptIntended" ? [event.attemptOrdinal] : []
+          )
+        ).toEqual([1, 2])
+        expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
+        expect(yield* Ref.get(trackerClaim)).toEqual(claim)
+        expect(yield* Ref.get(remoteCalls)).toEqual(["admit"])
+        expect(yield* Ref.get(integratorCalls)).toEqual([])
+        expect(yield* Ref.get(executorCommands)).toEqual([])
+        expect(yield* Ref.get(promotionCalls)).toEqual({ compareAndSet: 0, read: 0 })
+        expect(yield* Ref.get(completionCalls)).toEqual([])
+        expect(yield* Ref.get(candidateRemovals)).toBe(0)
+        expect((yield* Ref.get(candidateResources)).get(candidateResource)).toBe(candidateSessionId)
+        return
+      }
       if (premise === "denial") {
         const appendedRecords = after.slice(resumedRecords.length)
         expect(after.slice(0, resumedRecords.length)).toEqual(resumedRecords)
@@ -5620,6 +5649,10 @@ const exerciseResumedFinality = (premise: "unchanged" | "dependency" | "revision
 
 it.effect("ordinary production Run does not retry a conclusive resumed authentication denial", () =>
   exerciseResumedFinality("denial")
+)
+
+it.effect("S8 human early closure retains unpublished responsibility without proof or Run termination", () =>
+  exerciseResumedFinality("early-closure")
 )
 
 it.effect.each([
