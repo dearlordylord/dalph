@@ -94,6 +94,7 @@ Git history.
 ## Application Exit
 
 - [Gracefully exit the Dalph application](graceful-application-exit.md)
+- [Exit when the CLI receiver stops reading](cli-exit-output-grace.md)
 - [Application Exit model, decision-kernel, and test mapping](application-exit-model-mapping.md)
 - [Application Exit runtime mapping](application-exit-runtime-mapping.md)
 - [Suspend running executor work during application Exit](running-executor-application-exit.md)

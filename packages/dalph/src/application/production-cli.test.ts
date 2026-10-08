@@ -1,3 +1,4 @@
+import { CliExitOutputAbandoned } from "./cli-exit-output.js"
 import { it } from "@effect/vitest"
 import { NodeServices } from "@effect/platform-node"
 import {
@@ -3731,11 +3732,15 @@ it.effect("lost timeout output can never become a successful process result", ()
 
     yield* signals.installed
     yield* signals.send("SIGTERM")
-    yield* Deferred.await(outputFailed)
-    expect(yield* Fiber.join(running).pipe(Effect.flip)).toMatchObject({
-      _tag: "ProductionCliOutputError",
-      code: "output.write_failed"
-    })
+    const failure = yield* Fiber.join(running).pipe(Effect.flip)
+    if (failure instanceof CliExitOutputAbandoned) {
+      // At the lifecycle deadline no further output attempt is required.
+      expect(failure.requestedStatus).toBe(1)
+      expect(yield* Deferred.isDone(outputFailed)).toBe(false)
+    } else {
+      expect(failure).toMatchObject({ _tag: "ProductionCliOutputError", code: "output.write_failed" })
+      expect(yield* Deferred.isDone(outputFailed)).toBe(true)
+    }
     expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "RunDisposition")).toBe(false)
   })
 )

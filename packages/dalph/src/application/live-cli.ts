@@ -175,6 +175,7 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
                         Deferred.succeed(selected, undefined),
                         {
                           awaitRequest: signalAdapter.awaitRequest,
+                          awaitRequestTime: signalAdapter.awaitRequestTime,
                           awaitResult: signalAdapter.awaitResult,
                           presentResult: (result) =>
                             presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
@@ -290,6 +291,7 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
                     }),
                     {
                       awaitRequest: signalAdapter.awaitRequest,
+                      awaitRequestTime: signalAdapter.awaitRequestTime,
                       awaitResult: signalAdapter.awaitResult,
                       presentResult: (result) =>
                         presentApplicationExitResult(observation.selection.runId, result, output.writeLine)

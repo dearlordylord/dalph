@@ -351,3 +351,59 @@ for (const disposition of ["Completed", "Cancelled"] as const)
       expect(observed.stderr).not.toContain("private-provider-payload")
     }).pipe(Effect.provide(NodeServices.layer))
   )
+
+for (const outcome of ["Succeeded", "TimedOut", "FinalizationFailed"] as const) {
+  it.live(
+    `stalled Exit output ends the Node process after finalization with ${outcome} status`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+          const result =
+            outcome !== "TimedOut"
+              ? "ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })"
+              : "ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })"
+          const script = `
+        import { Effect } from "effect";
+        import { ApplicationExitResult, TraceOutput } from "@dalph/orchestrator";
+        import { NodeStdio } from "@effect/platform-node";
+        import { runDalphNodeMain } from "./dist/src/application/node-main.js";
+        import { withCliExitOutputGrace } from "./dist/src/application/cli-exit-output.js";
+        import { traceOutputStdioLayer } from "./dist/src/presentation/stdio-trace-output.js";
+        import { writeSync } from "node:fs";
+        const report = (event) => Effect.sync(() => writeSync(2, JSON.stringify({ event }) + "\\n"));
+        const application = Effect.scoped(Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => report("host-finalized")${outcome === "FinalizationFailed" ? '.pipe(Effect.andThen(Effect.die({ _tag: "ControlledFinalizationDefect" })))' : ""});
+          const output = yield* TraceOutput;
+          yield* withCliExitOutputGrace({ awaitRequest: Effect.void, awaitResult: Effect.succeed(${result}) },
+            () => output.writeLine(JSON.stringify({ payload: "x".repeat(4 * 1024 * 1024) })));
+        })).pipe(Effect.provide(traceOutputStdioLayer), Effect.provide(NodeStdio.layer));
+        runDalphNodeMain(application);
+      `
+          const child = yield* spawner.spawn(
+            ChildProcess.make(nodeProcess.execPath, ["--input-type=module", "--eval", script], {
+              cwd: dalphPackageDirectory
+            })
+          )
+          // Deliberately do not subscribe to stdout before the child has ended.
+          // Setting exitCode alone leaves Node waiting for this pending pipe.
+          const [exitCode, stderr] = yield* Effect.all(
+            [child.exitCode, child.stderr.pipe(Stream.decodeText(), Stream.mkString)],
+            { concurrency: "unbounded" }
+          ).pipe(Effect.timeout("10 seconds"))
+          expect(exitCode).toBe(outcome === "Succeeded" ? 0 : 1)
+          if (outcome === "FinalizationFailed") {
+            const events = stderr
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line))
+            expect(events[0]).toEqual({ event: "host-finalized" })
+            expect(events[1]).toMatchObject({ boundary: "NodeMainExit", outcome: "Failed" })
+          } else expect(stderr).toBe(JSON.stringify({ event: "host-finalized" }) + "\n")
+          const partial = yield* child.stdout.pipe(Stream.decodeText(), Stream.mkString)
+          expect(Buffer.byteLength(partial)).toBeLessThan(4 * 1024 * 1024)
+        })
+      ).pipe(Effect.provide(NodeServices.layer)),
+    15_000
+  )
+}

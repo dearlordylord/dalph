@@ -10,7 +10,7 @@ import {
   type ApplicationProcessLifecycleService,
   makeApplicationExitShell
 } from "@dalph/orchestrator"
-import { Deferred, Effect, FiberSet, type Scope } from "effect"
+import { Clock, Deferred, Effect, FiberSet, type Scope } from "effect"
 
 const linuxSupervisorExitSignal = "SIGTERM" as const
 
@@ -26,6 +26,8 @@ export interface ApplicationExitSignalBoundary {
 /** One scoped listener installation and the first joined lifecycle result it observes. */
 export interface InstalledApplicationExitSignalAdapter {
   readonly awaitRequest: Effect.Effect<void>
+  /** Exact first transport receipt on the same monotonic clock as the Exit shell. */
+  readonly awaitRequestTime: Effect.Effect<bigint>
   readonly awaitResult: Effect.Effect<ApplicationExitResult>
 }
 
@@ -51,11 +53,14 @@ export const installApplicationExitSignalAdapter = Effect.fn("ApplicationExitSig
 ) {
   const runRequest = yield* FiberSet.makeRuntime<never, void, never>()
   const firstRequest = yield* Deferred.make<void>()
+  const firstRequestTime = yield* Deferred.make<bigint>()
   const firstResult = yield* Deferred.make<ApplicationExitResult>()
   const registrations = acceptedSignals.map((signal) => {
     const listener = () => {
       runRequest(
-        Deferred.succeed(firstRequest, undefined).pipe(
+        Clock.monotonicTimeNanos.pipe(
+          Effect.flatMap((receivedAt) => Deferred.succeed(firstRequestTime, receivedAt)),
+          Effect.andThen(Deferred.succeed(firstRequest, undefined)),
           Effect.andThen(requestBoundary.requestExit),
           Effect.flatMap((result) => Deferred.succeed(firstResult, result)),
           Effect.asVoid
@@ -74,6 +79,7 @@ export const installApplicationExitSignalAdapter = Effect.fn("ApplicationExitSig
   )
   return {
     awaitRequest: Deferred.await(firstRequest),
+    awaitRequestTime: Deferred.await(firstRequestTime),
     awaitResult: Deferred.await(firstResult)
   } satisfies InstalledApplicationExitSignalAdapter
 })
