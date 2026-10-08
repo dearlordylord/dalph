@@ -2555,8 +2555,19 @@ const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTra
   "ObserveResponsibleTaskClaim",
   "ReleaseStartedIntegrationTarget"
 ])
-const transitionMayRunWhileRunPaused = (transition: RunnableFrontierTransition): boolean =>
-  transitionTagsAllowedWhilePaused.has(transition._tag)
+const transitionMayRunWhileRunPaused = (
+  transition: RunnableFrontierTransition,
+  records: JournalHistorySource
+): boolean => {
+  if (transitionTagsAllowedWhilePaused.has(transition._tag)) return true
+  if (transition._tag !== "ReconcilePlannedAttemptExecutorWork") return false
+  // Reconciliation of an intended stop belongs to settlement. Other commands
+  // can redeliver forward work and remain behind the pause/cancellation cutoff.
+  const intended = latestUnsettledPlannedAttemptExecutorCommand(records, transition.plannedAttempt)
+  return (
+    intended?.command === "Suspend" && plannedTaskAttemptEquivalence(intended.plannedAttempt, transition.plannedAttempt)
+  )
+}
 
 export const recordBeforePause = (
   records: Iterable<JournalRecord>,
@@ -2675,7 +2686,7 @@ export const filterFrontierForActivePauses = (
   const transitions = runSettlementClosed
     ? frontier.transitions.filter(
         (transition) =>
-          transitionMayRunWhileRunPaused(transition) ||
+          transitionMayRunWhileRunPaused(transition, journalHistoryOf(runState)) ||
           (heldIntegrationTaskIds.has(runnableTransitionTaskId(transition)) &&
             transitionTagsAllowedToFinishHeldIntegration.has(transition._tag)) ||
           pendingGitReadReconciliations.has(transition) ||

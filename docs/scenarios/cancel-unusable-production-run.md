@@ -58,6 +58,25 @@ result, and performs no second stop, abandonment, or claim mutation.
 
 ## Stop proof remains unavailable
 
+### A crash after the suspension intent
+
+R has an accepted Executing report, followed by an unreadable passive
+observation. Alice cancels R. Dalph records cancellation and its exact Suspend
+intent, then crashes before observing the command outcome. A later explicit
+cancel reconstructs that same intent and reconciles its exact executor
+containment before issuing another command. The cancellation cutoff must not
+filter out this Suspend reconciliation. It grants no Begin, Resume, or
+Continue reconciliation authority. An exact stopped report permits the existing
+abandonment and claim settlement; an unavailable or contradictory projection
+retains every responsibility and exits blocked. Worktree and evidence remain
+retained throughout. No Git mutation is applicable to this stop boundary.
+
+Acceptance: the durable cancellation regression in
+`recovery-activation.test.ts` covers both cancellation before Suspend and a crash
+after its intent. Existing command reconciliation tests own exact report and
+unavailable projection outcomes; the native cancellation witness owns retained
+containment and subsequent settlement.
+
 If the executor reports a possible writer, incomplete containment, reused
 identity, or contradictory evidence, Dalph leaves P, C, W, its task-work
 position, and all evidence retained. It emits `cancellation.blocked` with the

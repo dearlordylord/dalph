@@ -3471,89 +3471,110 @@ it("keeps Stop's executor boundary bounded and preserves the task position", () 
   })
 })
 
-effectIt.effect("lets durable Run cancellation override an unreadable executor projection", () =>
-  Effect.gen(function* () {
-    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
-    })
-    const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    const beginIntent = coverageRecord(
-      12,
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "Begin",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: beginOrdinal,
-        plannedAttempt: coverageAttempt,
-        version: workflowJournalEventVersion
+effectIt.effect.each([false, true])(
+  "lets durable Run cancellation override an unreadable executor projection (Suspend intended: %s)",
+  (suspendWasIntended) =>
+    Effect.gen(function* () {
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
       })
-    )
-    const beginResponse = coverageRecord(
-      13,
-      PlannedAttemptExecutorCommandResponseObservedEvent.make({
-        commandOrdinal: beginOrdinal,
-        occurrenceClassification: "NonActionOccurrence",
-        plannedAttempt: coverageAttempt,
-        report: executing,
-        version: workflowJournalEventVersion
-      })
-    )
-    const runningReport = executorReport(14, executing, 1)
-    const unreadableProjection = executorStateObservation(
-      15,
-      PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})
-    )
-    const cancellationPosition = JournalPosition.make(16)
-    const cancellation = coverageRecord(
-      Number(cancellationPosition),
-      RunCancellationAppliedEvent.make({
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        version: workflowJournalEventVersion
-      })
-    )
-    const began = makeHistoricalWorkflowRunBeganRecord(
-      coverageRunId,
-      coverageTarget,
-      coveragePolicy,
-      remotePublicationTargetForTest
-    )
-    const records = [
-      began,
-      ...acceptedCoverageLineageRecords().map((record) => ({
-        ...record,
-        position: JournalPosition.make(Number(record.position) + 1)
-      })),
-      beginIntent,
-      beginResponse,
-      runningReport,
-      unreadableProjection,
-      cancellation
-    ]
-    const reduced = reduceWorkflowJournalHistory(coverageRunId, records)
-    if (reduced._tag === "InvalidWorkflowJournalHistory") {
-      return yield* Effect.die(
-        `cancellation fixture must be accepted: ${reduced.issues.map(workflowJournalHistoryIssueDetail).join("; ")}`
+      const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      const beginIntent = coverageRecord(
+        12,
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Begin",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: beginOrdinal,
+          plannedAttempt: coverageAttempt,
+          version: workflowJournalEventVersion
+        })
       )
-    }
-    const cancelledState: ReconstructedRunState = {
-      ...reduced.runState,
-      cancellation: { _tag: "RunCancellationApplied", appliedAt: cancellationPosition },
-      graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
-    }
-    const resources = yield* makeIntegrationTargetResourceController()
-    const projection = yield* liveProjectionFor(
-      makeRunRecoveryProjection(coverageRunId, undefined, resources),
-      coverageRunId,
-      coverageTarget,
-      cancelledState,
-      records
-    )
-    expect(projection.frontier.transitions).toContainEqual(
-      RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
-    )
-    expect(projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptExecutorWork")).toBe(false)
-  })
+      const beginResponse = coverageRecord(
+        13,
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: beginOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt: coverageAttempt,
+          report: executing,
+          version: workflowJournalEventVersion
+        })
+      )
+      const runningReport = executorReport(14, executing, 1)
+      const unreadableProjection = executorStateObservation(
+        15,
+        PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})
+      )
+      const cancellationPosition = JournalPosition.make(16)
+      const cancellation = coverageRecord(
+        Number(cancellationPosition),
+        RunCancellationAppliedEvent.make({
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      const began = makeHistoricalWorkflowRunBeganRecord(
+        coverageRunId,
+        coverageTarget,
+        coveragePolicy,
+        remotePublicationTargetForTest
+      )
+      const records = [
+        began,
+        ...acceptedCoverageLineageRecords().map((record) => ({
+          ...record,
+          position: JournalPosition.make(Number(record.position) + 1)
+        })),
+        beginIntent,
+        beginResponse,
+        runningReport,
+        unreadableProjection,
+        cancellation,
+        ...(suspendWasIntended
+          ? [
+              coverageRecord(
+                17,
+                PlannedAttemptExecutorCommandIntendedEvent.make({
+                  command: "Suspend",
+                  initiatedBy: { _tag: "DalphCoordinator" },
+                  occurrenceClassification: "InitiatedAction",
+                  ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+                  plannedAttempt: coverageAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ]
+          : [])
+      ]
+      const reduced = reduceWorkflowJournalHistory(coverageRunId, records)
+      if (reduced._tag === "InvalidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `cancellation fixture must be accepted: ${reduced.issues.map(workflowJournalHistoryIssueDetail).join("; ")}`
+        )
+      }
+      const cancelledState: ReconstructedRunState = {
+        ...reduced.runState,
+        cancellation: { _tag: "RunCancellationApplied", appliedAt: cancellationPosition },
+        graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
+      }
+      const resources = yield* makeIntegrationTargetResourceController()
+      const projection = yield* liveProjectionFor(
+        makeRunRecoveryProjection(coverageRunId, undefined, resources),
+        coverageRunId,
+        coverageTarget,
+        cancelledState,
+        records
+      )
+      expect(projection.frontier.transitions).toContainEqual(
+        suspendWasIntended
+          ? RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+          : RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+      )
+      expect(projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptExecutorWork")).toBe(
+        false
+      )
+    })
 )
 
 it.each(["Stopped", "Unresolved"] as const)(
@@ -6583,6 +6604,52 @@ it("reconciles each exact pre-Pause integration intent but filters a post-Pause 
     expect(frontier.transitions).toEqual([beforeTransition])
   }
 })
+
+it.each(["Begin", "Resume", "Suspend"] as const)(
+  "cancellation permits only exact unsettled Suspend reconciliation (%s)",
+  (command) => {
+    const cancellationPosition = JournalPosition.make(10)
+    const state: ReconstructedRunState = {
+      ...coverageRunState(
+        [
+          coverageRecord(
+            10,
+            RunCancellationAppliedEvent.make({
+              initiatedBy: { _tag: "Operator" },
+              occurrenceClassification: "InitiatedAction",
+              version: workflowJournalEventVersion
+            })
+          ),
+          coverageRecord(
+            11,
+            PlannedAttemptExecutorCommandIntendedEvent.make({
+              command,
+              initiatedBy: { _tag: "DalphCoordinator" },
+              occurrenceClassification: "InitiatedAction",
+              ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+              plannedAttempt: coverageAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        ],
+        []
+      ),
+      cancellation: { _tag: "RunCancellationApplied", appliedAt: cancellationPosition }
+    }
+    const exact = RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+    const foreign = RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({
+      plannedAttempt: { ...coverageAttempt, attemptId: AttemptId.make("foreign-cancellation-attempt") }
+    })
+    const frontier = filterFrontierForActivePauses(
+      { explanations: [], transitions: [exact, foreign] },
+      state,
+      undefined,
+      new Set(),
+      new Set()
+    )
+    expect(frontier.transitions).toEqual(command === "Suspend" ? [exact] : [])
+  }
+)
 
 it("reconciles an integration intent admitted before cancellation but filters a later one", () => {
   const beforeCancellation = pausedIntegrationScenario("cancel-before", 8)
