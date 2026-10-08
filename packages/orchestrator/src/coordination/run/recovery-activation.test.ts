@@ -156,6 +156,7 @@ import {
 import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import {
   journalEvidenceFrom,
+  journalEvidenceBefore,
   journalGraphObservationAt,
   journalGraphSnapshotForObservation
 } from "../../workflow-journal/record-evidence.js"
@@ -493,9 +494,83 @@ it("does not use unrelated acquired claims as fresh integration claim observatio
   ]) {
     const later = coverageRecord(5, TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }))
     expect(authorizedClaimForAttempt([...records, later], coverageAttempt)?.claim).toEqual(coverageClaim)
-    expect(
-      latestIntegrationClaimObservationPosition([...records, later], coverageAttempt, coverageTarget, baseline)
-    ).toBeUndefined()
+    const history = [...records, later]
+    for (const source of [history, journalEvidenceFrom(history)]) {
+      expect(
+        latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, baseline)
+      ).toBeUndefined()
+    }
+  }
+})
+
+it("finds integration claim freshness without visiting retained graph refreshes", () => {
+  const records = [...coveragePlanRecords()]
+  for (let index = 0; index < 128; index += 1) {
+    const operation = makeTrackerGraphObservationOperation(
+      coverageGraphOperation.cause,
+      OperationId.make(`claim-freshness-graph-${index}`),
+      coverageTarget,
+      []
+    )
+    records.push(
+      coverageRecord(5 + index * 2, taskTrackerReadIntent(operation)),
+      coverageRecord(
+        6 + index * 2,
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, coverageGraph)
+        )
+      )
+    )
+  }
+  const unreadable = makeTaskClaimObservationOperation(
+    OperationId.make("claim-freshness-unreadable"),
+    coverageTarget,
+    coverageTaskId,
+    []
+  )
+  records.push(
+    coverageRecord(261, coverageClaimEvent),
+    coverageRecord(262, taskTrackerReadIntent(unreadable)),
+    coverageRecord(
+      263,
+      taskTrackerFactsObservedEvent(unreadable.operationId, makeFocusedTaskClaimFactsUnreadable(unreadable))
+    )
+  )
+  const evidence = journalEvidenceFrom(records)
+  for (const [cutoff, expected] of [
+    [261, 2],
+    [262, 261],
+    [264, 263]
+  ] as const) {
+    const prefix = records.filter(({ position }) => position < cutoff)
+    // Both representations exclude the cutoff record, including later claim facts.
+    const indexedPrefix = journalEvidenceBefore(evidence, cutoff)
+    for (const source of [prefix, indexedPrefix]) {
+      expect(latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, Option.none())).toBe(
+        expected
+      )
+      expect(
+        latestIntegrationClaimObservationPosition(
+          source,
+          coverageAttempt,
+          coverageTarget,
+          Option.some(JournalPosition.make(expected))
+        )
+      ).toBeUndefined()
+    }
+  }
+  let visits = 0
+  const stopObserving = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "IndexedRecordVisit") visits += 1
+  })
+  try {
+    expect(latestIntegrationClaimObservationPosition(evidence, coverageAttempt, coverageTarget, Option.none())).toBe(
+      263
+    )
+    expect(visits).toBeLessThan(32)
+  } finally {
+    stopObserving()
   }
 })
 
@@ -503,17 +578,13 @@ it("keeps focused integration claim observations within the exact task target an
   const records = coveragePlanRecords()
   const baseline = Option.some(JournalPosition.make(4))
   const exact = coverageRecord(5, coverageClaimEvent)
-  expect(
-    latestIntegrationClaimObservationPosition([...records, exact], coverageAttempt, coverageTarget, baseline)
-  ).toBe(5)
-  expect(
-    latestIntegrationClaimObservationPosition(
-      [...records, exact],
-      coverageAttempt,
-      coverageTarget,
-      Option.some(exact.position)
-    )
-  ).toBeUndefined()
+  const exactHistory = [...records, exact]
+  for (const source of [exactHistory, journalEvidenceFrom(exactHistory)]) {
+    expect(latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, baseline)).toBe(5)
+    expect(
+      latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, Option.some(exact.position))
+    ).toBeUndefined()
+  }
   for (const [target, taskId] of [
     [FixtureTarget.make("foreign-tracker-target"), coverageTaskId],
     [coverageTarget, TaskId.make("unrelated-C")]
@@ -523,14 +594,12 @@ it("keeps focused integration claim observations within the exact task target an
       operation.operationId,
       makeFocusedTaskClaimFactsObserved(operation, ActiveTaskClaim.make({ ...coverageClaim, taskId }))
     )
-    expect(
-      latestIntegrationClaimObservationPosition(
-        [...records, coverageRecord(5, event)],
-        coverageAttempt,
-        coverageTarget,
-        baseline
-      )
-    ).toBeUndefined()
+    const history = [...records, coverageRecord(5, event)]
+    for (const source of [history, journalEvidenceFrom(history)]) {
+      expect(
+        latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, baseline)
+      ).toBeUndefined()
+    }
   }
 })
 const acceptedCoverageClaimOperation = makeTaskClaimObservationOperation(

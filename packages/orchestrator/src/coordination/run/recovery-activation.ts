@@ -156,6 +156,7 @@ import {
   journalGraphObservationAt,
   journalGraphSnapshotForObservation,
   journalLatestTaskRead,
+  journalLatestTaskObservation,
   journalEvidenceBefore,
   journalRecordByPosition,
   journalRecordByKey,
@@ -2256,6 +2257,35 @@ export const latestIntegrationClaimObservationPosition = (
   freshnessBaseline: Option.Option<JournalPosition>
 ): JournalPosition | undefined => {
   const authorizedClaim = authorizedClaimForAttempt(source, plannedAttempt)?.claim
+  if (isJournalRecordEvidence(source)) {
+    // Graph refreshes cannot establish focused claim freshness. Keep exact
+    // acquisitions and both focused observation families competing by position.
+    const acquired = Array.from(journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskClaimAcquired")).findLast(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquired" &&
+        authorizedClaim !== undefined &&
+        isExactTaskClaim(event.claim, authorizedClaim)
+    )
+    const focused = journalLatestTaskObservation(source, {
+      taskId: plannedAttempt.taskId,
+      target,
+      kind: "FocusedTaskClaimFacts"
+    })
+    const unreadable = journalLatestTaskObservation(source, {
+      taskId: plannedAttempt.taskId,
+      target,
+      kind: "FocusedTaskClaimFactsUnreadable"
+    })
+    return [acquired?.position, focused?.position, unreadable?.position].reduce<JournalPosition | undefined>(
+      (latest, position) =>
+        position !== undefined &&
+        positionIsAfter(position, freshnessBaseline) &&
+        (latest === undefined || position > latest)
+          ? position
+          : latest,
+      undefined
+    )
+  }
   const records = Array.from(journalRecordsForTask(source, plannedAttempt.taskId))
   return records.findLast(
     ({ event, position }) =>
