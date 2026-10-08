@@ -350,7 +350,7 @@ export const makeSqliteJournalQueries = (
     partition: JournalPartition,
     operation: "JournalStore.scanHot" | "JournalStore.auditAll"
   ) {
-    const rows = yield* (
+    const statement =
       partition === "Hot"
         ? sql`
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
@@ -360,7 +360,16 @@ export const makeSqliteJournalQueries = (
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records_cold ORDER BY run_id ASC, position ASC
         `
-    ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))
+    // A cached prepare lookup retains its completed fiber's parent span. That
+    // span's exit owns the complete scan result until the statement expires.
+    // Scans still read and validate every row, without retaining that history
+    // through the driver's prepared-statement cache.
+    const rows = yield* statement.unprepared.pipe(
+      Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
+      // The native driver's unprepared path prepares synchronously; contain
+      // its SQLite preparation throws at this storage boundary as well.
+      Effect.catchDefect((cause) => Effect.fail(classifyJournalStorageFailure(operation, cause)))
+    )
     const collections = yield* collectScannedRows(partition, operation, rows)
     for (const [runId, records] of collections.recordsByRun) {
       const decision = decideJournalPartitionHistory(partition, runId, records)
