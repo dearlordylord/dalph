@@ -19,6 +19,7 @@ import {
 } from "../store.js"
 import { classifyJournalStorageFailure, decodeBoundary, type StoreOperation } from "./sqlite-store-errors.js"
 import type { SqliteHotStorageCheckpoint, SqlitePartitionSnapshot } from "./sqlite-storage-checkpoint.js"
+import { type JournalPayloadStringPool, withJournalPayloadStringPool } from "../payload-string-pool.js"
 
 const PersistedJournalRow = Schema.Struct({
   event_kind: JournalEventKind,
@@ -87,9 +88,10 @@ const recordKeyFromSqliteHex = (hex: string): JournalRecordKey | undefined => {
 
 const parseEvent = (
   row: Pick<PersistedJournalRow, "event_kind" | "event_version" | "payload_json">,
-  operation: StoreOperation
+  operation: StoreOperation,
+  strings: JournalPayloadStringPool
 ) =>
-  decodeJournalEvent({ kind: row.event_kind, payloadJson: row.payload_json, version: row.event_version }).pipe(
+  decodeJournalEvent({ kind: row.event_kind, payloadJson: row.payload_json, version: row.event_version }, strings).pipe(
     Effect.mapError((cause) => cause.detail),
     Effect.mapError((detail) => ({ detail, operation }))
   )
@@ -102,7 +104,8 @@ const decodeScannedRow = (
   partition: JournalPartition,
   operation: "JournalStore.scanHot" | "JournalStore.auditAll",
   rowOrdinal: number,
-  input: unknown
+  input: unknown,
+  strings: JournalPayloadStringPool
 ): Effect.Effect<ScannedRow> =>
   Effect.gen(function* () {
     const identity = yield* decodeBoundary(PersistedRunIdentity, input, operation).pipe(Effect.result)
@@ -133,7 +136,7 @@ const decodeScannedRow = (
         runId: decoded.success.run_id
       }
     }
-    const event = yield* parseEvent(decoded.success, operation).pipe(Effect.result)
+    const event = yield* parseEvent(decoded.success, operation, strings).pipe(Effect.result)
     if (Result.isFailure(event)) {
       return {
         _tag: "BoundaryIssue",
@@ -152,28 +155,33 @@ const decodeScannedRow = (
     }
   })
 
-const collectScannedRows = Effect.fn("JournalStore.Sqlite.collectScannedRows")(function* (
-  partition: JournalPartition,
-  operation: "JournalStore.scanHot" | "JournalStore.auditAll",
-  rows: ReadonlyArray<unknown>
-) {
-  const issues = new Array<JournalAudit["issues"][number]>()
-  const recordsByRun = new Map<RunId, Array<JournalRecord>>()
-  const rowRunIds = new Set<RunId>()
-  for (const [index, input] of rows.entries()) {
-    const decoded = yield* decodeScannedRow(partition, operation, index + 1, input)
-    if (decoded._tag === "BoundaryIssue") {
-      if (decoded.runId !== undefined) rowRunIds.add(decoded.runId)
-      issues.push(decoded.issue)
-      continue
-    }
-    rowRunIds.add(decoded.record.runId)
-    const current = recordsByRun.get(decoded.record.runId) ?? []
-    current.push(decoded.record)
-    recordsByRun.set(decoded.record.runId, current)
-  }
-  return { issues, recordsByRun, rowRunIds }
-})
+const collectScannedRows = Effect.fn("JournalStore.Sqlite.collectScannedRows")(
+  (
+    partition: JournalPartition,
+    operation: "JournalStore.scanHot" | "JournalStore.auditAll",
+    rows: ReadonlyArray<unknown>
+  ) =>
+    withJournalPayloadStringPool((strings) =>
+      Effect.gen(function* () {
+        const issues = new Array<JournalAudit["issues"][number]>()
+        const recordsByRun = new Map<RunId, Array<JournalRecord>>()
+        const rowRunIds = new Set<RunId>()
+        for (const [index, input] of rows.entries()) {
+          const decoded = yield* decodeScannedRow(partition, operation, index + 1, input, strings)
+          if (decoded._tag === "BoundaryIssue") {
+            if (decoded.runId !== undefined) rowRunIds.add(decoded.runId)
+            issues.push(decoded.issue)
+            continue
+          }
+          rowRunIds.add(decoded.record.runId)
+          const current = recordsByRun.get(decoded.record.runId) ?? []
+          current.push(decoded.record)
+          recordsByRun.set(decoded.record.runId, current)
+        }
+        return { issues, recordsByRun, rowRunIds }
+      })
+    )
+)
 
 interface SqlitePartitionScan {
   readonly issues: JournalAudit["issues"]
@@ -251,25 +259,27 @@ export const makeSqliteJournalQueries = (
       Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
     )
     if (onPartitionRowsQueried !== undefined) yield* onPartitionRowsQueried(partition, runId, rows.length)
-    const decodedRows = yield* Effect.forEach(rows, (row) =>
-      Effect.gen(function* () {
-        const key = recordKeyFromSqliteHex(row.record_key_hex)
-        if (key === undefined) {
-          return yield* historyCorruption(
-            partition,
-            runId,
-            operation,
-            "stored journal record key is not valid UTF-8 hex"
+    const decodedRows = yield* withJournalPayloadStringPool((strings) =>
+      Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const key = recordKeyFromSqliteHex(row.record_key_hex)
+          if (key === undefined) {
+            return yield* historyCorruption(
+              partition,
+              runId,
+              operation,
+              "stored journal record key is not valid UTF-8 hex"
+            )
+          }
+          const event = yield* parseEvent(row, operation, strings).pipe(
+            Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
           )
-        }
-        const event = yield* parseEvent(row, operation).pipe(
-          Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
-        )
-        return {
-          evidence: { event, position: row.position },
-          record: { event, key, position: row.position, runId: row.run_id } satisfies JournalRecord
-        }
-      })
+          return {
+            evidence: { event, position: row.position },
+            record: { event, key, position: row.position, runId: row.run_id } satisfies JournalRecord
+          }
+        })
+      )
     )
     const records = decodedRows.map(({ record }) => record)
     return yield* makeSqliteDecodedHistoryEvidence(records, partition, runId, operation)

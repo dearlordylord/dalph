@@ -9,6 +9,31 @@ journal reduction/admission govern every chronology below.
 
 ## 1. A caller reads one unchanged Run repeatedly
 
+### Repeated strings in a complete SQLite read
+
+Starting facts: persisted rows contain distinct workflow events whose primitive
+string fields repeat, including task descriptions, Run identities and claims.
+The caller requests an ordinary complete partition read or scan. SQLite loads
+the actual rows and validates their envelopes. While decoding those rows, one
+temporary parser reuses equal string values across payloads. Every event still
+passes the complete compact/gzip, version and semantic decoder; positions,
+keys, events and their correlations remain distinct and unchanged.
+
+After success, typed failure or interruption, the parser releases its private
+lookup table. The returned immutable events retain their own string references.
+Reopening or retrying creates a new parser and reads actual stored bytes; the
+lookup table is never persisted or used as authority. No tracker, Git, provider,
+workflow decision, cleanup or crash recovery rule changes: sharing equal
+primitive strings is observable only through resource use. Invalid payloads,
+corrupt envelopes and unsupported versions must still fail normally.
+
+Acceptance: `sqlite-event-codec.property.test.ts` compares pooled and ordinary
+decoding, including plain/gzip inputs and malformed envelopes.
+`sqlite-scan-retention.test.ts` holds distinct scanned Runs with an equal large
+payload and checks bounded retained memory without merging their records.
+The focused real retained-history read and native cancellation diagnostic own
+the production resource outcome; codec-only memory evidence cannot certify it.
+
 Starting facts: one live JournalStore owns its private SQLite connection under
 exclusive locking and the production coordinator fence. The Run has a complete
 Hot or valid terminal Cold partition. Manual database mutation is outside the

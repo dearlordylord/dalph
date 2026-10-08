@@ -7,6 +7,7 @@ import {
   JournalEventDecodeIssue
 } from "../event-codec.js"
 import { decodeJournalGzipPayload, encodeJournalGzipPayload } from "./gzip-payload.js"
+import type { JournalPayloadStringPool } from "../payload-string-pool.js"
 
 const Payload = Schema.Record(Schema.String, Schema.Json)
 
@@ -18,7 +19,8 @@ export const encodeSqliteJournalEvent = (event: WorkflowJournalEvent): EncodedJo
 
 /** Complete event validation remains mandatory after bounded storage decoding. */
 export const decodeSqliteJournalEvent = Effect.fn("JournalStore.Sqlite.decodeEvent")(function* (
-  encoded: EncodedJournalEvent
+  encoded: EncodedJournalEvent,
+  strings?: JournalPayloadStringPool
 ) {
   const payload = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Payload))(encoded.payloadJson).pipe(
     Effect.flatMap(decodeJournalGzipPayload),
@@ -26,5 +28,5 @@ export const decodeSqliteJournalEvent = Effect.fn("JournalStore.Sqlite.decodeEve
       (cause) => new JournalEventDecodeIssue({ detail: String(cause), kind: encoded.kind, version: encoded.version })
     )
   )
-  return yield* decodeJournalEvent({ ...encoded, payloadJson: JSON.stringify(payload) })
+  return yield* decodeJournalEvent({ ...encoded, payloadJson: JSON.stringify(payload) }, strings)
 })
