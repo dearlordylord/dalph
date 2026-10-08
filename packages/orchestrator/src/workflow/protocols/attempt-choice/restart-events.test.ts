@@ -6,6 +6,8 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedTaskAttempt,
+  PlannedAttemptExecutorReport,
+  plannedAttemptExecutorCorrelation,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -38,7 +40,17 @@ import {
   PlannedAttemptReplacementWitness,
   restartAuthorityReadOperationMatches
 } from "./replacement-events.js"
-import { PlannedAttemptExecutorReportOrdinal } from "../planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent
+} from "../planned-attempt-executor-work/events.js"
+import { executorGuidanceDispatchProblem } from "../executor-guidance/protocol.js"
+import { JournalRecord } from "../../../workflow-journal/store.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { TaskAttemptPlannedEvent } from "../../registry/event.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { ResultRecoveryAttemptReplacedEvent } from "../result-recovery/replacement-events.js"
+import { ResultRecoveryRequestId } from "../result-recovery/events.js"
 
 const runId = RunId.make("restart-event-run")
 const taskId = TaskId.make("restart-event-task")
@@ -106,6 +118,61 @@ const event = PlannedAttemptReplacedEvent.make({
   successorPlan,
   version: workflowJournalEventVersion,
   witness
+})
+
+it("guidance accepts the executing Restart successor while refusing its replaced predecessor", () => {
+  const recovered = ResultRecoveryAttemptReplacedEvent.make({
+    ...event,
+    _tag: "ResultRecoveryAttemptReplaced",
+    requestId: ResultRecoveryRequestId.make({ nonce: "guidance-result-restart", runId }),
+    subject: { _tag: "RejectedResult", plannedAttempt: p1, reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+    integrationTarget: IntegrationTarget.make({
+      repository: GitRepositoryLocator.make("/repositories/guidance"),
+      ref: IntegrationTargetRef.make("refs/heads/main")
+    }),
+    witness: {
+      activeTaskContinuationRead: {
+        graphObservationOperationId: witness.graphObservationOperationId,
+        taskClaimObservationOperationId: witness.claimObservationOperationId,
+        taskWorkSpecificationObservationOperationId: witness.specificationObservationOperationId
+      },
+      worktreeObservationOperationId: witness.oldWorktreeObservationOperationId,
+      targetLineageObservationOperationId: witness.targetLineageObservationOperationId
+    }
+  })
+  for (const replacement of [event, recovered]) {
+    const records: ReadonlyArray<JournalRecord> = [
+      TaskAttemptPlannedEvent.make({
+        operation: makeTaskAttemptPlanOperation({
+          operationId: OperationId.make("guidance-predecessor-plan"),
+          plannedAttempt: p1,
+          predecessorOperationIds: []
+        }),
+        version: workflowJournalEventVersion
+      }),
+      replacement,
+      ...[p1, p2].map((plannedAttempt) =>
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+    ].map((event, index) =>
+      JournalRecord.make({
+        runId,
+        event,
+        position: JournalPosition.make(index + 1),
+        key: JournalRecordKey.make(`restart-guidance:${index}`)
+      })
+    )
+    for (const history of [records, journalEvidenceFrom(records)]) {
+      expect(executorGuidanceDispatchProblem(history, p2)).toBeUndefined()
+      expect(executorGuidanceDispatchProblem(history, p1)).toBe("guidance selection crossed its implementation cutoff")
+    }
+  }
 })
 
 it.effect("round-trips the one atomic P1-to-P2 replacement event", () =>
