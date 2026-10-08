@@ -13,8 +13,7 @@ publisher protocol below is new design, not an existing Dalph capability.
 
 ## Evidence and preserved boundaries
 
-This draft consumes the completed [boundary research](../../research/planner-
-reviewed-task-decomposition.md), including its pinned Choir source and
+This draft consumes the completed [boundary research](../../research/planner-reviewed-task-decomposition.md), including its pinned Choir source and
 alternatives. Research inspected `ab7f6b6e2a5090959ea52bf379e8c2f9fc7d336b`; the
 prerequisite draft's immutable planned Base was
 `50a55341a826631755d7d845f829030044cdb848`. The source review uses planned Base
@@ -22,18 +21,14 @@ prerequisite draft's immutable planned Base was
 inventory establishes existing contracts, not proof of this proposal.
 
 When choosing publication order, preserve [complete intermediate tracker
-edits](../scenarios/intermediate-tracker-edits.md#a-complete-intermediate-edit-
-admits-d): Dalph can admit an open grouped child before a later blocker arrives.
-Missing pages are not complete empty blockers. Preserve [D9](../DELIVERY-
-INVARIANTS.md#graph-and-selection) and [D12–D16](../DELIVERY-
-INVARIANTS.md#admission-and-capacity), with `latestPolicyControlsAdmission` and
+edits](../scenarios/intermediate-tracker-edits.md#a-complete-intermediate-edit-admits-d): Dalph can admit an open grouped child before a later blocker arrives.
+Missing pages are not complete empty blockers. Preserve [D9](../DELIVERY-INVARIANTS.md#graph-and-selection) and [D12–D16](../DELIVERY-INVARIANTS.md#admission-and-capacity), with `latestPolicyControlsAdmission` and
 `everyDurableRetainedAttemptHasExactPosition` in
 [runActivation](../../specs/runActivation.qnt). These laws constrain existing
 admission; they do not model the proposed publication protocol.
 
 When changing parent instructions, preserve [changed-attempt
-choices](../scenarios/reconcile-changed-task-facts.md#alice-changes-as-
-instructions-while-its-planned-attempt-is-running), [exact attempt
+choices](../scenarios/reconcile-changed-task-facts.md#alice-changes-as-instructions-while-its-planned-attempt-is-running), [exact attempt
 identity](../DELIVERY-INVARIANTS.md#identity), and [durable
 planning](../ARCHITECTURE.md#durable-task-attempt-planning). A split cannot
 rewrite an attempt's revision, Base, branch, worktree, or executor locator.
@@ -50,9 +45,7 @@ promise. Existing `runActivation` controls remain governing; new publication
 safety needs future tests rather than claimed formal coverage.
 
 When recovering an unknown mutation, preserve [journal intent and
-readback](../architecture/journal-and-reconstruction.md#intent-observation-and-
-retry), [tracker observation coverage](../architecture/tracker-graph-and-
-claims.md), and [D23](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence). Claim
+readback](../architecture/journal-and-reconstruction.md#intent-observation-and-retry), [tracker observation coverage](../architecture/tracker-graph-and-claims.md), and [D23](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence). Claim
 reconciliation is precedent, not evidence that issue creation is idempotent. The
 current claim mutation service does not supply the proposed child-authoring
 seam.
@@ -201,8 +194,7 @@ Exit](../scenarios/graceful-application-exit.md) and [cleanup during
 Exit](../scenarios/cleanup-dispositions-during-application-exit.md); S12
 supplies the proposed external-publisher composition. When disposing any
 retained resource, preserve [exact cleanup](../scenarios/disposition-cleanup.md)
-and D16–D17 in [preservation invariants](../DELIVERY-
-INVARIANTS.md#preservation). Publication/rejection does no resource cleanup;
+and D16–D17 in [preservation invariants](../DELIVERY-INVARIANTS.md#preservation). Publication/rejection does no resource cleanup;
 adopting an existing tracker child is a tracker readback, not a Git resource
 disposition. Current models prove no external-publisher Exit or fencing
 contract.
@@ -657,6 +649,5 @@ only change and are deliberately unrun.
 | D8 Acceptance evidence | Accept or amend S1–S12, provider limits, proposed test seams and invariant obligations before any implementation. Documentation-task completion is not this decision. |
 
 Status remains **proposed, awaiting maintainer acceptance**. The [source-review
-appendix](../../research/planner-reviewed-task-decomposition.md#review-appendix-
-scenario-reconciliation) records scenario evidence and limits; it neither
+appendix](../../research/planner-reviewed-task-decomposition.md#review-appendix-scenario-reconciliation) records scenario evidence and limits; it neither
 changes canonical policy nor schedules implementation.
