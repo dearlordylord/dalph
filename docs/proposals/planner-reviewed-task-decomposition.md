@@ -600,7 +600,6 @@ decomposition.
 | Authorized tracker authoring, exact operation lookup and readback | [Tracker graph/claims](../architecture/tracker-graph-and-claims.md); new creation/grouping/edge contracts required | T1, T3–T7, T9–T12 |
 | Ordinary activation and control composition | [Reactive actions](../scenarios/run-reactive-delivery-actions.md), [Pause progress](../scenarios/observe-pause-progress.md), [intermediate edits](../scenarios/intermediate-tracker-edits.md) | T1, T5–T8, T10–T12 |
 | Exact changed-attempt disposition, integration and Base | [Changed facts](../scenarios/reconcile-changed-task-facts.md), [clean Restart](../scenarios/clean-restart-changed-attempt.md), [ordinary Base](../scenarios/qualified-current-head-attempt.md) | T1, T8–T11 |
-
 | Host Exit with separate publisher lifecycle | [Graceful Exit](../scenarios/graceful-application-exit.md); new external stop/fencing contract required | T12 |
 
 Future tests must assert ordered calls, identities, durable prefixes and
