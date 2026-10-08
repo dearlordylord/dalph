@@ -174,3 +174,22 @@ Physical evidence is retained at
 sources, identity manifest and exact process/group observations. The controlled
 host test proves coordinator capability release ordering; these new checks do not
 independently prove production OS lock release or Journal writer absence.
+
+## G2/G3 boundary: accepted output below the Node high-water mark
+
+Starting facts: the receiver does not consume stdout; earlier accepted bytes
+fill the OS pipe. Node retains a small accepted write in its local queue, below
+the high-water mark, so `write` returns true without a `drain` wait.
+Trigger: Exit produces Succeeded while that output remains pending.
+Boundary calls: the stdio publisher waits for completion of accepted writes,
+including a write whose initial acceptance returned true. The existing shared
+grace owns this wait. At expiry it abandons output, closes the host scope and
+ends Node with the lifecycle status; it records no successful delivery.
+Visible result: process completion after finalizers within the same allowance,
+with partial stdout permitted. Forbidden: canceling the grace because initial
+write acceptance returned true, or keeping the process alive indefinitely.
+Crash/retry: no output retry or durable output fact; existing restart custody
+rules apply. Acceptance: native Node integration fills the pipe with small
+writes, proves pending bytes with needDrain false, then requires finalization
+and exit without consumption. Existing draining and closed-pipe checks preserve
+complete records and typed failures. This refines already accepted G2/G3.
