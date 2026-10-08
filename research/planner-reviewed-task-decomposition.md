@@ -7,8 +7,8 @@ that possible extension; it does not authorize it.
 
 Status: **proposed design awaiting maintainer acceptance**, for
 [parent #421](https://github.com/dearlordylord/dalph/issues/421). Inspected on
-2026-10-07 at Git SHA `ab7f6b6e2a5090959ea52bf379e8c2f9fc7d336b`, also this
-attempt's planned Base. Source links below refer to that checkout unless a
+2026-10-07 at Git SHA `ab7f6b6e2a5090959ea52bf379e8c2f9fc7d336b`, also the research prerequisite's
+planned Base. Source links below refer to that checkout unless a
 separate pinned external SHA is stated. Symbols and headings are exact locators;
 Git preserves their inspected versions. No runtime/model files, canonical
 glossary, or ADRs change: prose in this research file cannot add workflow
@@ -162,3 +162,98 @@ citations establish source/contract boundaries; they are not new qualification
 evidence. Documentation validation is local links and formatting only, following
 [check selection](../docs/development/checks.md#choosing-checks). Remote link
 availability, semantic coverage and eventual design acceptance require review.
+
+
+## Review appendix: scenario reconciliation
+
+The reviewer compared the prerequisite draft with current repository authorities
+on 2026-10-08 at immutable planned Base
+`d6b703c75d4a18a9b31bf7aceb7a20f8d9fb370b`. This appendix and the
+[corrected proposal](../docs/proposals/planner-reviewed-task-decomposition.md)
+are the only changed artifacts. The review consumes the draft present at that
+Base; the earlier research and draft Bases above are provenance, not this review's
+candidate identity. No runtime tests, live mutations, model checks, or new
+acceptance authority are claimed. Local source/contract review establishes
+constraints, not implementation of the proposed seams. The pinned Choir findings
+remain prerequisite evidence; this review did not re-fetch external sources.
+
+### Authority and corrections
+
+The tracker owns instructions, graph, lifecycle and exact claims;
+[`PlannedTaskAttempt`](../packages/contracts/src/planned-attempt.ts) binds every
+immutable attempt locator. Current
+[graph coverage and consistency](../docs/architecture/tracker-graph-and-claims.md)
+still separates title/body fingerprints from edges and refuses absence inferred
+from partial reads. The
+[claim mutation algebra](../packages/orchestrator/src/authorities/task-tracker/claim-mutation.ts)
+provides exact claim operations, not child creation. No proposed marker lookup,
+publication serialization or graph-wide CAS is proven by that existing seam.
+
+Concrete corrections: distinguished research/draft/review Bases; called the
+recommended external publisher a hybrid rather than Dalph-owned research B;
+clarified task-scoped claim retention through Restart; made the first-created-child
+crash continuation explicit; supplied a chain chronology and separate host Exit
+composition. Added common exact-resource/claim premises and cleanup applicability
+for every scenario. No canonical glossary, ADR, protected composition, model or
+application file changes. Markdown is not loaded as a runtime workflow algebra,
+so these edits cannot change execution, requests, admission, retry or cleanup.
+
+### Scenario evidence and limitations
+
+Each row is a source review result, never a passing proposed acceptance test.
+T1–T12 are future seams in the proposal. Authority, attempt and claim premises
+apply per subject even when no mutation occurs. Exit overlays every row through
+S12; publication never grants a resource-cleanup disposition.
+
+| Scenario / future seam | Current evidence and concrete reconciliation | Remaining limitation / decision |
+| --- | --- | --- |
+| S1 / T1: normal publication, diamond | [Intermediate edits](../docs/scenarios/intermediate-tracker-edits.md) allow early admission from complete partial states; [Pause](../docs/scenarios/pause-whole-run.md) and [Pause progress](../docs/scenarios/observe-pause-progress.md) require safe boundaries, not receipt. I precedes C/D, each blocks P; grouping is separately authored. Each child acquires its own ordinary claim/plan; parent disposition follows S8. | Whole-Run hold affects only this Run. External exclusion, publisher history and authoring API remain D1–D5; no composed T1 exists. |
+| S2 / T2: reject and revise | [Operational scenario fields](../docs/OPERATIONAL-SCENARIOS.md#required-scenario-fields) require missing scopes/stories to be resolved. Rejection leaves exact A, claim and resources unchanged. New digest/revision cannot reuse approval. No tracker/Git cleanup or mutation crash applies; journal reply cuts do. | Review authentication and immutable receipt storage are D1/D2; no rejection transport exists here. |
+| S3 / T3: duplicate split/redelivery | [Intent, observation and retry](../docs/architecture/journal-and-reconstruction.md#intent-observation-and-retry) requires exact history lookup after ambiguous append. Equal bytes reuse recorded result; conflicting bytes fail. Different request with similar contents goes through S7, not automatic deduplication. | Existing live delivery-action exclusion proves no durable split/issue deduplication. Request namespace, retention and decision lookup remain D2. |
+| S4 / T4: crash after first create | Intent precedes uncertain effects under [D23](../docs/DELIVERY-INVARIANTS.md#ambiguity-and-evidence). Verified I is reused before missing C/D suffix. Applied-but-lost response, response-before-observation and intent-before-call all reconcile exact operation; zero search matches prove no non-application. | Provider marker lookup and no-late-application proof remain D4. Current exact claim lookup is precedent only; blocked create may remain unresolved indefinitely. |
+| S5 / T5: incomplete edges | [Normalized observations](../docs/architecture/tracker-graph-and-claims.md#normalized-observations) separate complete blocker/grouping coverage from acknowledgements. D→I must be read by exact endpoints; keep verified prefix and foreign records. No rollback deletion or claim release. | Relation-specific authoring/readback and cross-author exclusion remain D3–D5. A partial graph can be visible despite this Run's hold. |
+| S6 / T6: completion/Unpause response loss | [Unpause chronology](../docs/scenarios/pause-whole-run.md#alice-unpauses-a-passively-paused-run) requires fresh authorities before admission. Final observation lookup does not re-create children. Newer Pause cannot be overwritten; a child already admitted retains its exact ordinary attempt. | External publication history is separate from Run controls; no proposed shared atomic completion/Unpause transaction is proven. D2/D3 remain open. |
+| S7 / T7: concurrent overlap | [Task claims](../docs/architecture/tracker-graph-and-claims.md#github-claim-record) authorize exact task ownership, not graph writes or shared-interface exclusion. Same-parent duplicates and different-parent surface overlap both serialize or stop; revised approval must adopt exact observed TaskIds. | A process-local mutex does not fence another publisher/Run. Proof of exclusion and how competing reviews attach/adopt remain D1/D5/D7. |
+| S8 / T8: executing parent | [Changed instructions](../docs/scenarios/reconcile-changed-task-facts.md#alice-changes-as-instructions-while-its-planned-attempt-is-running) preserves F1/Base/worktree; [clean Restart](../docs/scenarios/clean-restart-changed-attempt.md) requires unbroken Safe evidence, no unsettled Resume, fresh eligibility/claim/Git and atomic replacement. Added task-scoped K retention: no publisher release or reacquisition on replacement. | Restart is accepted chronology, not proof this new composition is implemented. Blockers must prevent Resume after Unpause; terminal/integration races require fresh review, D6. |
+| S9 / T9: stale proposal | [GitHub consistency](../docs/architecture/tracker-graph-and-claims.md#github-consistency-and-bounds) supplies no edge revision or transaction-wide snapshot. Read each fact family before effects; stop suffix, retain prefix, reconcile earlier ambiguity and adopt exact partial tasks in Q2. | Undetectable edits between reads/effects remain an explicit consistency limit. Cooperative exclusion is a precondition, D3/D5; a fingerprint is no CAS. |
+| S10 / T10: incompatible shared interface | Immutable plans cannot re-pin AC/BC. [Intermediate edits](../docs/scenarios/intermediate-tracker-edits.md) leave already executing C running despite a new blocker; exact safe suspension and changed choices must precede replacement under [Restart](../docs/scenarios/clean-restart-changed-attempt.md). I2 cannot depend on blocked C in a cycle. | Version compatibility/migration acceptance and owner review remain D7. Separate paths do not prove disjoint interfaces; no automatic migration is qualified. |
+| S11 / T11: chain | [Rooted graph](../docs/architecture/tracker-graph-and-claims.md#run-root-task-and-run-task-graph) distinguishes grouping and transitive prerequisites. Y→X and P→Y release only from fresh tracker success; no parent back-edge, inherited claim or copied attempt. S4–S6 preserve every partial prefix. | Added chronological seam, not executed graph simulation. Provider exclusion and parent Restart composition still require D3–D6 acceptance. |
+| S12 / T12: Exit during publication | [Application Exit](../docs/scenarios/graceful-application-exit.md) closes host admission and bounds drain to five seconds, starts no fresh reconciliation, and persists no Exit result in Run history. Applied Pause survives ordinary startup. External publisher is separately stopped/held; host Exit proves no cancellation of its create. | D9 explicitly leaves external lifecycle/fencing unresolved. Successful Exit proves host recoverability only; no outside request or stopped publisher proof follows. |
+
+[Exact cleanup](../docs/scenarios/disposition-cleanup.md) requires a separate
+resource disposition, matching current authority and stopped writers; preserved
+replacement resources do not become disposable merely because a split is approved.
+[Cleanup during Exit](../docs/scenarios/cleanup-dispositions-during-application-exit.md)
+constrains already-admitted cleanup intent/outcome handling, not new publication
+rollback. Its historical family inventory is not used as a current implementation
+count. No S1–S12 publication path deletes tracker children or Git resources.
+
+### Required design exercises
+
+These are paper traces against the proposal, not runtime acceptance evidence.
+
+| Exercise | Ordered trace and stopping observation | Scenario mapping / unproved boundary |
+| --- | --- | --- |
+| Chain | Pause A; create X/Y; observe Y→X and P→Y plus grouping/content; Unpause and exact parent choice; observe X success, then Y success, then P eligibility. | S11/T11 and S8/T8; no hold bypass or transitive completion inference. |
+| Diamond | Pause A; create I/C/D; observe C→I, D→I, P→C/P→D; only I ready; I success releases C/D; one branch success still leaves P blocked. | S1/T1; ordinary capacity can serialize branches, concurrency is not promised. |
+| Shared-interface conflict | Q/R share S despite different file paths; first admission holds surface, second stops; incompatible change after AC planned pauses C/D and creates I2 only under revised exact review. | S7/T7 and S10/T10; unresolved cross-process fencing means neither may publish. |
+| Duplicate split | Same request/bytes returns durable receipt/approval; different bytes conflict; new request with identical split is independently reviewed and must adopt existing TaskIds. | S3/T3 and S7/T7; no content-similarity auto-merge. |
+| Crash after first task | I exists, observation may be lost; restart validates hold and exact marker/content, records I once, then starts only verified missing suffix. No conclusive lookup means stop. | S4/T4 and S5/T5; delayed indexing or late application forbids blind retry. |
+| Stale proposal | F changes, or edge/claim changes without F changing; focused revalidation stops suffix, preserves I, resolves old intent and reviews Q2 adopting I. | S9/T9; no invented graph CAS. |
+| Already executing parent | New blockers alone do not suspend A; confirmed Pause gives exact Safe report; edit P, Unpause, journal F2, exact Restart, wait for child success, atomically replace with fresh plan retaining K and WIP. | S8/T8; terminal/integration cutoff or unknown writers stops this trace for review. |
+
+### Maintainer decisions and validation limits
+
+The proposal's D1–D9 table owns unresolved consequential choices: authority,
+identity/history scope, exposure, create ambiguity, cross-author exclusion,
+parent disposition, interface ownership, required acceptance evidence and external
+publisher lifecycle. The recommended hybrid is a candidate; no choice is accepted
+by this review. In particular, neither source agreement nor future test labels
+establish an implemented or accepted decomposition specification.
+
+Selected validation is local Markdown targets/headings, whitespace and structure.
+The repository dprint configuration contains only the OXC plugin and excludes
+Markdown; its code formatter cannot qualify these documents. Use `git diff --check` and inspect headings, tables and fenced blocks for Markdown formatting,
+plus `mise exec -- pnpm check:docs` for links. No broader gate can prove the new
+proposal semantics from prose; application/model tests, coverage, corpus
+regeneration and live-provider fixtures are deliberately unrun.
