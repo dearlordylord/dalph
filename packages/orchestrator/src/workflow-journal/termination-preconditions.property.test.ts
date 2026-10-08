@@ -99,6 +99,17 @@ it("matches independent causal maximality for generated tracker histories", () =
   )
 })
 
+it("preserves explicit supersession through an unobserved graph-read predecessor", () => {
+  const records = recordsFor([
+    { completed: false, predecessors: [] },
+    { completed: false, predecessors: [0] },
+    { completed: true, predecessors: [1] }
+  ])
+    .filter(({ position }) => position !== 5)
+    .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+  expect(terminationPreconditionIssues(records, runId, evidence)).toEqual([])
+})
+
 it("rejects a future predecessor before deriving graph maximality", () => {
   expect(
     terminationPreconditionIssues(
