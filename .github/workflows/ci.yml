@@ -385,7 +385,7 @@ jobs:
 
       - name: Download hosted quality stage evidence
         if: needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           pattern: hosted-quality-stage-${{ github.run_id }}-${{ github.run_attempt }}-*
@@ -537,7 +537,7 @@ jobs:
 
       - name: Download formal model shard evidence
         if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: formal-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-*
           path: formal-shard-reports
