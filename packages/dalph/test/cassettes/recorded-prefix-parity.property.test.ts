@@ -288,6 +288,53 @@ it("keeps empty sources and unvisited schema-invalid suffixes untouched and shor
   expect(verifyRecordedCassetteRoundTrip(records, shorter)).toEqual(coldOracle(records, shorter))
 })
 
+it("retains cold schema diagnostics at every visited invalid entry and envelope", () => {
+  fc.assert(
+    fc.property(fc.integer({ min: 1, max: 8 }), (selected) => {
+      const records = capacityRecords([2, 3, 4, 5, 6, 7, 8, 1])
+      const cassette = Effect.runSync(projectRecordedCassette(records))
+      const entry = cassette.entries[selected]
+      if (entry === undefined) throw new Error("Expected selected recorded occurrence")
+      Object.defineProperty(entry, "capacity", { value: -1 })
+      expect(verifyRecordedCassetteRoundTrip(records.slice(0, selected), cassette)).toEqual(
+        coldOracle(records.slice(0, selected), cassette)
+      )
+      const actual = outcome(() => verifyRecordedCassetteRoundTrip(records, cassette))
+      expect(actual).toHaveProperty("defect")
+      expect(actual).toEqual(outcome(() => coldOracle(records, cassette)))
+    }),
+    { numRuns: 40 }
+  )
+  const records = capacityRecords([2])
+  const cassette = Effect.runSync(projectRecordedCassette(records))
+  Object.defineProperty(cassette, "schemaVersion", { value: 999 })
+  const actual = outcome(() => verifyRecordedCassetteRoundTrip(records, cassette))
+  expect(actual).toHaveProperty("defect")
+  expect(actual).toEqual(outcome(() => coldOracle(records, cassette)))
+})
+
+it("avoids repeated reads of already validated entry fields without losing cold checkpoints", () => {
+  const records = capacityRecords(Array.from({ length: 31 }, (_entry, index) => (index % 8) + 1))
+  const cassette = Effect.runSync(projectRecordedCassette(records))
+  let capacityReads = 0
+  for (const entry of cassette.entries) {
+    if (entry._tag !== "TaskWorkCapacityChanged") continue
+    const capacity = entry.capacity
+    Object.defineProperty(entry, "capacity", {
+      get: () => {
+        capacityReads += 1
+        return capacity
+      }
+    })
+  }
+  const actual = verifyRecordedCassetteRoundTrip(records, cassette)
+  const incrementalReads = capacityReads
+  capacityReads = 0
+  expect(actual).toEqual(coldOracle(records, cassette))
+  expect(incrementalReads).toBeGreaterThanOrEqual(31)
+  expect(incrementalReads).toBeLessThan(capacityReads / 2)
+})
+
 it.each([1, 8, 32])("prepares %i valid history occurrences once without repeated whole-prefix exports", (size) => {
   const records = capacityRecords(Array.from({ length: size - 1 }, (_entry, index) => (index % 8) + 1))
   const cassette = Effect.runSync(projectRecordedCassette(records))

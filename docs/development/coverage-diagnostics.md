@@ -1,5 +1,32 @@
 # Identify an unfinished coverage owner
 
+## Recorded round-trip validation owner
+
+The complete-delivery tests compare every journal checkpoint through
+`verifyRecordedCassetteRoundTrip`. Its successful path validates the cassette
+envelope and newly visited entries at each checkpoint, rather than revalidating
+all earlier entries. A schema failure still parses the complete visited prefix
+to retain the cold parser's exact entry index and diagnostic. Entries beyond
+the current checkpoint remain unread. Exhausted shorter cassettes still produce
+a comparison at every remaining source checkpoint.
+
+This changes verification cost only: the helper compares recorded history and
+does not execute Dalph workflow operations. Source history and recorded history
+still receive independent causal validation, and all four checkpoint comparisons
+remain. `recorded-prefix-parity.property.test.ts` retains the independent cold
+oracle, generated source/recording perturbations, invalid suffix and envelope
+checks, exact nested schema diagnostics, causal failure cursor, shorter repeated
+prefixes, and a field-read regression that fails with whole-prefix validation.
+Crashes and retries do not apply to this synchronous comparison helper; process
+custody remains the surrounding verification supervisor's responsibility.
+
+The retained #479 worker profile on `bcd0f7b4d0a8ad49413325f374f9f5e0f96a6bd3`
+measured 14.22 seconds in this helper, including 10.77 seconds in Schema
+validation. That demonstrates repeated validation cost; it does not establish
+the exact exception identity of the earlier hosted failures. Required hosted
+coverage must complete on the repaired exact source with stopped custody before
+#479 can be accepted.
+
 The coverage runner retains test lifecycle observations in its existing child
 logs. `coverage:body` selects the compact reporter alongside Vitest's dot
 reporter; this adds no Dalph workflow behavior, changes no test assertion or
