@@ -193,3 +193,30 @@ rules apply. Acceptance: native Node integration fills the pipe with small
 writes, proves pending bytes with needDrain false, then requires finalization
 and exit without consumption. Existing draining and closed-pipe checks preserve
 complete records and typed failures. This refines already accepted G2/G3.
+
+## G2/G3 boundary: the listening host is publishing its ready record
+
+Starting facts: configuration and Run establishment completed; the host signal
+adapter and HTTP listener are acquired. HostReady output, or the final lifecycle
+diagnostic on stderr, is admitted but its receiver stops reading.
+Trigger: the Operator sends SIGINT/SIGTERM and the same application shell reports
+its lifecycle result. The existing HTTP command cutoff and drain still apply.
+Boundary calls: the host command's complete presentation waits under the same
+500 ms output allowance, capped by the retained first-request deadline. A pending
+HostReady does not prevent observing that lifecycle result. Final diagnostic
+output does not create a new transport deadline after that result.
+Visible result: host/listener finalizers finish before process completion with
+partial output permitted. Conclusive output failures before expiry retain their
+existing typed failure/status. Normal draining output retains its existing records
+and command status. Forbidden: waiting another five seconds per output record,
+changing admitted HTTP operation ownership, or treating missing output as delivery.
+Crash/retry: no output retry or durable receipt; Run and provider custody retain
+their existing restart authorities. Acceptance: composed CLI/HTTP/signal/shell
+probe and a mapped host command regression for blocked HostReady and blocked
+lifecycle diagnostics, with finalizer/listener closure and draining controls.
+The mapped `running-host-cli-exit.test.ts` cases `host Exit preserves the shared
+allowance with stdout output`, `stderr output`, `draining output` and `failed
+output` prove the two stalls, full record delivery, typed failure and exact
+listener/finalizer closure. The native CLI/HTTP/signal/shell probe additionally
+requires process/group absence without forced kill. This is another
+admitted-output refinement of the accepted G2/G3 policy.

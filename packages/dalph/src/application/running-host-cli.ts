@@ -28,6 +28,7 @@ import { makeRunningHostWatchStage } from "./running-host-watch-stage.js"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { serveRunningHost } from "./running-host-http.js"
 import { runRunningHostMcp } from "./running-host-mcp.js"
+import { withCliExitOutputGrace } from "./cli-exit-output.js"
 import { DalphCommandExit, requestFailureExitStatus, transportFailureExitStatus } from "./command-exit.js"
 
 import {
@@ -77,11 +78,15 @@ export const makeRunningHostCommands = <E, R>(
                 ["SIGINT", "SIGTERM"]
               )
               const listening = yield* serveRunningHost(address, observation)
-              yield* writeLine(JSON.stringify({ _tag: "HostReady", address, descriptor: listening.descriptor }))
-              const result = yield* signalsInstalled.awaitResult
-              yield* writeLine(JSON.stringify({ applicationExit: result }), "stderr")
-              if (result._tag !== "Succeeded")
-                return yield* new DalphCommandExit({ status: transportFailureExitStatus })
+              yield* withCliExitOutputGrace(signalsInstalled, (exit) =>
+                Effect.gen(function* () {
+                  yield* writeLine(JSON.stringify({ _tag: "HostReady", address, descriptor: listening.descriptor }))
+                  const result = yield* exit.awaitResult
+                  yield* writeLine(JSON.stringify({ applicationExit: result }), "stderr")
+                  if (result._tag !== "Succeeded")
+                    return yield* new DalphCommandExit({ status: transportFailureExitStatus })
+                })
+              )
             })
           ).pipe(Effect.provide(outputLayer))
         )
