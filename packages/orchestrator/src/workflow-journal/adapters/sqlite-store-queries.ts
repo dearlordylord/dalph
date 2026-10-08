@@ -191,7 +191,7 @@ export const makeSqliteJournalQueries = (
     runId: RunId,
     operation: StoreOperation
   ) {
-    const input = yield* (
+    const statement =
       partition === "Hot"
         ? sql`
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
@@ -201,7 +201,12 @@ export const makeSqliteJournalQueries = (
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records_cold WHERE run_id = ${runId} ORDER BY position ASC
         `
-    ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))
+    // A first read after reopening must not pin its obsolete decoded history
+    // through the native driver's completed prepare fiber and parent span.
+    const input = yield* statement.unprepared.pipe(
+      Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
+      Effect.catchDefect((cause) => Effect.fail(classifyJournalStorageFailure(operation, cause)))
+    )
     const rows = yield* decodeBoundary(PersistedJournalRows, input, operation).pipe(
       Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
     )
@@ -270,7 +275,10 @@ export const makeSqliteJournalQueries = (
       partition === "Hot"
         ? sql`SELECT run_id FROM journal_records WHERE run_id = ${runId} LIMIT 1`
         : sql`SELECT run_id FROM journal_records_cold WHERE run_id = ${runId} LIMIT 1`
-    ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))
+    ).unprepared.pipe(
+      Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
+      Effect.catchDefect((cause) => Effect.fail(classifyJournalStorageFailure(operation, cause)))
+    )
     const rows = yield* decodeBoundary(Schema.Array(PersistedRunIdentity), input, operation).pipe(
       Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
     )

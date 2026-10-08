@@ -59,6 +59,17 @@ retirement-overlap and fresh reopened corruption tests.
 The append case also proves decoded-event identity reuse and no extra partition
 payload query after the acknowledged write.
 
+After reopening, the first partition SELECT must also release its obsolete
+read array and record wrappers once a later acknowledged append replaces the
+read view and callers drop their references. The live checkpoint still retains
+the exact decoded events needed by the current history. The native driver's
+prepare cache must not retain the completed read's parent span and old array.
+`sqlite-scan-retention.test.ts`: `releases the first reopened read array while retaining the current SQLite checkpoint`
+seeds a persisted Run in a separate closed store, opens a fresh connection,
+reads, appends, rereads, and checks both obsolete wrappers with WeakRef/GC while
+the store remains open. This changes only process-local retention; every row,
+membership, codec and history check, and the crash/reopen rules above remain.
+
 ## 3. Dalph writes and reopens gzip payloads
 
 Starting facts: a current full semantic event passes Effect Schema. Trigger:

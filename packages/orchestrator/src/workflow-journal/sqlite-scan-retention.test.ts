@@ -10,7 +10,12 @@ it.each(["scanHot", "auditAll"])("releases completed %s history while its SQLite
   const code = `
     import { Effect } from 'effect';
     import { RunId } from '@dalph/contracts';
-    import { JournalStore, sqliteJournalTestLayer, JournalDatabaseLocator, FixtureTarget, InitialControlPolicy, TaskWorkCapacity } from ${JSON.stringify(moduleUrl.href)};
+    import { JournalStore } from ${JSON.stringify(new URL("workflow-journal/store.js", moduleUrl).href)};
+    import { sqliteJournalTestLayer } from ${JSON.stringify(new URL("workflow-journal/adapters/sqlite-store.js", moduleUrl).href)};
+    import { JournalDatabaseLocator } from ${JSON.stringify(new URL("workflow-journal/identity.js", moduleUrl).href)};
+    import { FixtureTarget } from ${JSON.stringify(new URL("authorities/task-tracker/fixture/target.js", moduleUrl).href)};
+    import { InitialControlPolicy } from ${JSON.stringify(new URL("control/policy.js", moduleUrl).href)};
+    import { TaskWorkCapacity } from ${JSON.stringify(new URL("coordination/admission/capacity.js", moduleUrl).href)};
     import { remotePublicationTargetForTest } from ${JSON.stringify(publicationUrl.href)};
     const scanWeakly = (store) => Effect.gen(function* () {
       const scan = yield* store[${JSON.stringify(operation)}]();
@@ -35,4 +40,62 @@ it.each(["scanHot", "auditAll"])("releases completed %s history while its SQLite
     timeout: 5000
   })
   expect(JSON.parse(result)).toEqual([false, false, false])
+})
+
+it("releases the first reopened read array while retaining the current SQLite checkpoint", () => {
+  const moduleUrl = new URL("../../dist/src/index.js", import.meta.url)
+  const publicationUrl = new URL("../../dist/test/support/direct-publication.js", import.meta.url)
+  const code = `
+    import { mkdtempSync, rmSync } from 'node:fs';
+    import { tmpdir } from 'node:os';
+    import { join } from 'node:path';
+    import { Effect } from 'effect';
+    import { RunId } from '@dalph/contracts';
+    import { JournalStore } from ${JSON.stringify(new URL("workflow-journal/store.js", moduleUrl).href)};
+    import { sqliteJournalTestLayer } from ${JSON.stringify(new URL("workflow-journal/adapters/sqlite-store.js", moduleUrl).href)};
+    import { JournalDatabaseLocator, JournalRecordKey } from ${JSON.stringify(new URL("workflow-journal/identity.js", moduleUrl).href)};
+    import { FixtureTarget } from ${JSON.stringify(new URL("authorities/task-tracker/fixture/target.js", moduleUrl).href)};
+    import { InitialControlPolicy } from ${JSON.stringify(new URL("control/policy.js", moduleUrl).href)};
+    import { TaskWorkCapacity } from ${JSON.stringify(new URL("coordination/admission/capacity.js", moduleUrl).href)};
+    import { OperationId } from ${JSON.stringify(new URL("workflow/identity.js", moduleUrl).href)};
+    import { WorkflowOperation } from ${JSON.stringify(new URL("workflow/registry/operation.js", moduleUrl).href)};
+    import { taskTrackerReadIntent } from ${JSON.stringify(new URL("workflow/registry/event.js", moduleUrl).href)};
+    import { remotePublicationTargetForTest } from ${JSON.stringify(publicationUrl.href)};
+    const readWeakly = (store, runId) => Effect.gen(function* () {
+      const records = yield* store.read(runId);
+      if (records.length !== 1) throw new Error('Expected one cold Run beginning');
+      return [new WeakRef(records), new WeakRef(records[0])];
+    });
+    const root = mkdtempSync(join(tmpdir(), 'dalph-cold-read-retention-'));
+    const filename = JournalDatabaseLocator.make(join(root, 'journal.sqlite'));
+    const runId = RunId.make('cold-read-retention');
+    const target = FixtureTarget.make('cold-read-retention-target');
+    await Effect.runPromise(Effect.gen(function* () {
+      const store = yield* JournalStore;
+      yield* store.beginRun(runId, target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }), remotePublicationTargetForTest);
+    }).pipe(Effect.provide(sqliteJournalTestLayer({ filename }))));
+    const retained = await Effect.runPromise(Effect.gen(function* () {
+      const store = yield* JournalStore;
+      const references = yield* readWeakly(store, runId);
+      yield* store.append(runId, JournalRecordKey.make('successor'), taskTrackerReadIntent(
+        WorkflowOperation.cases.ReadTrackerGraph.make({ cause: { _tag: 'WorkflowEstablishment' },
+          operationId: OperationId.make('successor'), predecessorOperationIds: [],
+          readShape: { _tag: 'CompleteTargetClosure', explicitlyCoveredTaskIds: [] }, target })));
+      const current = yield* store.read(runId);
+      if (current.length !== 2 || current[0].event._tag !== 'WorkflowRunBegan')
+        throw new Error('Current checkpoint lost its original event');
+      yield* Effect.promise(() => new Promise(resolve => setImmediate(resolve)));
+      global.gc();
+      return references.map(reference => reference.deref() !== undefined);
+    }).pipe(Effect.provide(sqliteJournalTestLayer({ filename }))));
+    rmSync(root, { recursive: true, force: true });
+    process.stdout.write(JSON.stringify(retained));
+  `
+  const result = execFileSync(process.execPath, ["--expose-gc", "--input-type=module", "--eval", code], {
+    cwd: fileURLToPath(new URL("../../", import.meta.url)),
+    encoding: "utf8",
+    timeout: 5000
+  })
+  expect(JSON.parse(result)).toEqual([false, false])
 })
