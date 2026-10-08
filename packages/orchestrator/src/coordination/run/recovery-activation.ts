@@ -1696,6 +1696,7 @@ export const deriveJournalResponsibilityFacts = (
         changedSpecification.value.fingerprint
       ) !== undefined
     const acquiredClaim = authorizedClaimForAttempt(records, responsibility.plannedAttempt)
+    const claimFreshnessBaseline = freshnessBaselineForAttempt(responsibility.plannedAttempt)
     const currentClaimRecord = lastMatchingRecord(
       journalRecordsForTaskKind(source, responsibility.plannedAttempt.taskId, "TaskTrackerFactsObserved"),
       ({ event, position }) =>
@@ -1705,7 +1706,7 @@ export const deriveJournalResponsibilityFacts = (
         event.observation.coverage.taskId === responsibility.plannedAttempt.taskId &&
         (immutableRunTarget === undefined ||
           taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
-        positionIsAfter(position, freshnessBaselineForAttempt(responsibility.plannedAttempt))
+        positionIsAfter(position, claimFreshnessBaseline)
     )
     const currentClaimFacts = currentClaimRecord?.event
     const committedReacquisitionIntent = lastMatchingRecord(
