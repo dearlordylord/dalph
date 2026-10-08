@@ -196,3 +196,20 @@ void test("the hosted suffix job budget contains preparation, child stop, and ev
     )
   }
 })
+
+void test("manual coverage diagnostics cross UID isolation and retain successful child logs", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
+  assert.match(workflow, /coverage-diagnostics:\n\s+description:.*\n\s+type: boolean\n\s+default: false/u)
+  assert.ok(workflow.includes("DALPH_CI_DISPATCH_BASE_SHA: ${{ inputs['comparison-base'] || '' }}"))
+  const suffix = workflow.split("  quality-suffix:\n")[1]?.split(/^  [a-z][a-z-]*:\n/mu)[0]
+  assert.ok(suffix)
+  assert.ok(
+    suffix.includes(
+      "github.event_name == 'workflow_dispatch' && inputs['coverage-diagnostics'] && matrix.stageId == 'coverage'"
+    )
+  )
+  assert.ok(suffix.includes('"DALPH_COVERAGE_RESOURCE_OBSERVATIONS=$DALPH_COVERAGE_RESOURCE_OBSERVATIONS"'))
+  const logs = suffix.split("      - name: Upload failed hosted quality child logs\n")[1]?.split("      # This step")[0]
+  assert.ok(logs.includes("inputs['coverage-diagnostics'] && matrix.stageId == 'coverage'"))
+  assert.ok(logs.includes("include-hidden-files: true"))
+})

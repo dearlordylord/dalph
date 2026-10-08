@@ -257,7 +257,8 @@ describe("hosted formal-model contract", () => {
       "DALPH_HOSTED_QUALITY_NODE_VERSION",
       "DALPH_HOSTED_QUALITY_STAGE_ID",
       "DALPH_HOSTED_QUALITY_CELL_STARTED_AT",
-      "DALPH_COVERAGE_BASE_SHA"
+      "DALPH_COVERAGE_BASE_SHA",
+      "DALPH_COVERAGE_RESOURCE_OBSERVATIONS"
     ])
     expect(isolatedEnvironment).toContain('"GITHUB_RUN_ID=$GITHUB_RUN_ID"')
     expect(isolatedEnvironment).toContain('"GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"')

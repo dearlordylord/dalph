@@ -2063,7 +2063,17 @@ export const verifyRecordedCassetteRoundTrip = (
     sourceHistory = advanceComparisonHistoryOrColdFold(sourceHistory, sourceRecord, () =>
       reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
     )
-    const prefix = validateCompleteRecordedCassette({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
+    const prefix = { ...cassette, entries: cassette.entries.slice(0, checkpoint) }
+    // Earlier occurrences were validated at their first visited checkpoint.
+    // Keep the envelope checked, including when a shorter cassette is exhausted,
+    // but do not rescan its already validated entries on the successful path.
+    // No unvisited suffix is read. A schema failure uses the original complete
+    // prefix parser so its entry index, path and diagnostic remain unchanged.
+    try {
+      validateCompleteRecordedCassette({ ...prefix, entries: prefix.entries.slice(actualRecords.length) })
+    } catch {
+      validateCompleteRecordedCassette(prefix)
+    }
     const entry = prefix.entries[actualRecords.length]
     let selectedActualRecord: JournalRecord | undefined
     if (entry !== undefined) {
