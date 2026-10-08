@@ -178,7 +178,7 @@ export interface ProductionHostObservation {
   readonly runTermination: JournaledRunTerminationSource
   readonly selection: ProductionRunSelection
   /** Read-only projection of an acknowledged cursor; it cannot append or poll an outside authority. */
-  readonly traceReader: Pick<TraceReaderService, "readAt">
+  readonly traceReader: Pick<TraceReaderService, "readAt" | "snapshotAdmission">
   /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
   readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
   /** Exact Run control, serialized by the established Journal and coordinator owner. */

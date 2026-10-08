@@ -21,7 +21,7 @@ import type { JournalRecord, JournalStoreError } from "../workflow-journal/store
 import { OperationId } from "../workflow/identity.js"
 import { WorkflowRunBeganEvent, type WorkflowJournalEvent } from "../workflow/registry/event.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
-import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
+import { workflowOperationId, WorkflowOperation } from "../workflow/registry/operation.js"
 import {
   projectWorkflowOccurrences,
   WorkflowOccurrence,
@@ -207,11 +207,15 @@ export const TraceProcessLocalResourceSerialization = Schema.Struct({
 })
 export type TraceProcessLocalResourceSerialization = typeof TraceProcessLocalResourceSerialization.Type
 
-/** Relationships are grouped by their distinct meaning for presentation consumers. */
-export const TraceRelationships = Schema.Struct({
+const TraceNonCausalRelationships = Schema.Struct({
   outsideAuthorityAcknowledgements: Schema.Array(TraceOutsideAuthorityAcknowledgement),
   processLocalResourceSerializations: Schema.Array(TraceProcessLocalResourceSerialization),
-  taskGraphEdges: Schema.Array(TraceTaskGraphEdge),
+  taskGraphEdges: Schema.Array(TraceTaskGraphEdge)
+})
+
+/** Relationships are grouped by their distinct meaning for presentation consumers. */
+export const TraceRelationships = Schema.Struct({
+  ...TraceNonCausalRelationships.fields,
   workflowCausalEdges: Schema.Array(TraceWorkflowCausalEdge)
 })
 export type TraceRelationships = typeof TraceRelationships.Type
@@ -827,7 +831,7 @@ const traceAcknowledgementIssue = (
 const traceRelationshipIssue = (view: {
   readonly cursor: TraceCursor
   readonly items: ReadonlyArray<TraceHistoryItem>
-  readonly relationships: TraceRelationships
+  readonly relationships: typeof TraceNonCausalRelationships.Type
 }): string | undefined => {
   const invalidAcknowledgement = view.relationships.outsideAuthorityAcknowledgements.find(
     (acknowledgement) => traceAcknowledgementIssue(acknowledgement, view.cursor, view.items) !== undefined
@@ -849,7 +853,7 @@ const traceAtCursorInvariant = (view: {
   readonly derivedTaskOrder: TraceDerivedTaskOrder
   readonly graph: TraceTaskGraph | null
   readonly items: ReadonlyArray<TraceHistoryItem>
-  readonly relationships: TraceRelationships
+  readonly relationships: typeof TraceNonCausalRelationships.Type
   readonly facets: TraceHistoricalFacets
 }): string | undefined =>
   traceItemsIssue(view.items, view.cursor.runId, view.cursor.position) ??
@@ -860,17 +864,33 @@ const traceAtCursorInvariant = (view: {
   traceRelationshipIssue(view) ??
   traceHistoricalFacetsIssue(view, historicalFacetFactories)
 
-/** A fixed historical cursor view. Current status is intentionally not stored here. */
-export const TraceAtCursor = Schema.Struct({
+const TraceAtCursorWithoutCausalEdges = Schema.Struct({
   cursor: TraceCursor,
   derivedTaskOrder: TraceDerivedTaskOrder,
   graph: Schema.NullOr(TraceTaskGraph),
   items: Schema.Array(TraceHistoryItem),
-  relationships: TraceRelationships,
+  relationships: TraceNonCausalRelationships,
   facets: TraceHistoricalFacets,
   version: Schema.Literal(traceReaderSchemaVersion)
 }).check(Schema.makeFilter(traceAtCursorInvariant))
+
+/** A fixed historical cursor view. Current status is intentionally not stored here. */
+export const TraceAtCursor = Schema.Struct({
+  ...TraceAtCursorWithoutCausalEdges.fields,
+  relationships: TraceRelationships
+}).check(Schema.makeFilter(traceAtCursorInvariant))
 export type TraceAtCursor = typeof TraceAtCursor.Type
+
+/** Maximum JSON bytes available to one snapshot; admission never persists this capacity. */
+export const TraceSnapshotByteBudget = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)
+).pipe(Schema.brand("TraceSnapshotByteBudget"))
+export type TraceSnapshotByteBudget = typeof TraceSnapshotByteBudget.Type
+
+/** MayFit requires ordinary exact encoding; ExceedsByteBudget is a proven lower bound, never a partial trace. */
+export const TraceSnapshotAdmission = Schema.TaggedUnion({ MayFit: {}, ExceedsByteBudget: {} })
+export type TraceSnapshotAdmission = typeof TraceSnapshotAdmission.Type
 
 /** Prefix validation reports concrete storage facts instead of silently dropping history. */
 export const TracePrefixIssue = Schema.TaggedUnion({
@@ -1019,6 +1039,10 @@ export type PreparedTrace = PreparedTraceSnapshot
 
 /** Read-only trace service; it exposes projection reads only. */
 export interface TraceReaderService {
+  readonly snapshotAdmission: (
+    cursor: TraceCursor,
+    byteBudget: TraceSnapshotByteBudget
+  ) => Effect.Effect<TraceSnapshotAdmission, TraceReaderError | JournalStoreError>
   readonly causalPredecessor: (
     cursor: TraceCursor,
     successorOperationId: OperationId,
@@ -2243,19 +2267,27 @@ const processLocalResourceSerializationAt = (
 
 const singletonOrEmpty = <A>(value: A | undefined): ReadonlyArray<A> => (value === undefined ? [] : [value])
 
-const relationshipsAt = (
+const nonCausalRelationshipsAt = (
   records: ReadonlyArray<JournalRecord>,
   items: ReadonlyArray<TraceHistoryItem>,
-  graph: TraceTaskGraph | null,
-  operationIndex: ReadonlyMap<OperationId, IndexedOperation>
-): TraceRelationships => ({
+  graph: TraceTaskGraph | null
+): typeof TraceNonCausalRelationships.Type => ({
   outsideAuthorityAcknowledgements: records.flatMap((record) =>
     singletonOrEmpty(outsideAuthorityAcknowledgementAt(record, items))
   ),
   processLocalResourceSerializations: records.flatMap((record) =>
     singletonOrEmpty(processLocalResourceSerializationAt(record, items))
   ),
-  taskGraphEdges: graph?.edges ?? [],
+  taskGraphEdges: graph?.edges ?? []
+})
+
+const relationshipsAt = (
+  records: ReadonlyArray<JournalRecord>,
+  items: ReadonlyArray<TraceHistoryItem>,
+  graph: TraceTaskGraph | null,
+  operationIndex: ReadonlyMap<OperationId, IndexedOperation>
+): TraceRelationships => ({
+  ...nonCausalRelationshipsAt(records, items, graph),
   workflowCausalEdges: workflowCausalEdgesOf(operationIndex)
 })
 
@@ -2314,10 +2346,7 @@ type CompleteTraceIndex = {
   readonly target: TrackerTarget
 }
 
-const completeTraceIndexFromRecords = (
-  runId: RunId,
-  records: ReadonlyArray<JournalRecord>
-): Effect.Effect<CompleteTraceIndex, TraceReaderError> =>
+const traceComponentsFromRecords = (runId: RunId, records: ReadonlyArray<JournalRecord>) =>
   Effect.gen(function* () {
     yield* validateRecords(runId, records)
     const historyIssue = fullHistoryIssue(runId, records, canonicalQuerySourceFor)
@@ -2333,10 +2362,32 @@ const completeTraceIndexFromRecords = (
     const target = beginning.target
     const graphObservations = completeGraphObservationsFor(records, target)
     const graph = taskGraphAt(records, target)
-    const workflowCausalEdges = indexedWorkflowCausalEdgesOf(operationIndex)
-    const relationships = relationshipsAt(records, items, graph, operationIndex)
+    const relationships = nonCausalRelationshipsAt(records, items, graph)
     const committedThrough = Option.getOrThrow(Option.fromUndefinedOr(records[records.length - 1]?.position))
     const facets = prepareTraceHistoricalFacets(items, historicalFacetFactories)
+    return { committedThrough, facets, graph, graphObservations, items, operationIndex, relationships, target }
+  })
+
+const completeTraceIndexFromRecords = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): Effect.Effect<CompleteTraceIndex, TraceReaderError> =>
+  Effect.gen(function* () {
+    const {
+      committedThrough,
+      facets,
+      graph,
+      graphObservations,
+      items,
+      operationIndex,
+      relationships: nonCausal,
+      target
+    } = yield* traceComponentsFromRecords(runId, records)
+    const workflowCausalEdges = indexedWorkflowCausalEdgesOf(operationIndex)
+    const relationships: TraceRelationships = {
+      ...nonCausal,
+      workflowCausalEdges: workflowCausalEdgesOf(operationIndex)
+    }
     yield* Schema.decodeUnknownEffect(TraceAtCursor)({
       cursor: TraceCursor.make({ position: committedThrough, runId }),
       derivedTaskOrder: TraceDerivedTaskOrder.make({
@@ -2367,6 +2418,44 @@ const completeTraceIndexFromRecords = (
       workflowCausalEdges
     } satisfies CompleteTraceIndex
   })
+
+// Field names and JSON punctuation alone are a lower bound; actual identities and separators only add bytes.
+const minimumCausalEdgeJsonBytes = JSON.stringify({ predecessorOperationId: "", successorOperationId: "" }).length
+
+const snapshotAdmissionFromRecords = Effect.fn("TraceReader.snapshotAdmissionFromRecords")(function* (
+  cursor: TraceCursor,
+  records: ReadonlyArray<JournalRecord>,
+  byteBudget: TraceSnapshotByteBudget
+) {
+  const prefix = yield* cursorPrefixOf(cursor, records)
+  const components = yield* traceComponentsFromRecords(cursor.runId, prefix)
+  // The edge schema consists exactly of these two OperationIds. Validate every actual operation before using its
+  // predecessor count, even after enough references to exceed the budget have already been seen.
+  yield* Effect.forEach(
+    components.operationIndex.values(),
+    ({ operation }) => Schema.decodeUnknownEffect(WorkflowOperation)(operation),
+    { discard: true }
+  ).pipe(Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId: cursor.runId })))
+  yield* Schema.decodeUnknownEffect(TraceAtCursorWithoutCausalEdges)({
+    cursor,
+    derivedTaskOrder: TraceDerivedTaskOrder.make({
+      basis: "TaskIdCodeUnitAscending",
+      taskIds: sortedUniqueTaskIds(components.graph?.snapshot.tasks.map(({ id }) => id) ?? [])
+    }),
+    graph: components.graph,
+    items: components.items,
+    relationships: components.relationships,
+    facets: components.facets.at(cursor.position),
+    version: traceReaderSchemaVersion
+  }).pipe(Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId: cursor.runId })))
+  let remainingBytes: number = byteBudget
+  for (const { operation } of components.operationIndex.values()) {
+    const requiredBytes = operation.predecessorOperationIds.length * minimumCausalEdgeJsonBytes
+    if (requiredBytes > remainingBytes) return TraceSnapshotAdmission.cases.ExceedsByteBudget.make({})
+    remainingBytes -= requiredBytes
+  }
+  return TraceSnapshotAdmission.cases.MayFit.make({})
+})
 
 const binarySearchSplitDivisor = 2
 
@@ -2644,7 +2733,11 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
         return Effect.succeed(item)
       })
     )
-  return { causalPredecessor, prepare, read, readAt }
+  const snapshotAdmission = (cursor: TraceCursor, byteBudget: TraceSnapshotByteBudget) =>
+    readRecords(cursor.runId).pipe(
+      Effect.flatMap((records) => snapshotAdmissionFromRecords(cursor, records, byteBudget))
+    )
+  return { causalPredecessor, prepare, read, readAt, snapshotAdmission }
 }
 
 /** Public helper for callers that already hold the read-only service. */

@@ -68,7 +68,10 @@ export const makeRunningHostReadProbe = Effect.fn("RunningHostTest.readProbe")(f
     executeAttachedCommand: () => Effect.die("passive probe cannot execute commands"),
     runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
     applicationExitRequestBoundary: { requestExit: Effect.die("read cannot request Exit") },
-    traceReader: { readAt: () => Effect.die("read cannot request historical trace") }
+    traceReader: {
+      snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+      readAt: () => Effect.die("read cannot request historical trace")
+    }
   }
 
   return { runId: probeRunId, reads, closing, current, failure, observation }

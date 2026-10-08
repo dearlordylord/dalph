@@ -45,6 +45,7 @@ import {
   TraceCausalPredecessorNotProjected,
   TraceCursor,
   TraceCursorNotCommitted,
+  TraceSnapshotByteBudget,
   TraceJournalPrefixInvalid,
   TraceOutputError,
   TraceProjectionInvalid,
@@ -66,6 +67,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  Match,
   Option,
   Queue,
   Redacted,
@@ -447,7 +449,7 @@ export interface ProductionCliHostObservation {
   readonly current: CurrentSignal<DeliveryRuntimeObservationState, DeliveryStatusProjectionError>
   readonly runTermination: JournaledRunTerminationSource
   readonly selection: ProductionRunSelection
-  readonly traceReader: Pick<TraceReaderService, "readAt">
+  readonly traceReader: Pick<TraceReaderService, "readAt" | "snapshotAdmission">
 }
 
 const selectedRecord = (selection: ProductionRunSelection): ProductionCliRecord => ({
@@ -576,6 +578,21 @@ export const presentSelectedProductionRun = <EOutput, ESelected = never>(
             if (published !== undefined && sameTraceCursor(published, cursor)) return false
             const remaining = yield* Ref.get(remainingHistorySnapshotBytes)
             if (remaining > 0) {
+              const admission = yield* observation.traceReader.snapshotAdmission(
+                cursor,
+                TraceSnapshotByteBudget.make(Math.min(historySnapshotRecordByteLimit, remaining))
+              )
+              const exceedsBudget = Match.value(admission).pipe(
+                Match.tagsExhaustive({ ExceedsByteBudget: () => true, MayFit: () => false })
+              )
+              if (exceedsBudget) {
+                yield* writeLine(
+                  encodeProductionCliRecord({ _tag: "HistoryAdvanced", cursor, version: productionCliWireVersion })
+                )
+                yield* Ref.set(remainingHistorySnapshotBytes, 0)
+                yield* Ref.set(publishedHistoryCursor, cursor)
+                return true
+              }
               const snapshot = yield* observation.traceReader.readAt(cursor)
               const line = encodeProductionCliRecord(historicalRecord(snapshot))
               const bytes = new TextEncoder().encode(line).byteLength
