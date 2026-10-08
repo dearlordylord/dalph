@@ -18,7 +18,7 @@ import {
   type JournalStoreError
 } from "../store.js"
 import { classifyJournalStorageFailure, decodeBoundary, type StoreOperation } from "./sqlite-store-errors.js"
-import type { SqlitePartitionSnapshot } from "./sqlite-storage-checkpoint.js"
+import type { SqliteHotStorageCheckpoint, SqlitePartitionSnapshot } from "./sqlite-storage-checkpoint.js"
 
 const PersistedJournalRow = Schema.Struct({
   event_kind: JournalEventKind,
@@ -36,6 +36,46 @@ const lastRecordIndex = -1
 
 const historyCorruption = (partition: JournalPartition, runId: RunId, operation: StoreOperation, detail: string) =>
   new JournalHistoryCorruption({ detail, operation, partition, runId })
+
+/** Proves append positions and key uniqueness for already decoded immutable rows. */
+interface SqliteDecodedHistoryEvidence extends Pick<
+  SqliteHotStorageCheckpoint,
+  "decodedThrough" | "recordsByKey" | "terminalPosition"
+> {
+  readonly records: ReadonlyArray<JournalRecord>
+}
+
+export const makeSqliteDecodedHistoryEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  partition: JournalPartition,
+  runId: RunId,
+  operation: StoreOperation
+): Effect.Effect<SqliteDecodedHistoryEvidence, JournalHistoryCorruption> =>
+  Effect.gen(function* () {
+    const observedKeys = new Set<JournalRecordKey>()
+    for (const [index, record] of records.entries()) {
+      if (record.position !== index + 1) {
+        return yield* historyCorruption(
+          partition,
+          runId,
+          operation,
+          `expected contiguous position ${index + 1}, found ${record.position}`
+        )
+      }
+      if (observedKeys.has(record.key)) {
+        return yield* historyCorruption(partition, runId, operation, `duplicate record key ${record.key}`)
+      }
+      observedKeys.add(record.key)
+    }
+    return {
+      decodedThrough: records.at(lastRecordIndex)?.position,
+      records,
+      recordsByKey: HashMap.fromIterable(
+        records.map((record) => [record.key, { event: record.event, position: record.position }] as const)
+      ),
+      terminalPosition: records.find(({ event }) => event._tag === "WorkflowRunTerminated")?.position
+    }
+  })
 
 /** Node's SQLite TEXT reader stops at NUL; hex carries the complete stored UTF-8 key. */
 const recordKeyFromSqliteHex = (hex: string): JournalRecordKey | undefined => {
@@ -232,30 +272,7 @@ export const makeSqliteJournalQueries = (
       })
     )
     const records = decodedRows.map(({ record }) => record)
-    const observedKeys = new Set<JournalRecordKey>()
-    for (const [index, record] of records.entries()) {
-      if (record.position !== index + 1) {
-        return yield* historyCorruption(
-          partition,
-          runId,
-          operation,
-          `expected contiguous position ${index + 1}, found ${record.position}`
-        )
-      }
-      if (observedKeys.has(record.key)) {
-        return yield* historyCorruption(partition, runId, operation, `duplicate record key ${record.key}`)
-      }
-      observedKeys.add(record.key)
-    }
-    const recordsByKey = HashMap.fromIterable(
-      decodedRows.map(({ evidence, record }) => [record.key, evidence] as const)
-    )
-    return {
-      decodedThrough: records.at(lastRecordIndex)?.position,
-      records,
-      recordsByKey,
-      terminalPosition: records.find(({ event }) => event._tag === "WorkflowRunTerminated")?.position
-    }
+    return yield* makeSqliteDecodedHistoryEvidence(records, partition, runId, operation)
   })
 
   const loadPartitionRecords = Effect.fn("JournalStore.Sqlite.loadPartitionRecords")(function* (

@@ -70,6 +70,32 @@ reads, appends, rereads, and checks both obsolete wrappers with WeakRef/GC while
 the store remains open. This changes only process-local retention; every row,
 membership, codec and history check, and the crash/reopen rules above remain.
 
+### Selected startup history and the first append
+
+An exclusive SQLite connection has no checkpoint after reopening. Dalph already
+knows the exact Run R selected for startup; other Hot Runs still require the
+ordinary complete scan and validation. Startup requests that scan with R as its
+sole retention subject. The scan reads and decodes every Hot row, checks the
+selected history's contiguous positions and unique keys, and confirms that R
+has no Cold membership before retaining its current-connection checkpoint.
+Startup still validates every returned history before installing the live
+Journal. The checkpoint and Journal share R's immutable decoded events.
+
+The first acknowledged append to R uses that exact checkpoint instead of
+decoding R again. The selected scan array remains unchanged, and the next read
+contains both its original events and the committed append. No other Run is
+retained because of this request. An ordinary scan without a selected subject,
+or any audit, still invalidates the checkpoints; ambiguity and reopening retain
+their existing cold-read rules. Corrupt selected rows cannot seed a checkpoint,
+and conflicting Hot/Cold membership remains a typed failure. A missing selected
+Run is not invented. No provider, Git, or durable workflow effect is added.
+
+Acceptance: `sqlite-read-cache.test.ts` checks selected scan -> first append ->
+read, exact event identity, and no repeated partition-payload query. Existing
+scan/audit, corruption, ambiguous append and retirement tests own the unchanged
+failure boundaries. The retained production-sized startup/first-append
+diagnostic and native cancellation check own the memory/resource boundary.
+
 ## 3. Dalph writes and reopens gzip payloads
 
 Starting facts: a current full semantic event passes Effect Schema. Trigger:

@@ -27,7 +27,7 @@ import type { InitialControlPolicy } from "../../control/policy.js"
 import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
 import { classifyJournalMethodFailure, classifyJournalStorageFailure } from "./sqlite-store-errors.js"
 import { acquireExclusiveJournalWriter, migrateJournal } from "./sqlite-store-migration.js"
-import { makeSqliteJournalQueries } from "./sqlite-store-queries.js"
+import { makeSqliteDecodedHistoryEvidence, makeSqliteJournalQueries } from "./sqlite-store-queries.js"
 import { makeSqliteTerminalHistoryRetirement } from "./sqlite-store-retirement.js"
 import {
   appendSqliteStorageCheckpoint,
@@ -276,17 +276,44 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           )
         })
 
-        const scanHot = Effect.fn("JournalStore.Sqlite.scanHot")(function* () {
-          const result = yield* serialization.withPermit(
-            scanPartition("Hot", "JournalStore.scanHot").pipe(Effect.ensuring(invalidateAll))
+        const scanHot = Effect.fn("JournalStore.Sqlite.scanHot")(function* (retainRunId?: RunId) {
+          return yield* serialization.withPermit(
+            Effect.gen(function* () {
+              yield* invalidateAll
+              const result = yield* scanPartition("Hot", "JournalStore.scanHot")
+              const invalidRunIds = new Set(
+                result.issues.flatMap((issue) => (issue.runId === null ? [] : [issue.runId]))
+              )
+              const selected = result.runs.find(({ runId }) => runId === retainRunId && !invalidRunIds.has(runId))
+              if (selected !== undefined) {
+                if (yield* hasPartitionRows("Cold", selected.runId, "JournalStore.scanHot")) {
+                  return yield* new JournalPartitionContradiction({ runId: selected.runId })
+                }
+                const evidence = yield* makeSqliteDecodedHistoryEvidence(
+                  selected.records,
+                  "Hot",
+                  selected.runId,
+                  "JournalStore.scanHot"
+                )
+                yield* publish({
+                  decodedThrough: evidence.decodedThrough,
+                  partition: "Hot",
+                  recordsByKey: evidence.recordsByKey,
+                  runId: selected.runId,
+                  terminalPosition: evidence.terminalPosition
+                })
+              }
+              return {
+                issues: result.issues,
+                runs: result.runs
+                  .filter(({ runId }) => !invalidRunIds.has(runId))
+                  .map(({ records, runId }) => ({ records, runId }))
+              }
+            }).pipe(
+              Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidateAll : Effect.void)),
+              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.scanHot", cause))
+            )
           )
-          const invalidRunIds = new Set(result.issues.flatMap((issue) => (issue.runId === null ? [] : [issue.runId])))
-          return {
-            issues: result.issues,
-            runs: result.runs
-              .filter(({ runId }) => !invalidRunIds.has(runId))
-              .map(({ records, runId }) => ({ records, runId }))
-          }
         })
 
         const auditAll = Effect.fn("JournalStore.Sqlite.auditAll")(function* () {
