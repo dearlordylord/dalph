@@ -77,6 +77,37 @@ after its intent. Existing command reconciliation tests own exact report and
 unavailable projection outcomes; the native cancellation witness owns retained
 containment and subsequent settlement.
 
+### A tool limit precedes the lost Suspend response
+
+R retains its exact attempt, claim and worktree. The executor-private ledger
+contains `StopIntended` or `LimitReached` for an owned tool, while the Journal
+contains cancellation and an unresolved Suspend intent. Alice repeats cancel.
+The retained tool fence remains Unreadable for passive, Begin and Resume
+observations. Only reconciliation of that exact Suspend may enter the existing
+suspension protocol: re-read the private attempt, record any required suspension
+intent before containment effects, and obtain the ordinary current stopped-writer
+proof before persisting or returning safe suspension. The tool limit itself
+does not prove suspension. Foreign identity, unavailable provider reads or failed
+writer proof retain responsibility. A crash before the suspension observation
+reconciles the same private intent; no new turn or replacement is admitted.
+
+If Suspend projection remains Unreadable, the explicit cancellation invocation
+reports `cancellation.blocked` and stops its process-local activation owner.
+Timers cannot repeat that failed cancellation. Another explicit command may
+reconcile the retained intent. No claim release, cleanup or Run termination is
+permitted before exact stopped evidence; Git mutation is inapplicable.
+
+Acceptance: `Suspend reconciliation rechecks stopped custody behind a retained
+tool fence` in `codex-planned-attempt-executor.test.ts` covers both fence variants,
+failed proof, private-intent restart, passive and other command refusal, and
+subsequent exact proof without a new turn. `explicit cancellation stops after
+an unreadable Suspend projection` in `production-reactivation.test.ts` covers
+the typed blocker and absence of timer retries.
+`freshly rechecks exact stopped launch after cached lifecycle close` in
+`codex-app-server.test.ts` exercises the native process boundary: cached
+lifecycle success cannot substitute for a new exact launch/writer census;
+an unreadable census fails and a subsequent readable census is checked afresh.
+
 If the executor reports a possible writer, incomplete containment, reused
 identity, or contradictory evidence, Dalph leaves P, C, W, its task-work
 position, and all evidence retained. It emits `cancellation.blocked` with the

@@ -411,7 +411,10 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
       return runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
     }
     return runCancellationWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId)).pipe(
-      Effect.flatMap((decision) => requireProductionCancellationTermination(runId, decision))
+      Effect.flatMap((decision) => requireProductionCancellationTermination(runId, decision)),
+      Effect.catchTag("PlannedAttemptExecutorProjectionUnreadable", () =>
+        Effect.fail(new ProductionCancellationBlocked({ blocker: "PlannedAttemptExecutorProjectionUnreadable", runId }))
+      )
     )
   }
   const activateActiveWorkAuthorityRefresh = (source: "TrackerNotification" | "Timer") =>

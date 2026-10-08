@@ -8210,7 +8210,144 @@ it.effect("guidance selects the active owned turn and refuses completed or overs
   }).pipe(Effect.provide(layerFor({ ...harness, app })))
 })
 
+for (const mismatch of ["Thread", "Turn", "Worktree", "Incarnation"] as const) {
+  it.effect(`Suspend reconciliation refuses a tool fence with a different ${mismatch}`, () => {
+    const harness = makeHarness()
+    let freshStops = 0
+    const app = {
+      ...harness.app,
+      stopOwnedLaunch: () =>
+        Effect.sync(() => {
+          freshStops += 1
+        })
+    }
+    return Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      const write = harness.store.writeToolEffect
+      if (write === undefined) return yield* Effect.die("tool store missing")
+      yield* write(
+        CodexToolEffectRecord.cases.LimitReached.make({
+          runId: correlation.runId,
+          attemptId: correlation.attemptId,
+          threadId: CodexThreadId.make(mismatch === "Thread" ? "foreign-thread" : "codex-thread-issue-58"),
+          turnId: CodexTurnId.make(mismatch === "Turn" ? "foreign-turn" : "codex-turn-1"),
+          itemId: CodexToolItemId.make("foreign-cancel-fence"),
+          incarnation:
+            mismatch === "Incarnation" ? CodexServerIncarnation.make("foreign-incarnation") : harness.app.incarnation,
+          serverLaunch: CodexServerLaunchRecord.make({
+            command: ["codex", "app-server"],
+            incarnation:
+              mismatch === "Incarnation" ? CodexServerIncarnation.make("foreign-incarnation") : harness.app.incarnation,
+            phase: "Live",
+            pid: 101
+          }),
+          worktree: mismatch === "Worktree" ? WorktreeLocator.make("/foreign-worktree") : worktree,
+          startedAtMilliseconds: 0,
+          deadlineMilliseconds: 60_000,
+          reason: "Elapsed",
+          stopIntentAtMilliseconds: 60_000,
+          stoppedAtMilliseconds: 60_001
+        })
+      )
+      expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Suspend" })).toMatchObject({
+        _tag: "Unreadable"
+      })
+      expect(harness.currentRecord()?._tag).toBe("Running")
+      expect(freshStops).toBe(0)
+      expect(harness.closeCount()).toBe(0)
+      expect(harness.interruptCount()).toBe(0)
+      expect(harness.turnCount()).toBe(1)
+    }).pipe(Effect.provide(layerFor({ ...harness, app })))
+  })
+}
+
 for (const fence of ["StopIntended", "LimitReached"] as const) {
+  it.effect(`Suspend reconciliation rechecks stopped custody behind a retained tool fence (${fence})`, () => {
+    const harness = makeHarness()
+    let closeFails = true
+    let closeAttempts = 0
+    let cachedClose: CodexAppServerService["close"] = Effect.void
+    const launch = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: harness.app.incarnation,
+      phase: "Live",
+      pid: 101
+    })
+    const app = {
+      ...harness.app,
+      close: Effect.suspend(() => cachedClose),
+      stopOwnedLaunch: (owned: CodexServerLaunchRecord) =>
+        Effect.suspend(() => {
+          expect(owned).toEqual(launch)
+          closeAttempts += 1
+          return closeFails
+            ? Effect.fail(
+                new CodexAppServerFailure({ detail: "writers unproved", kind: "Ownership", operation: "close" })
+              )
+            : Effect.void
+        })
+    }
+    return Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      cachedClose = yield* Effect.cached(harness.app.close)
+      yield* app.close
+      const write = harness.store.writeToolEffect
+      if (write === undefined) return yield* Effect.die("tool store missing")
+      const fields = {
+        runId: correlation.runId,
+        attemptId: correlation.attemptId,
+        threadId: CodexThreadId.make("codex-thread-issue-58"),
+        turnId: CodexTurnId.make("codex-turn-1"),
+        itemId: CodexToolItemId.make("cancel-retained-fence"),
+        incarnation: harness.app.incarnation,
+        serverLaunch: launch,
+        worktree,
+        startedAtMilliseconds: 0,
+        deadlineMilliseconds: 60_000,
+        reason: "Elapsed" as const,
+        stopIntentAtMilliseconds: 60_000
+      }
+      yield* write(
+        fence === "StopIntended"
+          ? CodexToolEffectRecord.cases.StopIntended.make(fields)
+          : CodexToolEffectRecord.cases.LimitReached.make({ ...fields, stoppedAtMilliseconds: 60_001 })
+      )
+      harness.setResumeFailure(
+        new CodexAppServerFailure({
+          detail: "retained response expired",
+          kind: "ResponseDeadline",
+          operation: "thread/resume"
+        })
+      )
+      expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Suspend" })).toMatchObject({
+        _tag: "Unreadable"
+      })
+      expect(closeAttempts).toBe(1)
+      expect(harness.currentRecord()?._tag).toBe("SuspensionStopIntended")
+      expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+        _tag: "Unreadable"
+      })
+      for (const command of ["Begin", "Resume"] as const)
+        expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command })).toMatchObject({
+          _tag: "Unreadable"
+        })
+      expect(closeAttempts).toBe(1)
+      expect(harness.closeCount()).toBe(1)
+      const readsBeforeRetry = harness.resumeCwds.length
+      closeFails = false
+      expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Suspend" })).toMatchObject({
+        _tag: "Exact",
+        report: { _tag: "ExecutorWorkSafelySuspended", correlation }
+      })
+      expect(harness.currentRecord()?._tag).toBe("SafelySuspended")
+      if (fence === "LimitReached") expect(harness.resumeCwds).toHaveLength(readsBeforeRetry)
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.toolEffectRecords()).toMatchObject([{ _tag: "LimitReached" }])
+    }).pipe(Effect.provide(layerFor({ ...harness, app })))
+  })
+
   it.effect(`guidance refuses a retained ${fence} item fence without stopping or steering`, () => {
     const harness = makeHarness()
     let calls = 0
