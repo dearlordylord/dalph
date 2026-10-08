@@ -38,6 +38,15 @@ Recovery always reloads/decode actual bytes. A failed read discards the affected
 cache. Append's existing keyed checkpoint remains separate, retaining constant
 warm-append work rather than copying whole arrays on every append.
 
+After an acknowledged append, the connection's keyed checkpoint still proves
+every immutable row through the new position. The next ordinary read checks
+both partition memberships, then builds a new ordered array from that exact
+checkpoint, sharing its decoded events instead of decoding the whole Run again.
+The previous array remains unchanged. This changes only process-local payload
+reuse: workflow decisions, external requests, durable facts, and crash/retry
+rules remain unchanged. Ambiguous outcomes, failed reads, audits, scans, and
+reopening still discard the checkpoint or establish it again from actual bytes.
+
 Visible: next ordinary read sees all committed facts or typed failure. A lost
 append COMMIT acknowledgement invalidates caches; retry reads actual history and
 returns the committed same-key event without reinsertion. A retirement overlap
@@ -47,6 +56,8 @@ audit/reopen, or duplicate effects. Crash before commit rolls back; after commit
 recovery reconciles existing records. Acceptance: `sqlite-read-cache.test.ts`
 append/failure/audit/recovery/retirement cases, existing warm-append lost-COMMIT,
 retirement-overlap and fresh reopened corruption tests.
+The append case also proves decoded-event identity reuse and no extra partition
+payload query after the acknowledged write.
 
 ## 3. Dalph writes and reopens gzip payloads
 

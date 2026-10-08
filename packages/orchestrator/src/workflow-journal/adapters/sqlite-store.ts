@@ -31,6 +31,7 @@ import { makeSqliteJournalQueries } from "./sqlite-store-queries.js"
 import { makeSqliteTerminalHistoryRetirement } from "./sqlite-store-retirement.js"
 import {
   appendSqliteStorageCheckpoint,
+  snapshotFromSqliteStorageCheckpoint,
   type SqliteHotStorageCheckpoint,
   type SqliteStorageCheckpoint,
   type SqlitePartitionSnapshot
@@ -237,8 +238,10 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
             Effect.gen(function* () {
               const partition = yield* locateRunPartition(runId, "JournalStore.read")
               const cached = HashMap.get(yield* Ref.get(readSnapshots), runId)
-              return Option.isSome(cached) && cached.value.checkpoint.partition === partition
-                ? cached.value
+              if (Option.isSome(cached) && cached.value.checkpoint.partition === partition) return cached.value
+              const checkpoint = HashMap.get(yield* Ref.get(checkpoints), runId)
+              return Option.isSome(checkpoint) && checkpoint.value.partition === partition
+                ? snapshotFromSqliteStorageCheckpoint(checkpoint.value)
                 : yield* loadRunSnapshotForPartition(partition, runId, "JournalStore.read")
             }).pipe(
               sql.withTransaction,

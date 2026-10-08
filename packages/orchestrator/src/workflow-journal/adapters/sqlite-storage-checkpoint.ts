@@ -39,6 +39,17 @@ export interface SqlitePartitionSnapshot {
   readonly records: ReadonlyArray<JournalRecord>
 }
 
+/** Rebuilds an ordered read view from rows already proved by this exclusive connection. */
+export const snapshotFromSqliteStorageCheckpoint = (checkpoint: SqliteStorageCheckpoint): SqlitePartitionSnapshot => ({
+  checkpoint,
+  records: Array.from(HashMap.entries(checkpoint.recordsByKey), ([key, evidence]) => ({
+    event: evidence.event,
+    key,
+    position: evidence.position,
+    runId: checkpoint.runId
+  })).toSorted((left, right) => left.position - right.position)
+})
+
 export const appendSqliteStorageCheckpoint = (
   checkpoint: SqliteHotStorageCheckpoint,
   record: JournalRecord

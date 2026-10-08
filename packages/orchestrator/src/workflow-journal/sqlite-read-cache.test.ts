@@ -40,8 +40,11 @@ it.effect("loads unchanged Hot history once, reuses the array, and invalidates o
       expect(next).not.toBe(first)
       expect(next).toHaveLength(2)
       expect(first).toHaveLength(1)
+      // The exclusive store already proved this immutable event; decoding it
+      // again retains another complete payload beside the active Journal.
+      expect(next[0]?.event).toBe(first[0]?.event)
       expect(yield* journal.read(runId)).toBe(next)
-      expect(yield* Ref.get(queries)).toBe(2)
+      expect(yield* Ref.get(queries)).toBe(1)
       yield* journal.scanHot()
       expect(yield* journal.read(runId)).not.toBe(next)
       const beforeAudit = yield* journal.read(runId)
