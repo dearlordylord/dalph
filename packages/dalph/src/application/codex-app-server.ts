@@ -3578,7 +3578,13 @@ export const stopOwnedAppServer = (
       return yield* Effect.fail(operationFailure("close", "Ownership", "process identity changed before forced signal"))
     }
     const freshGroup = yield* groupCensus.observe(launch)
-    if (freshOwner._tag === "Absent" && freshGroup._tag === "Absent") {
+    if (freshGroup._tag === "Absent") {
+      // The owner can exit between its observation and the group census.
+      // An absent group alone cannot establish that the recorded owner exited.
+      const finalOwner = freshOwner._tag === "Absent" ? freshOwner : yield* service.observe(launch)
+      if (finalOwner._tag !== "Absent") {
+        return yield* Effect.fail(operationFailure("close", "Ownership", "process absence unproven after absent group"))
+      }
       // SIGTERM may finish between the grace observation and this census.
       // Reread the original identities so an escaped writer cannot disappear
       // from close authority merely because its current group is absent.
