@@ -1,4 +1,4 @@
-import { HashMap, HashSet, Option } from "effect"
+import { Equal, HashMap, HashSet, Option } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import type { TaskDagSnapshot } from "../authorities/task-tracker/graph.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
@@ -107,12 +107,18 @@ export const appendBlockerClearEvidence = (
   const state = switchGraph(prior?.latest, snapshot, position)
   const count = prior?.count ?? 0
   return retain(
-    HashMap.set(roots, key, {
-      count: count + 1,
-      positions: HashMap.set(prior?.positions ?? HashMap.empty(), count, position),
-      states: HashMap.set(prior?.states ?? HashMap.empty(), position, state),
-      latest: state
-    })
+    // Target histories are private persistent values: replacing one must not
+    // structurally hash every retained historical state on each observation.
+    HashMap.set(
+      roots,
+      key,
+      Equal.byReference({
+        count: count + 1,
+        positions: HashMap.set(prior?.positions ?? HashMap.empty(), count, position),
+        states: HashMap.set(prior?.states ?? HashMap.empty(), position, state),
+        latest: state
+      })
+    )
   )
 }
 

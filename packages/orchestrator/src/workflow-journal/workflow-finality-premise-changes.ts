@@ -1,5 +1,5 @@
 import type { RunId } from "@dalph/contracts"
-import { HashMap, HashSet, Option } from "effect"
+import { Equal, HashMap, HashSet, Option } from "effect"
 import type { JournalPosition } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 
@@ -43,10 +43,16 @@ export const appendWorkflowFinalityPremiseChanges = (
     (): PositionTimeline => ({ length: 0, positions: HashMap.empty() })
   )
   return retain(
-    HashMap.set(timelines, record.runId, {
-      length: prior.length + 1,
-      positions: HashMap.set(prior.positions, prior.length, record.position)
-    })
+    // This private persistent value is replaced by identity. Structural equality
+    // would hash its growing position map again on every append.
+    HashMap.set(
+      timelines,
+      record.runId,
+      Equal.byReference({
+        length: prior.length + 1,
+        positions: HashMap.set(prior.positions, prior.length, record.position)
+      })
+    )
   )
 }
 
