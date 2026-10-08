@@ -6262,6 +6262,75 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
   ).toBeUndefined()
 })
 
+it("retains settled graph predecessors when recovering G2 from accumulated history", () => {
+  const earlierGraphs = Array.from({ length: 128 }, (_, ordinal) =>
+    makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`active-g2-settled-${ordinal}`),
+      coverageTarget,
+      []
+    )
+  )
+  const history = earlierGraphs.flatMap((operation, ordinal) => [
+    coverageRecord(ordinal * 2 + 1, taskTrackerReadIntent(operation)),
+    coverageRecord(
+      ordinal * 2 + 2,
+      taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, coverageGraph)
+      )
+    )
+  ])
+  const latestGraph = earlierGraphs.at(-1)
+  if (latestGraph === undefined) throw new Error("Fixture requires a settled graph")
+  const currentGraph = { operationId: latestGraph.operationId, recordedAt: JournalPosition.make(256) }
+  const predecessors = earlierGraphs.map(({ operationId }) => operationId)
+  const pending = makeTrackerGraphObservationOperation(
+    { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: currentGraph.operationId },
+    OperationId.make("active-g2-after-settled-history"),
+    coverageTarget,
+    predecessors
+  )
+  const incomplete = makeTrackerGraphObservationOperation(
+    pending.cause,
+    pending.operationId,
+    coverageTarget,
+    predecessors.slice(1)
+  )
+  for (const source of [history, journalEvidenceFrom(history)]) {
+    expect(pendingActiveRefreshG2OperationFor(source, coverageRunId, coverageTarget, currentGraph)).toBeUndefined()
+  }
+  expect(
+    pendingActiveRefreshG2OperationFor(
+      journalEvidenceFrom([...history, coverageRecord(257, taskTrackerReadIntent(incomplete))]),
+      coverageRunId,
+      coverageTarget,
+      currentGraph
+    )
+  ).toBeUndefined()
+  const withPending = [...history, coverageRecord(257, taskTrackerReadIntent(pending))]
+  for (const source of [withPending, journalEvidenceFrom(withPending)]) {
+    expect(pendingActiveRefreshG2OperationFor(source, coverageRunId, coverageTarget, currentGraph)).toEqual(pending)
+  }
+  expect(
+    pendingActiveRefreshG2OperationFor(
+      journalEvidenceFrom([
+        ...withPending,
+        coverageRecord(
+          258,
+          taskTrackerFactsObservedEvent(
+            pending.operationId,
+            makeCompleteTaskTrackerFactsObserved(pending, coverageGraph)
+          )
+        )
+      ]),
+      coverageRunId,
+      coverageTarget,
+      currentGraph
+    )
+  ).toBeUndefined()
+})
+
 it("requires each active refresh to reread authorities after its own activation baseline", () => {
   const ready = PlannedWorktreeReady.make({
     baseSha: coverageAttempt.baseSha,

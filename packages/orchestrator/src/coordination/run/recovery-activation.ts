@@ -3022,11 +3022,10 @@ export const pendingActiveRefreshG2OperationFor = (
   for (const record of journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")) {
     const operation = graphReadIntentForRunTarget(record, runId, targetKey)
     if (operation === undefined) continue
-    const expectedPredecessors = Array.from(
-      HashSet.add(graphOperationIdsBeforeIntent, currentGraph.operationId)
-    ).toSorted()
+    const predecessorsBeforeIntent = graphOperationIdsBeforeIntent
     graphOperationIdsBeforeIntent = HashSet.add(graphOperationIdsBeforeIntent, operation.operationId)
     if (!isPendingReconfirmationOf(records, operation, record.position, currentGraph)) continue
+    const expectedPredecessors = Array.from(HashSet.add(predecessorsBeforeIntent, currentGraph.operationId)).toSorted()
     if (sameStringSequence([...operation.predecessorOperationIds].toSorted(), expectedPredecessors)) {
       pending = operation
     }
