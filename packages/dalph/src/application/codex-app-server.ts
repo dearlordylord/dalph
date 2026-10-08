@@ -1144,14 +1144,15 @@ const tokenReadFailure = async (
 ): Promise<TokenMemberObservation> => {
   /* v8 ignore next -- @preserve Vanished token candidates are exercised by the controlled process-policy suite. */
   if (processWasAbsent(error)) return undefined
-  const becameInert =
-    processErrorCode(error) === "EACCES" &&
-    native.platform === "linux" &&
-    (await readLinuxProcessStatObservation(pid, native))._tag === "Absent"
   const provenForeign =
     processErrorCode(error) === "EACCES" &&
     native.platform === "linux" &&
     (await linuxEnvironmentBelongsToForeignUser(pid, native))
+  // UID reads can race process exit too; reconcile absence after those reads.
+  const becameInert =
+    processErrorCode(error) === "EACCES" &&
+    native.platform === "linux" &&
+    (await readLinuxProcessStatObservation(pid, native))._tag === "Absent"
   return becameInert || provenForeign
     ? undefined
     : { detail: `cannot read process ${pid} launch token: ${String(error)}` }

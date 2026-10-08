@@ -759,6 +759,42 @@ describe("Codex process observation policy", () => {
     )
   })
 
+  it("reconciles fresh absence when an unreadable token candidate exits during the UID observation", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("uid-exit-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    let candidateExited = false
+    const observations: Array<string> = []
+    const signals: Array<readonly [number, number | NodeJS.Signals]> = []
+    const selectedNative = native({
+      readdir: async () => (candidateExited ? [] : ["100"]),
+      kill: (pid, signal) => {
+        signals.push([pid, signal])
+      },
+      readFile: async (path) => {
+        observations.push(path)
+        if (path.endsWith("/stat")) {
+          if (candidateExited) throw Object.assign(new Error("candidate exited"), { code: "ENOENT" })
+          return linuxStatText(stat(100, 1, 100, "linux:child"))
+        }
+        if (path === "/proc/100/status") {
+          candidateExited = true
+          throw Object.assign(new Error("candidate exited during UID observation"), { code: "ENOENT" })
+        }
+        if (path === "/proc/1/status") return "Uid: 1000 1000 1000 1000\n"
+        if (path.endsWith("/environ")) throw Object.assign(new Error("permission denied"), { code: "EACCES" })
+        return "/bin/sh\u0000"
+      }
+    })
+    const result = await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative))
+    expect(Exit.isSuccess(result)).toBe(true)
+    expect(observations.lastIndexOf("/proc/100/stat")).toBeGreaterThan(observations.indexOf("/proc/100/status"))
+    expect(signals.filter(([, signal]) => signal !== 0)).toEqual([])
+  })
+
   it("treats an inert Linux zombie as absent without reading its environment", async () => {
     const prior = CodexServerLaunchRecord.make({
       command: ["codex", "app-server"],

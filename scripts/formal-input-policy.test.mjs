@@ -150,6 +150,17 @@ void test("checked-in hosted formal inputs exactly match the authoritative JavaS
 void test("hosted command discovery includes new Node entries and rejects unsupported formal job inputs", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8")
+  assert.throws(
+    () =>
+      hostedWorkflowCommandEntries({
+        packageJson,
+        workflow: workflow.replace(
+          "- name: Upload formal model shard diagnostics\n        if: always()",
+          "- name: Upload formal model shard diagnostics\n        if: success()"
+        )
+      }),
+    /does not support diagnostic artifact syntax/u
+  )
   const withFormalStep = workflow.replace(
     "      - name: Run formal model shard\n",
     "      - name: Prepare hosted formal input\n        run: node scripts/prepare-hosted-formal.mjs\n\n      - name: Run formal model shard\n"

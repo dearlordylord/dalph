@@ -472,6 +472,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Upload formal model shard diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-${{ matrix.shard }}
+          path: |
+            .scratch/quality-gates/*/logs/*.log
+            .scratch/quality-gates/*/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 1
+
   formal-model-aggregate:
     name: Formal model gate (Node ${{ matrix.node-version }})
     needs: [change-plan, formal-models]

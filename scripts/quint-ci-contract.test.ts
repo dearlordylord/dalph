@@ -93,6 +93,12 @@ describe("hosted formal-model contract", () => {
     expect(formalJob).not.toContain("run: node scripts/run-hosted-formal-shard.mjs")
     expect(formalJob).toContain("\n        uses: actions/upload-artifact@v4")
     expect(formalJob).toContain("path: formal-shard-reports/shard-${{ matrix.shard }}.json")
+    expect(formalJob).toMatch(/- name: Upload formal model shard diagnostics\n\s+if: always\(\)/u)
+    expect(formalJob).toContain(
+      "name: formal-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-${{ matrix.shard }}"
+    )
+    expect(formalJob).toContain(".scratch/quality-gates/*/logs/*.log")
+    expect(formalJob).toContain("include-hidden-files: true")
     expect(formalJob).not.toContain(".formal-shard-reports")
     expect(
       execFileSync("git", ["check-ignore", "formal-shard-reports/shard-0.json"], {

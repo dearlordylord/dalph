@@ -209,6 +209,22 @@ const formalWorkflowCommands = (workflow) => {
     validateFormalJobEnvironment(definition.env, job)
     for (const step of definition.steps) {
       if (!isRecord(step)) throw new Error(`Hosted formal manifest does not support step syntax in ${job}`)
+      if (job === "formal-models" && step.name === "Upload formal model shard diagnostics") {
+        if (
+          !hasExactKeys(step, ["name", "if", "uses", "with"]) ||
+          step.if !== "always()" ||
+          step.uses !== "actions/upload-artifact@v4" ||
+          !isExactFlatRecord(step.with, {
+            name: "formal-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-${{ matrix.shard }}",
+            path: ".scratch/quality-gates/*/logs/*.log\n.scratch/quality-gates/*/*.json\n",
+            "include-hidden-files": true,
+            "if-no-files-found": "warn",
+            "retention-days": 1
+          })
+        )
+          throw new Error(`Hosted formal manifest does not support diagnostic artifact syntax in ${job}`)
+        continue
+      }
       const hasAction = Object.hasOwn(step, "uses")
       const hasCommand = Object.hasOwn(step, "run")
       if (hasAction && typeof step.uses === "string" && step.uses.startsWith("./"))

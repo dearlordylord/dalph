@@ -72,6 +72,24 @@ ownership census as production.
 
 ## Scenario-to-test mapping
 
+### An unreadable Linux token candidate exits during UID observation
+
+Starting facts: the app-server leader is absent and the token census has observed
+a live process candidate. Reading its environment returns `EACCES`; that error
+does not prove either ownership or absence. Dalph checks the candidate and owner
+effective UIDs. The candidate exits during that read, so its status is unavailable.
+After UID observation, Dalph reads the candidate's process state again. Only this
+fresh absent or inert observation permits omitting the candidate, without sending
+it a signal. A still-live candidate with an unreadable environment and same or
+unknown UID remains an ownership failure; PID reuse cannot grant signal authority.
+Crashes preserve the prior launch record, and a successor performs fresh native
+observations. There is no new workflow event or mutation retry in this refinement.
+
+Evidence: `reconciles fresh absence when an unreadable token candidate exits during
+the UID observation`, together with `retains unreadable %s-UID launch-token custody
+without signalling a candidate`, the live-unreadable refusal and foreign-UID
+controls in `codex-app-server-process-policy.property.test.ts`.
+
 | Accepted chronology or refinement | Concrete chronological outcome | Executable evidence |
 | --- | --- | --- |
 | 1. Create and materialize | Dalph asks real Codex to start one thread in the exact worktree, privately associates it, sends one task turn, and first reports `ExecutorWorkExecuting`. | `normal built host returns ExecutorWorkExecuting then the sealed Accepted commit without exposing its Codex thread id` |
