@@ -480,6 +480,51 @@ it.each(["Exact", "Foreign"] as const)(
   }
 )
 
+it("settles a completed worktree without revisiting accumulated task graph history", () => {
+  const responsibility = {
+    _tag: "TaskWorktreeResponsibility" as const,
+    beganAt: JournalPosition.make(8),
+    operation: acceptedCoverageWorktreeOperation,
+    taskId: coverageTaskId
+  }
+  const records = [...acceptedCoverageLineageRecords(false)]
+  for (let ordinal = 0; ordinal < 128; ordinal += 1) {
+    const operation = makeTrackerGraphObservationOperation(
+      coverageGraphOperation.cause,
+      OperationId.make(`settled-worktree-graph-${ordinal}`),
+      coverageTarget,
+      []
+    )
+    records.push(
+      coverageRecord(10 + ordinal * 2, taskTrackerReadIntent(operation)),
+      coverageRecord(
+        11 + ordinal * 2,
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, coverageGraph)
+        )
+      )
+    )
+  }
+  const state = coverageRunState(records, [responsibility])
+  let visits = 0
+  const stopObserving = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "IndexedRecordVisit") visits += 1
+  })
+  try {
+    expect(deriveJournalResponsibilityFacts(state, Option.none(), Option.none(), coverageTarget)).toEqual([
+      {
+        _tag: "WorkflowOperationFreshFacts",
+        disposition: { _tag: "Settled", outcome: "ResponsibilityCompleted" },
+        responsibility
+      }
+    ])
+    expect(visits).toBeLessThan(64)
+  } finally {
+    stopObserving()
+  }
+})
+
 it("does not use unrelated acquired claims as fresh integration claim observations", () => {
   const records = coveragePlanRecords()
   expect(latestIntegrationClaimObservationPosition(records, coverageAttempt, coverageTarget, Option.none())).toBe(2)

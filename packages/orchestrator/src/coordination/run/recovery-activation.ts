@@ -1585,6 +1585,13 @@ export const deriveJournalResponsibilityFacts = (
       }
     )
   const workflowOperationFreshFacts = (responsibility: WorkflowOperationResponsibility): ResponsibilityFreshFacts => {
+    if (operationWasSettled(source, workflowResponsibilityOperationId(responsibility))) {
+      return {
+        _tag: "WorkflowOperationFreshFacts",
+        disposition: ResponsibilityDisposition.Settled({ outcome: "ResponsibilityCompleted" }),
+        responsibility
+      }
+    }
     const records = [
       ...new Map(
         [
@@ -1612,8 +1619,7 @@ export const deriveJournalResponsibilityFacts = (
           immutableRunTarget
         )
       })
-    const settled =
-      operationWasSettled(records, workflowResponsibilityOperationId(responsibility)) || stoppedNoReleaseSettles()
+    const settled = stoppedNoReleaseSettles()
     const expectedClaim =
       responsibility._tag === "TaskClaimReleaseResponsibility"
         ? responsibility.operation.release.claim
