@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "579e76416363a8808cf66b45a72053d6de2f8f1805d97f9a599b3a28f33dfcd0",
+  "digest": "a9e9e82918b40dde431224c470c02dd876c12516ab9ff6cd0c1df250fe575c94",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -263,6 +263,7 @@
     "packages/orchestrator/src/workflow-journal/journaled-interpreter.ts",
     "packages/orchestrator/src/workflow-journal/maintenance.ts",
     "packages/orchestrator/src/workflow-journal/partition-history.ts",
+    "packages/orchestrator/src/workflow-journal/payload-string-pool.ts",
     "packages/orchestrator/src/workflow-journal/read-freshness-evidence.ts",
     "packages/orchestrator/src/workflow-journal/read-source.ts",
     "packages/orchestrator/src/workflow-journal/record-evidence.ts",
