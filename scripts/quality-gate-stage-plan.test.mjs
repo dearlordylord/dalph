@@ -210,6 +210,6 @@ void test("manual coverage diagnostics cross UID isolation and retain successful
   )
   assert.ok(suffix.includes('"DALPH_COVERAGE_RESOURCE_OBSERVATIONS=$DALPH_COVERAGE_RESOURCE_OBSERVATIONS"'))
   const logs = suffix.split("      - name: Upload failed hosted quality child logs\n")[1]?.split("      # This step")[0]
-  assert.ok(logs?.includes("inputs['coverage-diagnostics'] && matrix.stageId == 'coverage'"))
-  assert.ok(logs?.includes("include-hidden-files: true"))
+  assert.ok(logs.includes("inputs['coverage-diagnostics'] && matrix.stageId == 'coverage'"))
+  assert.ok(logs.includes("include-hidden-files: true"))
 })
