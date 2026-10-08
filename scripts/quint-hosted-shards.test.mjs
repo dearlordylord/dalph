@@ -55,6 +55,22 @@ void test("retains the independently reviewed model-family range oracle", () => 
   ])
 })
 
+void test("never admits two auto-starting backend owners together in the publication grant family", () => {
+  const profile = createQuintEffectiveProfile()
+  const shard = createQuintHostedShard(profile, 2)
+  const family = shard.steps.find((step) => step.kind === "commands" && step.positions.includes(123))
+  assert.ok(family)
+  assert.ok(family.positions.includes(127))
+  assert.equal(profile.commands[123].kind, "verify")
+  assert.equal(profile.commands[127].kind, "verify")
+  assert.equal(family.concurrency, 1)
+  assert.deepEqual(
+    shard.positions,
+    Array.from({ length: 13 }, (_, index) => index + 115)
+  )
+  assert.equal(shard.profileDigest, quintHostedProfileDigest(profile))
+})
+
 const kindPositions = (step) => step.positions
 const positionsUseEvaluator = (profile, positions) =>
   positions.some((position) => ["test", "sampled-run"].includes(profile.commands[position].kind))

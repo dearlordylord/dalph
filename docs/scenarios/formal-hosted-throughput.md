@@ -76,6 +76,25 @@ the workflow journal.
   pnpm/custody runner path, the aggregate dependency, and the literal
   720-second and 16-minute bounds.
 
+## A cold hosted family never starts competing backend owners
+
+- **Starting facts:** a fresh shard has no running Apalache backend. Its command
+  family contains two exhaustive checks whose Quint children automatically start
+  a backend at the same endpoint.
+- **Trigger and boundary calls:** the hosted plan admits that complete family
+  with concurrency one. Each child launches, uses, and stops its backend before
+  the next child starts; other families keep their existing bounded concurrency.
+- **Visible and forbidden results:** both original exhaustive obligations remain
+  mandatory, with unchanged arguments, verdicts and deadlines. Two children must
+  not race to bind the backend endpoint; a failure still prevents later admission.
+- **Crash/retry:** a failed child retains stopped-writer evidence and fails the
+  shard. A retry starts a fresh job and cannot credit its missing proof.
+- **Acceptance tests:** `quint-hosted-shards.test.mjs` checks that canonical
+  positions 123 and 127 remain together, require concurrency one, and retain the
+  complete publication-grant inventory and original profile digest. A focused
+  native cold-cache diagnostic exercises two Quint/TLC children: concurrent
+  startup reproduces the bind failure; sequential startup completes both proofs.
+
 ## GitHub avoids formal execution when the exact change cannot affect it
 
 - **Affected person and starting facts:** a maintainer opens or updates a pull

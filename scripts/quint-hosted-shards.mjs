@@ -70,7 +70,12 @@ export const createQuintHostedShard = (profile, shard, familyNames) => {
     const usesEvaluator = retained.some((position) => ["test", "sampled-run"].includes(profile.commands[position].kind))
     const serializedPrefix =
       !provenancePlaced && usesEvaluator ? Math.max(1, step.serializedPrefix) : step.serializedPrefix
-    steps.push({ ...step, positions: Object.freeze(retained), serializedPrefix })
+    // Raw hosted verify children own their auto-started Apalache server. Two
+    // cold children can both launch at the same endpoint before either is ready;
+    // serializing a family with multiple verifies avoids that ownership race.
+    const verifyCount = retained.filter((position) => profile.commands[position].kind === "verify").length
+    const concurrency = verifyCount > 1 ? 1 : step.concurrency
+    steps.push({ ...step, positions: Object.freeze(retained), serializedPrefix, concurrency })
     if (!provenancePlaced && usesEvaluator) {
       steps.push({ kind: "evaluator-provenance" })
       provenancePlaced = true
