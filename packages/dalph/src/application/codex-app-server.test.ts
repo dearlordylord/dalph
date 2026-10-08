@@ -1349,6 +1349,49 @@ it.effect("reports executor drain failure while still attempting app-server clea
   )
 )
 
+it.live("freshly rechecks exact stopped launch after cached lifecycle close", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-fresh-stopped-launch-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+      let reads = 0
+      let unreadable = false
+      const native = {
+        ...isolatedCodexProcessNativeService,
+        readFile: (filename: string) => {
+          reads += 1
+          return unreadable
+            ? Promise.reject(Object.assign(new Error("controlled unreadable process census"), { code: "EACCES" }))
+            : isolatedCodexProcessNativeService.readFile(filename)
+        }
+      }
+      const layer = codexAppServerNodeLayer({ executable }, native).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        const launch = app.serverLaunch
+        const freshStop = app.stopOwnedLaunch
+        if (launch === undefined || freshStop === undefined) return yield* Effect.die("native launch proof missing")
+        yield* app.close
+        const afterClose = reads
+        yield* app.close
+        expect(reads).toBe(afterClose)
+        unreadable = true
+        const unproved = yield* freshStop(launch).pipe(Effect.exit)
+        expect(Exit.isFailure(unproved)).toBe(true)
+        expect(reads).toBeGreaterThan(afterClose)
+        unreadable = false
+        const beforeFreshProof = reads
+        yield* freshStop(launch)
+        expect(reads).toBeGreaterThan(beforeFreshProof)
+      }).pipe(Effect.provide(layer))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
 it.effect("reports process-local app-server cleanup failure through the Exit boundary", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -162,6 +162,20 @@ const withSqliteClient = <A, E, R>(
     }).pipe(Effect.provide(Reactivity.layer))
   )
 
+it.effect("keeps native scan preparation failures typed for Hot and Cold", () =>
+  withSqliteClient(JournalDatabaseLocator.make(":memory:"), (sql) =>
+    Effect.gen(function* () {
+      const queries = makeSqliteJournalQueries(sql, undefined)
+      for (const partition of ["Hot", "Cold"] as const) {
+        const operation = partition === "Hot" ? "JournalStore.scanHot" : "JournalStore.auditAll"
+        const failure = yield* queries.scanPartition(partition, operation).pipe(Effect.flip)
+        expect(failure).toBeInstanceOf(JournalStorageUnavailable)
+        expect(failure).toMatchObject({ operation })
+      }
+    })
+  )
+)
+
 const seedSchemaV1 = (filename: JournalDatabaseLocator, record: JournalRecord) => {
   const encoded = encodeJournalEvent(record.event)
   return withSqliteClient(filename, (sql) =>

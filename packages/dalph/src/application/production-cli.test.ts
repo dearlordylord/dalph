@@ -694,7 +694,10 @@ it.effect("fails once when public stdout is lost without recursive Failure outpu
           current: currentSignalOf({ _tag: "NotReady" as const }),
           runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-          traceReader: { readAt: () => Effect.succeed(snapshot) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.succeed(snapshot)
+          }
         },
         {
           requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
@@ -806,7 +809,10 @@ it.effect("delivery throttle closes presentation and host scope without requesti
               current: currentSignalOf({ _tag: "NotReady" as const }),
               runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
               selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-              traceReader: { readAt: () => Effect.succeed(snapshot) }
+              traceReader: {
+                snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+                readAt: () => Effect.succeed(snapshot)
+              }
             },
             {
               requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
@@ -947,7 +953,10 @@ it.effect("preserves original task-tracker throttle after lost Failure output wi
               current: currentSignalOf({ _tag: "NotReady" as const }),
               runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
               selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-              traceReader: { readAt: () => Effect.succeed(snapshot) }
+              traceReader: {
+                snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+                readAt: () => Effect.succeed(snapshot)
+              }
             },
             {
               requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
@@ -1027,7 +1036,10 @@ it.effect("two CLI invocations report allocated then the same recovered Run with
               current: currentSignalOf({ _tag: "NotReady" as const }),
               runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
               selection,
-              traceReader: { readAt: () => Effect.succeed(snapshot) }
+              traceReader: {
+                snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+                readAt: () => Effect.succeed(snapshot)
+              }
             },
             inactiveApplicationExitRequestBoundary
           ).pipe(Effect.forkScoped)
@@ -1287,7 +1299,10 @@ it.effect("a TraceReader Journal failure emits one stable redacted Failure after
           current: currentSignalOf({ _tag: "NotReady" as const }),
           runTermination: completedRunTermination(),
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-          traceReader: { readAt: () => Effect.fail(failure) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.fail(failure)
+          }
         },
         inactiveApplicationExitRequestBoundary
       )
@@ -1366,7 +1381,10 @@ it.effect(
                 mutateWorkflow: Ref.update(workflowMutations, (count) => count + 1),
                 runTermination: completedRunTermination(),
                 selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-                traceReader: { readAt: () => Effect.succeed(snapshot) }
+                traceReader: {
+                  snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+                  readAt: () => Effect.succeed(snapshot)
+                }
               }
               return use(observation, observation.applicationExitRequestBoundary)
             })
@@ -1442,7 +1460,10 @@ it.effect(
           current: currentSignalOf({ _tag: "NotReady" as const }),
           runTermination: completedRunTermination(),
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-          traceReader: { readAt: () => Effect.fail(failure) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.fail(failure)
+          }
         }
         return use(observation, observation.applicationExitRequestBoundary)
       })
@@ -1550,7 +1571,10 @@ it.effect("cold public production command reports one allocated Run after its be
         current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => Ref.update(lines, (current) => [...current, line]),
       Ref.update(hostEntries, (count) => count + 1)
@@ -1581,6 +1605,7 @@ it.effect(
           runTermination: completedRunTermination(),
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
           traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
             readAt: () =>
               Effect.sync(() => {
                 reads += 1
@@ -1607,6 +1632,64 @@ it.effect(
     })
 )
 
+it.effect("an oversized first snapshot publishes its exact cursor without requesting complete projection", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const capacities = yield* Ref.make<ReadonlyArray<number>>([])
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: {
+          snapshotAdmission: (selected, capacity) =>
+            Effect.gen(function* () {
+              expect(selected).toEqual(cursor)
+              yield* Ref.update(capacities, (seen) => [...seen, capacity])
+              return { _tag: "ExceedsByteBudget" as const }
+            }),
+          readAt: () => Effect.die("an oversized snapshot must not be expanded")
+        }
+      },
+      (line) => Ref.update(lines, (seen) => [...seen, line])
+    )
+    expect(yield* Ref.get(capacities)).toEqual([1024 * 1024])
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.map(({ _tag }) => _tag)).toEqual([
+      "RunSelected",
+      "CurrentStatus",
+      "HistoryAdvanced",
+      "RunDisposition"
+    ])
+    expect(records[2]).toEqual({ _tag: "HistoryAdvanced", cursor, version: 1 })
+  })
+)
+
+it.effect("snapshot admission failure remains visible before cursor-only publication", () =>
+  Effect.gen(function* () {
+    const failure = new TraceProjectionInvalid({ detail: "invalid retained prefix before byte admission", runId })
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const observed = yield* Effect.flip(
+      presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination: completedRunTermination(),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: {
+            snapshotAdmission: () => Effect.fail(failure),
+            readAt: () => Effect.die("failed admission cannot request complete projection")
+          }
+        },
+        (line) => Ref.update(lines, (seen) => [...seen, line])
+      )
+    )
+    expect(observed).toEqual(failure)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual(["RunSelected", "CurrentStatus"])
+  })
+)
+
 it.effect("normal Run termination closes an open history attachment after its final snapshot and returns", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
@@ -1616,7 +1699,10 @@ it.effect("normal Run termination closes an open history attachment after its fi
         current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => Ref.update(lines, (current) => [...current, line])
     )
@@ -1657,7 +1743,10 @@ it.effect("an unfinished Run cannot hide status, history, or output presenter fa
           current: currentObservationChangesFailure(projectionFailure),
           runTermination,
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-          traceReader: { readAt: () => Effect.succeed(snapshot) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.succeed(snapshot)
+          }
         },
         writeLine
       )
@@ -1675,7 +1764,10 @@ it.effect("an unfinished Run cannot hide status, history, or output presenter fa
           current: currentSignalOf({ _tag: "NotReady" as const }),
           runTermination,
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-          traceReader: { readAt: () => Effect.fail(historyFailure) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.fail(historyFailure)
+          }
         },
         writeLine
       )
@@ -1690,7 +1782,10 @@ it.effect("an unfinished Run cannot hide status, history, or output presenter fa
           current: currentSignalOf({ _tag: "NotReady" as const }),
           runTermination,
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-          traceReader: { readAt: () => Effect.succeed(snapshot) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.succeed(snapshot)
+          }
         },
         (line) => (JSON.parse(line)._tag === "HistoricalSnapshot" ? Effect.fail(outputFailure) : Effect.void)
       )
@@ -1708,7 +1803,10 @@ it.effect("production presentation reports the host's exact recovered Run withou
         current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Recovered.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => Ref.update(lines, (current) => [...current, line])
     )
@@ -1735,7 +1833,10 @@ it.effect("attaches current-first without missing a delivery publication racing 
         current,
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => Ref.update(lines, (current) => [...current, line])
     ).pipe(Effect.forkChild)
@@ -1770,7 +1871,10 @@ it.effect("renders not-ready and waits without invoking a workflow boundary", ()
         current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination,
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) =>
         Ref.update(lines, (current) => [...current, line]).pipe(
@@ -1807,7 +1911,10 @@ it.effect("closed status without a final value cannot report Run completion", ()
         current: currentSignalOf({ _tag: "Closed" as const, final: null }),
         runTermination,
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) =>
         Ref.update(lines, (current) => [...current, line]).pipe(
@@ -2325,7 +2432,10 @@ it.effect("projects and encodes all twelve status variants through the productio
         current: currentSignalOf(observationState),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => Ref.update(lines, (current) => [...current, line])
     )
@@ -2387,7 +2497,10 @@ it.effect("presents Alice's nonterminal status change before the accepted Run te
         current,
         runTermination: { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) },
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => {
         const record = JSON.parse(line)
@@ -2442,7 +2555,10 @@ it.effect("rate-limits a rapid passive status source before it reaches stdout", 
         current,
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => Ref.update(lines, (current) => [...current, line])
     )
@@ -2485,7 +2601,10 @@ it.effect(
           current,
           runTermination: { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) },
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-          traceReader: { readAt: () => Effect.succeed(snapshot) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.succeed(snapshot)
+          }
         },
         (line) => {
           const record = JSON.parse(line)
@@ -2546,7 +2665,10 @@ it.effect("publishes a passive status immediately when it arrives after an idle 
         current,
         runTermination: { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) },
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => {
         const record = JSON.parse(line)
@@ -2841,7 +2963,10 @@ it("production status rendering has no tracker Git executor Integrator Journal m
     current: currentSignalOf({ _tag: "NotReady" }),
     runTermination: completedRunTermination(),
     selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-    traceReader: { readAt: () => Effect.succeed(snapshot) },
+    traceReader: {
+      snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+      readAt: () => Effect.succeed(snapshot)
+    },
     remotePublicationControl: {
       applyRemotePublicationResume: () => Effect.die("passive status must not call publication control"),
       applyRemotePublicationBatchGrant: () => Effect.die("passive status must not call publication control")
@@ -2868,7 +2993,10 @@ it.effect("reports the selected Run when termination races with current-first st
         current: currentSignalOf({ _tag: "Closed" as const, final: null }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.succeed(snapshot) }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.succeed(snapshot)
+        }
       },
       (line) => Ref.update(lines, (current) => [...current, line])
     )
@@ -2941,7 +3069,10 @@ it.effect("public publication commands report exact control receipts before ordi
             current: currentSignalOf({ _tag: "NotReady" as const }),
             runTermination: completedRunTermination(),
             selection: ProductionRunSelection.cases.Recovered.make({ runId }),
-            traceReader: { readAt: () => Effect.succeed(snapshot) }
+            traceReader: {
+              snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+              readAt: () => Effect.succeed(snapshot)
+            }
           },
           inactiveApplicationExitRequestBoundary,
           {
@@ -3038,7 +3169,10 @@ const activeProductionCliObservation = () => ({
   current: currentSignalOf({ _tag: "NotReady" as const }),
   runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
   selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-  traceReader: { readAt: () => Effect.succeed(snapshot) }
+  traceReader: {
+    snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+    readAt: () => Effect.succeed(snapshot)
+  }
 })
 
 const closingProductionCliObservation = (attachments: Ref.Ref<number>) => ({
@@ -3621,7 +3755,10 @@ it.effect("invokes one production host only after configuration and reports its 
               current: currentSignalOf({ _tag: "NotReady" as const }),
               runTermination: completedRunTermination(),
               selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-              traceReader: { readAt: () => Effect.succeed(snapshot) }
+              traceReader: {
+                snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+                readAt: () => Effect.succeed(snapshot)
+              }
             },
             inactiveApplicationExitRequestBoundary
           )
@@ -3673,7 +3810,10 @@ it.effect("routes cancel through the production host cancellation operation", ()
               current: currentSignalOf({ _tag: "NotReady" as const }),
               runTermination: completedRunTermination(),
               selection: ProductionRunSelection.cases.Recovered.make({ runId }),
-              traceReader: { readAt: () => Effect.succeed(snapshot) }
+              traceReader: {
+                snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+                readAt: () => Effect.succeed(snapshot)
+              }
             },
             inactiveApplicationExitRequestBoundary
           )

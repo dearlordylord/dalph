@@ -592,6 +592,8 @@ export {
   TraceProjectionInvalid,
   TraceReader,
   TraceReaderLayer,
+  TraceSnapshotAdmission,
+  TraceSnapshotByteBudget,
   TraceRunNotFound,
   TraceTaskGraph,
   TraceTaskGraphEdge,

@@ -24,6 +24,64 @@ const intent = (name: string) =>
     makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, OperationId.make(name), target, [], [])
   )
 
+it.effect("shares selected startup scan events with the first append checkpoint", () =>
+  Effect.gen(function* () {
+    const queries = yield* Ref.make(0)
+    yield* Effect.gen(function* () {
+      const journal = yield* JournalStore
+      yield* journal.beginRun(runId, target, policy, remotePublicationTargetForTest)
+      yield* Ref.set(queries, 0)
+      const scan = yield* journal.scanHot(runId)
+      const selected = scan.runs.find((run) => run.runId === runId)
+      expect(selected?.records).toHaveLength(1)
+      yield* journal.append(runId, JournalRecordKey.make("startup-first-append"), intent("startup-first-append"))
+      const current = yield* journal.read(runId)
+      expect(current).toHaveLength(2)
+      expect(selected?.records).toHaveLength(1)
+      expect(current[0]?.event).toBe(selected?.records[0]?.event)
+      expect(yield* Ref.get(queries)).toBe(0)
+    }).pipe(
+      Effect.provide(
+        sqliteJournalTestLayer({
+          filename: JournalDatabaseLocator.make(":memory:"),
+          onPartitionRowsQueried: () => Ref.update(queries, (n) => n + 1)
+        })
+      )
+    )
+  })
+)
+
+it.effect("retains only the requested startup Run and does not invent a missing Run", () =>
+  Effect.gen(function* () {
+    const queries = yield* Ref.make(0)
+    yield* Effect.gen(function* () {
+      const journal = yield* JournalStore
+      const other = RunId.make("other-startup-run")
+      yield* journal.beginRun(runId, target, policy, remotePublicationTargetForTest)
+      yield* journal.beginRun(other, target, policy, remotePublicationTargetForTest)
+      yield* Ref.set(queries, 0)
+      const scan = yield* journal.scanHot(runId)
+      expect(scan.runs).toHaveLength(2)
+      yield* journal.read(runId)
+      expect(yield* Ref.get(queries)).toBe(0)
+      yield* journal.read(other)
+      expect(yield* Ref.get(queries)).toBe(1)
+      const missing = RunId.make("missing-startup-run")
+      const next = yield* journal.scanHot(missing)
+      expect(next.runs.some((run) => run.runId === missing)).toBe(false)
+      yield* journal.read(runId)
+      expect(yield* Ref.get(queries)).toBe(2)
+    }).pipe(
+      Effect.provide(
+        sqliteJournalTestLayer({
+          filename: JournalDatabaseLocator.make(":memory:"),
+          onPartitionRowsQueried: () => Ref.update(queries, (n) => n + 1)
+        })
+      )
+    )
+  })
+)
+
 it.effect("loads unchanged Hot history once, reuses the array, and invalidates on append and scans", () =>
   Effect.gen(function* () {
     const queries = yield* Ref.make(0)
@@ -40,8 +98,11 @@ it.effect("loads unchanged Hot history once, reuses the array, and invalidates o
       expect(next).not.toBe(first)
       expect(next).toHaveLength(2)
       expect(first).toHaveLength(1)
+      // The exclusive store already proved this immutable event; decoding it
+      // again retains another complete payload beside the active Journal.
+      expect(next[0]?.event).toBe(first[0]?.event)
       expect(yield* journal.read(runId)).toBe(next)
-      expect(yield* Ref.get(queries)).toBe(2)
+      expect(yield* Ref.get(queries)).toBe(1)
       yield* journal.scanHot()
       expect(yield* journal.read(runId)).not.toBe(next)
       const beforeAudit = yield* journal.read(runId)

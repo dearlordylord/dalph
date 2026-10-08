@@ -39,8 +39,8 @@ export const executorGuidanceDispatchProblem = (
   for (const { event } of journalRecordsForAttempt(records, attempt.attemptId)) {
     if (
       event._tag === "IntegrationStarted" ||
-      event._tag === "PlannedAttemptReplaced" ||
-      event._tag === "ResultRecoveryAttemptReplaced"
+      ((event._tag === "PlannedAttemptReplaced" || event._tag === "ResultRecoveryAttemptReplaced") &&
+        event.subject.plannedAttempt.attemptId === attempt.attemptId)
     )
       return "guidance selection crossed its implementation cutoff"
   }

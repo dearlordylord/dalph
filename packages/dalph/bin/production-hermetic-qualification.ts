@@ -124,6 +124,7 @@ const application = Effect.gen(function* () {
                 acceptedHistory,
                 current,
                 traceReader: {
+                  snapshotAdmission: observation.traceReader.snapshotAdmission,
                   readAt: (cursor) =>
                     observation.traceReader.readAt(cursor).pipe(
                       Effect.tap((snapshot) =>

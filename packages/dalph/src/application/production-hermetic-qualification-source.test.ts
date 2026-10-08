@@ -1803,7 +1803,10 @@ describe("qualification original source boundary", () => {
           acceptedHistory: currentSignalOf(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
           runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
-          traceReader: { readAt: () => Effect.die(new Error("history is not read by this failure fixture")) }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.die(new Error("history is not read by this failure fixture"))
+          }
         }
         const ordinary: ProductionCliHostRunner<TaskTrackerMutationThrottled, never> = (_configuration, use) =>
           use(observation, { requestExit: Effect.never }).pipe(Effect.andThen(Effect.fail(throttle)))
@@ -1845,7 +1848,10 @@ describe("qualification original source boundary", () => {
         acceptedHistory: currentSignalOf(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
-        traceReader: { readAt: () => Effect.never }
+        traceReader: {
+          snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+          readAt: () => Effect.never
+        }
       }
       const ordinary: ProductionCliHostRunner<never, never> = (_configuration, use) =>
         use(observation, { requestExit: Effect.never })
@@ -1897,7 +1903,10 @@ describe("qualification original source boundary", () => {
           acceptedHistory: currentSignalOf(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
           runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
-          traceReader: { readAt: () => Effect.never }
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.never
+          }
         }
         const ordinary: ProductionCliHostRunner<TaskTrackerMutationThrottled, never> = (_configuration, use) =>
           use(observation, { requestExit: Effect.never }).pipe(Effect.andThen(Effect.fail(raw)))

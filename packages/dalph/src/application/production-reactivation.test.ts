@@ -35,6 +35,7 @@ import {
   OperationId,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorProjectionUnreadable,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorReportOrdinal,
@@ -136,6 +137,7 @@ import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
   productionRunReactivationLayer,
+  ProductionCancellationBlocked,
   productionWorkflowInterpreterLayer,
   ProductionRunReactivationInterval
 } from "./production.js"
@@ -287,6 +289,85 @@ it.effect("reports activation failures and stops repeated integration calls afte
       )
       expect(reported).toBe(failure)
     }
+  })
+)
+
+it.effect("explicit cancellation stops after an unreadable Suspend projection", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("unreadable-cancellation-run")
+    const failure = new PlannedAttemptExecutorProjectionUnreadable({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(8),
+      correlation: { attemptId: AttemptId.make("unreadable-cancellation-attempt"), runId }
+    })
+    const observed = yield* Deferred.make<unknown>()
+    const stopped = yield* Deferred.make<void>()
+    const calls = yield* Ref.make(0)
+    // The generic fixture injects the exact typed failure before its program.
+    const injectedFailure = Effect.fail(failure) as Effect.Effect<never>
+    const bootstrap = Layer.mock(JournaledRunBootstrap, {
+      activate: () => Ref.update(calls, (count) => count + 1).pipe(Effect.andThen(injectedFailure)),
+      readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+      registerAcceptedRunReactivationObservers: () => Effect.void,
+      operatorControl: {
+        applyRunCancellation: () =>
+          Effect.succeed({ _tag: "RunCancellationApplied" as const, appliedAt: JournalPosition.make(1) }),
+        applyRemotePublicationBatchGrant: () => Effect.die("unused"),
+        applyRemotePublicationResume: () => Effect.die("unused"),
+        applyIntegrationQuarantineDirection: () => Effect.die("unused"),
+        retryTaskAttemptBase: () => Effect.die("unused"),
+        readTaskAttemptBaseRetryRequest: () => Effect.die("unused"),
+        applyResultRecoveryDirection: () => Effect.die("unused"),
+        readResultRecoveryDirection: () => Effect.die("unused"),
+        applyAttemptChoice: () => Effect.die("unused"),
+        applyControlDirection: () => Effect.die("unused"),
+        applyTaskClaimReacquisition: () => Effect.die("unused"),
+        readAttemptChoice: () => Effect.die("unused"),
+        readIntegrationQuarantineDirection: () => Effect.die("unused"),
+        readTaskWorkCapacity: () => Effect.die("unused"),
+        observePause: () => Stream.empty,
+        setTaskWorkCapacity: () => Effect.die("unused")
+      }
+    })
+    const applicationExit = Layer.mock(ApplicationExitShell, {
+      admission: {
+        prepareForwardOwner: () => Effect.succeed({ cancel: Effect.void, register: Effect.die("unused") }),
+        acquireForwardOwner: () => Effect.die("unused"),
+        snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+      },
+      awaitExitRequested: Effect.never,
+      awaitExitResult: Effect.never,
+      awaitExecutorDrains: Effect.void,
+      registerExecutorDrain: () => Effect.void,
+      registerProcessLocalDrain: () => Effect.void,
+      requestBoundary: { requestExit: Effect.never }
+    })
+    const layer = productionRunReactivationLayer(
+      FixtureTarget.make("unreadable-cancellation-target"),
+      Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity })),
+      runId,
+      {
+        cancelBeforeDelivery: true,
+        onFailure: (reported) => Deferred.succeed(observed, reported).pipe(Effect.asVoid),
+        onTimerStateChange: (state) =>
+          state === "Stopped" ? Deferred.succeed(stopped, undefined).pipe(Effect.asVoid) : Effect.void
+      }
+    ).pipe(
+      Layer.provide(bootstrap),
+      Layer.provide(applicationExit),
+      Layer.provide(Layer.mock(PlannedTaskAttemptPlanner, {})),
+      Layer.provide(Layer.mock(TaskClaimAcquisitionPlanner, {}))
+    )
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* RunReactivationOwner
+        expect(yield* Deferred.await(observed)).toEqual(
+          new ProductionCancellationBlocked({ blocker: failure._tag, runId })
+        )
+        yield* Deferred.await(stopped)
+        yield* TestClock.adjust("1 hour")
+        expect(yield* Ref.get(calls)).toBe(1)
+      }).pipe(Effect.provide(layer))
+    )
   })
 )
 

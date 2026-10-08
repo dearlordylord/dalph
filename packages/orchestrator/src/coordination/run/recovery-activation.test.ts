@@ -156,6 +156,7 @@ import {
 import { makeHistoricalWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import {
   journalEvidenceFrom,
+  journalEvidenceBefore,
   journalGraphObservationAt,
   journalGraphSnapshotForObservation
 } from "../../workflow-journal/record-evidence.js"
@@ -479,6 +480,51 @@ it.each(["Exact", "Foreign"] as const)(
   }
 )
 
+it("settles a completed worktree without revisiting accumulated task graph history", () => {
+  const responsibility = {
+    _tag: "TaskWorktreeResponsibility" as const,
+    beganAt: JournalPosition.make(8),
+    operation: acceptedCoverageWorktreeOperation,
+    taskId: coverageTaskId
+  }
+  const records = [...acceptedCoverageLineageRecords(false)]
+  for (let ordinal = 0; ordinal < 128; ordinal += 1) {
+    const operation = makeTrackerGraphObservationOperation(
+      coverageGraphOperation.cause,
+      OperationId.make(`settled-worktree-graph-${ordinal}`),
+      coverageTarget,
+      []
+    )
+    records.push(
+      coverageRecord(10 + ordinal * 2, taskTrackerReadIntent(operation)),
+      coverageRecord(
+        11 + ordinal * 2,
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, coverageGraph)
+        )
+      )
+    )
+  }
+  const state = coverageRunState(records, [responsibility])
+  let visits = 0
+  const stopObserving = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "IndexedRecordVisit") visits += 1
+  })
+  try {
+    expect(deriveJournalResponsibilityFacts(state, Option.none(), Option.none(), coverageTarget)).toEqual([
+      {
+        _tag: "WorkflowOperationFreshFacts",
+        disposition: { _tag: "Settled", outcome: "ResponsibilityCompleted" },
+        responsibility
+      }
+    ])
+    expect(visits).toBeLessThan(64)
+  } finally {
+    stopObserving()
+  }
+})
+
 it("does not use unrelated acquired claims as fresh integration claim observations", () => {
   const records = coveragePlanRecords()
   expect(latestIntegrationClaimObservationPosition(records, coverageAttempt, coverageTarget, Option.none())).toBe(2)
@@ -493,9 +539,83 @@ it("does not use unrelated acquired claims as fresh integration claim observatio
   ]) {
     const later = coverageRecord(5, TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }))
     expect(authorizedClaimForAttempt([...records, later], coverageAttempt)?.claim).toEqual(coverageClaim)
-    expect(
-      latestIntegrationClaimObservationPosition([...records, later], coverageAttempt, coverageTarget, baseline)
-    ).toBeUndefined()
+    const history = [...records, later]
+    for (const source of [history, journalEvidenceFrom(history)]) {
+      expect(
+        latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, baseline)
+      ).toBeUndefined()
+    }
+  }
+})
+
+it("finds integration claim freshness without visiting retained graph refreshes", () => {
+  const records = [...coveragePlanRecords()]
+  for (let index = 0; index < 128; index += 1) {
+    const operation = makeTrackerGraphObservationOperation(
+      coverageGraphOperation.cause,
+      OperationId.make(`claim-freshness-graph-${index}`),
+      coverageTarget,
+      []
+    )
+    records.push(
+      coverageRecord(5 + index * 2, taskTrackerReadIntent(operation)),
+      coverageRecord(
+        6 + index * 2,
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, coverageGraph)
+        )
+      )
+    )
+  }
+  const unreadable = makeTaskClaimObservationOperation(
+    OperationId.make("claim-freshness-unreadable"),
+    coverageTarget,
+    coverageTaskId,
+    []
+  )
+  records.push(
+    coverageRecord(261, coverageClaimEvent),
+    coverageRecord(262, taskTrackerReadIntent(unreadable)),
+    coverageRecord(
+      263,
+      taskTrackerFactsObservedEvent(unreadable.operationId, makeFocusedTaskClaimFactsUnreadable(unreadable))
+    )
+  )
+  const evidence = journalEvidenceFrom(records)
+  for (const [cutoff, expected] of [
+    [261, 2],
+    [262, 261],
+    [264, 263]
+  ] as const) {
+    const prefix = records.filter(({ position }) => position < cutoff)
+    // Both representations exclude the cutoff record, including later claim facts.
+    const indexedPrefix = journalEvidenceBefore(evidence, cutoff)
+    for (const source of [prefix, indexedPrefix]) {
+      expect(latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, Option.none())).toBe(
+        expected
+      )
+      expect(
+        latestIntegrationClaimObservationPosition(
+          source,
+          coverageAttempt,
+          coverageTarget,
+          Option.some(JournalPosition.make(expected))
+        )
+      ).toBeUndefined()
+    }
+  }
+  let visits = 0
+  const stopObserving = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "IndexedRecordVisit") visits += 1
+  })
+  try {
+    expect(latestIntegrationClaimObservationPosition(evidence, coverageAttempt, coverageTarget, Option.none())).toBe(
+      263
+    )
+    expect(visits).toBeLessThan(32)
+  } finally {
+    stopObserving()
   }
 })
 
@@ -503,17 +623,13 @@ it("keeps focused integration claim observations within the exact task target an
   const records = coveragePlanRecords()
   const baseline = Option.some(JournalPosition.make(4))
   const exact = coverageRecord(5, coverageClaimEvent)
-  expect(
-    latestIntegrationClaimObservationPosition([...records, exact], coverageAttempt, coverageTarget, baseline)
-  ).toBe(5)
-  expect(
-    latestIntegrationClaimObservationPosition(
-      [...records, exact],
-      coverageAttempt,
-      coverageTarget,
-      Option.some(exact.position)
-    )
-  ).toBeUndefined()
+  const exactHistory = [...records, exact]
+  for (const source of [exactHistory, journalEvidenceFrom(exactHistory)]) {
+    expect(latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, baseline)).toBe(5)
+    expect(
+      latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, Option.some(exact.position))
+    ).toBeUndefined()
+  }
   for (const [target, taskId] of [
     [FixtureTarget.make("foreign-tracker-target"), coverageTaskId],
     [coverageTarget, TaskId.make("unrelated-C")]
@@ -523,14 +639,12 @@ it("keeps focused integration claim observations within the exact task target an
       operation.operationId,
       makeFocusedTaskClaimFactsObserved(operation, ActiveTaskClaim.make({ ...coverageClaim, taskId }))
     )
-    expect(
-      latestIntegrationClaimObservationPosition(
-        [...records, coverageRecord(5, event)],
-        coverageAttempt,
-        coverageTarget,
-        baseline
-      )
-    ).toBeUndefined()
+    const history = [...records, coverageRecord(5, event)]
+    for (const source of [history, journalEvidenceFrom(history)]) {
+      expect(
+        latestIntegrationClaimObservationPosition(source, coverageAttempt, coverageTarget, baseline)
+      ).toBeUndefined()
+    }
   }
 })
 const acceptedCoverageClaimOperation = makeTaskClaimObservationOperation(
@@ -3357,89 +3471,110 @@ it("keeps Stop's executor boundary bounded and preserves the task position", () 
   })
 })
 
-effectIt.effect("lets durable Run cancellation override an unreadable executor projection", () =>
-  Effect.gen(function* () {
-    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
-    })
-    const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    const beginIntent = coverageRecord(
-      12,
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "Begin",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: beginOrdinal,
-        plannedAttempt: coverageAttempt,
-        version: workflowJournalEventVersion
+effectIt.effect.each([false, true])(
+  "lets durable Run cancellation override an unreadable executor projection (Suspend intended: %s)",
+  (suspendWasIntended) =>
+    Effect.gen(function* () {
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
       })
-    )
-    const beginResponse = coverageRecord(
-      13,
-      PlannedAttemptExecutorCommandResponseObservedEvent.make({
-        commandOrdinal: beginOrdinal,
-        occurrenceClassification: "NonActionOccurrence",
-        plannedAttempt: coverageAttempt,
-        report: executing,
-        version: workflowJournalEventVersion
-      })
-    )
-    const runningReport = executorReport(14, executing, 1)
-    const unreadableProjection = executorStateObservation(
-      15,
-      PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})
-    )
-    const cancellationPosition = JournalPosition.make(16)
-    const cancellation = coverageRecord(
-      Number(cancellationPosition),
-      RunCancellationAppliedEvent.make({
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        version: workflowJournalEventVersion
-      })
-    )
-    const began = makeHistoricalWorkflowRunBeganRecord(
-      coverageRunId,
-      coverageTarget,
-      coveragePolicy,
-      remotePublicationTargetForTest
-    )
-    const records = [
-      began,
-      ...acceptedCoverageLineageRecords().map((record) => ({
-        ...record,
-        position: JournalPosition.make(Number(record.position) + 1)
-      })),
-      beginIntent,
-      beginResponse,
-      runningReport,
-      unreadableProjection,
-      cancellation
-    ]
-    const reduced = reduceWorkflowJournalHistory(coverageRunId, records)
-    if (reduced._tag === "InvalidWorkflowJournalHistory") {
-      return yield* Effect.die(
-        `cancellation fixture must be accepted: ${reduced.issues.map(workflowJournalHistoryIssueDetail).join("; ")}`
+      const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      const beginIntent = coverageRecord(
+        12,
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Begin",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: beginOrdinal,
+          plannedAttempt: coverageAttempt,
+          version: workflowJournalEventVersion
+        })
       )
-    }
-    const cancelledState: ReconstructedRunState = {
-      ...reduced.runState,
-      cancellation: { _tag: "RunCancellationApplied", appliedAt: cancellationPosition },
-      graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
-    }
-    const resources = yield* makeIntegrationTargetResourceController()
-    const projection = yield* liveProjectionFor(
-      makeRunRecoveryProjection(coverageRunId, undefined, resources),
-      coverageRunId,
-      coverageTarget,
-      cancelledState,
-      records
-    )
-    expect(projection.frontier.transitions).toContainEqual(
-      RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
-    )
-    expect(projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptExecutorWork")).toBe(false)
-  })
+      const beginResponse = coverageRecord(
+        13,
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: beginOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt: coverageAttempt,
+          report: executing,
+          version: workflowJournalEventVersion
+        })
+      )
+      const runningReport = executorReport(14, executing, 1)
+      const unreadableProjection = executorStateObservation(
+        15,
+        PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})
+      )
+      const cancellationPosition = JournalPosition.make(16)
+      const cancellation = coverageRecord(
+        Number(cancellationPosition),
+        RunCancellationAppliedEvent.make({
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      const began = makeHistoricalWorkflowRunBeganRecord(
+        coverageRunId,
+        coverageTarget,
+        coveragePolicy,
+        remotePublicationTargetForTest
+      )
+      const records = [
+        began,
+        ...acceptedCoverageLineageRecords().map((record) => ({
+          ...record,
+          position: JournalPosition.make(Number(record.position) + 1)
+        })),
+        beginIntent,
+        beginResponse,
+        runningReport,
+        unreadableProjection,
+        cancellation,
+        ...(suspendWasIntended
+          ? [
+              coverageRecord(
+                17,
+                PlannedAttemptExecutorCommandIntendedEvent.make({
+                  command: "Suspend",
+                  initiatedBy: { _tag: "DalphCoordinator" },
+                  occurrenceClassification: "InitiatedAction",
+                  ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+                  plannedAttempt: coverageAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ]
+          : [])
+      ]
+      const reduced = reduceWorkflowJournalHistory(coverageRunId, records)
+      if (reduced._tag === "InvalidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `cancellation fixture must be accepted: ${reduced.issues.map(workflowJournalHistoryIssueDetail).join("; ")}`
+        )
+      }
+      const cancelledState: ReconstructedRunState = {
+        ...reduced.runState,
+        cancellation: { _tag: "RunCancellationApplied", appliedAt: cancellationPosition },
+        graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
+      }
+      const resources = yield* makeIntegrationTargetResourceController()
+      const projection = yield* liveProjectionFor(
+        makeRunRecoveryProjection(coverageRunId, undefined, resources),
+        coverageRunId,
+        coverageTarget,
+        cancelledState,
+        records
+      )
+      expect(projection.frontier.transitions).toContainEqual(
+        suspendWasIntended
+          ? RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+          : RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+      )
+      expect(projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptExecutorWork")).toBe(
+        false
+      )
+    })
 )
 
 it.each(["Stopped", "Unresolved"] as const)(
@@ -6262,6 +6397,75 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
   ).toBeUndefined()
 })
 
+it("retains settled graph predecessors when recovering G2 from accumulated history", () => {
+  const earlierGraphs = Array.from({ length: 128 }, (_, ordinal) =>
+    makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`active-g2-settled-${ordinal}`),
+      coverageTarget,
+      []
+    )
+  )
+  const history = earlierGraphs.flatMap((operation, ordinal) => [
+    coverageRecord(ordinal * 2 + 1, taskTrackerReadIntent(operation)),
+    coverageRecord(
+      ordinal * 2 + 2,
+      taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, coverageGraph)
+      )
+    )
+  ])
+  const latestGraph = earlierGraphs.at(-1)
+  if (latestGraph === undefined) throw new Error("Fixture requires a settled graph")
+  const currentGraph = { operationId: latestGraph.operationId, recordedAt: JournalPosition.make(256) }
+  const predecessors = earlierGraphs.map(({ operationId }) => operationId)
+  const pending = makeTrackerGraphObservationOperation(
+    { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: currentGraph.operationId },
+    OperationId.make("active-g2-after-settled-history"),
+    coverageTarget,
+    predecessors
+  )
+  const incomplete = makeTrackerGraphObservationOperation(
+    pending.cause,
+    pending.operationId,
+    coverageTarget,
+    predecessors.slice(1)
+  )
+  for (const source of [history, journalEvidenceFrom(history)]) {
+    expect(pendingActiveRefreshG2OperationFor(source, coverageRunId, coverageTarget, currentGraph)).toBeUndefined()
+  }
+  expect(
+    pendingActiveRefreshG2OperationFor(
+      journalEvidenceFrom([...history, coverageRecord(257, taskTrackerReadIntent(incomplete))]),
+      coverageRunId,
+      coverageTarget,
+      currentGraph
+    )
+  ).toBeUndefined()
+  const withPending = [...history, coverageRecord(257, taskTrackerReadIntent(pending))]
+  for (const source of [withPending, journalEvidenceFrom(withPending)]) {
+    expect(pendingActiveRefreshG2OperationFor(source, coverageRunId, coverageTarget, currentGraph)).toEqual(pending)
+  }
+  expect(
+    pendingActiveRefreshG2OperationFor(
+      journalEvidenceFrom([
+        ...withPending,
+        coverageRecord(
+          258,
+          taskTrackerFactsObservedEvent(
+            pending.operationId,
+            makeCompleteTaskTrackerFactsObserved(pending, coverageGraph)
+          )
+        )
+      ]),
+      coverageRunId,
+      coverageTarget,
+      currentGraph
+    )
+  ).toBeUndefined()
+})
+
 it("requires each active refresh to reread authorities after its own activation baseline", () => {
   const ready = PlannedWorktreeReady.make({
     baseSha: coverageAttempt.baseSha,
@@ -6400,6 +6604,52 @@ it("reconciles each exact pre-Pause integration intent but filters a post-Pause 
     expect(frontier.transitions).toEqual([beforeTransition])
   }
 })
+
+it.each(["Begin", "Resume", "Suspend"] as const)(
+  "cancellation permits only exact unsettled Suspend reconciliation (%s)",
+  (command) => {
+    const cancellationPosition = JournalPosition.make(10)
+    const state: ReconstructedRunState = {
+      ...coverageRunState(
+        [
+          coverageRecord(
+            10,
+            RunCancellationAppliedEvent.make({
+              initiatedBy: { _tag: "Operator" },
+              occurrenceClassification: "InitiatedAction",
+              version: workflowJournalEventVersion
+            })
+          ),
+          coverageRecord(
+            11,
+            PlannedAttemptExecutorCommandIntendedEvent.make({
+              command,
+              initiatedBy: { _tag: "DalphCoordinator" },
+              occurrenceClassification: "InitiatedAction",
+              ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+              plannedAttempt: coverageAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        ],
+        []
+      ),
+      cancellation: { _tag: "RunCancellationApplied", appliedAt: cancellationPosition }
+    }
+    const exact = RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+    const foreign = RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({
+      plannedAttempt: { ...coverageAttempt, attemptId: AttemptId.make("foreign-cancellation-attempt") }
+    })
+    const frontier = filterFrontierForActivePauses(
+      { explanations: [], transitions: [exact, foreign] },
+      state,
+      undefined,
+      new Set(),
+      new Set()
+    )
+    expect(frontier.transitions).toEqual(command === "Suspend" ? [exact] : [])
+  }
+)
 
 it("reconciles an integration intent admitted before cancellation but filters a later one", () => {
   const beforeCancellation = pausedIntegrationScenario("cancel-before", 8)

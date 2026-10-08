@@ -156,7 +156,7 @@ export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(funct
   maintenance: JournalMaintenanceObservationService,
   retirementAttempts?: Ref.Ref<ReadonlySet<RunId>>
 ) {
-  const scan = yield* journal.scanHot()
+  const scan = yield* journal.scanHot(runId)
   // Hot discovery bounds the set that can own unfinished work, but the exact
   // requested Run may already be Cold after a prior startup or immediate
   // retirement. Read that identity through the normal two-partition seam so a

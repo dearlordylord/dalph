@@ -1159,9 +1159,13 @@ describe("Codex process observation policy", () => {
     expect(signals).toBe(2)
   })
 
-  it.each(["absent", "live", "foreign", "unreadable"] as const)(
-    "reconciles natural exit before forced close without signalling again; retains original writer custody after an absent fresh group (%s)",
-    async (outcome) => {
+  it.each(
+    (["already-absent", "exit-between-reads", "still-live", "foreign", "unreadable"] as const).flatMap((ownerOutcome) =>
+      (["absent", "live", "foreign", "unreadable"] as const).map((outcome) => ({ ownerOutcome, outcome }))
+    )
+  )(
+    "reconciles natural exit before forced close without signalling again; retains original writer custody after an absent fresh group ($ownerOutcome, $outcome)",
+    async ({ outcome, ownerOutcome }) => {
       const launch = CodexServerLaunchRecord.make({
         command: ["codex", "app-server"],
         incarnation: CodexServerIncarnation.make("stop|linux%3A70"),
@@ -1194,9 +1198,21 @@ describe("Codex process observation policy", () => {
             discover: () => Effect.succeed({ _tag: "Absent" as const }),
             stop: () => Effect.void,
             observe: () =>
-              Effect.sync(() =>
-                ++ownerReads === 1 ? { _tag: "ExactLive" as const, pid: 70 } : { _tag: "Absent" as const }
-              )
+              Effect.sync(() => {
+                ownerReads += 1
+                if (
+                  ownerReads === 1 ||
+                  ownerOutcome === "still-live" ||
+                  (ownerOutcome !== "already-absent" && ownerReads === 2)
+                ) {
+                  return { _tag: "ExactLive" as const, pid: 70 }
+                }
+                if (ownerOutcome === "foreign")
+                  return { _tag: "Contradictory" as const, detail: "controlled foreign owner" }
+                if (ownerOutcome === "unreadable")
+                  return { _tag: "Unreadable" as const, detail: "controlled unreadable owner" }
+                return { _tag: "Absent" as const }
+              })
           },
           {
             observe: () =>
@@ -1208,8 +1224,11 @@ describe("Codex process observation policy", () => {
           selectedNative
         )
       )
-      expect(Exit.isSuccess(result)).toBe(outcome === "absent")
-      expect(retainedMemberReads).toBeGreaterThan(0)
+      const ownerAbsent = ownerOutcome === "already-absent" || ownerOutcome === "exit-between-reads"
+      expect(Exit.isSuccess(result)).toBe(outcome === "absent" && ownerAbsent)
+      expect(ownerReads).toBe(ownerOutcome === "already-absent" ? 2 : 3)
+      if (!ownerAbsent) expect(retainedMemberReads).toBe(0)
+      else expect(retainedMemberReads).toBeGreaterThan(0)
       expect(signals).toEqual([[-70, "SIGTERM"]])
     }
   )

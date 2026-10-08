@@ -14,6 +14,7 @@ import {
 } from "../../workflow/protocols/integration-finality/events.js"
 import { encodeJournalEvent } from "../event-codec.js"
 import { decodeSqliteJournalEvent, encodeSqliteJournalEvent } from "./sqlite-event-codec.js"
+import { withJournalPayloadStringPool } from "../payload-string-pool.js"
 
 it("round-trips full semantic finality events through the production SQLite gzip and compact layers", async () => {
   await fc.assert(
@@ -34,8 +35,16 @@ it("round-trips full semantic finality events through the production SQLite gzip
       expect(decoded).toEqual(event)
       expect(encodeSqliteJournalEvent(decoded)).toEqual(stored)
       expect(await Effect.runPromise(decodeSqliteJournalEvent(encodeJournalEvent(event)))).toEqual(event)
+      await Effect.runPromise(
+        withJournalPayloadStringPool((strings) =>
+          Effect.gen(function* () {
+            expect(yield* decodeSqliteJournalEvent(stored, strings)).toEqual(decoded)
+            expect(yield* decodeSqliteJournalEvent(encodeJournalEvent(event), strings)).toEqual(decoded)
+          })
+        )
+      )
     }),
-    { numRuns: 60 }
+    { numRuns: 60, examples: [["\u0000"], ["__proto__"], ["\ud800"], ["漢字😀"], ["e\u0301"], ["é"]] }
   )
 })
 
@@ -58,6 +67,10 @@ it.effect("attaches the row's kind and semantic version to gzip failures without
         Effect.flip
       )
       expect(failure).toMatchObject({ _tag: "JournalEventDecodeIssue", kind: encoded.kind, version: encoded.version })
+      const pooledFailure = yield* withJournalPayloadStringPool((strings) =>
+        decodeSqliteJournalEvent({ ...encoded, payloadJson: JSON.stringify(changed) }, strings).pipe(Effect.flip)
+      )
+      expect(pooledFailure).toEqual(failure)
     }
   })
 )

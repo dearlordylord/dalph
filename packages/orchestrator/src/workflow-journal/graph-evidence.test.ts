@@ -84,6 +84,38 @@ const graphRead = (id: string, readTarget = target) =>
     [taskId]
   )
 
+it.each(["WorkflowEstablishment", "PostQuiescenceReconfirmation"] as const)(
+  "retains %s graph evidence without searching causal predecessors for continuation plans",
+  (cause) => {
+    const operation = makeTrackerGraphObservationOperation(
+      cause === "WorkflowEstablishment"
+        ? { _tag: cause }
+        : { _tag: cause, quiescentGraphOperationId: plan.operationId },
+      OperationId.make(`ordinary-${cause}`),
+      target,
+      [plan.operationId, ...Array.from({ length: 1024 }, (_, index) => OperationId.make(`prior-${index}`))],
+      [taskId]
+    )
+    const full = record(
+      2,
+      taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
+    )
+    let lookups = 0
+    const evidence = appendGraphEvidence(emptyGraphEvidence(), full, (id) => {
+      lookups += 1
+      return id === operation.operationId ? operation : id === plan.operationId ? plan : undefined
+    })
+    expect(lastGraphObservationAt(evidence, { target, throughPosition: full.position })).toBe(full)
+    expect(
+      lastGraphObservationAt(evidence, { target, plannedAttempt: attempt, throughPosition: full.position })
+    ).toBeUndefined()
+    expect(
+      Option.getOrThrow(graphSnapshotForObservation(evidence, full.position, full.position)).eligibleTasks()
+    ).toHaveLength(1)
+    expect(lookups).toBe(1)
+  }
+)
+
 it("retains malformed decoded graph evidence without projecting missing grouping facts", () => {
   const operation = graphRead("graph-missing-grouping")
   const full = makeCompleteTaskTrackerFactsObserved(operation, snapshot)

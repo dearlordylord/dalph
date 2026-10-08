@@ -167,6 +167,7 @@ import {
   TracePositionIdentity,
   TraceReader,
   TraceReaderLayer,
+  TraceSnapshotByteBudget,
   TraceRunNotFound,
   makeTraceReader,
   makeTracePresentation,
@@ -379,6 +380,69 @@ const sqliteReaderLayer = (filename: JournalDatabaseLocator) => {
 
 const readerFromRecords = (records: ReadonlyArray<JournalRecord>) =>
   makeTraceReader({ read: () => Effect.succeed(records) })
+
+it.effect("snapshot admission preserves small complete views and proves excess for dense causal histories", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const beginning = yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+    const operationIds = Array.from({ length: 256 }, (_, index) => OperationId.make(`snapshot-budget-${index}`))
+    const records: ReadonlyArray<JournalRecord> = [
+      beginning,
+      ...operationIds.map((operationId, index): JournalRecord => {
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          operationId,
+          target,
+          operationIds.slice(0, index)
+        )
+        const event = taskTrackerReadIntent(operation)
+        return { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(index + 2), runId }
+      })
+    ]
+    const reader = readerFromRecords(records)
+    const smallCursor = TraceCursor.make({ runId, position: JournalPosition.make(3) })
+    const smallReader = readerFromRecords(records.slice(0, 3))
+    const smallBefore = yield* smallReader.readAt(smallCursor)
+    const actualSmallBytes = new TextEncoder().encode(JSON.stringify(smallBefore)).byteLength
+    expect(yield* reader.snapshotAdmission(smallCursor, TraceSnapshotByteBudget.make(actualSmallBytes))).toEqual({
+      _tag: "MayFit"
+    })
+    expect(yield* smallReader.readAt(smallCursor)).toEqual(smallBefore)
+    const denseCursor = TraceCursor.make({ runId, position: JournalPosition.make(records.length) })
+    expect(yield* reader.snapshotAdmission(denseCursor, TraceSnapshotByteBudget.make(1024 * 1024))).toEqual({
+      _tag: "ExceedsByteBudget"
+    })
+    const missingPredecessor = OperationId.make("snapshot-budget-missing-predecessor")
+    const invalidOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("snapshot-budget-invalid-latest"),
+      target,
+      [missingPredecessor]
+    )
+    const invalidEvent = taskTrackerReadIntent(invalidOperation)
+    const invalidRecords: ReadonlyArray<JournalRecord> = [
+      ...records,
+      {
+        event: invalidEvent,
+        key: describeJournalEvent(invalidEvent).expectedKey,
+        position: JournalPosition.make(records.length + 1),
+        runId
+      }
+    ]
+    const invalidCursor = TraceCursor.make({ runId, position: JournalPosition.make(invalidRecords.length) })
+    const failure = yield* Effect.flip(
+      readerFromRecords(invalidRecords).snapshotAdmission(invalidCursor, TraceSnapshotByteBudget.make(1))
+    )
+    expect(failure).toMatchObject({ _tag: "TraceCausalPredecessorMissing", predecessorOperationId: missingPredecessor })
+    const invalidCursorFailure = yield* Effect.flip(
+      reader.snapshotAdmission(
+        TraceCursor.make({ runId, position: JournalPosition.make(records.length + 1) }),
+        TraceSnapshotByteBudget.make(1)
+      )
+    )
+    expect(invalidCursorFailure).toBeInstanceOf(TraceCursorNotCommitted)
+  }).pipe(Effect.provide(readerLayer))
+)
 
 const historicalIntegrationBoundaryRecords = (): ReadonlyArray<JournalRecord> => {
   const fixture = integrationFinalityFixture

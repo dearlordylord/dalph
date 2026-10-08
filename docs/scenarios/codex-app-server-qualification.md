@@ -91,6 +91,17 @@ ownership census as production.
 | Private-id refinement | The built host's known private id is absent from every emitted public event; the maintained cassette now exposes only the private record tag and asserts the known cassette thread id is absent from serialization. | `normal built host returns ExecutorWorkExecuting then the sealed Accepted commit without exposing its Codex thread id`; `runs maintained Codex executor stories through the concrete production executor` |
 | Supported hosts | One pinned runner and one test list are used unchanged on both supported operating systems. The Linux job runs Dalph and Codex under one disposable account so unrelated protected runner processes are provably foreign; platform-specific process observations must satisfy the same result contract. | workflow matrix entries `ubuntu-latest` and `macos-latest`, each running `pnpm qualify:codex` |
 
+The graceful application Exit chronology also covers natural exit between the
+fresh owner observation and the post-SIGTERM group census. Starting with an
+exact owner and retained exact writers, a grace-period survivor triggers those
+two reads. If the group is now absent but the earlier owner read was live,
+Dalph rereads the owner and then proves every original writer absent. It closes
+without another signal only after both proofs; a live, foreign, or unreadable
+owner or retained writer forbids successful cleanup. This observation race
+does not add a provider call or retry; crash recovery remains governed by the
+prior-leader-loss chronology. Controlled evidence is
+`reconciles natural exit before forced close without signalling again; retains original writer custody after an absent fresh group`.
+
 No provider mutation retry applies: the fixture provider receives model calls
 but owns no tracker lifecycle or claim. No GitHub facts participate. Crashes and
 retries apply only at the explicitly mapped Codex, private-store, process, Git,

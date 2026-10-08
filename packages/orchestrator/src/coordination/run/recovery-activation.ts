@@ -156,6 +156,7 @@ import {
   journalGraphObservationAt,
   journalGraphSnapshotForObservation,
   journalLatestTaskRead,
+  journalLatestTaskObservation,
   journalEvidenceBefore,
   journalRecordByPosition,
   journalRecordByKey,
@@ -1584,6 +1585,13 @@ export const deriveJournalResponsibilityFacts = (
       }
     )
   const workflowOperationFreshFacts = (responsibility: WorkflowOperationResponsibility): ResponsibilityFreshFacts => {
+    if (operationWasSettled(source, workflowResponsibilityOperationId(responsibility))) {
+      return {
+        _tag: "WorkflowOperationFreshFacts",
+        disposition: ResponsibilityDisposition.Settled({ outcome: "ResponsibilityCompleted" }),
+        responsibility
+      }
+    }
     const records = [
       ...new Map(
         [
@@ -1611,8 +1619,7 @@ export const deriveJournalResponsibilityFacts = (
           immutableRunTarget
         )
       })
-    const settled =
-      operationWasSettled(records, workflowResponsibilityOperationId(responsibility)) || stoppedNoReleaseSettles()
+    const settled = stoppedNoReleaseSettles()
     const expectedClaim =
       responsibility._tag === "TaskClaimReleaseResponsibility"
         ? responsibility.operation.release.claim
@@ -1695,6 +1702,7 @@ export const deriveJournalResponsibilityFacts = (
         changedSpecification.value.fingerprint
       ) !== undefined
     const acquiredClaim = authorizedClaimForAttempt(records, responsibility.plannedAttempt)
+    const claimFreshnessBaseline = freshnessBaselineForAttempt(responsibility.plannedAttempt)
     const currentClaimRecord = lastMatchingRecord(
       journalRecordsForTaskKind(source, responsibility.plannedAttempt.taskId, "TaskTrackerFactsObserved"),
       ({ event, position }) =>
@@ -1704,7 +1712,7 @@ export const deriveJournalResponsibilityFacts = (
         event.observation.coverage.taskId === responsibility.plannedAttempt.taskId &&
         (immutableRunTarget === undefined ||
           taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
-        positionIsAfter(position, freshnessBaselineForAttempt(responsibility.plannedAttempt))
+        positionIsAfter(position, claimFreshnessBaseline)
     )
     const currentClaimFacts = currentClaimRecord?.event
     const committedReacquisitionIntent = lastMatchingRecord(
@@ -2256,6 +2264,35 @@ export const latestIntegrationClaimObservationPosition = (
   freshnessBaseline: Option.Option<JournalPosition>
 ): JournalPosition | undefined => {
   const authorizedClaim = authorizedClaimForAttempt(source, plannedAttempt)?.claim
+  if (isJournalRecordEvidence(source)) {
+    // Graph refreshes cannot establish focused claim freshness. Keep exact
+    // acquisitions and both focused observation families competing by position.
+    const acquired = Array.from(journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskClaimAcquired")).findLast(
+      ({ event }) =>
+        event._tag === "TaskClaimAcquired" &&
+        authorizedClaim !== undefined &&
+        isExactTaskClaim(event.claim, authorizedClaim)
+    )
+    const focused = journalLatestTaskObservation(source, {
+      taskId: plannedAttempt.taskId,
+      target,
+      kind: "FocusedTaskClaimFacts"
+    })
+    const unreadable = journalLatestTaskObservation(source, {
+      taskId: plannedAttempt.taskId,
+      target,
+      kind: "FocusedTaskClaimFactsUnreadable"
+    })
+    return [acquired?.position, focused?.position, unreadable?.position].reduce<JournalPosition | undefined>(
+      (latest, position) =>
+        position !== undefined &&
+        positionIsAfter(position, freshnessBaseline) &&
+        (latest === undefined || position > latest)
+          ? position
+          : latest,
+      undefined
+    )
+  }
   const records = Array.from(journalRecordsForTask(source, plannedAttempt.taskId))
   return records.findLast(
     ({ event, position }) =>
@@ -2518,8 +2555,19 @@ const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTra
   "ObserveResponsibleTaskClaim",
   "ReleaseStartedIntegrationTarget"
 ])
-const transitionMayRunWhileRunPaused = (transition: RunnableFrontierTransition): boolean =>
-  transitionTagsAllowedWhilePaused.has(transition._tag)
+const transitionMayRunWhileRunPaused = (
+  transition: RunnableFrontierTransition,
+  records: JournalHistorySource
+): boolean => {
+  if (transitionTagsAllowedWhilePaused.has(transition._tag)) return true
+  if (transition._tag !== "ReconcilePlannedAttemptExecutorWork") return false
+  // Reconciliation of an intended stop belongs to settlement. Other commands
+  // can redeliver forward work and remain behind the pause/cancellation cutoff.
+  const intended = latestUnsettledPlannedAttemptExecutorCommand(records, transition.plannedAttempt)
+  return (
+    intended?.command === "Suspend" && plannedTaskAttemptEquivalence(intended.plannedAttempt, transition.plannedAttempt)
+  )
+}
 
 export const recordBeforePause = (
   records: Iterable<JournalRecord>,
@@ -2638,7 +2686,7 @@ export const filterFrontierForActivePauses = (
   const transitions = runSettlementClosed
     ? frontier.transitions.filter(
         (transition) =>
-          transitionMayRunWhileRunPaused(transition) ||
+          transitionMayRunWhileRunPaused(transition, journalHistoryOf(runState)) ||
           (heldIntegrationTaskIds.has(runnableTransitionTaskId(transition)) &&
             transitionTagsAllowedToFinishHeldIntegration.has(transition._tag)) ||
           pendingGitReadReconciliations.has(transition) ||
@@ -3022,11 +3070,10 @@ export const pendingActiveRefreshG2OperationFor = (
   for (const record of journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")) {
     const operation = graphReadIntentForRunTarget(record, runId, targetKey)
     if (operation === undefined) continue
-    const expectedPredecessors = Array.from(
-      HashSet.add(graphOperationIdsBeforeIntent, currentGraph.operationId)
-    ).toSorted()
+    const predecessorsBeforeIntent = graphOperationIdsBeforeIntent
     graphOperationIdsBeforeIntent = HashSet.add(graphOperationIdsBeforeIntent, operation.operationId)
     if (!isPendingReconfirmationOf(records, operation, record.position, currentGraph)) continue
+    const expectedPredecessors = Array.from(HashSet.add(predecessorsBeforeIntent, currentGraph.operationId)).toSorted()
     if (sameStringSequence([...operation.predecessorOperationIds].toSorted(), expectedPredecessors)) {
       pending = operation
     }

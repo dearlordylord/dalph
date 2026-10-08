@@ -78,14 +78,11 @@ describe("SQLite warm append storage checkpoint", () => {
           }
           const queriesAfter = yield* Ref.get(partitionRowQueries)
           expect(queriesAfter).toEqual(queriesBefore)
-          expect(queriesBefore.filter((query) => query.runId === runId).map(({ rowCount }) => rowCount)).toEqual([
-            0,
-            1,
-            prefixSize + 1
-          ])
+          expect(queriesBefore.filter((query) => query.runId === runId).map(({ rowCount }) => rowCount)).toEqual([0, 1])
           expect((yield* journal.read(runId)).map(({ position }) => position)).toEqual(
             Array.from({ length: prefixSize + 17 }, (_, index) => index + 1)
           )
+          expect(yield* Ref.get(partitionRowQueries)).toEqual(queriesAfter)
           return {
             inserted: (yield* Ref.get(inserted)) - insertsBefore,
             keyLookups: (yield* Ref.get(keyLookups)) - lookupsBefore,

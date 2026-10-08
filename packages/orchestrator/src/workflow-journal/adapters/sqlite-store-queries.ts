@@ -18,7 +18,8 @@ import {
   type JournalStoreError
 } from "../store.js"
 import { classifyJournalStorageFailure, decodeBoundary, type StoreOperation } from "./sqlite-store-errors.js"
-import type { SqlitePartitionSnapshot } from "./sqlite-storage-checkpoint.js"
+import type { SqliteHotStorageCheckpoint, SqlitePartitionSnapshot } from "./sqlite-storage-checkpoint.js"
+import { type JournalPayloadStringPool, withJournalPayloadStringPool } from "../payload-string-pool.js"
 
 const PersistedJournalRow = Schema.Struct({
   event_kind: JournalEventKind,
@@ -37,6 +38,46 @@ const lastRecordIndex = -1
 const historyCorruption = (partition: JournalPartition, runId: RunId, operation: StoreOperation, detail: string) =>
   new JournalHistoryCorruption({ detail, operation, partition, runId })
 
+/** Proves append positions and key uniqueness for already decoded immutable rows. */
+interface SqliteDecodedHistoryEvidence extends Pick<
+  SqliteHotStorageCheckpoint,
+  "decodedThrough" | "recordsByKey" | "terminalPosition"
+> {
+  readonly records: ReadonlyArray<JournalRecord>
+}
+
+export const makeSqliteDecodedHistoryEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  partition: JournalPartition,
+  runId: RunId,
+  operation: StoreOperation
+): Effect.Effect<SqliteDecodedHistoryEvidence, JournalHistoryCorruption> =>
+  Effect.gen(function* () {
+    const observedKeys = new Set<JournalRecordKey>()
+    for (const [index, record] of records.entries()) {
+      if (record.position !== index + 1) {
+        return yield* historyCorruption(
+          partition,
+          runId,
+          operation,
+          `expected contiguous position ${index + 1}, found ${record.position}`
+        )
+      }
+      if (observedKeys.has(record.key)) {
+        return yield* historyCorruption(partition, runId, operation, `duplicate record key ${record.key}`)
+      }
+      observedKeys.add(record.key)
+    }
+    return {
+      decodedThrough: records.at(lastRecordIndex)?.position,
+      records,
+      recordsByKey: HashMap.fromIterable(
+        records.map((record) => [record.key, { event: record.event, position: record.position }] as const)
+      ),
+      terminalPosition: records.find(({ event }) => event._tag === "WorkflowRunTerminated")?.position
+    }
+  })
+
 /** Node's SQLite TEXT reader stops at NUL; hex carries the complete stored UTF-8 key. */
 const recordKeyFromSqliteHex = (hex: string): JournalRecordKey | undefined => {
   const bytes = Buffer.from(hex, "hex")
@@ -47,9 +88,10 @@ const recordKeyFromSqliteHex = (hex: string): JournalRecordKey | undefined => {
 
 const parseEvent = (
   row: Pick<PersistedJournalRow, "event_kind" | "event_version" | "payload_json">,
-  operation: StoreOperation
+  operation: StoreOperation,
+  strings: JournalPayloadStringPool
 ) =>
-  decodeJournalEvent({ kind: row.event_kind, payloadJson: row.payload_json, version: row.event_version }).pipe(
+  decodeJournalEvent({ kind: row.event_kind, payloadJson: row.payload_json, version: row.event_version }, strings).pipe(
     Effect.mapError((cause) => cause.detail),
     Effect.mapError((detail) => ({ detail, operation }))
   )
@@ -62,7 +104,8 @@ const decodeScannedRow = (
   partition: JournalPartition,
   operation: "JournalStore.scanHot" | "JournalStore.auditAll",
   rowOrdinal: number,
-  input: unknown
+  input: unknown,
+  strings: JournalPayloadStringPool
 ): Effect.Effect<ScannedRow> =>
   Effect.gen(function* () {
     const identity = yield* decodeBoundary(PersistedRunIdentity, input, operation).pipe(Effect.result)
@@ -93,7 +136,7 @@ const decodeScannedRow = (
         runId: decoded.success.run_id
       }
     }
-    const event = yield* parseEvent(decoded.success, operation).pipe(Effect.result)
+    const event = yield* parseEvent(decoded.success, operation, strings).pipe(Effect.result)
     if (Result.isFailure(event)) {
       return {
         _tag: "BoundaryIssue",
@@ -112,28 +155,33 @@ const decodeScannedRow = (
     }
   })
 
-const collectScannedRows = Effect.fn("JournalStore.Sqlite.collectScannedRows")(function* (
-  partition: JournalPartition,
-  operation: "JournalStore.scanHot" | "JournalStore.auditAll",
-  rows: ReadonlyArray<unknown>
-) {
-  const issues = new Array<JournalAudit["issues"][number]>()
-  const recordsByRun = new Map<RunId, Array<JournalRecord>>()
-  const rowRunIds = new Set<RunId>()
-  for (const [index, input] of rows.entries()) {
-    const decoded = yield* decodeScannedRow(partition, operation, index + 1, input)
-    if (decoded._tag === "BoundaryIssue") {
-      if (decoded.runId !== undefined) rowRunIds.add(decoded.runId)
-      issues.push(decoded.issue)
-      continue
-    }
-    rowRunIds.add(decoded.record.runId)
-    const current = recordsByRun.get(decoded.record.runId) ?? []
-    current.push(decoded.record)
-    recordsByRun.set(decoded.record.runId, current)
-  }
-  return { issues, recordsByRun, rowRunIds }
-})
+const collectScannedRows = Effect.fn("JournalStore.Sqlite.collectScannedRows")(
+  (
+    partition: JournalPartition,
+    operation: "JournalStore.scanHot" | "JournalStore.auditAll",
+    rows: ReadonlyArray<unknown>
+  ) =>
+    withJournalPayloadStringPool((strings) =>
+      Effect.gen(function* () {
+        const issues = new Array<JournalAudit["issues"][number]>()
+        const recordsByRun = new Map<RunId, Array<JournalRecord>>()
+        const rowRunIds = new Set<RunId>()
+        for (const [index, input] of rows.entries()) {
+          const decoded = yield* decodeScannedRow(partition, operation, index + 1, input, strings)
+          if (decoded._tag === "BoundaryIssue") {
+            if (decoded.runId !== undefined) rowRunIds.add(decoded.runId)
+            issues.push(decoded.issue)
+            continue
+          }
+          rowRunIds.add(decoded.record.runId)
+          const current = recordsByRun.get(decoded.record.runId) ?? []
+          current.push(decoded.record)
+          recordsByRun.set(decoded.record.runId, current)
+        }
+        return { issues, recordsByRun, rowRunIds }
+      })
+    )
+)
 
 interface SqlitePartitionScan {
   readonly issues: JournalAudit["issues"]
@@ -191,7 +239,7 @@ export const makeSqliteJournalQueries = (
     runId: RunId,
     operation: StoreOperation
   ) {
-    const input = yield* (
+    const statement =
       partition === "Hot"
         ? sql`
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
@@ -201,56 +249,40 @@ export const makeSqliteJournalQueries = (
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records_cold WHERE run_id = ${runId} ORDER BY position ASC
         `
-    ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))
+    // A first read after reopening must not pin its obsolete decoded history
+    // through the native driver's completed prepare fiber and parent span.
+    const input = yield* statement.unprepared.pipe(
+      Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
+      Effect.catchDefect((cause) => Effect.fail(classifyJournalStorageFailure(operation, cause)))
+    )
     const rows = yield* decodeBoundary(PersistedJournalRows, input, operation).pipe(
       Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
     )
     if (onPartitionRowsQueried !== undefined) yield* onPartitionRowsQueried(partition, runId, rows.length)
-    const decodedRows = yield* Effect.forEach(rows, (row) =>
-      Effect.gen(function* () {
-        const key = recordKeyFromSqliteHex(row.record_key_hex)
-        if (key === undefined) {
-          return yield* historyCorruption(
-            partition,
-            runId,
-            operation,
-            "stored journal record key is not valid UTF-8 hex"
+    const decodedRows = yield* withJournalPayloadStringPool((strings) =>
+      Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const key = recordKeyFromSqliteHex(row.record_key_hex)
+          if (key === undefined) {
+            return yield* historyCorruption(
+              partition,
+              runId,
+              operation,
+              "stored journal record key is not valid UTF-8 hex"
+            )
+          }
+          const event = yield* parseEvent(row, operation, strings).pipe(
+            Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
           )
-        }
-        const event = yield* parseEvent(row, operation).pipe(
-          Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
-        )
-        return {
-          evidence: { event, position: row.position },
-          record: { event, key, position: row.position, runId: row.run_id } satisfies JournalRecord
-        }
-      })
+          return {
+            evidence: { event, position: row.position },
+            record: { event, key, position: row.position, runId: row.run_id } satisfies JournalRecord
+          }
+        })
+      )
     )
     const records = decodedRows.map(({ record }) => record)
-    const observedKeys = new Set<JournalRecordKey>()
-    for (const [index, record] of records.entries()) {
-      if (record.position !== index + 1) {
-        return yield* historyCorruption(
-          partition,
-          runId,
-          operation,
-          `expected contiguous position ${index + 1}, found ${record.position}`
-        )
-      }
-      if (observedKeys.has(record.key)) {
-        return yield* historyCorruption(partition, runId, operation, `duplicate record key ${record.key}`)
-      }
-      observedKeys.add(record.key)
-    }
-    const recordsByKey = HashMap.fromIterable(
-      decodedRows.map(({ evidence, record }) => [record.key, evidence] as const)
-    )
-    return {
-      decodedThrough: records.at(lastRecordIndex)?.position,
-      records,
-      recordsByKey,
-      terminalPosition: records.find(({ event }) => event._tag === "WorkflowRunTerminated")?.position
-    }
+    return yield* makeSqliteDecodedHistoryEvidence(records, partition, runId, operation)
   })
 
   const loadPartitionRecords = Effect.fn("JournalStore.Sqlite.loadPartitionRecords")(function* (
@@ -270,7 +302,10 @@ export const makeSqliteJournalQueries = (
       partition === "Hot"
         ? sql`SELECT run_id FROM journal_records WHERE run_id = ${runId} LIMIT 1`
         : sql`SELECT run_id FROM journal_records_cold WHERE run_id = ${runId} LIMIT 1`
-    ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))
+    ).unprepared.pipe(
+      Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
+      Effect.catchDefect((cause) => Effect.fail(classifyJournalStorageFailure(operation, cause)))
+    )
     const rows = yield* decodeBoundary(Schema.Array(PersistedRunIdentity), input, operation).pipe(
       Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
     )
@@ -350,7 +385,7 @@ export const makeSqliteJournalQueries = (
     partition: JournalPartition,
     operation: "JournalStore.scanHot" | "JournalStore.auditAll"
   ) {
-    const rows = yield* (
+    const statement =
       partition === "Hot"
         ? sql`
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
@@ -360,7 +395,16 @@ export const makeSqliteJournalQueries = (
           SELECT run_id, position, hex(record_key) AS record_key_hex, event_kind, event_version, payload_json
           FROM journal_records_cold ORDER BY run_id ASC, position ASC
         `
-    ).pipe(Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)))
+    // A cached prepare lookup retains its completed fiber's parent span. That
+    // span's exit owns the complete scan result until the statement expires.
+    // Scans still read and validate every row, without retaining that history
+    // through the driver's prepared-statement cache.
+    const rows = yield* statement.unprepared.pipe(
+      Effect.mapError(classifyJournalStorageFailure.bind(undefined, operation)),
+      // The native driver's unprepared path prepares synchronously; contain
+      // its SQLite preparation throws at this storage boundary as well.
+      Effect.catchDefect((cause) => Effect.fail(classifyJournalStorageFailure(operation, cause)))
+    )
     const collections = yield* collectScannedRows(partition, operation, rows)
     for (const [runId, records] of collections.recordsByRun) {
       const decision = decideJournalPartitionHistory(partition, runId, records)

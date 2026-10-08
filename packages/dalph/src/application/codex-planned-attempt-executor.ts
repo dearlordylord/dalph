@@ -2552,8 +2552,8 @@ const makeCodexPlannedAttemptExecutorContext = (
     ) =>
       store.readToolEffect?.(correlation.runId, correlation.attemptId, turnId, itemId) ??
       Effect.fail(new CodexTurnBoundaryUnknown({}))
-    const finishToolEffectStop = Effect.fn("CodexPlannedAttemptExecutor.finishToolEffectStop")(function* (
-      record: Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }>
+    const stopToolEffectContainment = Effect.fn("CodexPlannedAttemptExecutor.stopToolEffectContainment")(function* (
+      record: Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" | "LimitReached" }>
     ) {
       if (record.incarnation === app.incarnation) {
         yield* app
@@ -2570,24 +2570,34 @@ const makeCodexPlannedAttemptExecutorContext = (
           return yield* new CodexTurnBoundaryUnknown({})
         yield* app.stopRetainedLaunch(record.serverLaunch)
       }
-      const stoppedAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
-      yield* writeToolEffect(
-        CodexToolEffectRecord.cases.LimitReached.make({
-          runId: record.runId,
-          attemptId: record.attemptId,
-          threadId: record.threadId,
-          turnId: record.turnId,
-          itemId: record.itemId,
-          incarnation: record.incarnation,
-          worktree: record.worktree,
-          ...(record.serverLaunch === undefined ? {} : { serverLaunch: record.serverLaunch }),
-          startedAtMilliseconds: record.startedAtMilliseconds,
-          deadlineMilliseconds: record.deadlineMilliseconds,
-          reason: record.reason,
-          stopIntentAtMilliseconds: record.stopIntentAtMilliseconds,
-          stoppedAtMilliseconds
-        })
-      )
+    })
+    const recordToolEffectLimitReached = Effect.fn("CodexPlannedAttemptExecutor.recordToolEffectLimitReached")(
+      function* (record: Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }>) {
+        const stoppedAtMilliseconds = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+        yield* writeToolEffect(
+          CodexToolEffectRecord.cases.LimitReached.make({
+            runId: record.runId,
+            attemptId: record.attemptId,
+            threadId: record.threadId,
+            turnId: record.turnId,
+            itemId: record.itemId,
+            incarnation: record.incarnation,
+            worktree: record.worktree,
+            ...(record.serverLaunch === undefined ? {} : { serverLaunch: record.serverLaunch }),
+            startedAtMilliseconds: record.startedAtMilliseconds,
+            deadlineMilliseconds: record.deadlineMilliseconds,
+            reason: record.reason,
+            stopIntentAtMilliseconds: record.stopIntentAtMilliseconds,
+            stoppedAtMilliseconds
+          })
+        )
+      }
+    )
+    const finishToolEffectStop = Effect.fn("CodexPlannedAttemptExecutor.finishToolEffectStop")(function* (
+      record: Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }>
+    ) {
+      yield* stopToolEffectContainment(record)
+      yield* recordToolEffectLimitReached(record)
     })
     const stopToolEffect = Effect.fn("CodexPlannedAttemptExecutor.stopToolEffect")(function* (
       record: Extract<CodexToolEffectRecord, { readonly _tag: "Started" }>,
@@ -2721,6 +2731,38 @@ const makeCodexPlannedAttemptExecutorContext = (
         (effect): effect is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }> =>
           effect._tag === "StopIntended"
       )
+      if (purpose._tag === "ReconcileCommand" && purpose.command === "Suspend") {
+        const retainedToolStop = retainedToolEffects.find(
+          (effect): effect is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" | "LimitReached" }> =>
+            effect._tag === "StopIntended" || effect._tag === "LimitReached"
+        )
+        if (retainedToolStop !== undefined) {
+          if (
+            (!isPersistableOwnedRecord(record) && record._tag !== "SuspensionStopIntended") ||
+            retainedToolStop.runId !== correlation.runId ||
+            retainedToolStop.attemptId !== correlation.attemptId ||
+            retainedToolStop.threadId !== record.threadId ||
+            retainedToolStop.turnId !== record.observedTurnId ||
+            retainedToolStop.worktree !== record.worktree ||
+            retainedToolStop.incarnation !== record.turnStartIncarnation ||
+            retainedToolStop.serverLaunch === undefined ||
+            retainedToolStop.serverLaunch.incarnation !== retainedToolStop.incarnation ||
+            app.stopOwnedLaunch === undefined
+          )
+            return yield* new CodexTurnBoundaryUnknown({})
+          const attempt = { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree }
+          const stopIntent =
+            record._tag === "SuspensionStopIntended" ? record : suspensionStopIntendedRecordFor(attempt, record)
+          yield* invalidateBeginProof(correlation)
+          if (record._tag !== "SuspensionStopIntended") yield* save(stopIntent)
+          // The journal's exact Suspend intent authorizes this fresh custody
+          // proof. A historical item limit alone never proves safe suspension.
+          yield* app.stopOwnedLaunch(retainedToolStop.serverLaunch)
+          if (retainedToolStop._tag === "StopIntended") yield* recordToolEffectLimitReached(retainedToolStop)
+          yield* save(safelySuspendedRecordFor(attempt, stopIntent))
+          return projectionOutcome(exact(suspended(correlation)))
+        }
+      }
       if (intendedToolStop !== undefined) {
         yield* finishToolEffectStop(intendedToolStop)
         return projectionOutcome(unreadable(correlation, "Codex tool item limit reached"))
@@ -3955,7 +3997,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         )
       },
       observe: (correlation, purpose) =>
-        (isBeginReconciliation(purpose)
+        (isBeginReconciliation(purpose) || (purpose._tag === "ReconcileCommand" && purpose.command === "Suspend")
           ? gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(project(correlation, purpose))))
           : project(correlation, purpose)
         ).pipe(

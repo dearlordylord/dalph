@@ -27,7 +27,7 @@ type GraphObservationRecord = {
 }
 
 /** Private membership index for one immutable termination check. */
-type GraphReadPredecessors = ReadonlyMap<OperationId, ReadonlySet<OperationId>>
+type GraphReadPredecessors = ReadonlyMap<OperationId, ReadonlyArray<OperationId>>
 
 const lengthPrefixed = (value: string): string => `${value.length}:${value}`
 
@@ -105,7 +105,7 @@ const graphReadPredecessors = (records: ReadonlyArray<JournalRecord>): GraphRead
   new Map(
     records.flatMap(({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
-        ? [[event.operation.operationId, new Set(event.operation.predecessorOperationIds)] as const]
+        ? [[event.operation.operationId, event.operation.predecessorOperationIds] as const]
         : []
     )
   )
@@ -128,33 +128,27 @@ const graphObservationsContradict = (
   return leftGraph !== undefined && rightGraph !== undefined && graphFactsKey(leftGraph) !== graphFactsKey(rightGraph)
 }
 
-/** Reverse only explicit edges; reaching another observed read proves supersession. */
+/** Follow only explicit predecessors; each observed descendant proves its observed ancestors superseded. */
 const causallySupersededGraphReads = (
   operations: GraphReadPredecessors,
   observations: ReadonlyArray<GraphObservationRecord>
 ): ReadonlySet<OperationId> => {
-  const successors = new Map<OperationId, Set<OperationId>>()
-  for (const [operationId, predecessors] of operations) {
-    for (const predecessor of predecessors) {
-      const following = successors.get(predecessor) ?? new Set<OperationId>()
-      following.add(operationId)
-      successors.set(predecessor, following)
-    }
-  }
   const observed = new Set(observations.map(({ operationId }) => operationId))
   const superseded = new Set<OperationId>()
   for (const origin of observed) {
     const visited = new Set<OperationId>([origin])
-    const pending = [...(successors.get(origin) ?? [])]
+    const pending = [...(operations.get(origin) ?? [])]
     while (pending.length > 0) {
-      const descendant = pending.pop()
-      if (descendant === undefined || visited.has(descendant)) continue
-      if (observed.has(descendant)) {
-        superseded.add(origin)
-        break
+      const predecessor = pending.pop()
+      if (predecessor === undefined || visited.has(predecessor)) continue
+      visited.add(predecessor)
+      if (observed.has(predecessor)) {
+        superseded.add(predecessor)
+        // Its own traversal covers earlier ancestors; copying or reversing
+        // every historical edge would retain a second dense graph here.
+        continue
       }
-      visited.add(descendant)
-      for (const successor of successors.get(descendant) ?? []) pending.push(successor)
+      for (const earlier of operations.get(predecessor) ?? []) pending.push(earlier)
     }
   }
   return superseded

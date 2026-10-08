@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import { JournalEventKind, JournalEventVersion, workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { WorkflowJournalEvent } from "../workflow/registry/event.js"
 import { decodeJournalStoragePayload, encodeJournalStoragePayload } from "./storage-payload.js"
+import type { JournalPayloadStringPool } from "./payload-string-pool.js"
 
 const CurrentPayload = Schema.Record(Schema.String, Schema.Json)
 
@@ -27,10 +28,11 @@ export class JournalEventDecodeIssue extends Schema.TaggedError<JournalEventDeco
 const decodePayload = (
   payloadJson: string,
   kind: JournalEventKind,
-  version: JournalEventVersion
+  version: JournalEventVersion,
+  strings?: JournalPayloadStringPool
 ): Effect.Effect<Schema.JsonObject, JournalEventDecodeIssue> =>
   Effect.try({
-    try: (): unknown => JSON.parse(payloadJson),
+    try: (): unknown => (strings === undefined ? JSON.parse(payloadJson) : strings.parse(payloadJson)),
     catch: (cause) => new JournalEventDecodeIssue({ detail: String(cause), kind, version })
   }).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(CurrentPayload)),
@@ -44,8 +46,11 @@ const decodePayload = (
 /**
  * Decodes one current immutable payload into the current semantic event.
  */
-export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(function* (encoded: EncodedJournalEvent) {
-  const storedPayload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
+export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(function* (
+  encoded: EncodedJournalEvent,
+  strings?: JournalPayloadStringPool
+) {
+  const storedPayload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version, strings)
   const payload = yield* decodeJournalStoragePayload(encoded.kind, storedPayload).pipe(
     Effect.mapError(
       (cause) => new JournalEventDecodeIssue({ detail: String(cause), kind: encoded.kind, version: encoded.version })

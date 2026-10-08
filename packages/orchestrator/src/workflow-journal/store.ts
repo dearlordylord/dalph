@@ -260,8 +260,8 @@ export interface JournalStoreService {
     JournalRecord,
     JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan | WorkflowRunTargetMismatch
   >
-  /** Discovers only histories whose rows remain eligible to own recovery work. */
-  readonly scanHot: () => Effect.Effect<JournalScan, JournalStoreError>
+  /** Discovers all Hot histories; optionally shares decoded rows with one selected startup Run. */
+  readonly scanHot: (retainRunId?: RunId) => Effect.Effect<JournalScan, JournalStoreError>
   /** Explicitly audits both physical partitions, including cold historical rows. */
   readonly auditAll: () => Effect.Effect<JournalAudit, JournalStoreError>
   /** Atomically moves one complete valid terminal history from hot to cold. */
