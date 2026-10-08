@@ -1,8 +1,8 @@
 # Executor proposals and planner-reviewed task decomposition
 
-Status: **proposed, awaiting maintainer acceptance**. This is the scenario draft
-for [#484](https://github.com/dearlordylord/dalph/issues/484), under [parent
-#421](https://github.com/dearlordylord/dalph/issues/421). Reviewing or
+Status: **proposed, awaiting maintainer acceptance**. This specification for
+[#421](https://github.com/dearlordylord/dalph/issues/421) integrates the boundary
+research, chronological scenario draft, and source review from its prerequisites. Reviewing or
 completing this documentation task does not accept this design or authorize
 implementation. No implementation tickets are created by this proposal.
 
@@ -10,6 +10,32 @@ The executor suggests a split to a planner; the planner reviews an exact
 revision; an authorized publisher authors tracker tasks and relations; Dalph
 subsequently reads those tasks through its ordinary graph boundary. The proposed
 publisher protocol below is new design, not an existing Dalph capability.
+
+## Gradual decomposition and shared-interface ownership
+
+The executor proposes only the next useful split of its current task, with
+concrete child acceptance stories and residual parent work. The planner reviews
+that local scope rather than requiring a complete recursive tree or a known
+implementation route for every child. A child executor may later propose its
+own split through the same review/publication protocol; parent grouping alone
+never makes its descendants prerequisites. Each later split requires fresh
+tracker facts, exact review and explicitly authored native blocked-by edges.
+
+This adapts the pinned [Choir planning guidance](https://github.com/Weber-GeoML/Choir/blob/762d1ce47ee23871075fea22a2b510c1fd054fed/docs/agents/orchestrator-planning.md):
+start shallow, let executor evidence motivate further decomposition, and widen
+review when other tasks depend on an interface’s exact shape. Choir’s local
+roadmap graph and proof-specific readiness rules are not adopted. Dalph reads
+readiness and completion from the tracker; artifacts describe requested edits,
+not a second live task graph.
+
+For each shared surface, the planner names one owner, its contract/version,
+compatibility examples and the dependent tasks. The recommended profile assigns
+a dedicated interface task and explicit prerequisites before consumers begin.
+A helper used only within one child stays with that child; separate files do
+not establish separate interfaces. Review includes every affected consumer when
+the shared shape changes. The planner approves ownership and acceptance scope;
+it need not write application code. S7 covers overlapping ownership proposals
+and S10 covers changes after consumers already have immutable plans.
 
 ## Evidence and preserved boundaries
 
@@ -50,7 +76,8 @@ reconciliation is precedent, not evidence that issue creation is idempotent. The
 current claim mutation service does not supply the proposed child-authoring
 seam.
 
-Only the Markdown proposal and its research review appendix change. It is not
+The integrated artifacts are the Markdown proposal and its research review
+appendix; this final coherence edit changes only the proposal. It is not
 loaded by runtime, adds no workflow operation or model, and changes neither the
 accepted glossary/ADRs nor [protected
 compositions](../ARCHITECTURE.md#protected-compositions). Prose cannot change
@@ -428,7 +455,7 @@ it is not an old-attempt claim that the publisher may release. Replacement
 deletes neither resources nor the claim. Any later cleanup requires its own
 exact disposition.
 
- **Visible and forbidden outcomes.** Maintainer sees preserved A/WIP, new
+**Visible and forbidden outcomes.** Maintainer sees preserved A/WIP, new
 residual instructions and the exact choice required. Continue is not this
 profile's handoff: choosing Continue requires replanning the residual overlap;
 unfinished blockers still prohibit Resume. No further publication repair is
@@ -503,7 +530,7 @@ Old resources remain for separately authorized disposition; no cleanup is
 prerequisite to replacement. Ordinary I2 delivery and fresh tracker success
 precede new dependent plans/starts/resumes.
 
- **Visible and forbidden outcomes.** Maintainer sees one interface owner,
+**Visible and forbidden outcomes.** Maintainer sees one interface owner,
 concrete compatibility/migration responsibilities and retained old attempts.
 Independent file paths are not proof of independent interfaces. No planner-
 written code is assumed, no in-place Base/contract rewrite, and no new blocker
@@ -644,9 +671,19 @@ only change and are deliberately unrun.
 | D5 Partial repair and concurrency | Resume verified prefix, no automatic deletion; serialize parent/shared surfaces and re-review competing proposals. Decide how exclusion is proved across Runs/processes; fail closed until it is. |
 | D6 Parent disposition | Retain residual parent coherence with explicit blockers; safely suspend, change instructions and use exact Restart when replacing active scope. Continue/Stop require a revised overlap/disposition review; approval never closes P. |
 | D7 Shared interfaces | Dedicated owner task and explicit prerequisites; incompatible revisions require dependent-attempt review and ordinary disposition. Decide compatibility examples and ownership review authority. |
-| D9 External publisher lifecycle | Decide how publisher stop, loss of hold and exclusion renewal are observed across host Exit/death. Host Exit neither cancels it nor supplies fencing; until proved, no publication suffix is authorized. |
 | D8 Acceptance evidence | Accept or amend S1–S12, provider limits, proposed test seams and invariant obligations before any implementation. Documentation-task completion is not this decision. |
+| D9 External publisher lifecycle | Decide how publisher stop, loss of hold and exclusion renewal are observed across host Exit/death. Host Exit neither cancels it nor supplies fencing; until proved, no publication suffix is authorized. |
 
 Status remains **proposed, awaiting maintainer acceptance**. The [source-review
 appendix](../../research/planner-reviewed-task-decomposition.md#review-appendix-scenario-reconciliation) records scenario evidence and limits; it neither
 changes canonical policy nor schedules implementation.
+
+## Specification delivery boundary
+
+The source-review appendix integrates the research with S1–S12 and their future
+T1–T12 obligations, including chain, diamond, duplicate, stale, shared-interface
+and interrupted-publication exercises. The decision table above remains open
+for maintainer review. Delivering this reviewed proposed specification closes
+only the specification-writing scope. It accepts no design choice, authorizes
+no implementation, and creates no implementation tickets. Dalph owns final
+publication and tracker closure.
