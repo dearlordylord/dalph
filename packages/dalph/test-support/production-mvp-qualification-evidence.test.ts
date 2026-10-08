@@ -349,7 +349,7 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
     const result = yield* qualificationFormalProvenance(sourceSha, {
       _tag: "SuppliedProfiles",
       dedicated: profile("dedicated", 2),
-      stressed: profile("stressed", 4)
+      stressed: profile("stressed", 5)
     })
     expect(result._tag).toBe("DedicatedAndStressed")
     if (result._tag !== "DedicatedAndStressed") return yield* Effect.die("supplied profiles must be present")
@@ -367,13 +367,13 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
       )
       expect(value.formalSeconds).toBe(105)
       expect(value.completeProfileSeconds).toBe(116)
-      expect(value.shards.map(({ shard }) => shard)).toEqual([0, 1])
-      expect(value.shards.map(({ hostedLimitSeconds }) => hostedLimitSeconds)).toEqual([960, 960])
+      expect(value.shards.map(({ shard }) => shard)).toEqual([0, 1, 2])
+      expect(value.shards.map(({ hostedLimitSeconds }) => hostedLimitSeconds)).toEqual([960, 960, 960])
       expect(value.shards.every(({ setupInstallSeconds }) => setupInstallSeconds === 10)).toBe(true)
     }
     expect(
       new Set([result.dedicated, result.stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))).size
-    ).toBe(4)
+    ).toBe(6)
     expect(result.dedicated.profileKind).toBe("dedicated")
     expect(result.dedicated.shards.every(({ condition }) => condition.kind === "dedicated-hosted-job")).toBe(true)
     expect(result.stressed.profileKind).toBe("stressed")
@@ -387,18 +387,18 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
   })
 )
 
-it.effect("live qualification provenance requires four independent same-source formal shard jobs", () =>
+it.effect("live qualification provenance requires six independent same-source formal shard jobs", () =>
   Effect.gen(function* () {
     const result = yield* requiredQualificationFormalProvenance(sourceSha, {
       dedicated: profile("dedicated", 2),
-      stressed: profile("stressed", 4)
+      stressed: profile("stressed", 5)
     })
     expect(result._tag).toBe("DedicatedAndStressed")
     expect(result.dedicated.sourceSha).toBe(sourceSha)
     expect(result.stressed.sourceSha).toBe(sourceSha)
     expect(
       new Set([result.dedicated, result.stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))).size
-    ).toBe(4)
+    ).toBe(6)
     expect(
       (yield* requiredQualificationFormalProvenance(sourceSha, {
         dedicated: profile("dedicated", 2),
@@ -408,7 +408,7 @@ it.effect("live qualification provenance requires four independent same-source f
     expect(
       (yield* requiredQualificationFormalProvenance(sourceSha, {
         dedicated: profile("dedicated", 2),
-        stressed: { ...profile("stressed", 4), runId: 2 }
+        stressed: { ...profile("stressed", 5), runId: 2 }
       }).pipe(Effect.flip)).operation
     ).toBe("ValidateProvenance")
   })
@@ -436,7 +436,7 @@ it.effect("stale substituted unsupported incomplete or over-budget provenance gr
       const failure = yield* qualificationFormalProvenance(sourceSha, {
         _tag: "SuppliedProfiles",
         dedicated: changed,
-        stressed: profile("stressed", 4)
+        stressed: profile("stressed", 5)
       }).pipe(Effect.flip)
       expect(failure.operation).toBe("ValidateProvenance")
     }
@@ -452,8 +452,8 @@ it.effect("stale substituted unsupported incomplete or over-budget provenance gr
         _tag: "SuppliedProfiles",
         dedicated: profile("dedicated", 2),
         stressed: {
-          ...profile("stressed", 4),
-          shards: profile("stressed", 4).shards.map((shard) => ({
+          ...profile("stressed", 5),
+          shards: profile("stressed", 5).shards.map((shard) => ({
             ...shard,
             condition: profile("dedicated", 2).shards[0]?.condition ?? shard.condition
           }))

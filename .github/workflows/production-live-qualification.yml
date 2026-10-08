@@ -67,10 +67,18 @@ jobs:
             label: Stressed formal evidence
             runner: ubuntu-latest
             shard: 0
+          - profile: dedicated
+            label: Dedicated formal evidence
+            runner: ubuntu-24.04-arm
+            shard: 2
           - profile: stressed
             label: Stressed formal evidence
             runner: ubuntu-latest
             shard: 1
+          - profile: stressed
+            label: Stressed formal evidence
+            runner: ubuntu-latest
+            shard: 2
     env:
       DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
@@ -268,7 +276,7 @@ jobs:
       - name: Build shipped controller
         run: pnpm build
 
-      - name: Download all four formal shard reports
+      - name: Download all six formal shard reports
         uses: actions/download-artifact@v4
         with:
           pattern: production-live-formal-*-${{ github.run_id }}-${{ github.run_attempt }}

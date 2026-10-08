@@ -202,7 +202,7 @@ const formalProfile = (profileKind: "dedicated" | "stressed", jobId: number) => 
   profileDigest: "9".repeat(64),
   formalSeconds: 1,
   completeProfileSeconds: 2,
-  shards: [0, 1].map((shard) => ({
+  shards: [0, 1, 2].map((shard) => ({
     shard,
     condition:
       profileKind === "dedicated"
@@ -262,7 +262,7 @@ const input = {
   formal: {
     _tag: "DedicatedAndStressed",
     dedicated: formalProfile("dedicated", 312),
-    stressed: formalProfile("stressed", 314)
+    stressed: formalProfile("stressed", 315)
   }
 }
 

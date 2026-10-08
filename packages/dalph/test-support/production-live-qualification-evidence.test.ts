@@ -73,7 +73,7 @@ const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: numbe
   profileDigest: digest("9"),
   formalSeconds: 105,
   completeProfileSeconds: 115,
-  shards: [0, 1].map((shard) => ({
+  shards: [0, 1, 2].map((shard) => ({
     shard,
     condition:
       profileKind === "dedicated"
@@ -151,7 +151,7 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
     formal: yield* Schema.decodeUnknownEffect(QualificationFormalProvenance.cases.DedicatedAndStressed)({
       _tag: "DedicatedAndStressed",
       dedicated: dedicatedFormalProfile(72),
-      stressed: stressedFormalProfile(74)
+      stressed: stressedFormalProfile(75)
     }),
     fixture: { repositoryNodeId, issueNodeId, labelNodeIds: [labelNodeId] },
     composition: {

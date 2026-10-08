@@ -18,8 +18,16 @@ export const productionLiveQualificationFormalValidatorBin =
 export const productionLiveQualificationEnvironment = "production-live-qualification"
 export const productionLiveQualificationOptIn = "DALPH_RUN_PRODUCTION_LIVE_QUALIFICATION"
 export const formalQualificationJobNames = Object.freeze({
-  dedicated: Object.freeze(["Dedicated formal evidence shard 0", "Dedicated formal evidence shard 1"]),
-  stressed: Object.freeze(["Stressed formal evidence shard 0", "Stressed formal evidence shard 1"])
+  dedicated: Object.freeze([
+    "Dedicated formal evidence shard 0",
+    "Dedicated formal evidence shard 1",
+    "Dedicated formal evidence shard 2"
+  ]),
+  stressed: Object.freeze([
+    "Stressed formal evidence shard 0",
+    "Stressed formal evidence shard 1",
+    "Stressed formal evidence shard 2"
+  ])
 })
 
 const exactSha = /^[0-9a-f]{40}$/u
@@ -601,7 +609,7 @@ const enrichFormalMetadata = async ({ environment, job, kind, metadataPath, repo
 
 const suppliedFormalProfile = async ({ environment, formalRoot, kind }) => {
   const shards = await Promise.all(
-    [0, 1].map(async (shard) => {
+    [0, 1, 2].map(async (shard) => {
       const paths = formalShardPaths(formalRoot, kind, shard)
       const profile = await readFormalShardMetadata({ environment, kind, shard, ...paths })
       const metadata = await readJsonObject(paths.metadataPath, `${kind} shard ${shard} formal provenance`)
@@ -686,13 +694,13 @@ export const resolveFormalQualificationJobs = async ({
   const resolved = Object.fromEntries(
     ["dedicated", "stressed"].map((kind) => [
       kind,
-      [0, 1].map((shard) => resolveFormalJob(jobs, kind, shard, runId, runAttempt))
+      [0, 1, 2].map((shard) => resolveFormalJob(jobs, kind, shard, runId, runAttempt))
     ])
   )
   const jobIds = Object.values(resolved)
     .flat()
     .map(({ id }) => id)
-  if (new Set(jobIds).size !== 4) throw new Error("all four formal Actions job IDs must be distinct")
+  if (new Set(jobIds).size !== 6) throw new Error("all six formal Actions job IDs must be distinct")
   await Promise.all(
     Object.entries(resolved).flatMap(([kind, profileJobs]) =>
       profileJobs.map((job, shard) =>
@@ -777,7 +785,7 @@ export const validateProductionLiveQualificationEnvironment = async (environment
   await requireReadableFile(shippedEntry, "built shipped Dalph entry")
   await requireReadableFile(codexEntry, "locked Codex JavaScript entry")
   for (const kind of ["dedicated", "stressed"]) {
-    for (const shard of [0, 1]) {
+    for (const shard of [0, 1, 2]) {
       const paths = formalShardPaths(formalRoot, kind, shard)
       await requireReadableFile(paths.reportPath, `${kind} shard ${shard} formal report`)
       await requireReadableFile(paths.metadataPath, `${kind} shard ${shard} formal provenance`)

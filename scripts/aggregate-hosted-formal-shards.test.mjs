@@ -92,7 +92,7 @@ const fixture = (affectedFamilies) => {
     })
 }
 
-void test("accepts two out-of-order reports only as one exact canonical command profile", () => {
+void test("accepts all out-of-order reports only as one exact canonical command profile", () => {
   const envelopes = fixture().reverse()
   const aggregate = aggregateHostedFormalShards({ binding, envelopes })
   assert.equal(aggregate.version, 1)
@@ -104,10 +104,12 @@ void test("accepts two out-of-order reports only as one exact canonical command 
     Array.from({ length: formalCommandCount }, (_value, position) => position)
   )
   const first = aggregate.commandEvidence[0]
-  assert.deepEqual(first.args, envelopes[1].report.commands[0].args)
-  assert.deepEqual(first.verdict, envelopes[1].report.commands[0].verdict)
+  const firstShard = envelopes.find(({ shard }) => shard === 0)
+  assert.ok(firstShard)
+  assert.deepEqual(first.args, firstShard.report.commands[0].args)
+  assert.deepEqual(first.verdict, firstShard.report.commands[0].verdict)
   assert.equal(first.result, "exit:0")
-  assert.equal(first.obligationId, envelopes[1].report.commands[0].obligationId)
+  assert.equal(first.obligationId, firstShard.report.commands[0].obligationId)
   assert.equal(first.durationMilliseconds, 1)
   assert.ok(aggregate.negativeControls.some((name) => name.includes("temporal mutant")))
   assert.equal(JSON.stringify(aggregate).includes("/opt/bin/node"), false)
@@ -136,10 +138,10 @@ void test("fails closed on missing duplicate mixed and altered shard evidence", 
       reports[1].profileDigest = "other-profile"
     },
     (reports) => {
-      reports[1].shardCount = 3
+      reports[1].shardCount = 4
     },
     (reports) => {
-      reports[1].report.shard.shardCount = 3
+      reports[1].report.shard.shardCount = 4
     },
     (reports) => {
       reports[1].report.profile.commands[0].args = ["typecheck", "specs/substituted.qnt"]

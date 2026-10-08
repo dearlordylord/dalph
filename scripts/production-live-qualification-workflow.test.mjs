@@ -78,18 +78,19 @@ void test("job environments do not read runner context before GitHub assigns a r
   assert.match(qualificationPaths, /\}\s*>> "\$GITHUB_ENV"/u)
 })
 
-void test("four physical shard jobs capture dedicated and stressed evidence before one live job", () => {
+void test("six physical shard jobs capture dedicated and stressed evidence before one live job", () => {
   const preflightJob = workflow.slice(workflow.indexOf("  preflight:\n"), workflow.indexOf("  formal:\n"))
   assert.match(preflightJob, /Require successful CI for exact candidate/u)
   assert.match(preflightJob, /--require-successful-ci/u)
   assert.match(workflow, /^  formal:$/mu)
   assert.match(formalJob, /needs:\s*\[preflight\]/u)
   assert.match(formalJob, /name: \$\{\{ matrix\.label \}\} shard \$\{\{ matrix\.shard \}\}/u)
-  assert.equal((formalJob.match(/profile: dedicated/gu) ?? []).length, 2)
-  assert.equal((formalJob.match(/profile: stressed/gu) ?? []).length, 2)
-  assert.equal((formalJob.match(/runner: ubuntu-24\.04-arm/gu) ?? []).length, 2)
+  assert.equal((formalJob.match(/profile: dedicated/gu) ?? []).length, 3)
+  assert.equal((formalJob.match(/profile: stressed/gu) ?? []).length, 3)
+  assert.equal((formalJob.match(/runner: ubuntu-24\.04-arm/gu) ?? []).length, 3)
   assert.equal((formalJob.match(/shard: 0/gu) ?? []).length, 2)
   assert.equal((formalJob.match(/shard: 1/gu) ?? []).length, 2)
+  assert.equal((formalJob.match(/shard: 2/gu) ?? []).length, 2)
   assert.match(formalJob, /pnpm check:ci:formal:shard --shard/u)
   assert.equal((workflow.match(/pnpm check:ci:formal/gu) ?? []).length, 2)
   assert.match(formalJob, /DALPH_FORMAL_PROFILE_KIND: \$\{\{ matrix\.profile \}\}/u)

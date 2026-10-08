@@ -36,7 +36,7 @@ const fixture = async () => {
   const formal = {}
   for (const name of ["dedicated", "stressed"]) {
     formal[name] = []
-    for (const shard of [0, 1]) {
+    for (const shard of [0, 1, 2]) {
       const directory = join(root, "formal", name, `shard-${shard}`)
       const report = join(directory, "report.json")
       const metadata = join(directory, "provenance.json")
@@ -121,7 +121,7 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
   profileDigest: "9".repeat(64),
   formalSeconds: 105,
   completeProfileSeconds: 120,
-  shards: [0, 1].map((shard) => ({
+  shards: [0, 1, 2].map((shard) => ({
     shard,
     condition:
       profileKind === "dedicated"
@@ -151,12 +151,13 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
           (position >= 86 && position <= 90) ||
           (position >= 110 && position <= 114) ||
           (position >= 128 && position <= 137)
-        : (position >= 37 && position <= 41) ||
-          (position >= 47 && position <= 59) ||
-          (position >= 65 && position <= 85) ||
-          (position >= 91 && position <= 109) ||
-          (position >= 115 && position <= 127) ||
-          (position >= 138 && position <= 146)
+        : shard === 1
+          ? (position >= 37 && position <= 41) ||
+            (position >= 47 && position <= 59) ||
+            (position >= 65 && position <= 85) ||
+            (position >= 91 && position <= 109) ||
+            (position >= 138 && position <= 146)
+          : position >= 115 && position <= 127
     ),
     setupInstallSeconds: 12,
     formalSeconds: 105 - shard,
@@ -172,7 +173,7 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
 const formalForManifest = Object.freeze({
   _tag: "DedicatedAndStressed",
   dedicated: formalProfileForManifest("dedicated", 812),
-  stressed: formalProfileForManifest("stressed", 814)
+  stressed: formalProfileForManifest("stressed", 815)
 })
 
 const decodeWithBuiltRuntimeSchema = async (manifest) => {
@@ -234,8 +235,10 @@ const completedFormalJob = (id, name, completeJobSeconds = 120) => ({
 const completedFormalJobs = (duration = 120) => [
   completedFormalJob(812, "Dedicated formal evidence shard 0", duration),
   completedFormalJob(813, "Dedicated formal evidence shard 1", duration),
-  completedFormalJob(814, "Stressed formal evidence shard 0", duration),
-  completedFormalJob(815, "Stressed formal evidence shard 1", duration)
+  completedFormalJob(814, "Dedicated formal evidence shard 2", duration),
+  completedFormalJob(815, "Stressed formal evidence shard 0", duration),
+  completedFormalJob(816, "Stressed formal evidence shard 1", duration),
+  completedFormalJob(817, "Stressed formal evidence shard 2", duration)
 ]
 
 afterEach(async () => {
@@ -633,7 +636,7 @@ void test("fails closed for a malformed reviewed base or non-absolute manifest l
   }
 })
 
-void test("resolves four unique numeric shard job IDs and retains truthful per-shard timing", async () => {
+void test("resolves six unique numeric shard job IDs and retains truthful per-shard timing", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   const apiPayload = {
@@ -664,21 +667,35 @@ void test("resolves four unique numeric shard job IDs and retains truthful per-s
         id: 813,
         name: "Dedicated formal evidence shard 1",
         startedAt: "2026-09-13T12:00:00Z"
+      },
+      {
+        completeJobSeconds: 120,
+        completedAt: "2026-09-13T12:02:00.000Z",
+        id: 814,
+        name: "Dedicated formal evidence shard 2",
+        startedAt: "2026-09-13T12:00:00Z"
       }
     ],
     stressed: [
       {
         completeJobSeconds: 120,
         completedAt: "2026-09-13T12:02:00.000Z",
-        id: 814,
+        id: 815,
         name: "Stressed formal evidence shard 0",
         startedAt: "2026-09-13T12:00:00Z"
       },
       {
         completeJobSeconds: 120,
         completedAt: "2026-09-13T12:02:00.000Z",
-        id: 815,
+        id: 816,
         name: "Stressed formal evidence shard 1",
+        startedAt: "2026-09-13T12:00:00Z"
+      },
+      {
+        completeJobSeconds: 120,
+        completedAt: "2026-09-13T12:02:00.000Z",
+        id: 817,
+        name: "Stressed formal evidence shard 2",
         startedAt: "2026-09-13T12:00:00Z"
       }
     ]
@@ -686,9 +703,9 @@ void test("resolves four unique numeric shard job IDs and retains truthful per-s
   assert.match(request.url, /\/actions\/runs\/701\/attempts\/1\/jobs\?per_page=100$/u)
   assert.equal(request.options.headers.Authorization, "Bearer github-secret")
   for (const [profileIndex, name] of ["dedicated", "stressed"].entries()) {
-    for (const shard of [0, 1]) {
+    for (const shard of [0, 1, 2]) {
       const metadata = JSON.parse(await readFile(f.formal[name][shard].metadata, "utf8"))
-      assert.equal(metadata.job.jobId, 812 + profileIndex * 2 + shard)
+      assert.equal(metadata.job.jobId, 812 + profileIndex * 3 + shard)
       assert.equal(typeof metadata.job.jobId, "number")
       assert.equal(metadata.job.workflow, "Production live qualification")
       assert.equal(metadata.job.runAttempt, 1)

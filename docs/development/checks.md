@@ -200,7 +200,7 @@ diagnostic and never claims full CI coverage.
 A passing local stage supplies acceptance evidence for the same command and
 source boundary. The local gate is sequential in one worktree; hosted CI also
 tests clean runner setup, its generated Node matrix, coverage UID isolation,
-portable artifact export/aggregation, and two formal shards under the hosted
+portable artifact export/aggregation, and three formal shards under the hosted
 CPU policy. Record these remaining platform and workflow differences instead
 of reporting the remote jobs as passed. Remote CI can continue in the
 background after a locally qualified push; investigate its result only when it

@@ -88,7 +88,7 @@ describe("hosted formal-model contract", () => {
     expect(formalJob).toContain("\n    runs-on: ubuntu-24.04-arm")
     expect(formalJob).toContain("\n    timeout-minutes: 16")
     expect(formalJob).toMatch(/\n\s+node-version: \$\{\{ matrix\.node-version \}\}/)
-    expect(formalJob).toContain("\n        shard: [0, 1]")
+    expect(formalJob).toContain("\n        shard: [0, 1, 2]")
     expect(formalJob).toContain('pnpm check:ci:formal:shard --shard "${{ matrix.shard }}"')
     expect(formalJob).not.toContain("run: node scripts/run-hosted-formal-shard.mjs")
     expect(formalJob).toContain("\n        uses: actions/upload-artifact@v4")
@@ -107,7 +107,7 @@ describe("hosted formal-model contract", () => {
       }).trim()
     ).toBe("formal-shard-reports/shard-0.json")
     expect(formalJob).toContain(
-      "\n      matrix:\n        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}\n        shard: [0, 1]"
+      "\n      matrix:\n        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}\n        shard: [0, 1, 2]"
     )
     const aggregateJob = jobs.get("formal-model-aggregate")?.join("\n")
     expect(aggregateJob).toBeDefined()
@@ -137,7 +137,7 @@ describe("hosted formal-model contract", () => {
     expect(aggregateJob).toContain("\n          path: formal-shard-reports")
     expect(aggregateJob).not.toContain(".formal-shard-reports")
     expect(aggregateJob).toMatch(
-      /- name: Validate complete formal model evidence\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'\n\s+run: node scripts\/aggregate-hosted-formal-shards\.mjs formal-shard-reports\/shard-0\.json formal-shard-reports\/shard-1\.json/u
+      /- name: Validate complete formal model evidence\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'\n\s+run: node scripts\/aggregate-hosted-formal-shards\.mjs formal-shard-reports\/shard-0\.json formal-shard-reports\/shard-1\.json formal-shard-reports\/shard-2\.json\n/u
     )
     expect(aggregateJob).toMatch(
       /- name: Report formal model gate not applicable\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'false'/u

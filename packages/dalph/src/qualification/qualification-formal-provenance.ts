@@ -16,7 +16,10 @@ export const QualificationFormalRunId = Schema.Int.check(Schema.isGreaterThan(0)
 export const QualificationFormalRunAttempt = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
   Schema.brand("QualificationFormalRunAttempt")
 )
-export const QualificationFormalShard = Schema.Literals([0, 1]).pipe(Schema.brand("QualificationFormalShard"))
+const publicationGrantShard = 2
+export const QualificationFormalShard = Schema.Literals([0, 1, publicationGrantShard]).pipe(
+  Schema.brand("QualificationFormalShard")
+)
 const QualificationDurationSeconds = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
   Schema.brand("QualificationDurationSeconds")
 )
@@ -101,7 +104,7 @@ const FormalProfileFields = {
   profileDigest: EvidenceDigest,
   formalSeconds: QualificationDurationSeconds,
   completeProfileSeconds: QualificationDurationSeconds,
-  shards: Schema.Tuple([FormalShardEvidence, FormalShardEvidence]),
+  shards: Schema.Tuple([FormalShardEvidence, FormalShardEvidence, FormalShardEvidence]),
   commands: CompleteProfileCommands,
   negativeControls: Schema.NonEmptyArray(Schema.NonEmptyString)
 }

@@ -17,6 +17,7 @@ import {
   FormalShardEvidence,
   QualificationFormalProfile,
   QualificationFormalProvenance,
+  QualificationFormalShard,
   RequiredQualificationFormalProvenance
 } from "./qualification-formal-provenance.js"
 
@@ -37,8 +38,8 @@ const hexadecimalByteWidth = 2
 const hostedJobLimitSeconds = 960
 const formalGateLimitSeconds = 750
 const millisecondsPerSecond = 1_000
-const qualificationFormalShardCount = 2
-const qualificationFormalJobCount = 4
+const qualificationFormalShardCount = 3
+const qualificationFormalJobCount = 6
 
 type QualificationScriptModules = { readonly aggregateHostedFormalShards: QualificationShardAggregator }
 
@@ -269,7 +270,7 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
           const started = Date.parse(shard.startedAt)
           const completed = Date.parse(shard.completedAt)
           if (
-            ![0, 1].includes(shard.shard) ||
+            !Schema.is(QualificationFormalShard)(shard.shard) ||
             !profileConditionMatchesKind(profileKind, shard.condition) ||
             shard.job.runId !== profile.runId ||
             shard.job.runAttempt !== profile.runAttempt ||
@@ -304,7 +305,10 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
         })
       )
     )
-    if (shards[0]?.shard !== 0 || shards[1]?.shard !== 1 || shards[0].job.jobId === shards[1].job.jobId)
+    if (
+      shards.some((shard, index) => shard.shard !== index) ||
+      new Set(shards.map(({ job }) => job.jobId)).size !== qualificationFormalShardCount
+    )
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     const formalSeconds = Math.max(...shards.map((shard) => shard.formalSeconds))
     const completeProfileSeconds =

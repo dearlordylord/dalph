@@ -34,7 +34,7 @@ import {
   RequiredQualificationFormalProvenance
 } from "./qualification-provenance.js"
 
-const requiredFormalShardJobCount = 4
+const requiredFormalShardJobCount = 6
 
 /** Identifies one operator-approved live qualification invocation, not a hermetic fixture. */
 export const LiveQualificationInvocationId = Schema.NonEmptyString.pipe(Schema.brand("LiveQualificationInvocationId"))
@@ -289,7 +289,7 @@ const provenanceBindsOneSourceAndIndependentJobs: LiveQualificationEvidenceInvar
     [evidence.formal.dedicated, evidence.formal.stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))
   ).size === requiredFormalShardJobCount
     ? undefined
-    : "live qualification provenance must bind one source and four independent formal shard jobs"
+    : "live qualification provenance must bind one source and six independent formal shard jobs"
 
 const finalityBelongsToDeliveredRun: LiveQualificationEvidenceInvariant = (evidence) =>
   evidence.final.run.runId === evidence.delivery.runId

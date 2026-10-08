@@ -104,6 +104,9 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
   // Reproduce the enclosing quality gate even when this test runs standalone.
   const environment = withoutInheritedCustody({
     ...process.env,
+    // This fixture runs no formatter; its input guard must not observe another
+    // worktree's formatter cache while proving the owned server output route.
+    DPRINT_CACHE_DIR: join(root, ".scratch", "dprint-cache"),
     DALPH_GATE_GIT_HISTORY: "candidate-ancestry",
     DALPH_DPRINT_INCREMENTAL: "disabled"
   })

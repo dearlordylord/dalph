@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto"
 
-export const quintHostedShardCount = 2
+// Keep the complete publication-grant family in its own 720-second cell.
+// Its retained #408 batch/finality enumeration alone took 442 seconds;
+// hosted run 37850267480 spent 558 seconds before reaching it on shard 1.
+// Assignment changes scheduling only: canonical commands and models stay intact.
+export const quintHostedShardCount = 3
 
 const obligationIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 
@@ -17,7 +21,7 @@ export const quintHostedModelFamilies = Object.freeze([
   { name: "accepted-result automatic successor", first: 100, last: 104, shard: 1 },
   { name: "accepted-result automatic successor counter proof", first: 105, last: 109, shard: 1 },
   { name: "integration finality", first: 110, last: 114, shard: 0 },
-  { name: "publication exhaustion batch grant", first: 115, last: 127, shard: 1 },
+  { name: "publication exhaustion batch grant", first: 115, last: 127, shard: 2 },
   { name: "provider result correction", first: 128, last: 132, shard: 0 },
   { name: "result recovery direction", first: 133, last: 137, shard: 0 },
   { name: "executor guidance", first: 138, last: 146, shard: 1 }

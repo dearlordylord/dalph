@@ -32,13 +32,13 @@ the workflow journal.
   and fail-fast behavior. `quint-effective-profile.test.mjs` proves that all
   105 canonical commands and their exact tokens remain unchanged.
 
-## GitHub qualifies every command in two model-family shards
+## GitHub qualifies every command in three model-family shards
 
 - **Starting facts:** a non-documentation candidate commit needs formal
   qualification for one supported Node version. GitHub supplies one workflow
   run id, attempt number, commit SHA, and Node version. No complete shard
   reports exist for that identity.
-- **Trigger:** the formal matrix starts shard zero and shard one for that Node
+- **Trigger:** the formal matrix starts shards zero, one, and two for that Node
   version.
 - **Boundary calls:** each job independently installs the pinned tools, enters
   through the repository's pnpm and gate-custody admission path, and constructs
@@ -49,7 +49,7 @@ the workflow journal.
   custody ID, writes one report bound to the workflow run, attempt, commit,
   Node version, shard number, shard count, and complete-profile digest, and
   uploads that report. A later
-  aggregation job downloads both reports and reconstructs the canonical
+  aggregation job downloads all three reports and reconstructs the canonical
   profile. It rejects a missing or duplicate shard, mixed workflow/commit/Node
   identities, a profile mismatch, an absent or duplicate command position, a
   command-token mismatch, a missing, malformed, or duplicate custody ID, an
@@ -57,8 +57,8 @@ the workflow journal.
   temporal verdict. The runner records only IDs returned by the admitted
   command boundary; neither the runner nor aggregator synthesizes one.
 - **Visible result:** the aggregate job succeeds only when positions 0 through
-  104 occur exactly once and prove the same complete formal profile. The two
-  shard jobs may finish in either order.
+  146 occur exactly once and prove the same complete formal profile. The three
+  shard jobs may finish in any order.
 - **Forbidden result:** a shard must not publish local reusable formal success;
   aggregation must not accept one shard, mix reports from another retry or Node
   version, reduce the inventory, split a model family, change a seed/sample/
@@ -72,7 +72,7 @@ the workflow journal.
   disjoint, exhaustive assignment and unchanged command tokens; shard-report
   tests prove exact successful aggregation and every missing/mixed/duplicate/
   altered rejection above, including missing, malformed, and duplicate custody
-  IDs; the CI contract test proves two shards, report upload/download, the
+  IDs; the CI contract test proves three shards, report upload/download, the
   pnpm/custody runner path, the aggregate dependency, and the literal
   720-second and 16-minute bounds.
 
@@ -140,8 +140,8 @@ the workflow journal.
   exactly regenerated from the authoritative closure and changes for a selected
   model, imported helper, hosted command, workflow, toolchain, or workspace
   package input, including rejection of an unsupported workspace lifecycle.
-  `quint-ci-contract.test.ts` proves affected changes retain two shards and
-  unchanged aggregation, while unaffected changes skip both shards and keep the
+  `quint-ci-contract.test.ts` proves affected changes retain three shards and
+  complete aggregation, while unaffected changes skip all shards and keep the
   successful lightweight required check with exact classification evidence. It
   also proves that a failed change plan fails the always-running aggregate and
   that not-applicable success requires a successful plan with the exact

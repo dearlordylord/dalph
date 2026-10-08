@@ -208,7 +208,8 @@ export const aggregateHostedFormalShards = ({ affectedFamilies, binding, envelop
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (process.argv.length !== 4) throw new Error("Hosted Quint aggregate requires two shard report paths")
+  if (process.argv.length !== quintHostedShardCount + 2)
+    throw new Error(`Hosted Quint aggregate requires ${quintHostedShardCount} shard report paths`)
   const envelopes = await Promise.all(
     process.argv.slice(2).map(async (path) => JSON.parse(await readFile(path, "utf8")))
   )
