@@ -277,7 +277,7 @@ jobs:
         run: pnpm build
 
       - name: Download all six formal shard reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: production-live-formal-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dalph-live-formal
