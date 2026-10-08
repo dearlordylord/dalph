@@ -90,6 +90,10 @@ const correlatedPlans = (
 ): ReadonlyArray<PlannedTaskAttempt> => {
   const operation = lookup(operationId)
   if (operation?._tag !== "ReadTrackerGraph") return []
+  // Other read causes cannot name continuation plans; their causal predecessors
+  // may contain the whole retained graph rather than a bounded attempt witness.
+  if (operation.cause._tag !== "ExecutingWorkAuthorityCheck" && operation.cause._tag !== "AttemptContinuation")
+    return []
   const namedPlans = operation.predecessorOperationIds.flatMap((id) => {
     const predecessor = lookup(id)
     return predecessor?._tag === "RecordTaskAttemptPlan" ? [predecessor] : []
