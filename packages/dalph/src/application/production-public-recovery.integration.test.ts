@@ -614,11 +614,15 @@ it.live(
           }
         })
         yield* stopAbruptly(first)
-        const context = yield* Layer.build(
-          sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
+        const readJournal = Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
+            )
+            return yield* Context.get(context, JournalStore).read(selected.runId)
+          })
         )
-        const store = Context.get(context, JournalStore)
-        const before = yield* store.read(selected.runId)
+        const before = yield* readJournal
         const begin = before.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
         if (begin?.event._tag !== "PlannedAttemptExecutorCommandIntended") return expect.fail("missing Begin")
         expect(begin.event.command).toBe("Begin")
@@ -643,7 +647,7 @@ it.live(
             )
         )
         yield* stopAbruptly(second)
-        const after = yield* store.read(selected.runId)
+        const after = yield* readJournal
         expect(after.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toEqual(
           before.filter(({ event }) => event._tag === "TaskAttemptPlanned")
         )
