@@ -293,22 +293,18 @@ for (const [name, layer] of [
         const fixture = completedRunFinalityFixture({
           runId,
           target,
-          operationId: OperationId.make("x".repeat(60 * 1024 * 1024))
+          operationId: OperationId.make("x".repeat(24 * 1024 * 1024))
         })
-        yield* Effect.logInfo("oversized.begin")
         yield* store.beginRun(runId, target, policy, remotePublicationTargetForTest)
-        // The large saved observation and termination evidence exceed compression eligibility.
+        // Eleven saved copies make a 24 MiB identity exceed the actual 256 MiB quota.
+        // Keep the physical fixture just over quota to avoid unnecessary allocation/GC.
         yield* store.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
         yield* store.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
-        yield* Effect.logInfo("oversized.terminate")
         yield* store.terminateRun(runId, "Completed", fixture.evidence)
-        yield* Effect.logInfo("oversized.retire")
         yield* store.retireTerminalRun(runId)
         const before = yield* store.readCompletion(runId)
         expect((yield* store.read(runId)).length).toBe(4)
-        yield* Effect.logInfo("oversized.maintain")
         const result = yield* store.maintainArchive()
-        yield* Effect.logInfo("oversized.deleted")
         expect(result).toMatchObject({ savedBytes: 0, deletedRuns: [runId] })
         expect(yield* store.readCompletion(runId)).toMatchObject({
           ...before,
@@ -317,7 +313,7 @@ for (const [name, layer] of [
         })
         expect(yield* store.read(runId).pipe(Effect.flip)).toMatchObject({ _tag: "JournalHistoryDeleted" })
       }).pipe(Effect.provide(layer)),
-    { timeout: 120_000 }
+    { timeout: 60_000 }
   )
 }
 

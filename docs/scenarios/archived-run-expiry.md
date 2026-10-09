@@ -125,13 +125,13 @@ store contracts and composed host tests together establish the result.
 | 9 | Closed identity before lazy policy/activation: shared lifecycle and completion-only bootstrap tests above; public closed commands after scheduled expiry. |
 | 10 | Typed failure, safe unrelated work and no immediate retries: `host-archive-maintenance.test.ts`, **“the owning host observes one storage failure without retrying before the next normal pass”**; physical transaction cuts above and startup-retirement failure composition below. |
 | 11 | Conservative adoption: `completion.test.ts`, **“backfills legacy completion receipts without inventing dates or losing histories”**, before/after-commit backfill cases, invalid/contradictory negative cases. `startup-recovery.test.ts`, **“reopens SQLite, reconciles terminal Hot history, and leaves an unrelated active Run discoverable”**, and malformed-Hot blocking cases preserve startup rules. |
-| 12 | Finite Run/time bounds and honest later backlog progress: bounded/time tests above. `host-archive-maintenance.test.ts`, **“the host runs startup maintenance once, waits a finite interval and stops on Exit”**; physical startup and idle host tests below. |
+| 12 | Finite Run/time bounds and honest later backlog progress: bounded/time tests above. `host-archive-maintenance.test.ts`, **“the host runs startup maintenance once, waits a finite interval and stops on Exit”**; physical startup and idle host tests below. **“the SQLite host yields between archive units and graceful Exit stops at an atomic boundary”** queues an unrelated read behind the first transaction, verifies it before the second, requests actual Exit during that unit, and proves its coherent commit/rollback and a retained third history. |
 | 13 | Retained compact outcome and explicit deleted details: public idle-host control/closed-command test above, shared audit/cursor tests and contradictory-completion tests. |
 | 14 | Logical saved accounting across physical reopen without VACUUM: physical purge/reopen test above; saved-codec memory/SQLite contracts. |
 
 New composed tests are under `packages/dalph/src/application/`:
 
-- `host-archive-startup.acceptance.test.ts`: **“the owning startup retires aged terminal Hot history before expiry and preserves unrelated unfinished work”** reopens physical SQLite through the actual host graph.
+- `host-archive-startup.acceptance.test.ts`: **“the owning startup retires aged terminal Hot history before expiry and preserves unrelated unfinished work”** reopens physical SQLite through the actual host graph. Its **“the SQLite host yields between archive units and graceful Exit stops at an atomic boundary”** uses real SQLite transaction cuts and the host Exit boundary.
 - `running-host-capacity-lifecycle.acceptance.test.ts`: the public idle scheduled
   expiry test uses a controlled host clock and actual SQLite and HTTP. Activation
   and retention have distinct fixture intervals so a wakeup cannot target the

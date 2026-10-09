@@ -78,6 +78,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
     readonly onRootGraphRead?: () => Effect.Effect<void>
     readonly onActivationIdle?: () => Effect.Effect<void>
+    readonly beforeArchiveCommit?: () => Effect.Effect<void, string>
     readonly onActivationFailure?: () => Effect.Effect<void>
   },
   interruptStopsTurn = false,
@@ -316,6 +317,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
             journalStoreCapabilities(
               sqliteJournalTestLayer({
                 filename: configuration.journalDatabase,
+                ...(discovery?.beforeArchiveCommit === undefined
+                  ? {}
+                  : { beforeArchiveCommit: discovery.beforeArchiveCommit }),
                 ...(afterInsert === undefined ? {} : { onAppendInserted: () => afterInsert() }),
                 ...(paused.afterCommit === undefined ? {} : { afterAppendCommit: paused.afterCommit })
               })
