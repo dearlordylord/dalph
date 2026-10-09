@@ -39,6 +39,7 @@ import { Context, Effect, Fiber, FileSystem, Layer, Path, Queue, Ref, Schema, St
 import { expect } from "vitest"
 import { ProductionCliRecord, type ProductionCliRecord as ProductionCliRecordType } from "./production-cli.js"
 import { CodexAttemptStore, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/test/support/required-planned-attempt-positions.js"
 import { DalphRuntimeDiagnostic } from "./runtime-diagnostic.js"
 
 type CurrentStatusRecord = Extract<ProductionCliRecordType, { readonly _tag: "CurrentStatus" }>
@@ -649,6 +650,17 @@ it.live(
         expect((yield* Ref.get(second.eventLog)).filter(({ _tag }) => _tag === "CodexTurnStarted")).toEqual([])
         expect(yield* fileSystem.readFileString(fixture.codexTranscript)).toBe(transcript)
         expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+        for (const records of [before, after]) {
+          const reconstructed = reduceWorkflowJournalHistory(selected.runId, records)
+          if (reconstructed._tag !== "ValidWorkflowJournalHistory") return expect.fail("invalid restart history")
+          expect(requiredPlannedAttemptPositionsOf(reconstructed.runState)).toEqual([
+            {
+              runId: selected.runId,
+              attemptId: begin.event.plannedAttempt.attemptId,
+              taskId: begin.event.plannedAttempt.taskId
+            }
+          ])
+        }
       }).pipe(Effect.provide(NodeServices.layer))
     ),
   20_000
