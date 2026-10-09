@@ -1,3 +1,4 @@
+import { makeCoalescingCurrentSignal } from "./coalescing-current-signal.js"
 import {
   applyTaskAttemptBaseRetry,
   readTaskAttemptBaseRetryRequest
@@ -168,11 +169,7 @@ import type { IntegratorCandidateCleanupEvidenceReadFailure } from "../../workfl
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TraceCursor } from "../../presentation/trace-reader.js"
 import type { DeliveryRuntimeObservationState } from "../delivery/delivery-runtime-observation.js"
-import {
-  currentSignalFromCurrentFirstStream,
-  makeCoalescingCurrentSignal,
-  type CurrentSignal
-} from "../delivery/relations.js"
+import { currentSignalFromCurrentFirstStream, type CurrentSignal } from "../delivery/relations.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 

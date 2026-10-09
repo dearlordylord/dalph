@@ -139,16 +139,8 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
           ),
           () => Ref.update(count, (current) => current - 1)
         )
-        const currentSignal = observation.current.latest ?? observation.current
-        const attachment = yield* currentSignal.attach.pipe(
-          Effect.mapError(
-            (): RunningHostError => ({
-              _tag: "ReadFailed",
-              causeTag: "ObservationUnavailable",
-              detail: "The current source is unavailable."
-            })
-          )
-        )
+        const currentSignal = observation.watchCurrent ?? observation.current.latest ?? observation.current
+        const attachment = yield* currentSignal.attach
         const states = Stream.concat(Stream.make(attachment.current), attachment.changes)
         const inspect =
           request.operation._tag === "WatchInspection" && inspection !== undefined ? yield* inspection : undefined

@@ -7,7 +7,7 @@ import {
   type TaskId,
   type TaskRevision
 } from "@dalph/contracts"
-import { Context, Effect, Option, PubSub, Ref, Schema, Semaphore, Sink, Stream } from "effect"
+import { Context, Effect, Option, Schema, Sink, Stream } from "effect"
 import type * as Scope from "effect/Scope"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -72,35 +72,6 @@ export interface CurrentSignal<A, E = never> {
   /** Current-first publication stream retained for declarative signal composition. */
   readonly changes: Stream.Stream<A, E>
 }
-
-/** One shared canonical value plus bounded void hints. Slow subscriptions cannot
- * pin a backlog of superseded values. The publication lock fixes the initial
- * value and hint subscription at the same cut; ordinary signals stay loss-free. */
-export const makeCoalescingCurrentSignal = Effect.fn("CurrentSignal.makeCoalescing")(function* <A>(initial: A) {
-  const current = yield* Ref.make(initial)
-  const hints = yield* PubSub.sliding<void>(1)
-  const lock = yield* Semaphore.make(1)
-  const signal = makeCurrentSignal(
-    lock.withPermit(
-      Effect.gen(function* () {
-        const subscription = yield* PubSub.subscribe(hints)
-        return {
-          current: yield* Ref.get(current),
-          changes: Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(Stream.mapEffect(() => Ref.get(current)))
-        }
-      })
-    )
-  )
-  return {
-    signal: { ...signal, get: Ref.get(current) },
-    publish: (value: A) =>
-      lock.withPermit(
-        Effect.uninterruptible(
-          Ref.set(current, value).pipe(Effect.andThen(PubSub.publish(hints, undefined)), Effect.asVoid)
-        )
-      )
-  }
-})
 
 /** One scoped current-first attachment; its changes stream is valid only inside the acquiring scope. */
 export interface CurrentSignalAttachment<A, E = never> {

@@ -13,7 +13,10 @@ This slice uses no historical paging or workflow changes.
    subscriptions carry bounded void hints, not a loss-free state backlog. Shared canonical state
    remains owned by delivery; these references can keep old canonical values
    alive and are reported separately, never counted as bounded optional bytes.
-3. Before projecting, Dalph checks a finite structural preparation charge. Before
+3. Before projecting, Dalph checks a finite structural preparation charge.
+   On production Ready reads this includes the borrowed accepted prefix before
+   allocating diagnostic arrays/maps; the reader does not export history. A
+   large history may refuse the watch even if the final current frame is small. Before
    schema encoding/stringification, it checks finite structural and JSON-byte
    charges. Initial, pending and admitted whole writes have separate allowances.
    Oversized current state produces a typed refusal, never a truncated graph or
@@ -44,6 +47,9 @@ Acceptance mapping (individual tests, not aggregate totals):
   `A disposable observer pins current then reads latest after ten thousand updates without a value backlog`.
 - Raw reference coalescing/current-first/release: `running-host-watch-stage.test.ts`,
   `Attachment preserves initial while its independent pump drains latest and releases upstream before Closed is read`.
+- Production Ready diagnostic preparation before historical intermediates:
+  `running-host-watch-diagnostics.test.ts`,
+  `A Ready watch refuses large diagnostic preparation before materialization despite small current output, then reconnects passively`.
 - Preparation/encoded boundaries including a single oversized string:
   `running-host-observer-budget.test.ts`.
 - Public refusal, exact source release and latest-state reconnect:

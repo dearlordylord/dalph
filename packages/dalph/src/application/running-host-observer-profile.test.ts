@@ -22,7 +22,7 @@ import {
 
 for (const payloadBytes of [256 * 1024, 1792 * 1024]) {
   it.live(
-    `Native paused TCP reader retains charged initial/latest/write and releases exactly (${payloadBytes} bytes)`,
+    `Native paused TCP reader times out an admitted write, retains charged latest and releases exactly (${payloadBytes} bytes)`,
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -74,17 +74,43 @@ for (const payloadBytes of [256 * 1024, 1792 * 1024]) {
             (frame) => encodeRunningHostWatchFrame(frame).pipe(Effect.andThen(Queue.offer(consumed, undefined)))
           )
           yield* Queue.take(consumed)
-          const initial = yield* stage.takeInitial
-          const writer = yield* writeRunningHostWatchFrame(response, initial).pipe(Effect.exit, Effect.forkChild)
-          for (let ordinal = 1; ordinal <= 64; ordinal += 1) {
-            yield* Queue.offer(changes, value(ordinal))
-            yield* Queue.take(consumed)
-          }
+          const started = yield* Queue.bounded<void>(1)
+          const admitted = yield* Ref.make<RunningHostWatchFrame | null>(null)
+          const published = yield* Ref.make(0)
+          const writer = yield* Effect.gen(function* () {
+            let current = yield* stage.takeInitial
+            let sequence = 0
+            for (;;) {
+              yield* Ref.set(admitted, current)
+              yield* Queue.offer(started, undefined)
+              yield* writeRunningHostWatchFrame(response, { ...current, sequence: WatchSequence.make(sequence) })
+              sequence += 1
+              current = yield* stage.take
+            }
+          }).pipe(Effect.result, Effect.forkChild)
+          const publisher = yield* Effect.gen(function* () {
+            let ordinal = 0
+            while (ordinal < 4096) {
+              yield* Queue.take(started)
+              for (let replacement = 0; replacement < 64; replacement += 1) {
+                ordinal += 1
+                yield* Queue.offer(changes, value(ordinal))
+                yield* Queue.take(consumed)
+                yield* Ref.set(published, ordinal)
+              }
+            }
+          }).pipe(Effect.forkChild)
+          const result = yield* Fiber.join(writer)
+          expect(result).toMatchObject({ _tag: "Failure", failure: { _tag: "WriteTimedOut" } })
+          yield* Fiber.interrupt(publisher)
+          const inFlight = yield* Ref.get(admitted)
+          if (inFlight === null) return yield* Effect.die("requires an admitted native write")
           const retained = yield* stage.retained
           expect(retained.initial).toBeNull()
-          expect(retained.pending?.requestId.startsWith("64:")).toBe(true)
-          const initialCharge = yield* observerStructuralBytes(
-            initial,
+          expect(retained.pending).not.toBeNull()
+          expect(response.writableLength).toBeGreaterThan(0)
+          const inFlightCharge = yield* observerStructuralBytes(
+            inFlight,
             observerRetentionLimits.presentationBytes,
             "Presentation"
           )
@@ -93,7 +119,7 @@ for (const payloadBytes of [256 * 1024, 1792 * 1024]) {
             observerRetentionLimits.presentationBytes,
             "Presentation"
           )
-          const encodedBytes = new TextEncoder().encode(yield* encodeRunningHostWatchFrame(initial)).byteLength + 1
+          const encodedBytes = new TextEncoder().encode(yield* encodeRunningHostWatchFrame(inFlight)).byteLength + 1
           expect(encodedBytes).toBeLessThanOrEqual(runningHostLimits.resultBytes + 1)
           expect(response.writableLength).toBeLessThanOrEqual(encodedBytes + 512)
           mkdirSync(".scratch", { recursive: true })
@@ -101,7 +127,8 @@ for (const payloadBytes of [256 * 1024, 1792 * 1024]) {
             `.scratch/observer-profile-${payloadBytes}.json`,
             JSON.stringify(
               {
-                profile: "paused-loopback-tcp/64-replacements/one-observer/zero-workflow-records",
+                profile:
+                  "paused-loopback-tcp/64-replacements-per-write/max4096-updates/one-observer/zero-workflow-records",
                 candidate: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
                 candidateDiff: execFileSync("git", ["diff", "--no-ext-diff", "--", "packages/dalph/src/application"], {
                   encoding: "utf8"
@@ -111,9 +138,9 @@ for (const payloadBytes of [256 * 1024, 1792 * 1024]) {
                 arch: profileProcess.arch,
                 payloadBytes,
                 observerCount: 1,
-                publishedValues: 65,
+                publishedValues: (yield* Ref.get(published)) + 1,
                 optional: {
-                  initialCharge,
+                  inFlightCharge,
                   pendingCharge,
                   admittedWriteBytes: encodedBytes,
                   nativeWritableBytes: response.writableLength
@@ -121,21 +148,27 @@ for (const payloadBytes of [256 * 1024, 1792 * 1024]) {
                 sharedCanonicalBytes: 0,
                 rssBytes: profileProcess.memoryUsage().rss,
                 heapUsedBytes: profileProcess.memoryUsage().heapUsed,
+                peakRssBytes: profileProcess.resourceUsage().maxRSS * 1024,
                 safetyCeilingIsHeapCap: false
               },
               null,
               2
             )
           )
+          const closed = yield* Deferred.make<void>()
+          response.once("close", () => Effect.runSync(Deferred.succeed(closed, undefined)))
           peer.destroy()
           response.destroy()
-          yield* Fiber.interrupt(writer)
+          yield* Deferred.await(closed)
+          expect(response.writableLength).toBe(0)
+          yield* Ref.set(admitted, null)
           yield* stage.stop
           expect(yield* stage.retained).toEqual({ initial: null, pending: null })
           expect(yield* Ref.get(releases)).toBe(1)
           yield* stage.stop
           expect(yield* Ref.get(releases)).toBe(1)
         })
-      )
+      ),
+    20000
   )
 }

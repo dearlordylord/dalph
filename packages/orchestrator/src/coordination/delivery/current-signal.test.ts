@@ -1,3 +1,4 @@
+import { makeCoalescingCurrentSignal } from "../run/coalescing-current-signal.js"
 import { it } from "@effect/vitest"
 import { Cause, Deferred, Effect, Exit, Fiber, Option, SubscriptionRef, Stream } from "effect"
 import { expect } from "vitest"
@@ -5,7 +6,6 @@ import {
   attachCurrentSignal,
   currentSignalOf,
   currentSignalFromCurrentFirstStream,
-  makeCoalescingCurrentSignal,
   mapCurrentSignal,
   zipCurrentSignals
 } from "./relations.js"

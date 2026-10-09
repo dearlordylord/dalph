@@ -1,12 +1,8 @@
+import { makeCoalescingCurrentSignal } from "../run/coalescing-current-signal.js"
 import { Context, Data, Effect, Match, Option, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
-import {
-  currentSignalFromCurrentFirstStream,
-  makeCoalescingCurrentSignal,
-  type CurrentSignal,
-  type DeliveryRuntimeEvaluation
-} from "./relations.js"
+import { currentSignalFromCurrentFirstStream, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
 import type { FreshTaskCandidate } from "./fresh-task-candidate.js"
 import {
