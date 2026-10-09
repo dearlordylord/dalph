@@ -22,6 +22,7 @@ const compatibleFailures: Readonly<
   Record<RunningHostError["_tag"], ReadonlyArray<RunningHostRequest["operation"]["_tag"]>>
 > = {
   SubscriptionLimitExceeded: ["WatchSnapshots", "WatchInspection"],
+  ObserverRetentionExceeded: ["WatchSnapshots", "WatchInspection"],
   RunInactive: ["ReadCapacity", "SetCapacity"],
   PolicyRevisionConflict: ["SetCapacity"],
   UnpausePartiallyApplied: ["Unpause"],

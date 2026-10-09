@@ -5,6 +5,7 @@ import {
   attachCurrentSignal,
   currentSignalOf,
   currentSignalFromCurrentFirstStream,
+  makeCoalescingCurrentSignal,
   mapCurrentSignal,
   zipCurrentSignals
 } from "./relations.js"
@@ -174,4 +175,22 @@ it.effect("mapped and zipped signals expose coherent get values and reactive upd
       expect(yield* zipped.get).toEqual([4, "B"])
     })
   )
+)
+
+it.effect(
+  "A disposable observer pins current then reads latest after ten thousand updates without a value backlog",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const latest = yield* makeCoalescingCurrentSignal({ ordinal: 0 })
+        const attached = yield* latest.signal.attach
+        for (let ordinal = 1; ordinal <= 10000; ordinal += 1) yield* latest.publish({ ordinal })
+        expect(attached.current).toEqual({ ordinal: 0 })
+        expect(yield* attached.changes.pipe(Stream.runHead)).toEqual(Option.some({ ordinal: 10000 }))
+        const reconnect = yield* latest.signal.attach
+        expect(reconnect.current).toEqual({ ordinal: 10000 })
+        yield* latest.publish({ ordinal: 10001 })
+        expect(yield* reconnect.changes.pipe(Stream.runHead)).toEqual(Option.some({ ordinal: 10001 }))
+      })
+    )
 )

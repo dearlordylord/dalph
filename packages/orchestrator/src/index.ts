@@ -979,6 +979,7 @@ export {
   type DeliveryRelationSourceError,
   DeliverySettlementError,
   makeCurrentSignal,
+  makeCoalescingCurrentSignal,
   mapCurrentSignal,
   TicketDeliveryError,
   TrackerGraphRelationError,

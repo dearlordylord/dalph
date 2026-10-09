@@ -9,6 +9,7 @@ import {
   WatchSequence,
   type RunningHostWatchFrame,
   type RunningHostError,
+  encodeRunningHostWatchFrame,
   runningHostLimits,
   watchFrameEnds
 } from "./running-host-contract.js"
@@ -69,11 +70,15 @@ export const makeRunningHostMcpWatches = Effect.fn("RunningHostMcp.makeWatches")
       ),
       Effect.flatMap(Effect.fail)
     )
-  const drop = (watch: WatchResource) =>
+  const drop = (resource: WatchResource) =>
     Effect.gen(function* () {
+      const watch = resource
       resources.delete(watch.id)
       yield* Deferred.succeed(watch.disposed, undefined)
       yield* Scope.close(watch.scope, Exit.void)
+      watch.initial = null
+      watch.last = null
+      watch.failure = null
     }).pipe(Effect.uninterruptible)
   yield* Effect.addFinalizer(() => Effect.forEach([...resources.values()], drop, { discard: true }))
   const poke = (watch: WatchResource) =>
@@ -144,7 +149,8 @@ export const makeRunningHostMcpWatches = Effect.fn("RunningHostMcp.makeWatches")
         )
       ),
       watchFrameEnds,
-      failure
+      failure,
+      encodeRunningHostWatchFrame
     ).pipe(
       Scope.provide(scope),
       Effect.onExit((exit) => (exit._tag === "Failure" ? Scope.close(scope, exit) : Effect.void))

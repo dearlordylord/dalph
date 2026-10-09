@@ -18,6 +18,7 @@ Git history.
 - [Terminate one globally settled Run](terminate-settled-run.md)
 - [Keep the host responsive after delivery](post-delivery-host-responsiveness.md)
 - [Alice's changing graph settles as Blocked](changing-graph-finality.md)
+- [Bound slow current-state observers](bounded-current-state-observers.md)
 - [CLI and MCP clients reach one separately started Dalph host](running-host-clients.md)
 - [The Operator reads a bounded Run summary](compact-run-inspection.md)
 - [Alice inspects the running host's complete task graph](live-task-graph-page.md)

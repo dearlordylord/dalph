@@ -168,7 +168,11 @@ import type { IntegratorCandidateCleanupEvidenceReadFailure } from "../../workfl
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TraceCursor } from "../../presentation/trace-reader.js"
 import type { DeliveryRuntimeObservationState } from "../delivery/delivery-runtime-observation.js"
-import { currentSignalFromCurrentFirstStream, type CurrentSignal } from "../delivery/relations.js"
+import {
+  currentSignalFromCurrentFirstStream,
+  makeCoalescingCurrentSignal,
+  type CurrentSignal
+} from "../delivery/relations.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 
@@ -412,6 +416,7 @@ export const journaledRunBootstrapLayer = (
       const acceptedHistoryState = yield* SubscriptionRef.make<Option.Option<TraceCursor>>(Option.none())
       const runTermination = yield* Deferred.make<JournaledRunTermination>()
       yield* Effect.addFinalizer(() => PubSub.shutdown(acceptedHistoryState.pubsub))
+      const latestHistory = yield* makeCoalescingCurrentSignal<Option.Option<TraceCursor>>(Option.none())
       const acceptedHistoryPublication = yield* Semaphore.make(1)
       const publishAcceptedHistory = (runId: RunId, position: JournalPosition) =>
         acceptedHistoryPublication.withPermit(
@@ -421,16 +426,27 @@ export const journaledRunBootstrapLayer = (
               if (runId !== expectedRunId)
                 return Effect.die(new Error("accepted history cannot publish another Run identity"))
               if (Option.isSome(current) && current.value.position >= position) return Effect.void
-              return SubscriptionRef.set(acceptedHistoryState, Option.some(TraceCursor.make({ position, runId })))
+              const cursor = Option.some(TraceCursor.make({ position, runId }))
+              return Effect.uninterruptible(
+                SubscriptionRef.set(acceptedHistoryState, cursor).pipe(Effect.andThen(latestHistory.publish(cursor)))
+              )
             })
           )
         )
-      const acceptedHistory = currentSignalFromCurrentFirstStream(
-        SubscriptionRef.changes(acceptedHistoryState).pipe(
-          Stream.filter(Option.isSome),
-          Stream.map((cursor) => cursor.value)
+      const acceptedHistory = {
+        ...currentSignalFromCurrentFirstStream(
+          SubscriptionRef.changes(acceptedHistoryState).pipe(
+            Stream.filter(Option.isSome),
+            Stream.map((cursor) => cursor.value)
+          )
+        ),
+        latest: currentSignalFromCurrentFirstStream(
+          latestHistory.signal.changes.pipe(
+            Stream.filter(Option.isSome),
+            Stream.map((cursor) => cursor.value)
+          )
         )
-      )
+      }
       const exitAwareStorage: JournalStorageBoundary = {
         append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input)),
         read: storage.read,

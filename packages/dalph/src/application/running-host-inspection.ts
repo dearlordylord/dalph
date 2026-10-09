@@ -1,4 +1,11 @@
-import { type TaskDagSnapshot, TaskDagWire, TrackerGraphReader, type TrackerTarget } from "@dalph/orchestrator"
+import {
+  type CurrentSignal,
+  makeCoalescingCurrentSignal,
+  type TaskDagSnapshot,
+  TaskDagWire,
+  TrackerGraphReader,
+  type TrackerTarget
+} from "@dalph/orchestrator"
 import {
   Clock,
   Context,
@@ -29,6 +36,7 @@ export const RunningHostInspection = Schema.TaggedUnion({
 export type RunningHostInspection = typeof RunningHostInspection.Type
 
 export interface RunningHostInspectionService {
+  readonly latest?: CurrentSignal<RunningHostInspection>
   readonly current: Effect.Effect<RunningHostInspection>
   readonly changes: Stream.Stream<RunningHostInspection>
   readonly refresh: Effect.Effect<void>
@@ -47,9 +55,11 @@ export const makeRunningHostInspection: (
   ): Effect.fn.Return<RunningHostInspectionService, never, Scope.Scope> {
     const scope = yield* Scope.fork(yield* Scope.Scope)
     const state = yield* SubscriptionRef.make<RunningHostInspection>({ _tag: "Loading" })
+    const latest = yield* makeCoalescingCurrentSignal<RunningHostInspection>({ _tag: "Loading" })
     const observe = Effect.fn("RunningHostInspection.observe")(function* (snapshot: TaskDagSnapshot) {
       const observedAt = InspectionObservedAt.make(yield* Clock.currentTimeMillis)
       yield* SubscriptionRef.set(state, { _tag: "Ready", value: { graph: snapshot.toWire(), observedAt } })
+      yield* latest.publish(yield* SubscriptionRef.get(state))
     })
     const refresh = yield* Effect.cachedWithTTL(
       reader.read(target).pipe(
@@ -69,6 +79,7 @@ export const makeRunningHostInspection: (
                   ? { _tag: "Stale", value: current.value, failedAt, reason: error._tag }
                   : { _tag: "Unavailable", failedAt, reason: error._tag }
             )
+            yield* latest.publish(yield* SubscriptionRef.get(state))
           })
         )
       ),
@@ -82,7 +93,13 @@ export const makeRunningHostInspection: (
     // Stop the loop before its nested read fibers; closing a sequential scope
     // while the loop joins its read can otherwise leave that join suspended.
     yield* Effect.addFinalizer(() => stop)
-    return { current: SubscriptionRef.get(state), changes: SubscriptionRef.changes(state), refresh: refreshOwned, stop }
+    return {
+      latest: latest.signal,
+      current: SubscriptionRef.get(state),
+      changes: SubscriptionRef.changes(state),
+      refresh: refreshOwned,
+      stop
+    }
   }
 )
 
