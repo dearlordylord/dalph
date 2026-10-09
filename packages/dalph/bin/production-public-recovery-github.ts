@@ -9,6 +9,7 @@ const FixtureEnvironment = Schema.Struct({
   DALPH_QUALIFICATION_MODE: Schema.Literals([
     "first",
     "recovered",
+    "reconcile-cut",
     "terminal",
     "exit-during-attachment",
     "cancellation"
@@ -74,6 +75,7 @@ const graphResponse = (request: GithubGraphqlRequest): Effect.Effect<{ readonly 
     FindClaimLabel: (find) =>
       Effect.gen(function* () {
         yield* observe({ _tag: "FindClaimLabelStarted", labelName: find.labelName })
+        if (environment.DALPH_QUALIFICATION_MODE === "reconcile-cut") return yield* Effect.never
         if (
           environment.DALPH_QUALIFICATION_MODE === "first" ||
           (environment.DALPH_QUALIFICATION_MODE === "cancellation" &&
