@@ -811,6 +811,7 @@ const makeRunActivationDriverImplementation = () => {
   }
 
   const journal = JournalStore.of({
+    maintainArchive: () => Effect.die("model driver must not maintain archives"),
     readCompletion: (runId) => Effect.succeed({ _tag: "NoCompletion" as const, runId }),
     append: (eventRunId, key, event) => Effect.sync(() => append(eventRunId, key, event)),
     beginRun: (eventRunId, eventTarget, policy, _publication, attemptBasePolicy) =>
@@ -826,7 +827,7 @@ const makeRunActivationDriverImplementation = () => {
           ...(otherRecords.length === 0 ? [] : [{ records: otherRecords, runId: otherRunId }])
         ]
       }),
-    auditAll: () => Effect.succeed({ issues: [], runs: [] }),
+    auditAll: () => Effect.succeed({ completions: [], issues: [], runs: [] }),
     retireTerminalRun: (eventRunId) =>
       Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
     terminateRun: (eventRunId, disposition, evidence) =>

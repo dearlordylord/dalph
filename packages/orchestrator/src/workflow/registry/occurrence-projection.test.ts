@@ -1440,6 +1440,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
       })
       const records = yield* Ref.make(prefix)
       const journal = JournalStore.of({
+        maintainArchive: () => Effect.die("startup authority reread must not maintain archives"),
         readCompletion: (runId) => Effect.succeed({ _tag: "NoCompletion", runId }),
         append: (recordRunId, key, event) =>
           Ref.modify(records, (current) => {
@@ -1480,6 +1481,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         Layer.succeed(
           RunLifecycleJournal,
           RunLifecycleJournal.of({
+            maintainArchive: journal.maintainArchive,
             readCompletion: journal.readCompletion,
             beginRun: journal.beginRun,
             read: journal.read,

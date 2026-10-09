@@ -1,6 +1,7 @@
 import { Cause, Effect, Match, Schema } from "effect"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import {
+  JournalHistoryDeleted,
   JournalDataCorruption,
   JournalHistoryCorruption,
   JournalHistoryNotTerminal,
@@ -79,7 +80,7 @@ export function classifyJournalMethodFailure(
   cause: unknown
 ): JournalStoreContradiction | JournalStoreError | WorkflowRunAlreadyTerminated | JournalPartitionContradiction
 export function classifyJournalMethodFailure(
-  operation: "JournalStore.read" | "JournalStore.readCompletion",
+  operation: "JournalStore.read" | "JournalStore.readCompletion" | "JournalStore.maintainArchive",
   cause: unknown
 ): JournalStoreError
 export function classifyJournalMethodFailure(
@@ -115,6 +116,7 @@ export function classifyJournalMethodFailure(operation: StoreOperation, cause: u
       (failure) => new JournalStorageUnavailable({ detail: failure.detail, operation })
     ),
     Match.whenOr(
+      Match.instanceOf(JournalHistoryDeleted),
       Match.instanceOf(JournalStoreContradiction),
       Match.instanceOf(WorkflowRunAlreadyBegan),
       Match.instanceOf(WorkflowRunAlreadyTerminated),

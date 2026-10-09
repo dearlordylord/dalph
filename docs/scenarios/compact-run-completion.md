@@ -3,8 +3,8 @@
 Scope: [#488](https://github.com/dearlordylord/dalph/issues/488), the first slice of
 [#487](https://github.com/dearlordylord/dalph/issues/487). Parent scenarios 1 and
 11 and the Available-history identity/integrity portions of 9 and 13 govern
-this work. Deleted-history behavior remains pending #489; scheduling and
-bounded retention passes remain pending #490.
+this work. [Deleted-history expiry](archived-run-expiry.md) extends these contracts in #489;
+startup and idle periodic scheduling remain pending #490.
 
 ## Governing behavior
 
@@ -105,7 +105,7 @@ unchanged history and unchanged tracker/Git calls.
 ## Read contract and evidence limits
 
 `JournalStore.readCompletion` returns `NoCompletion` or `CompletedRun`, with a
-separate typed history availability. Only Available is produced here. The
+separate typed history availability. Expiry subsequently produces Deleted with reason and observation time. The
 completion row contains no original finality tree. SQLite reads check receipt
 checksum and fingerprints of the beginning, terminal and last publication rows
 in one serialized transaction; they do not decode those event payloads or replay
@@ -117,7 +117,5 @@ that evidence. Stored publication proves what Dalph recorded at its exact
 position, never the receiving branch's current contents.
 
 Completion records remain durable independently of detail placement. Available
-without its required endpoints is corruption. Deleted is reserved in the type
-for #489, which will provide deletion and coherent detail-unavailable reads;
-this ticket makes no claim that deletion is implemented. No detail row, evidence
-bundle or other archive artifact is deleted.
+without its required endpoints is corruption. The subsequent expiry owner produces Deleted only atomically with complete
+detail removal. Evidence bundles and other archive artifacts are not deleted.

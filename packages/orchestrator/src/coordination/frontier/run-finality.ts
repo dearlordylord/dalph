@@ -1,3 +1,4 @@
+import type { RunTerminationDisposition } from "./run-termination-disposition.js"
 /* eslint-disable functional/immutable-data -- Graph blockage is a private monotone fixed-point computation, not persisted state. */
 import {
   RunId,
@@ -16,8 +17,7 @@ import { CompleteTargetClosureCoverage } from "../../workflow/task-tracker-facts
 import type { RunnableFrontier } from "./frontier.js"
 
 /** The only whole-Run terminal classifications accepted by V1. */
-export const RunTerminationDisposition = Schema.Literals(["Completed", "Blocked", "Cancelled"])
-export type RunTerminationDisposition = typeof RunTerminationDisposition.Type
+export { RunTerminationDisposition } from "./run-termination-disposition.js"
 
 /** Classification of one accepted complete current Run graph. */
 export const RunGraphOutcome = Schema.Literals(["AllTasksSucceeded", "Blocked", "Unsettled"])

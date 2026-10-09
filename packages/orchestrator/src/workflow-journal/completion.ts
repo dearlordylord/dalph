@@ -1,9 +1,7 @@
-import { GitCommitSha, RemotePublicationTarget, RunId } from "@dalph/contracts"
+import { RunCompletion, type RunCompletionTiming, type RunCompletionInspection } from "./completion-model.js"
+import type { RunId } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
-import { taskTrackerTargetKey, TrackerTarget } from "../authorities/task-tracker/target.js"
-import { RunTerminationDisposition } from "../coordination/frontier/run-finality.js"
-import { RemotePublicationProofBasis } from "../workflow/protocols/direct-publication/events.js"
-import { JournalPosition } from "./identity.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
 import { decideJournalPartitionHistory } from "./partition-history.js"
 import {
   JournalDataCorruption,
@@ -12,48 +10,7 @@ import {
   type JournalRecord
 } from "./store.js"
 
-/** Wall-clock milliseconds for storage age; never a tracker revision or Journal ordering key. */
-export const RunCompletionTime = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
-  Schema.brand("RunCompletionTime")
-)
-export type RunCompletionTime = typeof RunCompletionTime.Type
-
-/** Legacy histories carry no trustworthy original termination date. The first verified baseline is retained forever. */
-export const RunCompletionTiming = Schema.TaggedUnion({
-  Known: { completedAt: RunCompletionTime },
-  LegacyBaseline: { originalTime: Schema.Literal("Unknown"), verifiedAt: RunCompletionTime }
-})
-export type RunCompletionTiming = typeof RunCompletionTiming.Type
-
-/** Recorded receiving-branch proof only; this does not assert the branch's current contents. */
-export const RunCompletionPublication = Schema.TaggedUnion({
-  NoRecordedPublication: {},
-  RecordedPublication: {
-    candidateCommit: GitCommitSha,
-    target: RemotePublicationTarget,
-    proof: RemotePublicationProofBasis,
-    recordedAt: JournalPosition
-  }
-})
-
-/** Durable terminal result, independent of the original finality tree and detailed history. */
-export const RunCompletion = Schema.Struct({
-  runId: RunId,
-  target: TrackerTarget,
-  disposition: RunTerminationDisposition,
-  terminatedAt: JournalPosition,
-  timing: RunCompletionTiming,
-  publication: RunCompletionPublication
-})
-export type RunCompletion = typeof RunCompletion.Type
-
-/** Deleted is reserved for ticket #489; this implementation produces only Available. */
-export const RunHistoryAvailability = Schema.Literals(["Available", "Deleted"])
-export const RunCompletionInspection = Schema.TaggedUnion({
-  NoCompletion: { runId: RunId },
-  CompletedRun: { completion: RunCompletion, history: RunHistoryAvailability }
-})
-export type RunCompletionInspection = typeof RunCompletionInspection.Type
+export * from "./completion-model.js"
 
 const lastRecordIndex = -1
 

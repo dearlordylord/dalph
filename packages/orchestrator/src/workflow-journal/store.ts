@@ -1,4 +1,5 @@
-import type { RunCompletionInspection } from "./completion.js"
+import type { ArchiveRetentionObservation } from "./archive-retention.js"
+import { RunCompletion, RunHistoryDeletion, type RunCompletionInspection } from "./completion-model.js"
 import type { AttemptBasePolicy } from "../workflow/protocols/task-attempt-planning/base.js"
 // @effect-diagnostics lazyEffect:off
 import { Context, Effect, Layer, Schema } from "effect"
@@ -42,7 +43,8 @@ export const JournalStoreOperation = Schema.Literals([
   "JournalStore.scanHot",
   "JournalStore.auditAll",
   "JournalStore.retireTerminalRun",
-  "JournalStore.readCompletion"
+  "JournalStore.readCompletion",
+  "JournalStore.maintainArchive"
 ])
 export type JournalStoreOperation = typeof JournalStoreOperation.Type
 
@@ -88,7 +90,14 @@ export class JournalSchemaIncompatible extends Schema.TaggedError<JournalSchemaI
   { found: JournalSchemaVersion, supported: JournalSchemaVersion }
 ) {}
 
+/** Details were intentionally expired; identity and the exact terminal result remain known. */
+export class JournalHistoryDeleted extends Schema.TaggedError<JournalHistoryDeleted>()("JournalHistoryDeleted", {
+  completion: Schema.suspend(() => RunCompletion),
+  deletion: Schema.suspend(() => RunHistoryDeletion)
+}) {}
+
 export type JournalStoreError =
+  | JournalHistoryDeleted
   | JournalDataCorruption
   | JournalHistoryCorruption
   | JournalSchemaIncompatible
@@ -204,6 +213,7 @@ const JournalAppendErrorSchema = Schema.Union([
   InRunJournalRunMismatch,
   JournalStoreContradiction,
   JournalDataCorruption,
+  JournalHistoryDeleted,
   JournalHistoryCorruption,
   JournalSchemaIncompatible,
   JournalStorageAccessDenied,
@@ -218,6 +228,7 @@ const journalAppendFailureDispositions: Readonly<Record<JournalAppendError["_tag
   {
     InRunJournalRunMismatch: "DefinitelyAbsent",
     JournalDataCorruption: "MayHaveCommitted",
+    JournalHistoryDeleted: "MayHaveCommitted",
     JournalHistoryCorruption: "MayHaveCommitted",
     JournalHistoryInvalid: "MayHaveCommitted",
     JournalPartitionContradiction: "MayHaveCommitted",
@@ -243,6 +254,7 @@ export type JournalReadError = JournalError | InRunJournalRunMismatch | JournalS
 
 export interface JournalStoreService {
   /** Independently reads durable completion metadata; never replays or repairs history. */
+  readonly maintainArchive: () => Effect.Effect<ArchiveRetentionObservation, JournalStoreError>
   readonly readCompletion: (runId: RunId) => Effect.Effect<RunCompletionInspection, JournalStoreError>
   readonly beginRun: (
     runId: RunId,
@@ -289,6 +301,7 @@ export class JournalStore extends Context.Service<JournalStore, JournalStoreServ
 
 /** Bootstrap and post-runtime Run lifecycle access; ordinary workflow services never receive it. */
 export interface RunLifecycleJournalService {
+  readonly maintainArchive: JournalStoreService["maintainArchive"]
   readonly readCompletion: JournalStoreService["readCompletion"]
   readonly beginRun: JournalStoreService["beginRun"]
   readonly read: JournalStoreService["read"]
@@ -315,6 +328,7 @@ export const journalStoreCapabilities = <E, R>(
         Context.add(
           RunLifecycleJournal,
           RunLifecycleJournal.of({
+            maintainArchive: journal.maintainArchive,
             readCompletion: journal.readCompletion,
             beginRun: journal.beginRun,
             read: journal.read,

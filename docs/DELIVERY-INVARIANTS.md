@@ -454,8 +454,12 @@ and D4 already forbid the replacement attempt and the second claim; the
 recovery-specific clause is that no second worktree is created for a
 reconstructed attempt.
 
-**D32 Journal reduction.** Append-only. Reduction is a pure fold, total over
-contradictory histories, and idempotent under replay.
+**D32 Journal reduction.** Workflow admission is append-only. Reduction of
+Available history is a pure fold, total over contradictory histories, and
+idempotent under replay. Authorized [whole archived-history expiry](scenarios/archived-run-expiry.md)
+removes no partial prefix: it retains the independently readable completion and
+closed identity, and explicitly reports Deleted details rather than replaying
+missing evidence.
 
 **D32a Journal record admission.** Records are scoped to their Run: none
 precedes the Run's beginning fact, none follows its termination fact, there is

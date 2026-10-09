@@ -1,3 +1,4 @@
+import { makeMemoryArchiveRetention, savedMemoryArchiveBytes } from "./memory-archive-retention.js"
 import {
   adoptMemoryCompletions,
   decideMemoryCompletion,
@@ -15,6 +16,7 @@ import {
   type AppendableWorkflowJournalEvent,
   type JournalRecord,
   type JournalStoreOperation,
+  JournalHistoryDeleted,
   JournalHistoryCorruption,
   JournalHistoryNotTerminal,
   JournalPartitionContradiction,
@@ -38,6 +40,8 @@ import { decideJournalPartitionHistory } from "../partition-history.js"
 import type { JournalScan } from "../recovery-model.js"
 
 const emptyMemoryJournalState = (): MemoryJournalState => ({
+  archiveBytes: new Map(),
+  deletions: new Map(),
   completions: new Map(),
   coldRecordsByRun: new Map(),
   hotRecordsByRun: new Map()
@@ -182,7 +186,12 @@ const hotMemoryRetirementTransition = (
   const hotRecordsByRun = new Map([...current.hotRecordsByRun].filter(([candidate]) => candidate !== runId))
   return [
     Effect.succeed({ _tag: "Retired", from: "Hot", runId, to: "Cold" }),
-    { ...current, coldRecordsByRun, hotRecordsByRun }
+    {
+      ...current,
+      coldRecordsByRun,
+      hotRecordsByRun,
+      archiveBytes: new Map([...current.archiveBytes, [runId, savedMemoryArchiveBytes(hot)] as const])
+    }
   ]
 }
 
@@ -201,7 +210,11 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
     Effect.gen(function* () {
       const baseline = RunCompletionTime.make(yield* Clock.currentTimeMillis)
       const completions = adoptMemoryCompletions(initial, baseline)
-      const state = yield* Ref.make<MemoryJournalState>({ ...initial, completions })
+      const state = yield* Ref.make<MemoryJournalState>({
+        ...initial,
+        completions,
+        archiveBytes: new Map([...initial.coldRecordsByRun].map(([id, rows]) => [id, savedMemoryArchiveBytes(rows)]))
+      })
       const readCompletion = Effect.fn("JournalStore.Memory.readCompletion")(function* (
         runId: RunId,
         operation: JournalStoreOperation = "JournalStore.readCompletion"
@@ -291,6 +304,11 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
 
       const read = Effect.fn("JournalStore.Memory.read")(function* (runId: RunId) {
         const current = yield* Ref.get(state)
+        const receipt = current.deletions.has(runId)
+          ? yield* readMemoryCompletion(current, runId, "JournalStore.read")
+          : undefined
+        if (receipt?._tag === "CompletedRun" && receipt.history === "Deleted")
+          return yield* new JournalHistoryDeleted({ completion: receipt.completion, deletion: receipt.deletion })
         const { cold, hot } = locateRun(current, runId)
         if (cold !== undefined && hot !== undefined) return yield* new JournalPartitionContradiction({ runId })
         return cold === undefined ? (hot ?? []) : yield* readColdHistory(runId, cold, "JournalStore.read")
@@ -355,8 +373,16 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
           ...hot.map(([runId, records]) => ({ partition: "Hot" as const, records, runId })),
           ...cold.map(([runId, records]) => ({ partition: "Cold" as const, records, runId }))
         ]
-        return { issues, runs }
+        return {
+          issues,
+          runs,
+          completions: [...current.completions.keys()]
+            .map((id) => decideMemoryCompletion(current, id, "JournalStore.auditAll"))
+            .filter((receipt) => receipt._tag === "CompletedRun")
+        }
       })
+
+      const maintainArchive = yield* makeMemoryArchiveRetention(state)
 
       const retireTerminalRun = Effect.fn("JournalStore.Memory.retireTerminalRun")(function* (runId: RunId) {
         yield* readCompletion(runId, "JournalStore.retireTerminalRun")
@@ -377,6 +403,7 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
       })
 
       return JournalStore.of({
+        maintainArchive,
         readCompletion,
         append,
         auditAll,
@@ -403,6 +430,8 @@ export const memoryJournalStoreLayerFromPartitionRecords = (input: {
 }) =>
   journalStoreCapabilities(
     memoryRawJournalStoreLayer({
+      archiveBytes: new Map(),
+      deletions: new Map(),
       completions: new Map((input.completions ?? []).map((receipt) => [receipt.runId, receipt])),
       coldRecordsByRun: recordsByRun(input.cold ?? []),
       hotRecordsByRun: recordsByRun(input.hot ?? [])

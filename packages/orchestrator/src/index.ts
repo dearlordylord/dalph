@@ -282,6 +282,7 @@ export {
   JournalPositionGap,
   JournalRecordMismatch,
   JournalDataCorruption,
+  JournalHistoryDeleted,
   JournalHistoryCorruption,
   JournalHistoryNotTerminal,
   JournalPartitionContradiction,

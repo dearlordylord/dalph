@@ -6,8 +6,9 @@ import { JournalSchemaVersion } from "../identity.js"
 import { JournalDataCorruption, JournalSchemaIncompatible } from "../store.js"
 import { classifyJournalStorageFailure, decodeBoundary } from "./sqlite-store-errors.js"
 
-const currentJournalSchemaVersionValue = 3
+const currentJournalSchemaVersionValue = 4
 const currentJournalSchemaVersion = JournalSchemaVersion.make(currentJournalSchemaVersionValue)
+const completionMigrationId = 3
 const journalMigrationId = 2
 const MigrationVersionRows = Schema.Tuple([Schema.Struct({ schema_version: JournalSchemaVersion })])
 
@@ -61,13 +62,26 @@ export const migrateJournal = Effect.fn("JournalStore.Sqlite.migrate")(function*
     ) STRICT`
     yield* migrationSql`CREATE INDEX journal_terminal_runs ON journal_records(event_kind, run_id)`
     yield* migrationSql`CREATE INDEX journal_cold_terminal_runs ON journal_records_cold(event_kind, run_id)`
-    yield* migrationSql`PRAGMA user_version = ${migrationSql.literal(String(currentJournalSchemaVersionValue))}`
+    yield* migrationSql`PRAGMA user_version = ${migrationSql.literal(String(completionMigrationId))}`
   })
   yield* SqliteMigrator.run({
     loader: Effect.succeed([
       [1, "create_current_journal_records", Effect.succeed(createCurrentJournal)],
       [journalMigrationId, "create_cold_journal_records", Effect.succeed(createColdJournal)],
-      [currentJournalSchemaVersionValue, "create_run_completions", Effect.succeed(createCompletions)]
+      [completionMigrationId, "create_run_completions", Effect.succeed(createCompletions)],
+      [
+        currentJournalSchemaVersionValue,
+        "archive_retention",
+        Effect.succeed(
+          Effect.gen(function* () {
+            const migrationSql = yield* SqlClient.SqlClient
+            yield* migrationSql`ALTER TABLE run_completions ADD COLUMN deletion_json TEXT`
+            yield* migrationSql`CREATE TABLE archive_histories (run_id TEXT PRIMARY KEY NOT NULL, saved_bytes INTEGER NOT NULL CHECK(saved_bytes >= 0), baseline INTEGER) STRICT`
+            yield* migrationSql`CREATE INDEX archive_history_age ON archive_histories(baseline, run_id)`
+            yield* migrationSql`PRAGMA user_version = 4`
+          })
+        )
+      ]
     ]),
     table: "effect_sql_migrations"
   }).pipe(

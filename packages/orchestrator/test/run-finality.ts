@@ -17,12 +17,13 @@ import { workflowJournalEventVersion } from "../src/workflow/kernel/event.js"
 export const completedRunFinalityFixture = (input: {
   readonly runId: RunId
   readonly target: TrackerTarget
+  readonly operationId?: OperationId
   readonly observedAt?: JournalPosition
 }) => {
   const observedJournalPosition = 3
   const operation = makeTrackerGraphObservationOperation(
     { _tag: "WorkflowEstablishment" },
-    OperationId.make(`completed-finality:${input.runId}`),
+    input.operationId ?? OperationId.make(`completed-finality:${input.runId}`),
     input.target
   )
   const snapshot = validSnapshot({

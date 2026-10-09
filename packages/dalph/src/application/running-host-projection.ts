@@ -5,6 +5,7 @@ import {
   type DeliveryRuntimeObservationState,
   type JournaledRunTermination,
   type RunCompletion,
+  type RunCompletionInspection,
   type TraceCursor
 } from "@dalph/orchestrator"
 import { Effect, Order, Schema } from "effect"
@@ -106,6 +107,7 @@ export const projectRunningHostSnapshot = Effect.fn("RunningHost.projectSnapshot
 export interface RunningHostControlObservation {
   readonly direction: "RunPaused" | "RunUnpaused" | "RunTerminated"
   readonly observedAt: TraceCursor
+  readonly completionResult?: Extract<RunCompletionInspection, { readonly _tag: "CompletedRun" }>
   readonly completion?: RunCompletion
   readonly termination: JournaledRunTermination | null
 }
@@ -142,7 +144,7 @@ export const projectRunningHostRunControl = Effect.fn("RunningHost.projectRunCon
       ...(observation.completion === undefined
         ? {}
         : {
-            completionResult: {
+            completionResult: observation.completionResult ?? {
               _tag: "CompletedRun" as const,
               completion: observation.completion,
               history: "Available" as const

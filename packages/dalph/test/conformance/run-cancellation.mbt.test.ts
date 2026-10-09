@@ -913,6 +913,7 @@ const makeStorage = (
     })
 
   return {
+    maintainArchive: () => Effect.die("model driver must not maintain archives"),
     readCompletion: (runId: RunId) => Effect.succeed({ _tag: "NoCompletion" as const, runId }),
     append,
     beginRun,
@@ -920,7 +921,7 @@ const makeStorage = (
     readRunForRecovery,
     scanHot: () =>
       Effect.succeed({ issues: [], runs: readRecords().length === 0 ? [] : [{ records: readRecords(), runId }] }),
-    auditAll: () => Effect.succeed({ issues: [], runs: [] }),
+    auditAll: () => Effect.succeed({ completions: [], issues: [], runs: [] }),
     retireTerminalRun: (eventRunId) =>
       Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
     terminateRun

@@ -1,3 +1,4 @@
+import type { RunCompletionInspection } from "./completion.js"
 import { Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import type { JournalRecord } from "./store.js"
@@ -37,6 +38,7 @@ export interface JournalScan {
 
 /** Reports every valid or malformed history in both physical Journal partitions. */
 export interface JournalAudit {
+  readonly completions: ReadonlyArray<Extract<RunCompletionInspection, { readonly _tag: "CompletedRun" }>>
   readonly issues: ReadonlyArray<JournalAuditIssue>
   readonly runs: ReadonlyArray<JournalRunRecords & { readonly partition: JournalPartition }>
 }

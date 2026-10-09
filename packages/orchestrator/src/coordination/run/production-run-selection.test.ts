@@ -1,3 +1,6 @@
+import { TestClock } from "effect/testing"
+import { archiveAgeMillis } from "../../workflow-journal/archive-retention.js"
+import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -18,7 +21,7 @@ import {
   makeHistoricalWorkflowRunBeganRecord,
   makeWorkflowRunTerminatedRecord
 } from "../../workflow-journal/run-lifecycle.js"
-import { RunLifecycleJournal } from "../../workflow-journal/store.js"
+import { JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { cancelledRunFinalityFixture, completedRunFinalityFixture } from "../../../test/run-finality.js"
 import { StartupRecoveryBlocked } from "./startup-recovery.js"
 import {
@@ -182,6 +185,7 @@ it.effect("redelivers the exact cancelled production Run after its terminal hist
   }).pipe(
     Effect.provide(
       auditJournalLayer({
+        completions: [],
         issues: [],
         runs: [
           {
@@ -221,7 +225,7 @@ it.effect("finds no production cancellation Run when the complete audit is empty
     expect(yield* discoverProductionCancellationRun(FixtureTarget.make("production-host-never-started"))).toEqual({
       _tag: "Fresh"
     })
-  }).pipe(Effect.provide(auditJournalLayer({ issues: [], runs: [] })))
+  }).pipe(Effect.provide(auditJournalLayer({ completions: [], issues: [], runs: [] })))
 )
 
 it.effect("ignores completed production history during cancellation discovery", () => {
@@ -233,6 +237,7 @@ it.effect("ignores completed production history during cancellation discovery", 
   }).pipe(
     Effect.provide(
       auditJournalLayer({
+        completions: [],
         issues: [],
         runs: [
           {
@@ -271,7 +276,9 @@ it.effect("rejects one terminal cancellation history for another production targ
     expect(failure).toEqual(
       new ProductionRunSelectionConflict({ conflicts: [{ runId, target: recordedTarget }], requestedTarget })
     )
-  }).pipe(Effect.provide(auditJournalLayer({ issues: [], runs: [cancelledAuditRun(runId, recordedTarget)] })))
+  }).pipe(
+    Effect.provide(auditJournalLayer({ completions: [], issues: [], runs: [cancelledAuditRun(runId, recordedTarget)] }))
+  )
 })
 
 it.effect("fails cancellation discovery when the complete audit is malformed", () => {
@@ -286,6 +293,7 @@ it.effect("fails cancellation discovery when the complete audit is malformed", (
   }).pipe(
     Effect.provide(
       auditJournalLayer({
+        completions: [],
         issues: [
           new JournalSemanticIssue({
             detail: "malformed cancellation audit",
@@ -311,6 +319,7 @@ it.effect("fails when a cancellation audit contains an invalid journal history",
   }).pipe(
     Effect.provide(
       auditJournalLayer({
+        completions: [],
         issues: [],
         runs: [{ partition: JournalPartition.make("Cold"), records: [beginning, beginning], runId }]
       })
@@ -327,6 +336,7 @@ it.effect("prefers one unfinished Run over retired cancellation history", () => 
   }).pipe(
     Effect.provide(
       auditJournalLayer({
+        completions: [],
         issues: [],
         runs: [
           {
@@ -362,6 +372,7 @@ it.effect("rejects multiple terminal cancellation histories for one production t
   }).pipe(
     Effect.provide(
       auditJournalLayer({
+        completions: [],
         issues: [],
         runs: [cancelledAuditRun(firstRunId, target), cancelledAuditRun(secondRunId, target)]
       })
@@ -450,3 +461,22 @@ it.effect("fails when a discovered Hot Run has an invalid journal history", () =
     Effect.provide(NodeCrypto.layer)
   )
 })
+
+it.effect("redelivers exact cancelled completion-only identity without reconstructing expired evidence", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("cancelled-expired")
+    const target = FixtureTarget.make("cancelled-expired-target")
+    const store = yield* RunLifecycleJournal
+    const fixture = cancelledRunFinalityFixture({ runId, target })
+    const raw = yield* JournalStore
+    yield* store.beginRun(runId, target, policy, remotePublicationTargetForTest)
+    yield* raw.append(runId, runCancellationAppliedRecordKey, fixture.cancellation)
+    yield* raw.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+    yield* raw.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+    yield* store.terminateRun(runId, "Cancelled", fixture.evidence)
+    yield* store.retireTerminalRun(runId)
+    yield* TestClock.adjust(archiveAgeMillis)
+    yield* store.maintainArchive()
+    expect(yield* discoverProductionCancellationRun(target)).toEqual({ _tag: "Recovered", runId })
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)

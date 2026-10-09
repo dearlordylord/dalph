@@ -94,20 +94,43 @@ See
 Dalph commits a compact completion record with accepted termination in one
 storage transition. `JournalStore.readCompletion` and the lifecycle capability
 read that result without full-history replay or repair. The terminal public
-Run-control response includes the result and typed Available history, and
+Run-control response includes the result and typed Available or Deleted history, and
 bootstrap checks it before lazy policy or activation. Active controls keep
 using their accepted prefix. A foreign target and contradictory storage facts
 fail closed.
 
-Supported SQLite generation 1/2 histories migrate to generation 3. Open-time
+Supported SQLite generation 1/2/3 histories migrate to generation 4. Open-time
 reconciliation canonically validates legacy terminal candidates and records
 Unknown original time with the first committed verification baseline; it
 preserves all Hot/Cold rows. Already established records use independent
 integrity reads, never another baseline. Invalid histories are reported by exact
 reads/audits and never adopted. Cold failures do not prevent unrelated Hot
-recovery. No retention timer or deletion is added. The
+recovery. The
 [completion scenarios and evidence limits](../scenarios/compact-run-completion.md)
-map owner, migration, bootstrap and public checks; Deleted details remain #489.
+map owner, migration, bootstrap and public checks.
+
+After ordinary terminal settlement and lossless retirement, the exclusive owner
+invokes `RunLifecycleJournal.maintainArchive` once. One shared policy selects
+indexed storage metadata, expires age-eligible histories first, then oldest
+eligible histories under budget pressure. Each exact deletion canonically
+validates the selected Cold history and checks its established completion before
+one atomic details/availability commit. SQLite independently checks the retained
+receipt checksum after expiry; no full evidence can be replayed from it.
+
+Saved bytes count UTF-8 RunId, key, event kind and saved payload plus eight bytes
+each for position and version. Memory uses the same saved codec at retirement;
+SQLite measures actual persisted representations. Per-Run metadata is storage
+provenance, not a cleanup frontier. Legacy baselines never reset. A pass starts
+at most 32 whole units and starts none after one elapsed second; a started atomic
+unit finishes or rolls back before the owner moves on. This bounds units rather
+than promising a deadline for a single oversized history. Observations report
+remaining bytes, excess, expired backlog and deferred storage/protected/bound
+conditions. No storage failure changes accepted finality or starts an immediate
+retry loop. Exact caches are invalidated even after acknowledgement loss.
+
+[Expiry scenarios](../scenarios/archived-run-expiry.md) map the additional tests.
+Startup/idle periodic triggers remain #490; this slice introduces no timer,
+VACUUM, provider mutation, or artifact garbage collection.
 
 ## Complete-history reconstruction
 
@@ -121,7 +144,9 @@ not prove that a Run is unfinished.
 
 An exact `read` and recovery read check both partitions in one SQLite snapshot
 or one memory state transition. They return the complete history from whichever
-partition contains it and fail closed if the Run appears in both. The explicit
+partition contains it while Available, explicitly report `JournalHistoryDeleted`
+with completion and deletion provenance after expiry, and fail closed if the
+Run appears in both. The explicit
 `auditAll` operation scans both Hot and Cold with partition-bearing issues and
 does not silently omit retained or malformed rows. It is the diagnostic and
 repair-evidence boundary; it is not ordinary startup discovery.
