@@ -1,6 +1,6 @@
 {
   "version": 1,
   "lane": "application-exit/1",
-  "provenanceSha256": "8be02cb5346e6b352e17d0242db69d35c907508937efdc33c19ac9bad9591a64",
-  "corpusSha256": "764e9ca46d0e8a03d06ffb62a354346e5cebfeb603f52503b0a0bdf84d6ff089"
+  "provenanceSha256": "74fa2ee3617494a4b5904a012141d09710475a93ba21a9edf205938cda63eec0",
+  "corpusSha256": "d3a0f5ddb97bb47b54a3a11a6f02dd87f361e1f0b88845502055fba8e486b378"
 }

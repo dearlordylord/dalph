@@ -293,10 +293,11 @@ for (const [name, layer] of [
         const fixture = completedRunFinalityFixture({
           runId,
           target,
-          operationId: OperationId.make("x".repeat(60 * 1024 * 1024))
+          operationId: OperationId.make("x".repeat(24 * 1024 * 1024))
         })
         yield* store.beginRun(runId, target, policy, remotePublicationTargetForTest)
-        // The large saved observation and termination evidence exceed compression eligibility.
+        // Eleven saved copies make a 24 MiB identity exceed the actual 256 MiB quota.
+        // Keep the physical fixture just over quota to avoid unnecessary allocation/GC.
         yield* store.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
         yield* store.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
         yield* store.terminateRun(runId, "Completed", fixture.evidence)

@@ -110,7 +110,9 @@ recovery. The
 map owner, migration, bootstrap and public checks.
 
 After ordinary terminal settlement and lossless retirement, the exclusive owner
-invokes `RunLifecycleJournal.maintainArchive` once. One shared policy selects
+invokes `RunLifecycleJournal.maintainArchive` once. The established repository
+host also invokes this operation at startup and one minute after each completed
+scheduled pass, under its existing coordinator and SQLite custody. One shared policy selects
 indexed storage metadata, expires age-eligible histories first, then oldest
 eligible histories under budget pressure. Each exact deletion canonically
 validates the selected Cold history and checks its established completion before
@@ -129,8 +131,9 @@ conditions. No storage failure changes accepted finality or starts an immediate
 retry loop. Exact caches are invalidated even after acknowledgement loss.
 
 [Expiry scenarios](../scenarios/archived-run-expiry.md) map the additional tests.
-Startup/idle periodic triggers remain #490; this slice introduces no timer,
-VACUUM, provider mutation, or artifact garbage collection.
+The host-scoped scheduler drains on Exit. SQLite releases its storage permit
+between atomic units so unrelated operations can proceed. There is no separate
+writer, immediate failure retry, VACUUM, provider mutation or artifact collection.
 
 ## Complete-history reconstruction
 
