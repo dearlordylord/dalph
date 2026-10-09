@@ -9,6 +9,14 @@ Canonical domain language lives in [CONTEXT.md](CONTEXT.md). Chronological
 behavior lives under [scenarios/](scenarios), and accepted design decisions
 live under [adr/](adr).
 
+## Archived history availability
+
+The Journal owner preserves compact terminal results independently of detailed
+history. Ordinary settlement retires the complete history losslessly, then
+performs one finite whole-history retention pass. [Journal and reconstruction](architecture/journal-and-reconstruction.md#independently-readable-completion)
+owns saved-byte accounting, atomic deletion and explicit Deleted reads. Current
+tracker, Git and execution facts retain their own authorities.
+
 ## Governing Composition
 
 Before delivery is constructed, one application entry establishes the exact

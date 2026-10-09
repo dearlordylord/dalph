@@ -7,7 +7,7 @@ import {
   ResultRecoveryRequestId,
   ControlDirectionApplicationOrdinal,
   RunTerminationDisposition,
-  RunCompletionInspection,
+  CompletedRunInspection,
   TraceCursor,
   RunControlPolicy,
   RunPolicyRevision,
@@ -238,7 +238,7 @@ export const RunningHostRunControl = Schema.TaggedUnion({
   RunPaused: { controlObservedAt: TraceCursor, terminationEvidence: PendingEvidence },
   RunUnpaused: { controlObservedAt: TraceCursor, terminationEvidence: PendingEvidence },
   RunTerminated: {
-    completionResult: Schema.optionalKey(RunCompletionInspection.cases.CompletedRun),
+    completionResult: Schema.optionalKey(CompletedRunInspection),
     terminationEvidence: Schema.TaggedStruct("Accepted", {
       disposition: RunTerminationDisposition,
       terminatedAt: TraceCursor

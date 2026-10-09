@@ -112,6 +112,7 @@ import {
   WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
 import {
+  observeArchiveRetention,
   journalMaintenanceDiagnosticFor,
   type JournalMaintenanceObservationService
 } from "../../workflow-journal/maintenance.js"
@@ -912,6 +913,7 @@ export const journaledRunBootstrapLayer = (
               Effect.catch((failure) => maintenanceObservation.observe(journalMaintenanceDiagnosticFor(runId, failure)))
             )
         }
+        yield* observeArchiveRetention(runId, lifecycle, maintenanceObservation)
         return proof.decision
       })
 

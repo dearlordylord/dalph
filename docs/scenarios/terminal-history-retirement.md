@@ -18,6 +18,16 @@ Journal contains a complete valid prefix ending before
 valid termination with its exact `RunTerminationDisposition` and
 `RunFinalityEvidence`.
 
+## Subsequent expiry refines the lossless guarantee
+
+Hot-to-Cold retirement remains byte-preserving and lossless. The accepted
+[#487](https://github.com/dearlordylord/dalph/issues/487) policy subsequently
+authorizes [whole archived-history expiry](archived-run-expiry.md). Transparent
+full-detail reads below apply while history is Available. After expiry, the
+compact result and closed identity remain, and detailed reads explicitly report
+Deleted instead of returning an empty prefix or corruption. This supersedes an
+indefinite-detail-availability interpretation of #70 without changing retirement.
+
 ## 1. Dalph retires a newly terminated Run
 
 Starting facts: Dalph owns active Run R, and R's complete valid history is in

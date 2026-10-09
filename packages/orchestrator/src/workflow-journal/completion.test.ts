@@ -164,10 +164,11 @@ it.effect("backfills legacy completion receipts without inventing dates or losin
       )
       yield* withSql(filename, (sql) =>
         Effect.gen(function* () {
+          yield* sql`DROP TABLE archive_histories`
           yield* sql`DROP TABLE run_completions`
           yield* sql`DROP INDEX journal_terminal_runs`
           yield* sql`DROP INDEX journal_cold_terminal_runs`
-          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 3`
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 3`
           yield* sql`PRAGMA user_version = 2`
         })
       )
@@ -193,6 +194,13 @@ it.effect("backfills legacy completion receipts without inventing dates or losin
           expect(yield* store.readCompletion(runId)).toEqual(baseline)
           expect(yield* store.read(runId)).toEqual(original)
           expect((yield* store.scanHot()).runs).toEqual([])
+          yield* TestClock.adjust("29 days")
+          yield* store.maintainArchive()
+          expect(yield* store.readCompletion(runId)).toMatchObject({
+            ...baseline,
+            history: "Deleted",
+            deletion: { reason: "Age" }
+          })
         }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       )
     })

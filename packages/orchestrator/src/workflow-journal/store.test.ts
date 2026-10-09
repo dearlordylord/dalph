@@ -1,3 +1,5 @@
+import { archiveAgeMillis } from "./archive-retention.js"
+import { TestClock } from "effect/testing"
 import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 // @effect-diagnostics unnecessaryEffectGen:off
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
@@ -598,6 +600,31 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       }).pipe(Effect.provide(makeLayer()))
     )
 
+    it.effect("expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const receipts = []
+        for (const disposition of ["Completed", "Blocked", "Cancelled"] as const) {
+          const id = RunId.make(`expiry-${name}-${disposition}`)
+          const target = FixtureTarget.make(`expiry-${disposition}`)
+          yield* journal.beginRun(id, target, initialPolicy, remotePublicationTargetForTest)
+          yield* appendTerminalDisposition(journal, id, target, disposition)
+          yield* journal.retireTerminalRun(id)
+          receipts.push(yield* journal.readCompletion(id))
+        }
+        yield* TestClock.adjust(archiveAgeMillis)
+        const pass = yield* journal.maintainArchive()
+        expect(pass.deletedRuns.length).toBe(3)
+        for (const before of receipts) {
+          if (before._tag !== "CompletedRun") return yield* Effect.die("missing receipt")
+          expect(yield* journal.readCompletion(before.completion.runId)).toMatchObject({
+            ...before,
+            history: "Deleted"
+          })
+        }
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
     it.effect("retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore
@@ -1148,11 +1175,12 @@ durableJournalStoreContract(
             const migrations = yield* sql`
               SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
             `
-            expect(schemaVersion).toEqual([{ user_version: 3 }])
+            expect(schemaVersion).toEqual([{ user_version: 4 }])
             expect(migrations).toEqual([
               { migration_id: 1, name: "create_current_journal_records" },
               { migration_id: 2, name: "create_cold_journal_records" },
-              { migration_id: 3, name: "create_run_completions" }
+              { migration_id: 3, name: "create_run_completions" },
+              { migration_id: 4, name: "archive_retention" }
             ])
           }).pipe(Effect.provide(Reactivity.layer))
         )
@@ -1237,8 +1265,13 @@ durableJournalStoreContract(
                 const schema = yield* sql`PRAGMA user_version`
                 const hot = yield* sql`SELECT COUNT(*) AS count FROM journal_records WHERE run_id = ${runId}`
                 const cold = yield* sql`SELECT COUNT(*) AS count FROM journal_records_cold WHERE run_id = ${runId}`
-                expect(migrations).toEqual([{ migration_id: 1 }, { migration_id: 2 }, { migration_id: 3 }])
-                expect(schema).toEqual([{ user_version: 3 }])
+                expect(migrations).toEqual([
+                  { migration_id: 1 },
+                  { migration_id: 2 },
+                  { migration_id: 3 },
+                  { migration_id: 4 }
+                ])
+                expect(schema).toEqual([{ user_version: 4 }])
                 expect(hot).toEqual([{ count: 1 }])
                 expect(cold).toEqual([{ count: 0 }])
               })
@@ -1533,11 +1566,12 @@ durableJournalStoreContract(
             expect(history).toEqual([record])
             yield* withSqliteClient(filename, (sql) =>
               Effect.gen(function* () {
-                expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 3 }])
+                expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 4 }])
                 expect(yield* sql`SELECT migration_id FROM effect_sql_migrations ORDER BY migration_id`).toEqual([
                   { migration_id: 1 },
                   { migration_id: 2 },
-                  { migration_id: 3 }
+                  { migration_id: 3 },
+                  { migration_id: 4 }
                 ])
                 expect(yield* sql`SELECT COUNT(*) AS count FROM journal_records_cold WHERE run_id = ${runId}`).toEqual([
                   { count: 0 }
@@ -1642,7 +1676,7 @@ durableJournalStoreContract(
                 created_at DATETIME NOT NULL DEFAULT current_timestamp,
                 name VARCHAR(255) NOT NULL
               )`
-                yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (4, 'future')`
+                yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (5, 'future')`
               })
             )
             const failure = yield* Effect.flip(
@@ -1651,7 +1685,7 @@ durableJournalStoreContract(
               }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
 
-            expect(failure).toMatchObject({ _tag: "JournalSchemaIncompatible", found: 4, supported: 3 })
+            expect(failure).toMatchObject({ _tag: "JournalSchemaIncompatible", found: 5, supported: 4 })
           })
         )
       )

@@ -1,3 +1,4 @@
+import { SavedArchiveBytes } from "../../../orchestrator/src/workflow-journal/archive-retention.js"
 /* eslint-disable max-lines -- One driver keeps the cancellation model-to-runtime seam map auditable. */
 /* eslint-disable functional/immutable-data -- The driver owns a short-lived mutable test projection. */
 import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
@@ -913,6 +914,14 @@ const makeStorage = (
     })
 
   return {
+    maintainArchive: () =>
+      Effect.succeed({
+        savedBytes: SavedArchiveBytes.make(0),
+        excessBytes: SavedArchiveBytes.make(0),
+        expiredBacklog: 0,
+        deletedRuns: [],
+        deferred: "None"
+      }),
     readCompletion: (runId: RunId) => Effect.succeed({ _tag: "NoCompletion" as const, runId }),
     append,
     beginRun,
@@ -920,7 +929,7 @@ const makeStorage = (
     readRunForRecovery,
     scanHot: () =>
       Effect.succeed({ issues: [], runs: readRecords().length === 0 ? [] : [{ records: readRecords(), runId }] }),
-    auditAll: () => Effect.succeed({ issues: [], runs: [] }),
+    auditAll: () => Effect.succeed({ completions: [], issues: [], runs: [] }),
     retireTerminalRun: (eventRunId) =>
       Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
     terminateRun

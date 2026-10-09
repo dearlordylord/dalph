@@ -1,6 +1,8 @@
+import type { SavedArchiveBytes } from "../archive-retention.js"
 import { decideWorkflowRunTermination } from "../run-lifecycle.js"
 import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
 import {
+  type RunHistoryDeletion,
   type RunCompletionInspection,
   type RunCompletionTiming,
   compactRunCompletion,
@@ -23,6 +25,8 @@ import {
 } from "../store.js"
 
 export interface MemoryJournalState {
+  readonly archiveBytes: ReadonlyMap<RunId, SavedArchiveBytes>
+  readonly deletions: ReadonlyMap<RunId, RunHistoryDeletion>
   readonly completions: ReadonlyMap<RunId, RunCompletion>
   readonly hotRecordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
   readonly coldRecordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
@@ -69,6 +73,12 @@ export const decideMemoryCompletion = (
         })
     }
     return { _tag: "NoCompletion" as const, runId }
+  }
+  const deletion = state.deletions.get(runId)
+  if (deletion !== undefined) {
+    if (hot !== undefined || cold !== undefined)
+      return new JournalDataCorruption({ operation, detail: `deleted history still has rows for ${runId}` })
+    return { _tag: "CompletedRun", completion: receipt, history: "Deleted", deletion }
   }
   const began = records[0]
   const terminal = records.at(lastRecordIndex)

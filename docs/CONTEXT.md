@@ -539,7 +539,8 @@ _Avoid_: Full finality tree, runtime projection, current remote head
 
 **Run history availability**:
 Whether the detailed chronology of a known completed Run is Available or
-Deleted. Deleted details do not mean an unknown Run or authorize another Begin.
+Deleted. Deleted details retain the reason (age, budget, or both) and observation
+time. They do not mean an unknown Run or authorize another Begin.
 _Avoid_: Terminal disposition, Hot/Cold placement, activation state
 
 **Run cancellation**:
@@ -633,12 +634,22 @@ reports that history as already retired; contradictory Hot-and-Cold membership
 and malformed history fail closed.
 _Avoid_: Deleting old rows, inferred completion, asynchronous archive job
 
+**Archived-history expiry**:
+The owner's atomic removal of every detailed record for one canonically settled
+terminal Run with an established compact completion result. Thirty elapsed UTC
+days expire details, including equality; saved archive bytes above 256 MiB can
+expire younger histories, oldest baseline first with Run identity breaking ties.
+The result and identity survive indefinitely. Unfinished or obligation-bearing
+work is protected regardless of age or pressure.
+_Avoid_: Partial prefix truncation, cancellation, artifact cleanup, total file cap
+
 **Hot discovery and full journal audit**:
 `scanHot` is the ordinary startup operation and considers only Hot histories
 that may still require recovery validation. `auditAll` is the explicit
 partition-aware diagnostic operation over both Hot and Cold, including retained
-history and Cold decoding failures. Exact Run reads are transparent across the
-two partitions but reject contradictory membership.
+history, completion-only Runs, and Cold decoding failures. Exact Run reads are
+transparent across the two partitions while Available, report Deleted details
+explicitly after expiry, and reject contradictory membership.
 _Avoid_: Startup scan of every physical row, archive as authority, partial read
 
 **Workflow-journal history reduction**:

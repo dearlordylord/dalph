@@ -1,4 +1,10 @@
-import { completedRunRecoveryFailure, RunCompletionTime } from "../completion.js"
+import { makeSqliteRunRecovery } from "./sqlite-run-recovery.js"
+import {
+  makeSqliteArchiveRetention,
+  refreshSqliteArchiveAccounting,
+  type SqliteArchiveRetentionCuts
+} from "./sqlite-archive-retention.js"
+import { RunCompletionTime } from "../completion.js"
 import { makeSqliteCompletions } from "./sqlite-completion.js"
 import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
@@ -10,11 +16,7 @@ import { JournalDatabaseLocator, JournalPosition, type JournalRecordKey } from "
 import { equalJournalEvents } from "../event-codec.js"
 import { encodeSqliteJournalEvent as encodeJournalEvent } from "./sqlite-event-codec.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
-import {
-  decideWorkflowRunBeginning,
-  decideWorkflowRunTermination,
-  readRecoverableRunBeginning
-} from "../run-lifecycle.js"
+import { decideWorkflowRunBeginning, decideWorkflowRunTermination } from "../run-lifecycle.js"
 import {
   journalStoreCapabilities,
   unpublishedInRunJournalTestLayer,
@@ -40,12 +42,11 @@ import {
   type SqlitePartitionSnapshot
 } from "./sqlite-storage-checkpoint.js"
 
-interface SqliteJournalStoreConfig {
-  readonly filename: JournalDatabaseLocator
-}
+type SqliteJournalStoreConfig = Pick<SqliteJournalTestConfig, "filename">
 
 /** Test-only SQLite seams for controlled migration and retirement cuts. */
-interface SqliteJournalTestConfig extends SqliteJournalStoreConfig {
+interface SqliteJournalTestConfig extends SqliteArchiveRetentionCuts {
+  readonly filename: JournalDatabaseLocator
   /** Deterministic test seam executed inside an exact-read transaction after membership is read. */
   readonly beforeReadLoad?: () => Effect.Effect<void>
   /** Deterministic migration cut used only to prove rollback after cold-table creation. */
@@ -154,14 +155,12 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           Effect.tap(() => testConfig?.afterBackfillCommit?.() ?? Effect.void),
           Effect.mapError((failure) => classifyJournalMethodFailure("JournalStore.readCompletion", failure))
         )
+        yield* refreshSqliteArchiveAccounting(sql).pipe(
+          sql.withTransaction,
+          Effect.mapError((error) => classifyJournalMethodFailure("JournalStore.maintainArchive", error))
+        )
         const serialization = yield* Semaphore.make(1)
-        const readCompletion = (runId: RunId) =>
-          serialization.withPermit(
-            completions.read(runId).pipe(
-              sql.withTransaction,
-              Effect.mapError((failure) => classifyJournalMethodFailure("JournalStore.readCompletion", failure))
-            )
-          )
+        const readCompletion = (runId: RunId) => serialization.withPermit(completions.readIndependent(runId))
         const checkpoints = yield* Ref.make(HashMap.empty<RunId, SqliteStorageCheckpoint>())
         const readSnapshots = yield* Ref.make(HashMap.empty<RunId, SqlitePartitionSnapshot>())
         const invalidateRead = (runId: RunId) => Ref.update(readSnapshots, HashMap.remove(runId))
@@ -266,6 +265,7 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         const read = Effect.fn("JournalStore.Sqlite.read")(function* (runId: RunId) {
           return yield* serialization.withPermit(
             Effect.gen(function* () {
+              yield* completions.requireAvailable(runId)
               const partition = yield* locateRunPartition(runId, "JournalStore.read")
               const cached = HashMap.get(yield* Ref.get(readSnapshots), runId)
               if (Option.isSome(cached) && cached.value.checkpoint.partition === partition) return cached.value
@@ -287,28 +287,16 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           )
         })
 
-        const readRunForRecovery = Effect.fn("JournalStore.Sqlite.readRunForRecovery")(function* (
-          runId: RunId,
-          target: TrackerTarget
-        ) {
-          return yield* serialization.withPermit(
-            Effect.gen(function* () {
-              const completion = yield* completions.read(runId)
-              const failure = completedRunRecoveryFailure(runId, target, completion)
-              if (failure !== undefined) return yield* failure
-              const snapshot = yield* loadRunSnapshot(runId, "JournalStore.readRunForRecovery").pipe(
-                sql.withTransaction,
-                Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.readRunForRecovery", cause))
-              )
-              yield* publish(snapshot.checkpoint)
-              return yield* readRecoverableRunBeginning(snapshot.records, runId, target)
-            }).pipe(
+        const recover = makeSqliteRunRecovery(completions, queries, publish)
+        const readRunForRecovery = (runId: RunId, target: TrackerTarget) =>
+          serialization.withPermit(
+            recover(runId, target).pipe(
+              sql.withTransaction,
               Effect.ensuring(invalidateRead(runId)),
               Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)),
               Effect.mapError((failure) => classifyJournalMethodFailure("JournalStore.readRunForRecovery", failure))
             )
           )
-        })
 
         const scanHot = Effect.fn("JournalStore.Sqlite.scanHot")(function* (retainRunId?: RunId) {
           return yield* serialization.withPermit(
@@ -358,9 +346,13 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
               const contradictoryRunId = [...hot.rowRunIds].find((candidate) => cold.rowRunIds.has(candidate))
               if (contradictoryRunId !== undefined)
                 return yield* new JournalPartitionContradiction({ runId: contradictoryRunId })
-              const audit = { issues: [...hot.issues, ...cold.issues], runs: [...hot.runs, ...cold.runs] }
-              yield* completions.audit(audit)
-              return audit
+              const audit = {
+                completions: [],
+                issues: [...hot.issues, ...cold.issues],
+                runs: [...hot.runs, ...cold.runs]
+              }
+              const receipts = yield* completions.audit(audit)
+              return { ...audit, completions: receipts }
             }).pipe(
               sql.withTransaction,
               Effect.ensuring(invalidateAll),
@@ -369,11 +361,14 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           )
         })
 
+        const retention = makeSqliteArchiveRetention(sql, queries, completions, invalidate, testConfig ?? {})
+        const maintainArchive = () => serialization.withPermit(retention())
         const retireSqlite = makeSqliteTerminalHistoryRetirement(sql, queries, testConfig?.afterRetirementCopy)
         const retireTerminalRun = Effect.fn("JournalStore.Sqlite.retireTerminalRun")(function* (runId: RunId) {
           return yield* serialization.withPermit(
             retireSqlite(runId).pipe(
               Effect.tap(() => completions.read(runId)),
+              Effect.tap(() => refreshSqliteArchiveAccounting(sql, runId)),
               sql.withTransaction,
               Effect.tap(() => testConfig?.afterRetirementCommit?.() ?? Effect.void),
               Effect.ensuring(invalidate(runId)),
@@ -428,6 +423,7 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         })
 
         return JournalStore.of({
+          maintainArchive,
           readCompletion,
           append,
           auditAll,

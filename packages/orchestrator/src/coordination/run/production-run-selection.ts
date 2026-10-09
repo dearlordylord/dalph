@@ -124,6 +124,12 @@ export const discoverProductionCancellationRun = Effect.fn("ProductionHost.disco
     /* v8 ignore next -- @preserve Every valid unfinished or terminal cancellation candidate has WorkflowRunBegan. */
     return candidateTarget === undefined ? [] : [{ runId: reduction.runId, target: candidateTarget }]
   })
+  if (unfinished.length === 0) {
+    for (const receipt of audit.completions) {
+      if (receipt.history === "Deleted" && receipt.completion.disposition === "Cancelled")
+        conflicts.push({ runId: receipt.completion.runId, target: receipt.completion.target })
+    }
+  }
   const [firstConflict, ...remainingConflicts] = conflicts
   if (
     firstConflict !== undefined &&

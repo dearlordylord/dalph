@@ -21,6 +21,7 @@ import {
   type GithubIssueTarget,
   type JournaledRunTerminationSource,
   JournalDataCorruption,
+  JournalHistoryDeleted,
   JournalHistoryCorruption,
   JournalPartitionContradiction,
   JournalSchemaIncompatible,
@@ -132,6 +133,7 @@ export class ProductionCliStartupError extends Schema.TaggedError<ProductionCliS
 ) {}
 
 const productionCliJournalFailureCodes = [
+  "journal.history_deleted",
   "journal.data_corruption",
   "journal.history_corruption",
   "journal.partition_contradiction",
@@ -827,6 +829,7 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     DeliveryStatusRunIdentityUnavailable,
     DeliveryStatusRunMismatch,
     JournalDataCorruption,
+    JournalHistoryDeleted,
     JournalHistoryCorruption,
     JournalPartitionContradiction,
     JournalSchemaIncompatible,
@@ -957,6 +960,11 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
       })
     case "JournalDataCorruption":
       return journalFailure("journal.data_corruption", "the production Journal contains invalid data")
+    case "JournalHistoryDeleted":
+      return journalFailure(
+        "journal.history_deleted",
+        "the Run details expired; its compact completion remains available"
+      )
     case "JournalHistoryCorruption":
       return journalFailure("journal.history_corruption", "the production Journal contains an invalid Run history")
     case "JournalPartitionContradiction":

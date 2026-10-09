@@ -382,6 +382,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     authorE: completeDelivery?.authorE ?? trackerEdits.authorE,
     setIncompleteEvidence: trackerEdits.setIncompleteEvidence,
     bootstrap: Deferred.await(bootstrapReady),
+    retireHistory: (runId: RunId) =>
+      Deferred.await(pausedStore).pipe(Effect.flatMap((store) => store.retireTerminalRun(runId))),
+    maintainArchive: Deferred.await(pausedStore).pipe(Effect.flatMap((store) => store.maintainArchive())),
     readHistory: (runId: RunId) => Deferred.await(pausedStore).pipe(Effect.flatMap((store) => store.read(runId))),
     readPausedHistory: Deferred.await(pausedStore).pipe(
       Effect.flatMap((store) => store.read(RunId.make("paused-client-run")))

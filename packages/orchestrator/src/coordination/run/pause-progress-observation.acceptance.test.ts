@@ -570,6 +570,7 @@ const runtimeLayer = (
 
 const countingStore = (delegate: JournalStore["Service"], calls: Ref.Ref<BoundaryCalls>) =>
   JournalStore.of({
+    maintainArchive: delegate.maintainArchive,
     readCompletion: delegate.readCompletion,
     beginRun: (...input) => increment(calls, "journalStore").pipe(Effect.andThen(delegate.beginRun(...input))),
     append: (...input) => increment(calls, "journalStore").pipe(Effect.andThen(delegate.append(...input))),

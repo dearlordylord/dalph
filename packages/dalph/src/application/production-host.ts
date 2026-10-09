@@ -20,6 +20,7 @@ import {
   journalRecordAt,
   type JournaledRunTermination,
   type RunCompletion,
+  type RunCompletionInspection,
   GithubGraphqlClient,
   type GithubGraphqlExecution,
   GithubGraphqlRequestError,
@@ -201,6 +202,7 @@ export interface ProductionHostObservation {
 export interface ProductionPassiveRunControl {
   readonly direction: "RunPaused" | "RunUnpaused" | "RunTerminated"
   readonly observedAt: TraceCursor
+  readonly completionResult?: Extract<RunCompletionInspection, { readonly _tag: "CompletedRun" }>
   readonly completion?: RunCompletion
   readonly termination: JournaledRunTermination | null
 }
@@ -1333,6 +1335,7 @@ export const withDecodedProductionRepositoryHost = <
           return {
             direction: "RunTerminated" as const,
             observedAt,
+            completionResult: completion,
             completion: completion.completion,
             termination: { disposition: completion.completion.disposition, terminatedAt: observedAt }
           } satisfies ProductionPassiveRunControl
