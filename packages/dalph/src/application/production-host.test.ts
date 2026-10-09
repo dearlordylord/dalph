@@ -377,7 +377,8 @@ it.effect("production provider refuses retained shared attempts before spawning 
               _tag: "CodexAppServerFailure",
               kind: "Ownership",
               operation: "initialize",
-              detail: "retained shared-provider attempts require explicit custody migration; no provider was started"
+              detail:
+                "retained shared-provider attempts have unresolved custody; resolve external writers before separately retiring obsolete development data or using an isolated fresh dataset; no provider was started"
             }
           })
           expect(yield* fs.exists(`${executable}.capture.json`)).toBe(false)
@@ -919,63 +920,64 @@ it.effect("does not acquire a Codex provider for the built-in Kimi executor prof
   }).pipe(Effect.scoped)
 )
 
-it.effect(
-  "production host returns ProductionHostObservation only after exact Run selection and acknowledged WorkflowRunBegan",
-  () =>
-    Effect.gen(function* () {
-      const events = yield* Ref.make<ReadonlyArray<string>>([])
-      const storage = memoryJournalStoreLayer
-      const foundation = Layer.merge(ownershipLayer, storage)
-      const graph = {
-        acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
-        foundation: () => foundation,
-        makeApplicationExit: () => makeProductionHostApplicationExitShell(),
-        run: (configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
-          Layer.effectContext(
-            Effect.gen(function* () {
-              const journal = yield* JournalStore
-              const awaitEstablished = Effect.gen(function* () {
-                const record = yield* journal
-                  .beginRun(
-                    selection.runId,
-                    configuration.target,
-                    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
-                    remotePublicationTargetForTest
-                  )
-                  .pipe(Effect.orDie)
-                yield* Ref.update(events, (current) => [...current, "begin-acknowledged"])
-                return JournaledRunEstablished.make({
-                  acceptedAt: record.position,
-                  runId: selection.runId,
-                  target: configuration.target
-                })
+it.effect("isolated fresh SQLite dataset starts only after exact Run selection and acknowledged WorkflowRunBegan", () =>
+  Effect.gen(function* () {
+    const events = yield* Ref.make<ReadonlyArray<string>>([])
+    const input = yield* makeTemporaryProductionInput
+    const storage = sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) }).pipe(
+      Layer.orDie
+    )
+    const foundation = Layer.merge(ownershipLayer, storage)
+    const graph = {
+      acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
+      foundation: () => foundation,
+      makeApplicationExit: () => makeProductionHostApplicationExitShell(),
+      run: (configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
+        Layer.effectContext(
+          Effect.gen(function* () {
+            const journal = yield* JournalStore
+            const awaitEstablished = Effect.gen(function* () {
+              const record = yield* journal
+                .beginRun(
+                  selection.runId,
+                  configuration.target,
+                  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+                  remotePublicationTargetForTest
+                )
+                .pipe(Effect.orDie)
+              yield* Ref.update(events, (current) => [...current, "begin-acknowledged"])
+              return JournaledRunEstablished.make({
+                acceptedAt: record.position,
+                runId: selection.runId,
+                target: configuration.target
               })
-              return Context.empty().pipe(
-                Context.add(
-                  JournaledRunObservationSource,
-                  JournaledRunObservationSource.of({
-                    acceptedHistory: currentSignalOf(
-                      TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
-                    ),
-                    awaitEstablished,
-                    current: currentSignalOf({ _tag: "NotReady" as const }),
-                    runTermination: unterminatedRun
-                  })
-                ),
-                Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
-              )
             })
-          )
-      } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
-
-      const selection = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
-        Ref.update(events, (current) => [...current, "observation-returned", "github-read"]).pipe(
-          Effect.as(observation.selection)
+            return Context.empty().pipe(
+              Context.add(
+                JournaledRunObservationSource,
+                JournaledRunObservationSource.of({
+                  acceptedHistory: currentSignalOf(
+                    TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
+                  ),
+                  awaitEstablished,
+                  current: currentSignalOf({ _tag: "NotReady" as const }),
+                  runTermination: unterminatedRun
+                })
+              ),
+              Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
+            )
+          })
         )
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
+
+    const selection = yield* withProductionRepositoryHost(input, graph, (observation) =>
+      Ref.update(events, (current) => [...current, "observation-returned", "github-read"]).pipe(
+        Effect.as(observation.selection)
       )
-      expect(selection._tag).toBe("Allocated")
-      expect(yield* Ref.get(events)).toEqual(["begin-acknowledged", "observation-returned", "github-read"])
-    }).pipe(Effect.provide(NodeCrypto.layer))
+    )
+    expect(selection._tag).toBe("Allocated")
+    expect(yield* Ref.get(events)).toEqual(["begin-acknowledged", "observation-returned", "github-read"])
+  }).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer), Effect.scoped)
 )
 
 it.effect("production host exposes TaskTrackerMutationThrottled unchanged and tears down only its ordinary scope", () =>
@@ -2355,6 +2357,53 @@ it.effect(
         assertNoProviderOrJournalStateChanges(yield* Ref.get(calls))
       }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
     )
+)
+
+it.effect("unsupported development history refuses before effects and preserves source bytes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const input = yield* makeTemporaryProductionInput
+      const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+      const runId = RunId.make("unsupported-development-history")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+          )
+          yield* Context.get(context, JournalStore).beginRun(
+            runId,
+            target,
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+            remotePublicationTargetForTest
+          )
+        })
+      )
+      for (const version of [workflowJournalEventVersion - 1, workflowJournalEventVersion + 1]) {
+        yield* Effect.sync(() => {
+          const database = new DatabaseSync(input.journalDatabase)
+          database.prepare("UPDATE journal_records SET event_version = ?").run(version)
+          database.close()
+        })
+        const before = yield* fs.readFile(input.journalDatabase)
+        const calls = yield* Ref.make(noUnsafeDiscoveryBoundaryCalls)
+        const failure = yield* withProductionRepositoryHost(input, makeUnsafeDiscoveryGraph(calls), () =>
+          Effect.die("unsupported history must not expose a host observation")
+        ).pipe(Effect.flip)
+        expect(failure).toBeInstanceOf(StartupRecoveryBlocked)
+        if (!(failure instanceof StartupRecoveryBlocked)) return yield* Effect.die("expected startup refusal")
+        expect(failure.issues).toEqual([
+          expect.objectContaining({
+            _tag: "JournalBoundaryDecodeIssue",
+            detail: expect.stringContaining(`supported event format is ${workflowJournalEventVersion}`)
+          })
+        ])
+        assertNoProviderOrJournalStateChanges(yield* Ref.get(calls))
+        expect(yield* fs.readFile(input.journalDatabase)).toEqual(before)
+        expect(yield* fs.exists(input.repository)).toBe(true)
+      }
+    }).pipe(Effect.provide(NodeServices.layer), Effect.provide(NodeCrypto.layer))
+  )
 )
 
 it.effect(

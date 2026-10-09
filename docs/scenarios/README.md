@@ -53,6 +53,7 @@ Git history.
 - [Cancel or continue an exact pre-integration attempt](cancel-or-continue-attempt.md)
 - [Cancel one production Run with an unusable executor](cancel-unusable-production-run.md)
 - [Replace an exact changed attempt from clean resources](clean-restart-changed-attempt.md)
+- [Refuse incompatible development history before effects](unsupported-development-history.md)
 - [Establish a Run idempotently, then activate it once](run-establishment-and-activation.md)
 
 ## Executor work and recovery

@@ -930,7 +930,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         })
       if (attemptStore.hasRetainedAttempts === undefined || (yield* attemptStore.hasRetainedAttempts())) {
         return yield* new CodexAppServerFailure({
-          detail: "retained shared-provider attempts require explicit custody migration; no provider was started",
+          detail:
+            "retained shared-provider attempts have unresolved custody; resolve external writers before separately retiring obsolete development data or using an isolated fresh dataset; no provider was started",
           kind: "Ownership",
           operation: "initialize"
         })

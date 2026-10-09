@@ -230,6 +230,11 @@ The workflow algebra, journal schema, workflow-journal-history reducer, and
 recovery model must represent the eligibility-observation intent, its
 authoritative and simulated outcomes, the ordinary planning edge, and issue
 #66's separate replacement action and causal validation described above.
+For the accepted pre-release scope of issue #491, recovery preserves current-format
+history; incompatible development formats are refused before workflow effects.
+Cross-release preservation and migration are not required. Existing historical
+decoding may remain without expansion. Manual retirement is separate from
+external custody resolution and accepted cleanup or archive retention rules.
 Journal schema evolution must preserve readable supported history without
 treating a prior generic graph observation as eligibility evidence or a
 terminal result as an unrecorded successor.

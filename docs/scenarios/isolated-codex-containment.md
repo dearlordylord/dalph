@@ -175,14 +175,16 @@ its partial resources; foreign custody fails before signals or new work.
 ## S7: Retained shared-state admission
 
 Starting facts: an earlier host has stored attempts under shared launch custody.
-Before a new isolated provider starts, inspect that inventory. Until an explicit
-migration can prove all affected writers and custody, return an actionable
-admission refusal and preserve all old records, commits, worktrees and planned
-Bases. Do not silently import a thread into new ownership, edit old records,
+Before a new isolated provider starts, inspect that inventory. While affected
+writers and custody remain unresolved, return an actionable admission refusal
+and preserve all old records, commits, worktrees and planned Bases. Issue #491
+supersedes a required legacy migration: the Operator may separately retire
+obsolete development data after resolving external custody and use a safely
+isolated fresh dataset. Local data absence is never stopped-writer proof. Do not silently import a thread into new ownership, edit old records,
 start a duplicate Run or manually publish a retained candidate.
 
-Fresh-state passing tests do not prove migration of beta #426. A refused
-migration is a declared supported boundary, not a repaired retained task.
+Fresh-state passing tests do not prove recovery of beta #426. Refusal remains
+a supported boundary and does not repair a retained task.
 
 ## Verification owners
 

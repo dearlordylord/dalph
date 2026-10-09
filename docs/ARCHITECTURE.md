@@ -446,7 +446,10 @@ through the same attempt owner. Terminal owners retire after their last user
 leaves; suspended and unresolved owners retain their custody. Host Exit reaches
 all providers through the existing process-local drain registrations.
 The state root from a former shared-provider host refuses admission when it
-contains retained attempts; migration must prove that custody explicitly.
+contains retained attempts. Resolve external custody before separately retiring
+obsolete development data or starting a safely isolated fresh dataset; missing
+local records never prove that claims, worktrees, sessions or writers stopped.
+No migration is required by the accepted pre-release scope of issue #491.
 See [isolated Codex containment](scenarios/isolated-codex-containment.md).
 See [prepare the exact Codex task worktree](scenarios/prepare-exact-codex-task-worktree.md).
 

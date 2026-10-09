@@ -40,6 +40,7 @@ import {
   RemotePublicationResumeStatus,
   RemotePublicationBatchGrantReceipt,
   StartupRecoveryBlocked,
+  workflowJournalEventVersion,
   TraceAtCursor,
   TraceCausalPredecessorContradiction,
   TraceCausalPredecessorMissing,
@@ -943,7 +944,7 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
     case "StartupRecoveryBlocked":
       return new ProductionCliStartupError({
         code: "startup.recovery_blocked",
-        detail: "the production Journal cannot be recovered safely",
+        detail: `the production Journal contains invalid or unsupported history; supported event format is ${workflowJournalEventVersion}. Retire obsolete development data separately only after resolving external claims, worktrees, sessions and writers; no automatic deletion or migration is performed`,
         subject: "production repository"
       })
     case "ProductionRunSelectionConflict":
@@ -970,7 +971,10 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
     case "JournalPartitionContradiction":
       return journalFailure("journal.partition_contradiction", "the production Journal contains conflicting Run copies")
     case "JournalSchemaIncompatible":
-      return journalFailure("journal.schema_incompatible", "the production Journal schema is incompatible")
+      return journalFailure(
+        "journal.schema_incompatible",
+        `the production Journal schema ${failure.found} is unsupported; supported storage format is ${failure.supported}. Retire obsolete development data separately only after resolving external custody; no automatic deletion or migration is performed`
+      )
     case "JournalStorageAccessDenied":
       return journalFailure("journal.storage_access_denied", "access to the production Journal was denied")
     case "JournalStorageCapacityExhausted":
