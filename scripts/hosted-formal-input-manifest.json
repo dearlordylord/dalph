@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "d6472a2a71fe41aa58add9bd3eaf2d3644065ad74bd277fd12b124a6f4552a1c",
+  "digest": "73214a7e4038a732d8768a17014e42f9fcd4953dcddb9bc5ada435fbf1a4e7fb",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -113,6 +113,7 @@
     "packages/orchestrator/src/coordination/delivery/delivery-action-proposal.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-child-handoff.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-cleanup-boundary.ts",
+    "packages/orchestrator/src/coordination/delivery/delivery-diagnostic-evidence.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-diagnostics.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-evidence.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-planning-catch-up.ts",

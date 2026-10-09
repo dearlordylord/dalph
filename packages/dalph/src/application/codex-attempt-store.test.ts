@@ -1414,3 +1414,59 @@ it.effect("persists recovery permission and predecessor before native reopen wit
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
+
+it.effect("fresh storage custody refuses missing, contradictory and released lease ownership", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-tool-storage-proof-" })
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        if (store.verifyServerLease === undefined) return yield* Effect.die("native storage proof missing")
+        expect(
+          (yield* store.verifyServerLease(() => Effect.succeed({ _tag: "ExactLive" })).pipe(Effect.result))._tag
+        ).toBe("Failure")
+        yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" }))
+        yield* store.verifyServerLease(() => Effect.succeed({ _tag: "ExactLive" }))
+        for (const observation of [
+          { _tag: "Absent" },
+          { _tag: "Contradictory", detail: "foreign owner" },
+          { _tag: "Unreadable", detail: "owner unavailable" }
+        ] as const) {
+          expect((yield* store.verifyServerLease(() => Effect.succeed(observation)).pipe(Effect.result))._tag).toBe(
+            "Failure"
+          )
+        }
+        yield* store.releaseServerLease(leaseOwner)
+        expect(
+          (yield* store.verifyServerLease(() => Effect.succeed({ _tag: "ExactLive" })).pipe(Effect.result))._tag
+        ).toBe("Failure")
+      }).pipe(Effect.provide(nodeLayer(`${root}/executor-private-state.json`)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reads exact historical launch without clearing it and rejects contradictory launch history", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-tool-launch-history-" })
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        if (store.readRetainedServerLaunch === undefined) return yield* Effect.die("native launch history missing")
+        const launch = CodexServerLaunchRecord.make({
+          command: ["codex", "app-server"],
+          incarnation: CodexServerIncarnation.make("historical-tool-owner"),
+          phase: "Live",
+          pid: 101
+        })
+        yield* store.writeServerLaunch(launch)
+        yield* store.clearServerLaunch(launch.incarnation)
+        expect(yield* store.readRetainedServerLaunch(launch.incarnation)).toEqual(Option.some(launch))
+        expect(yield* store.readServerLaunch()).toEqual(Option.none())
+        yield* store.writeServerLaunch({ ...launch, pid: 202 })
+        expect((yield* store.readRetainedServerLaunch(launch.incarnation).pipe(Effect.result))._tag).toBe("Failure")
+      }).pipe(Effect.provide(nodeLayer(`${root}/executor-private-state.json`)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)

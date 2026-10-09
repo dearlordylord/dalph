@@ -110,6 +110,7 @@ import {
   CodexReplacementRequestId,
   CodexSealedTerminal,
   type CodexServerIncarnation,
+  CodexServerLaunchRecord,
   type CodexReplacementRequestDigest,
   type CodexSealedTerminal as CodexSealedTerminalType,
   type CodexThreadId,
@@ -1151,10 +1152,28 @@ const makeCodexPlannedAttemptExecutorContext = (
     const guidanceCustodyBlocked = (correlation: PlannedAttemptExecutorCorrelation) =>
       Effect.gen(function* () {
         const effects = yield* listToolEffects(correlation)
+        if (effects.length > 0) {
+          const storage = yield* verifyToolStorageOwnership().pipe(Effect.result)
+          if (Result.isFailure(storage)) return true
+        }
+        const record = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+        if (Option.isNone(record) || hasUnreconciledHistoricalTool(effects, record.value)) return true
+        const retired = effects.filter(hasStoppedToolCustody)
+        if (retired.length > 0) {
+          const verifyStoppedLaunch = app.verifyStoppedLaunch
+          if (verifyStoppedLaunch === undefined) return true
+          const proof = yield* Effect.gen(function* () {
+            yield* verifyToolStorageOwnership()
+            for (const item of retired) {
+              if (!("suspensionCustody" in item)) return yield* new CodexTurnBoundaryUnknown({})
+              yield* verifyStoppedLaunch(item.suspensionCustody.serverLaunch)
+            }
+          }).pipe(Effect.result)
+          if (Result.isFailure(proof)) return true
+        }
         return yield* Effect.sync(() => {
           const key = plannedAttemptExecutorCorrelationKey(correlation)
-          if (effects.some((effect) => effect._tag === "StopIntended" || effect._tag === "LimitReached"))
-            guidanceStopped.add(key)
+          if (effects.some(unresolvedToolCustody)) guidanceStopped.add(key)
           return guidanceStopped.has(key)
         })
       })
@@ -1332,7 +1351,9 @@ const makeCodexPlannedAttemptExecutorContext = (
         const settledTerminalToolItems =
           terminalCorrelation === undefined
             ? false
-            : (yield* listToolEffects(terminalCorrelation)).every((effect) => effect._tag === "Completed")
+            : (yield* listToolEffects(terminalCorrelation)).every(
+                (effect) => effect._tag === "Completed" || hasStoppedToolCustody(effect)
+              )
         return yield* observeOwnedActivity(yield* refreshThreadTurnLedger(thread), settledTerminalToolItems)
       }
     )
@@ -1832,7 +1853,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         ? observeRecoveryWriterCensus(observeOwnedActivityByThreadId(observedRecord.threadId, correlation))
         : observeOwnedActivity(
             reconciliation.thread,
-            toolEffects.every((effect) => effect._tag === "Completed")
+            toolEffects.every((effect) => effect._tag === "Completed" || hasStoppedToolCustody(effect))
           )
       if (censusHasActivity(census)) {
         return {
@@ -2350,12 +2371,14 @@ const makeCodexPlannedAttemptExecutorContext = (
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       const record = yield* readSuspensionRecord(correlation)
       if (record._tag !== "SafelySuspended") return yield* new CodexTurnBoundaryUnknown({})
+      yield* proveRetiredToolCustody(correlation, record, true)
       const response = record.resultCycle?.responses.at(lastElementOffset)
       const now = ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
       if (response !== undefined && providerResultResponseExpired(response.intent, now))
         return yield* expireResultCorrection(correlation, record)
       const existingReport = yield* reconcileExistingResume(attempt, correlation, record)
       if (existingReport !== undefined) return existingReport
+      yield* Effect.sync(() => guidanceStopped.delete(plannedAttemptExecutorCorrelationKey(correlation)))
       return yield* sendTurn(attempt, request.specification, correlation, record)
     })
 
@@ -2473,6 +2496,8 @@ const makeCodexPlannedAttemptExecutorContext = (
     const suspend = Effect.fn("CodexPlannedAttemptExecutor.suspend")(function* (attempt: PlannedTaskAttempt) {
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       const record = yield* readSuspensionRecord(correlation)
+      const toolSuspension = yield* reconcileSuspendedToolCustody(correlation, record)
+      if (toolSuspension) return suspended(correlation)
       const finishIntendedContainmentStop = Effect.fn("CodexPlannedAttemptExecutor.finishIntendedContainmentStop")(
         function* (intent: CodexSuspensionStopIntentRecord) {
           yield* app.close
@@ -2552,6 +2577,176 @@ const makeCodexPlannedAttemptExecutorContext = (
     ) =>
       store.readToolEffect?.(correlation.runId, correlation.attemptId, turnId, itemId) ??
       Effect.fail(new CodexTurnBoundaryUnknown({}))
+    const hasStoppedToolCustody = (effect: CodexToolEffectRecord): boolean =>
+      "suspensionCustody" in effect && effect.suspensionCustody._tag === "Stopped"
+    const toolEffectMatchesCurrentTurn = (item: CodexToolEffectRecord, record: CodexAttemptRecord): boolean =>
+      "observedTurnId" in record &&
+      item.runId === record.correlationRunId &&
+      item.attemptId === record.correlationAttemptId &&
+      item.threadId === record.threadId &&
+      item.turnId === record.observedTurnId &&
+      item.incarnation === record.turnStartIncarnation &&
+      item.worktree === record.worktree
+    const hasUnreconciledHistoricalTool = (
+      items: ReadonlyArray<CodexToolEffectRecord>,
+      record: CodexAttemptRecord
+    ): boolean =>
+      items.some(
+        (item) =>
+          item._tag !== "Completed" && !hasStoppedToolCustody(item) && !toolEffectMatchesCurrentTurn(item, record)
+      )
+    const unresolvedToolCustody = (effect: CodexToolEffectRecord): boolean =>
+      effect._tag === "StopIntended" ||
+      (effect._tag === "LimitReached" && !hasStoppedToolCustody(effect)) ||
+      ("suspensionCustody" in effect && effect.suspensionCustody._tag === "StopIntended")
+    const verifyToolStorageOwnership = (): Effect.Effect<void, CodexAppServerFailure | CodexTurnBoundaryUnknown> =>
+      app.verifyStorageOwnership ?? Effect.fail(new CodexTurnBoundaryUnknown({}))
+
+    const proveRetiredToolCustody = Effect.fn("CodexPlannedAttemptExecutor.proveRetiredToolCustody")(function* (
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: CodexThreadBackedRecord,
+      admittingWriter = false
+    ) {
+      const items = yield* listToolEffects(correlation)
+      const launches = new Map<CodexServerIncarnation, CodexServerLaunchRecord>()
+      for (const item of items) {
+        if (item._tag === "Completed") continue
+        if (!admittingWriter && record._tag === "Running" && toolEffectMatchesCurrentTurn(item, record)) continue
+        if (
+          !hasStoppedToolCustody(item) ||
+          !("suspensionCustody" in item) ||
+          item.threadId !== record.threadId ||
+          item.worktree !== record.worktree
+        )
+          return yield* new CodexTurnBoundaryUnknown({})
+        const launch = item.suspensionCustody.serverLaunch
+        const prior = launches.get(launch.incarnation)
+        if (prior !== undefined && !Schema.toEquivalence(CodexServerLaunchRecord)(prior, launch))
+          return yield* new CodexTurnBoundaryUnknown({})
+        launches.set(launch.incarnation, launch)
+      }
+      if (launches.size === 0) return
+      if (app.verifyStoppedLaunch === undefined || (admittingWriter && launches.has(app.incarnation)))
+        return yield* new CodexTurnBoundaryUnknown({})
+      yield* verifyToolStorageOwnership()
+      for (const launch of launches.values()) yield* app.verifyStoppedLaunch(launch)
+      yield* verifyToolStorageOwnership()
+    })
+
+    // The existing workflow Suspend intent authorizes this private reconciliation.
+    // Persist each exact launch before stop; append observations before Safe. A
+    // reopened intent rereads those destinations and never grants another budget.
+    const reconcileSuspendedToolCustody = Effect.fn("CodexPlannedAttemptExecutor.reconcileSuspendedToolCustody")(
+      function* (correlation: PlannedAttemptExecutorCorrelation, record: CodexThreadBackedRecord) {
+        const items = (yield* listToolEffects(correlation)).filter((item) => item._tag !== "Completed")
+        if (items.length === 0) return false
+        yield* closeGuidanceAdmission(correlation)
+        if (
+          (!isPersistableOwnedRecord(record) && record._tag !== "SuspensionStopIntended") ||
+          app.stopOwnedLaunch === undefined
+        )
+          return yield* new CodexTurnBoundaryUnknown({})
+        const launches = new Map<CodexServerIncarnation, CodexServerLaunchRecord>()
+        for (const item of items) {
+          const custody = "suspensionCustody" in item ? item.suspensionCustody : undefined
+          const retainedLaunch =
+            custody === undefined &&
+            item._tag === "Started" &&
+            item.incarnation !== app.incarnation &&
+            store.readRetainedServerLaunch !== undefined
+              ? yield* store.readRetainedServerLaunch(item.incarnation)
+              : Option.none<CodexServerLaunchRecord>()
+          const launch =
+            custody?.serverLaunch ??
+            (item._tag === "StopIntended" || item._tag === "LimitReached" ? item.serverLaunch : undefined) ??
+            (item.incarnation === app.incarnation ? app.serverLaunch : Option.getOrUndefined(retainedLaunch))
+          if (
+            item.runId !== correlation.runId ||
+            item.attemptId !== correlation.attemptId ||
+            item.threadId !== record.threadId ||
+            item.worktree !== record.worktree ||
+            (custody === undefined &&
+              item.turnId !== record.observedTurnId &&
+              item.turnId !== record.priorObservedTurnId) ||
+            (item.turnId === record.observedTurnId && item.incarnation !== record.turnStartIncarnation) ||
+            launch === undefined ||
+            launch.incarnation !== item.incarnation ||
+            launch.phase !== "Live" ||
+            launch.pid === null
+          )
+            return yield* new CodexTurnBoundaryUnknown({})
+          const prior = launches.get(launch.incarnation)
+          if (prior !== undefined && !Schema.toEquivalence(CodexServerLaunchRecord)(prior, launch))
+            return yield* new CodexTurnBoundaryUnknown({})
+          launches.set(launch.incarnation, launch)
+        }
+        // The current interrupted turn may have no item; its containment remains
+        // an independent responsibility even when every historical item was stopped.
+        const currentIncarnation = record.turnStartIncarnation
+        if (currentIncarnation === undefined) return yield* new CodexTurnBoundaryUnknown({})
+        const retainedCurrentLaunch =
+          !launches.has(currentIncarnation) &&
+          currentIncarnation !== app.incarnation &&
+          store.readRetainedServerLaunch !== undefined
+            ? yield* store.readRetainedServerLaunch(currentIncarnation)
+            : Option.none<CodexServerLaunchRecord>()
+        const currentLaunch =
+          launches.get(currentIncarnation) ??
+          (currentIncarnation === app.incarnation ? app.serverLaunch : Option.getOrUndefined(retainedCurrentLaunch))
+        if (currentLaunch === undefined) return yield* new CodexTurnBoundaryUnknown({})
+        launches.set(currentLaunch.incarnation, currentLaunch)
+        yield* verifyToolStorageOwnership()
+        const attempt = { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree }
+        // A successor provider is outside the stopped launch set. Its live
+        // thread/census must independently agree before reporting Safe.
+        if (!launches.has(app.incarnation)) {
+          const thread = yield* app.readThread(record.threadId)
+          yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
+          if (ownedTurnForRecord(thread, record)._tag !== "Found") return yield* new CodexTurnBoundaryUnknown({})
+          if ((yield* observeOwnedActivityByThreadId(record.threadId))._tag !== "Absent")
+            return yield* new CodexTurnBoundaryUnknown({})
+        }
+        const intent =
+          record._tag === "SuspensionStopIntended" ? record : suspensionStopIntendedRecordFor(attempt, record)
+        yield* closeGuidanceAdmission(correlation)
+        if (record._tag !== "SuspensionStopIntended") yield* save(intent)
+        for (const item of items) {
+          if (item._tag !== "Started" && item._tag !== "LimitReached") continue
+          if (item.suspensionCustody !== undefined) continue
+          const launch = launches.get(item.incarnation)
+          if (launch === undefined) return yield* new CodexTurnBoundaryUnknown({})
+          yield* writeToolEffect({
+            ...item,
+            suspensionCustody: { _tag: "StopIntended", suspensionTurnId: record.observedTurnId, serverLaunch: launch }
+          })
+        }
+        for (const launch of launches.values()) yield* app.stopOwnedLaunch(launch)
+        yield* verifyToolStorageOwnership()
+        for (const item of yield* listToolEffects(correlation)) {
+          if (item._tag === "StopIntended") {
+            yield* recordToolEffectLimitReached(item)
+            const launch = launches.get(item.incarnation)
+            if (launch === undefined) return yield* new CodexTurnBoundaryUnknown({})
+            const reached = yield* readToolEffect(correlation, item.turnId, item.itemId)
+            if (Option.isNone(reached) || reached.value._tag !== "LimitReached")
+              return yield* new CodexTurnBoundaryUnknown({})
+            yield* writeToolEffect({
+              ...reached.value,
+              suspensionCustody: { _tag: "StopIntended", suspensionTurnId: record.observedTurnId, serverLaunch: launch }
+            })
+          }
+        }
+        for (const item of yield* listToolEffects(correlation)) {
+          if (
+            (item._tag === "Started" || item._tag === "LimitReached") &&
+            item.suspensionCustody?._tag === "StopIntended"
+          )
+            yield* writeToolEffect({ ...item, suspensionCustody: { ...item.suspensionCustody, _tag: "Stopped" } })
+        }
+        yield* save(safelySuspendedRecordFor(attempt, intent))
+        return true
+      }
+    )
     const stopToolEffectContainment = Effect.fn("CodexPlannedAttemptExecutor.stopToolEffectContainment")(function* (
       record: Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" | "LimitReached" }>
     ) {
@@ -2727,47 +2922,37 @@ const makeCodexPlannedAttemptExecutorContext = (
       })
       if (!sameCorrelation(observed, correlation)) return projectionOutcome(foreign(correlation, observed))
       const retainedToolEffects = yield* listToolEffects(correlation)
+      if (purpose._tag === "ReconcileCommand" && purpose.command === "Suspend" && isThreadBackedRecord(record)) {
+        if (yield* reconcileSuspendedToolCustody(correlation, record))
+          return projectionOutcome(exact(suspended(correlation)))
+      }
+      if (record._tag !== "SafelySuspended" && guidanceStopped.has(plannedAttemptExecutorCorrelationKey(correlation)))
+        return projectionOutcome(
+          unreadable(correlation, "Codex stopped guidance admission awaits custody reconciliation")
+        )
+      if (record._tag === "SuspensionStopIntended")
+        return projectionOutcome(unreadable(correlation, "Codex Suspend containment reconciliation remains unresolved"))
+      if (retainedToolEffects.some(hasStoppedToolCustody) && isThreadBackedRecord(record))
+        yield* proveRetiredToolCustody(correlation, record)
+      if (
+        retainedToolEffects.some(
+          (effect) => "suspensionCustody" in effect && effect.suspensionCustody._tag === "StopIntended"
+        )
+      )
+        return projectionOutcome(unreadable(correlation, "Codex tool suspension custody remains unresolved"))
+      if (hasUnreconciledHistoricalTool(retainedToolEffects, record))
+        return projectionOutcome(
+          unreadable(correlation, "Codex historical tool custody requires owning Suspend reconciliation")
+        )
       const intendedToolStop = retainedToolEffects.find(
         (effect): effect is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }> =>
           effect._tag === "StopIntended"
       )
-      if (purpose._tag === "ReconcileCommand" && purpose.command === "Suspend") {
-        const retainedToolStop = retainedToolEffects.find(
-          (effect): effect is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" | "LimitReached" }> =>
-            effect._tag === "StopIntended" || effect._tag === "LimitReached"
-        )
-        if (retainedToolStop !== undefined) {
-          if (
-            (!isPersistableOwnedRecord(record) && record._tag !== "SuspensionStopIntended") ||
-            retainedToolStop.runId !== correlation.runId ||
-            retainedToolStop.attemptId !== correlation.attemptId ||
-            retainedToolStop.threadId !== record.threadId ||
-            retainedToolStop.turnId !== record.observedTurnId ||
-            retainedToolStop.worktree !== record.worktree ||
-            retainedToolStop.incarnation !== record.turnStartIncarnation ||
-            retainedToolStop.serverLaunch === undefined ||
-            retainedToolStop.serverLaunch.incarnation !== retainedToolStop.incarnation ||
-            app.stopOwnedLaunch === undefined
-          )
-            return yield* new CodexTurnBoundaryUnknown({})
-          const attempt = { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree }
-          const stopIntent =
-            record._tag === "SuspensionStopIntended" ? record : suspensionStopIntendedRecordFor(attempt, record)
-          yield* invalidateBeginProof(correlation)
-          if (record._tag !== "SuspensionStopIntended") yield* save(stopIntent)
-          // The journal's exact Suspend intent authorizes this fresh custody
-          // proof. A historical item limit alone never proves safe suspension.
-          yield* app.stopOwnedLaunch(retainedToolStop.serverLaunch)
-          if (retainedToolStop._tag === "StopIntended") yield* recordToolEffectLimitReached(retainedToolStop)
-          yield* save(safelySuspendedRecordFor(attempt, stopIntent))
-          return projectionOutcome(exact(suspended(correlation)))
-        }
-      }
       if (intendedToolStop !== undefined) {
         yield* finishToolEffectStop(intendedToolStop)
         return projectionOutcome(unreadable(correlation, "Codex tool item limit reached"))
       }
-      if (retainedToolEffects.some((effect) => effect._tag === "LimitReached"))
+      if (retainedToolEffects.some(unresolvedToolCustody))
         return projectionOutcome(unreadable(correlation, "Codex tool item limit reached"))
       if (isBeginReconciliation(purpose) && record._tag === "Terminal") {
         return projectionOutcome(exact(running(correlation)))
@@ -3735,6 +3920,15 @@ const makeCodexPlannedAttemptExecutorContext = (
     const replacement = Effect.fn("CodexProviderWorkUnitReplacement.replace")(function* (
       request: CodexProviderWorkUnitReplacementRequest
     ) {
+      const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
+      const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+      if (Option.isSome(found) && isThreadBackedRecord(found.value)) {
+        const custody = yield* proveRetiredToolCustody(correlation, found.value, true).pipe(Effect.result)
+        if (Result.isFailure(custody))
+          return CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+            detail: "retained tool custody is unresolved"
+          })
+      }
       const subject = yield* readReplacementSubject(request)
       if (subject._tag === "Result") return subject.result
       const prepared = yield* prepareReplacementExecution(request, subject)
@@ -3767,6 +3961,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       if (!sameCorrelation(authorization.correlation, correlation)) return yield* new CodexTurnBoundaryUnknown({})
       const record = yield* readSuspensionRecord(correlation)
+      yield* proveRetiredToolCustody(correlation, record, true)
       if (record.worktree !== attempt.worktree) return yield* new CodexThreadMismatch({})
       const history = "resultRecoveryHistory" in record ? (record.resultRecoveryHistory ?? []) : []
       const retained = history.find(({ authorizationId }) => authorizationId.nonce === authorization.nonce)
@@ -3902,29 +4097,31 @@ const makeCodexPlannedAttemptExecutorContext = (
             gate.withPermit(
               Effect.gen(function* () {
                 if (new TextEncoder().encode(text).byteLength > executorGuidanceTextByteLimit)
-                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TextTooLarge" })
+                  return Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TextTooLarge" }))
                 const selected = yield* selectGuidanceTarget(target.plannedAttempt)
                 if (selected._tag === "Refused")
-                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: selected.reason })
+                  return Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: selected.reason }))
                 if (selected.target.session !== target.session || selected.target.turn !== target.turn)
-                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TargetChanged" })
+                  return Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TargetChanged" }))
                 const steer = app.steerTurn
                 if (steer === undefined)
-                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CapabilityUnavailable" })
+                  return Effect.succeed(
+                    ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CapabilityUnavailable" })
+                  )
                 const record = yield* store.readAttempt(target.plannedAttempt.runId, target.plannedAttempt.attemptId)
                 if (Option.isNone(record) || record.value._tag !== "Running")
-                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "AttemptInactive" })
+                  return Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "AttemptInactive" }))
                 if (
                   ExecutorGuidanceSessionLocator.make(record.value.threadId) !== target.session ||
                   ExecutorGuidanceTurnLocator.make(record.value.observedTurnId) !== target.turn
                 )
-                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TargetChanged" })
+                  return Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "TargetChanged" }))
                 // Admission linearizes at this final durable/atomic flag check.
                 // A later item stop proceeds without waiting for the RPC ACK;
                 // this admitted input may acknowledge or become Unknown.
                 if (yield* guidanceCustodyBlocked(plannedAttemptExecutorCorrelation(target.plannedAttempt)))
-                  return ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CustodyUnproved" })
-                return yield* steer(
+                  return Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CustodyUnproved" }))
+                return steer(
                   record.value.threadId,
                   record.value.observedTurnId,
                   text,
@@ -3936,6 +4133,7 @@ const makeCodexPlannedAttemptExecutorContext = (
               })
             )
           ),
+          Effect.flatMap((transmission): Effect.Effect<ExecutorGuidanceTransmission> => transmission),
           Effect.catch(() =>
             Effect.succeed(ExecutorGuidanceTransmission.cases.Refused.make({ reason: "CustodyUnproved" }))
           )
@@ -3963,6 +4161,7 @@ const makeCodexPlannedAttemptExecutorContext = (
                     plannedAttempt,
                     detail: "exact retained terminal ownership is unproved"
                   })
+                yield* proveRetiredToolCustody(correlation, record)
                 const thread = yield* app.readThread(record.threadId)
                 yield* enforceThreadIdentity(
                   { attemptId: correlation.attemptId, runId: correlation.runId, worktree: record.worktree },
@@ -4125,7 +4324,11 @@ const makeCodexPlannedAttemptExecutorContext = (
               const found = yield* readToolEffect(correlation, retainedTurnId, itemId)
               const retained = Option.isSome(found) ? found.value : undefined
               if (item.phase === "Malformed") {
-                if (retained?._tag === "Completed" || retained?._tag === "LimitReached") return undefined
+                if (
+                  retained !== undefined &&
+                  (retained._tag === "Completed" || retained._tag === "LimitReached" || "suspensionCustody" in retained)
+                )
+                  return undefined
                 if (retained?._tag === "StopIntended") {
                   yield* finishToolEffectStop(retained)
                   return toolLimitProjection()
@@ -4234,24 +4437,30 @@ const makeCodexPlannedAttemptExecutorContext = (
               return undefined
             })
           const checkToolEffectDeadline = Effect.gen(function* () {
-            const correction = yield* attemptGate.withPermit(
-              Effect.gen(function* () {
-                const current = yield* store.readAttempt(correlation.runId, correlation.attemptId)
-                if (Option.isNone(current) || !recordMatchesCorrelation(current.value, correlation)) return undefined
-                const owned = current.value
-                if (owned._tag === "ResultCorrectionStopIntended")
-                  return yield* finishResultCorrectionStop(correlation, owned, false)
-                if (owned._tag !== "Running" && owned._tag !== "TurnObserved") return undefined
-                const response = owned.resultCycle?.responses.at(lastElementOffset)
-                const now = ProviderResultInstantMilliseconds.make(
-                  yield* Effect.clockWith((clock) => clock.currentTimeMillis)
-                )
-                if (response === undefined || !providerResultResponseExpired(response.intent, now)) return undefined
-                return yield* expireResultCorrection(correlation, owned)
-              })
-            )
+            const correction = yield* Effect.gen(function* () {
+              const current = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+              if (Option.isNone(current) || !recordMatchesCorrelation(current.value, correlation)) return undefined
+              const owned = current.value
+              if (owned._tag === "ResultCorrectionStopIntended")
+                return yield* finishResultCorrectionStop(correlation, owned, false)
+              if (owned._tag !== "Running" && owned._tag !== "TurnObserved") return undefined
+              const response = owned.resultCycle?.responses.at(lastElementOffset)
+              const now = ProviderResultInstantMilliseconds.make(
+                yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+              )
+              if (response === undefined || !providerResultResponseExpired(response.intent, now)) return undefined
+              return yield* expireResultCorrection(correlation, owned)
+            })
             if (correction !== undefined) return projectionOutcome(exact(correction))
-            const retained = yield* listToolEffects(correlation)
+            const allRetained = yield* listToolEffects(correlation)
+            const current = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+            if (Option.isNone(current) || hasUnreconciledHistoricalTool(allRetained, current.value))
+              return projectionOutcome(
+                unreadable(correlation, "Codex historical tool custody requires owning Suspend reconciliation")
+              )
+            const retained = allRetained.filter((item) => !hasStoppedToolCustody(item))
+            if (retained.some((item) => "suspensionCustody" in item))
+              return projectionOutcome(unreadable(correlation, "Codex tool suspension custody remains unresolved"))
             const pending = retained.find(
               (record): record is Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" }> =>
                 record._tag === "StopIntended"
@@ -4315,7 +4524,7 @@ const makeCodexPlannedAttemptExecutorContext = (
                 (typeof candidate["status"] !== "string" || !completedToolStatuses.has(candidate["status"]))
             )
             if (!isJsonRecord(activeItem) || typeof activeItem["id"] !== "string") return undefined
-            if (retained.some((record) => record.turnId === retainedTurnId && record.itemId === activeItem["id"]))
+            if (allRetained.some((record) => record.turnId === retainedTurnId && record.itemId === activeItem["id"]))
               return undefined
             if (owned.turnStartIncarnation === undefined || owned.turnStartIncarnation !== app.incarnation)
               return toolLimitProjection()
@@ -4338,7 +4547,7 @@ const makeCodexPlannedAttemptExecutorContext = (
             turnSubscription.toolEffects.pipe(
               Stream.mapEffect((item) =>
                 toolEffectGate
-                  .withPermit(observeToolEffect(item))
+                  .withPermit(attemptGate.withPermit(observeToolEffect(item)))
                   .pipe(
                     Effect.catch((error: unknown) =>
                       Effect.succeed(projectionOutcome(projectFailure(correlation, error)))
@@ -4349,7 +4558,7 @@ const makeCodexPlannedAttemptExecutorContext = (
             Stream.fromSchedule(Schedule.spaced(Duration.seconds(1))).pipe(
               Stream.mapEffect(() =>
                 toolEffectGate
-                  .withPermit(checkToolEffectDeadline)
+                  .withPermit(attemptGate.withPermit(checkToolEffectDeadline))
                   .pipe(
                     Effect.catch((error: unknown) =>
                       Effect.succeed(projectionOutcome(projectFailure(correlation, error)))

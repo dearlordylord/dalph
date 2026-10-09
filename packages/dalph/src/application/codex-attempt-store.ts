@@ -685,6 +685,14 @@ const keyOf = (runId: RunId, attemptId: AttemptId): string => `${runId}\u0000${a
 export const CodexToolItemId = Schema.NonEmptyString.pipe(Schema.brand("CodexToolItemId"))
 export type CodexToolItemId = typeof CodexToolItemId.Type
 
+/** Suspend records stop intent separately from a tool's completion or limit disposition.
+ * Stopped is retained evidence, never a reusable writer-admission capability.
+ */
+const CodexToolSuspensionCustody = Schema.TaggedUnion({
+  StopIntended: { suspensionTurnId: CodexTurnId, serverLaunch: Schema.suspend(() => CodexServerLaunchRecord) },
+  Stopped: { suspensionTurnId: CodexTurnId, serverLaunch: Schema.suspend(() => CodexServerLaunchRecord) }
+})
+
 const CodexToolEffectFields = {
   runId: RunId,
   attemptId: AttemptId,
@@ -699,7 +707,7 @@ const CodexToolEffectFields = {
 
 /** Item observation and stop effects remain in executor-private durable state. */
 export const CodexToolEffectRecord = Schema.TaggedUnion({
-  Started: CodexToolEffectFields,
+  Started: { ...CodexToolEffectFields, suspensionCustody: Schema.optionalKey(CodexToolSuspensionCustody) },
   Completed: { ...CodexToolEffectFields, completedAtMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) },
   StopIntended: {
     ...CodexToolEffectFields,
@@ -709,6 +717,7 @@ export const CodexToolEffectRecord = Schema.TaggedUnion({
   },
   LimitReached: {
     ...CodexToolEffectFields,
+    suspensionCustody: Schema.optionalKey(CodexToolSuspensionCustody),
     serverLaunch: Schema.optionalKey(Schema.suspend(() => CodexServerLaunchRecord)),
     reason: Schema.Literals(["Elapsed", "Malformed", "MissingStart", "ClockReversed"]),
     stopIntentAtMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -716,6 +725,13 @@ export const CodexToolEffectRecord = Schema.TaggedUnion({
   }
 }).check(
   Schema.makeFilter((record) => {
+    if (
+      "suspensionCustody" in record &&
+      (record.suspensionCustody.serverLaunch.incarnation !== record.incarnation ||
+        record.suspensionCustody.serverLaunch.phase !== "Live" ||
+        record.suspensionCustody.serverLaunch.pid === null)
+    )
+      return "suspension custody must identify the item's exact live launch"
     if (record.deadlineMilliseconds <= record.startedAtMilliseconds) return "item deadline must follow its start"
     if (
       (record._tag === "StopIntended" || record._tag === "LimitReached") &&
@@ -768,7 +784,25 @@ const toolEffectTransitionValid = (previous: CodexToolEffectRecord, next: CodexT
     previous.deadlineMilliseconds !== next.deadlineMilliseconds
   )
     return false
-  if (previous._tag === "Started") return next._tag === "Completed" || next._tag === "StopIntended"
+  if (
+    (previous._tag === "Started" && next._tag === "Started") ||
+    (previous._tag === "LimitReached" && next._tag === "LimitReached")
+  ) {
+    const before = previous.suspensionCustody
+    const after = next.suspensionCustody
+    if (after === undefined) return false
+    const { suspensionCustody: _beforeCustody, ...beforeDisposition } = previous
+    const { suspensionCustody: _afterCustody, ...afterDisposition } = next
+    if (!toolEffectEquivalence(beforeDisposition, afterDisposition)) return false
+    return before === undefined
+      ? after._tag === "StopIntended"
+      : before._tag === "StopIntended" &&
+          after._tag === "Stopped" &&
+          before.suspensionTurnId === after.suspensionTurnId &&
+          Schema.toEquivalence(CodexServerLaunchRecord)(before.serverLaunch, after.serverLaunch)
+  }
+  if (previous._tag === "Started")
+    return previous.suspensionCustody === undefined && (next._tag === "Completed" || next._tag === "StopIntended")
   return (
     previous._tag === "StopIntended" &&
     next._tag === "LimitReached" &&
@@ -895,6 +929,10 @@ export interface CodexAttemptStoreService {
   ) => Effect.Effect<void, CodexAttemptStoreFailure>
 
   readonly readServerLaunch: () => Effect.Effect<Option.Option<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
+  /** Reads retained launch observations without treating them as current stop proof. */
+  readonly readRetainedServerLaunch?: (
+    incarnation: CodexServerIncarnation
+  ) => Effect.Effect<Option.Option<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
   readonly writeServerLaunch: (record: CodexServerLaunchRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   readonly clearServerLaunch: (incarnation: CodexServerIncarnation) => Effect.Effect<void, CodexAttemptStoreFailure>
   /** Original namespace/startup deadline survives independent launch cleanup. */
@@ -919,6 +957,10 @@ export interface CodexAttemptStoreService {
     attemptId: AttemptId
   ) => Effect.Effect<ReadonlyArray<CodexToolEffectRecord>, CodexAttemptStoreFailure>
   readonly writeToolEffect?: (record: CodexToolEffectRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
+  /** Fresh descriptor, owner and process proof for an already-held storage lease. */
+  readonly verifyServerLease?: (
+    observe: (owner: CodexServerLeaseRecord) => Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure>
+  ) => Effect.Effect<void, CodexAttemptStoreFailure>
   /** Cross-process exclusive admission lease for the application child. */
   readonly acquireServerLease: (
     owner: CodexServerLeaseRecord,
@@ -1854,6 +1896,42 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
             }).pipe(Effect.mapError(storeOperationFailure.bind(undefined, operation)))
           )
         )
+      const readRetainedServerLaunch = Effect.fn("CodexAttemptStore.readRetainedServerLaunch")(function* (
+        incarnation: CodexServerIncarnation
+      ) {
+        yield* guard("readServerLaunch", Effect.void)
+        yield* validatePrivateDescriptor(snapshotFile, filename, native).pipe(
+          Effect.mapError(
+            (error) => new CodexAttemptStoreFailure({ operation: "readServerLaunch", detail: String(error) })
+          )
+        )
+        const text = yield* Effect.tryPromise({
+          try: () => readPrivateDescriptor(snapshotFile),
+          catch: (error) => new CodexAttemptStoreFailure({ operation: "readServerLaunch", detail: String(error) })
+        })
+        const lines = text.split("\n").filter((line) => line.trim().length > 0)
+        let found: CodexServerLaunchRecord | undefined
+        for (const [index, line] of lines.entries()) {
+          const snapshot = parseChecksummedSnapshotLine(line)
+          if (snapshot === undefined) {
+            // An interrupted trailing append supplies no observation.
+            if (index === lines.length - 1 && !line.endsWith("}")) continue
+            return yield* new CodexAttemptStoreFailure({
+              operation: "readServerLaunch",
+              detail: "retained launch history is unreadable"
+            })
+          }
+          const launch = snapshot.serverLaunch
+          if (launch === null || launch.incarnation !== incarnation || launch.phase !== "Live") continue
+          if (found !== undefined && !Schema.toEquivalence(CodexServerLaunchRecord)(found, launch))
+            return yield* new CodexAttemptStoreFailure({
+              operation: "readServerLaunch",
+              detail: "retained launch observations contradict each other"
+            })
+          found = launch
+        }
+        return Option.fromUndefinedOr(found)
+      })
       const readAttempt: CodexAttemptStoreService["readAttempt"] = (runId, attemptId) =>
         guard(
           "readAttempt",
@@ -2191,6 +2269,33 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
             if (Result.isFailure(inspected)) return yield* releaseAfterAcquireFailureForFile(file, inspected.failure)
           })
         )
+      const verifyServerLease = Effect.fn("CodexAttemptStore.verifyServerLease")(function* (
+        observe: (
+          owner: CodexServerLeaseRecord
+        ) => Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure>
+      ) {
+        const held = yield* Ref.get(heldLease)
+        if (Option.isNone(held))
+          return yield* new CodexAttemptStoreFailure({
+            operation: "acquireServerLease",
+            detail: "storage lease is not held"
+          })
+        yield* validatePrivateFilesystem(parent, filename, temporary, leaseFilename, native)
+        yield* validatePrivateDescriptor(snapshotFile, filename, native).pipe(Effect.mapError(acquireDescriptorFailure))
+        yield* validatePrivateDescriptor(held.value.file, leaseFilename, native).pipe(
+          Effect.mapError(acquireDescriptorFailure)
+        )
+        const owner = yield* readLeaseRecord(held.value.file)
+        if (
+          Option.isNone(owner) ||
+          !sameLeaseOwner(owner.value, held.value.owner) ||
+          (yield* observe(owner.value))._tag !== "ExactLive"
+        )
+          return yield* new CodexAttemptStoreFailure({
+            operation: "acquireServerLease",
+            detail: "storage owner is unproved"
+          })
+      })
       const releaseServerLease: CodexAttemptStoreService["releaseServerLease"] = (owner) =>
         Effect.gen(function* () {
           const held = yield* Ref.get(heldLease)
@@ -2211,6 +2316,7 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         writeAttempt: (record) => writeAttempt(record),
         writeResultRecovery: (record, recovery) => writeAttempt(record, recovery),
         readServerLaunch,
+        readRetainedServerLaunch,
         writeServerLaunch,
         clearServerLaunch,
         readServerStartup,
@@ -2221,6 +2327,7 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         listToolEffects,
         writeToolEffect,
         acquireServerLease,
+        verifyServerLease,
         releaseServerLease
       })
     })
