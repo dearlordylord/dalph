@@ -79,10 +79,11 @@ const respond = (message: unknown) => {
         items: [{ content: [{ text: inputText, type: "text" }], type: "userMessage" }],
         status: "inProgress"
       }
-      thread = { ...thread, status: "active", turns: [turn] }
+      thread = { ...thread, status: "active", turns: [turn], turnStarts: Number(thread["turnStarts"] ?? 0) + 1 }
       saveThread()
       nodeFs.writeFileSync(nodePath.join(String(thread["cwd"]), "cancellation-work-in-progress.txt"), "preserved\n")
       nodeProcess.stderr.write('DALPH_PUBLIC_RECOVERY_FIXTURE {"_tag":"CodexTurnStarted"}\n')
+      if (nodeProcess.env["DALPH_QUALIFICATION_LOSE_BEGIN_ACK"] === "true") return
       write(request.id, { turn })
       return
     }

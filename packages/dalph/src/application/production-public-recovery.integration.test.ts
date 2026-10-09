@@ -39,6 +39,7 @@ import { Context, Effect, Fiber, FileSystem, Layer, Path, Queue, Ref, Schema, St
 import { expect } from "vitest"
 import { ProductionCliRecord, type ProductionCliRecord as ProductionCliRecordType } from "./production-cli.js"
 import { CodexAttemptStore, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/test/support/required-planned-attempt-positions.js"
 import { DalphRuntimeDiagnostic } from "./runtime-diagnostic.js"
 
 type CurrentStatusRecord = Extract<ProductionCliRecordType, { readonly _tag: "CurrentStatus" }>
@@ -132,7 +133,8 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   operation: "run" | "cancel" = "run",
   failSuspension = false,
   processEacces = false,
-  dirtyStdout = false
+  dirtyStdout = false,
+  loseBeginAck = false
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const command = ChildProcess.make(
@@ -152,6 +154,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
         DALPH_QUALIFICATION_FAIL_SUSPENSION: String(failSuspension),
         DALPH_QUALIFICATION_PROCESS_EACCES: String(processEacces),
         DALPH_QUALIFICATION_DIRTY_STDOUT: String(dirtyStdout),
+        DALPH_QUALIFICATION_LOSE_BEGIN_ACK: String(loseBeginAck),
         GITHUB_TOKEN: "controlled-github-token",
         PATH: `${gitFixtureDirectory}:${nodeProcess.env["PATH"] ?? ""}`
       }
@@ -574,6 +577,105 @@ it.live(
       }).pipe(Effect.provide(NodeServices.layer))
     ),
   20_000
+)
+
+it.live(
+  "current-format SQLite restart reconciles a lost Begin acknowledgement without another turn",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* publicFixture
+        const launch = (loseBeginAck: boolean) =>
+          spawnPublicProcess(
+            fixture.config,
+            fixture.claimState,
+            fixture.cleanupObservation,
+            fixture.cleanupRelease,
+            fixture.cleanupWorktree,
+            fixture.commonDirectory,
+            fixture.gitFixtureDirectory,
+            "cancellation",
+            "run",
+            false,
+            false,
+            false,
+            loseBeginAck
+          )
+        const first = yield* launch(true)
+        const selected = yield* takeMatching(first.records, ({ _tag }) => _tag === "RunSelected")
+        if (selected._tag !== "RunSelected") return expect.fail("missing Run")
+        const fileSystem = yield* FileSystem.FileSystem
+        yield* Effect.gen(function* () {
+          while (
+            !(yield* fileSystem.exists(fixture.codexTranscript)) ||
+            !(yield* fileSystem.readFileString(fixture.codexTranscript)).includes('"status":"inProgress"')
+          ) {
+            yield* Effect.sleep("20 millis")
+          }
+        })
+        yield* stopAbruptly(first)
+        const readJournal = Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
+            )
+            return yield* Context.get(context, JournalStore).read(selected.runId)
+          })
+        )
+        const before = yield* readJournal
+        const begin = before.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+        if (begin?.event._tag !== "PlannedAttemptExecutorCommandIntended") return expect.fail("missing Begin")
+        expect(begin.event.command).toBe("Begin")
+        expect(begin.event.plannedAttempt.baseSha).toBe(fixture.baseSha)
+        expect(before.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toEqual([])
+        const transcript = yield* fileSystem.readFileString(fixture.codexTranscript)
+        expect(JSON.parse(transcript).turnStarts).toBe(1)
+        expect(transcript).toContain('"status":"inProgress"')
+        const second = yield* launch(false)
+        expect(yield* takeMatching(second.records, ({ _tag }) => _tag === "RunSelected")).toEqual({
+          ...selected,
+          selection: "Recovered"
+        })
+        yield* takeMatching(
+          second.records,
+          (record) =>
+            record._tag === "HistoricalSnapshot" &&
+            record.snapshot.items.some(
+              ({ occurrence }) =>
+                occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+                occurrence.report._tag === "ExecutorWorkExecuting"
+            )
+        )
+        yield* stopAbruptly(second)
+        const after = yield* readJournal
+        expect(after.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toEqual(
+          before.filter(({ event }) => event._tag === "TaskAttemptPlanned")
+        )
+        expect(after.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toEqual([begin])
+        expect(after.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(1)
+        expect(after.find(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")?.event).toMatchObject({
+          report: {
+            _tag: "ExecutorWorkExecuting",
+            correlation: { runId: selected.runId, attemptId: begin.event.plannedAttempt.attemptId }
+          }
+        })
+        expect((yield* Ref.get(second.eventLog)).filter(({ _tag }) => _tag === "CodexTurnStarted")).toEqual([])
+        expect(yield* fileSystem.readFileString(fixture.codexTranscript)).toBe(transcript)
+        expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+        for (const records of [before, after]) {
+          const reconstructed = reduceWorkflowJournalHistory(selected.runId, records)
+          if (reconstructed._tag !== "ValidWorkflowJournalHistory") return expect.fail("invalid restart history")
+          expect(requiredPlannedAttemptPositionsOf(reconstructed.runState)).toEqual([
+            {
+              runId: selected.runId,
+              attemptId: begin.event.plannedAttempt.attemptId,
+              taskId: begin.event.plannedAttempt.taskId
+            }
+          ])
+        }
+      }).pipe(Effect.provide(NodeServices.layer))
+    ),
+  60_000
 )
 
 it.live(

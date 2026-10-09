@@ -130,6 +130,7 @@ Git history.
 - [Navigate a large observed Run without losing identity](large-run-navigation.md)
 - [Run one task through a hermetic no-crash Dalph lifecycle](hermetic-no-crash-lifecycle.md)
 - [Two ready tasks overlap while one target integrates in journal order](hermetic-concurrency-and-serialized-integration.md)
+- [Restart after Codex accepts Begin without acknowledging it](ambiguous-executor-begin-restart.md)
 - [Restart after the tracker applies an exact claim](ambiguous-claim-acquisition-restart.md)
 - [Restart after Git publishes the candidate without acknowledgement](restart-after-remote-publication.md)
 - [Restart after Git promotes the target without returning](crash-after-target-promotion.md)
