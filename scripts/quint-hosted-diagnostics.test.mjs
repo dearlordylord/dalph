@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
-test("hosted TLC diagnostics retain both streams without changing success or violation exits", async () => {
+await test("hosted TLC diagnostics retain both streams without changing success or violation exits", async () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-tlc-output-"))
   const java = join(root, "controlled-java")
   const jarDirectory = join(root, "apalache-dist-0.56.1", "apalache", "lib")
@@ -24,12 +24,14 @@ const { verify } = createRequire(${JSON.stringify(packageJson)})('@informalsyste
 const result = await verify({moduleName:'Controlled',tlaCode:'---- MODULE Controlled ----\\n====',hasInvariant:false,hasTemporal:false},'0.56.1',{},1);
 console.log('VERDICT '+JSON.stringify({success:result.isRight(),violation:result.isLeft()&&result.value.isViolation}));
 `
+  let stoppedWritersProven = true
   try {
     for (const scenario of [
       { flag: "0", exit: "0", success: true, violation: false, streams: false },
       { flag: "1", exit: "0", success: true, violation: false, streams: true },
       { flag: "1", exit: "12", success: false, violation: true, streams: true }
     ]) {
+      stoppedWritersProven = false
       const result = await runBoundedCommand({
         executable: process.execPath,
         args: ["--input-type=module", "--eval", source],
@@ -46,13 +48,18 @@ console.log('VERDICT '+JSON.stringify({success:result.isRight(),violation:result
         timeoutMilliseconds: 5000,
         captureOutput: true,
         relayParentSignals: true
+      }).catch((error) => {
+        stoppedWritersProven = error.stoppedWritersProven === true
+        throw error
       })
+      stoppedWritersProven = true
       const verdict = JSON.parse(result.output.match(/^VERDICT (.+)$/mu)[1])
       assert.deepEqual(verdict, { success: scenario.success, violation: scenario.violation })
       assert.equal(result.output.includes("controlled TLC stdout"), scenario.streams)
       assert.equal(result.output.includes("controlled TLC stderr"), scenario.streams)
     }
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    if (stoppedWritersProven) rmSync(root, { recursive: true, force: true })
+    else console.error(`Controlled TLC fixture retained while writers are unproven: ${root}`)
   }
 })
