@@ -18,7 +18,13 @@ import { JournalStorageUnavailable, JournalStore } from "./store.js"
 import { memoryJournalStoreLayer } from "./adapters/memory-store.js"
 import { sqliteJournalTestLayer } from "./adapters/sqlite-store.js"
 
-import { archiveAgeMillis, archiveByteBudget, archiveRetentionPass, SavedArchiveBytes } from "./archive-retention.js"
+import {
+  archiveAgeMillis,
+  archiveByteBudget,
+  archivePassMillis,
+  archiveRetentionPass,
+  SavedArchiveBytes
+} from "./archive-retention.js"
 import { makeTraceReader, TraceCursor } from "../presentation/trace-reader.js"
 import { encodeSqliteJournalEvent } from "./adapters/sqlite-event-codec.js"
 import { OperationId } from "../workflow/identity.js"
@@ -216,6 +222,49 @@ it.effect("enforces saved archive bytes by whole-Run completion order, equality,
     yield* Ref.set(state, [{ ...b, bytes: SavedArchiveBytes.make(archiveByteBudget + 1) }])
     expect((yield* archiveRetentionPass(owner)).deletedRuns).toEqual([b.runId])
     expect(yield* Ref.get(state)).toEqual([])
+  })
+)
+
+it.effect("stops archive selection at exactly one second and progresses on a later pass", () =>
+  Effect.gen(function* () {
+    const candidates = ["a", "b"].map((id) => ({
+      runId: RunId.make(id),
+      baseline: RunCompletionTime.make(0),
+      bytes: SavedArchiveBytes.make(archiveByteBudget + 1)
+    }))
+    const state = yield* Ref.make(candidates)
+    const now = yield* Ref.make(Number(archiveAgeMillis))
+    const owner = {
+      now: Ref.get(now),
+      snapshot: () =>
+        Ref.get(state).pipe(
+          Effect.map((remaining) => ({
+            candidates: remaining,
+            expiredBacklog: remaining.length,
+            savedBytes: SavedArchiveBytes.make(remaining.reduce((sum, item) => sum + item.bytes, 0))
+          }))
+        ),
+      remove: (candidate: (typeof candidates)[number]) =>
+        Effect.gen(function* () {
+          yield* Ref.update(state, (remaining) => remaining.filter((item) => item.runId !== candidate.runId))
+          yield* Ref.update(now, (time) => time + archivePassMillis)
+        })
+    }
+    expect(yield* archiveRetentionPass(owner)).toEqual({
+      savedBytes: archiveByteBudget + 1,
+      excessBytes: 1,
+      expiredBacklog: 1,
+      deletedRuns: [RunId.make("a")],
+      deferred: "Bound"
+    })
+    expect((yield* Ref.get(state)).map((candidate) => candidate.runId)).toEqual([RunId.make("b")])
+    expect(yield* archiveRetentionPass(owner)).toEqual({
+      savedBytes: 0,
+      excessBytes: 0,
+      expiredBacklog: 0,
+      deletedRuns: [RunId.make("b")],
+      deferred: "None"
+    })
   })
 )
 

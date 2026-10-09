@@ -65,7 +65,7 @@ SQLite bytes may remain allocated while logical saved bytes fall.
 | 9, 13 | `journaled-run-bootstrap.test.ts`: **“rejects a completion-only Run before evaluating policy or constructing activation”** and **“rejects a reopened completion-only SQLite Run before constructing activation”**. |
 | 9, 13 | `running-host-capacity-lifecycle.acceptance.test.ts`: **“public terminal inspection keeps the exact result after owned expiry while the host remains open”** reads HTTP control and verifies publication/result, closed commands and unchanged tracker/Git counts. |
 | Ordinary trigger | `journaled-run-bootstrap.test.ts`: **“ordinary terminal settlement retires its history and expires an older whole archived Run”** uses the production settlement composition. |
-| Finite portion of 12 | `archive-retention.test.ts`: **“bounds archive maintenance and honestly reports an expired backlog for later ordinary passes”**. Startup/idle triggers remain #490. |
+| Finite portion of 12 | `archive-retention.test.ts`: **“bounds archive maintenance and honestly reports an expired backlog for later ordinary passes”** proves the Run-count bound; **“stops archive selection at exactly one second and progresses on a later pass”** proves the elapsed-time boundary, honest remaining excess/backlog and later progress. Startup/idle triggers remain #490. |
 | Legacy baseline | Existing `completion.test.ts` backfill/reopen/crash tests remain required; expiry consumes that established baseline. |
 
 Paths above are under `packages/orchestrator/src/workflow-journal/`,
