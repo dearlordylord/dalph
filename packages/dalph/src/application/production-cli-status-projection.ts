@@ -1,3 +1,4 @@
+import { publicResponsibilityDiagnosticOf } from "./production-cli-responsibility-diagnostic.js"
 import type { DeliveryStatusEntry } from "@dalph/orchestrator"
 import { Match, Schema } from "effect"
 import {
@@ -152,6 +153,7 @@ export const publicDeliveryStatusEntryOf = Match.type<DeliveryStatusEntry>().pip
           : entry.evidence._tag === "ResponsibilityFacts"
             ? {
                 _tag: "ResponsibilityFacts" as const,
+                diagnostic: publicResponsibilityDiagnosticOf(entry.evidence.facts),
                 responsibilityReference: ObligationReference.make(
                   deliveryStatusObligationReference({
                     _tag: "WorkflowResponsibility",

@@ -1,3 +1,4 @@
+import type { DeliveryDiagnostics } from "./delivery-diagnostics.js"
 import { Effect, Schema, Stream } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type {
@@ -62,6 +63,24 @@ const entriesForReady = (
   ]
 }
 
+/** A task read includes only its task-local Base refusals, while shared tracker waits remain Run-scoped. */
+const scopedDiagnostics = (subject: DeliveryStatusSubject, diagnostics: DeliveryDiagnostics): DeliveryDiagnostics => {
+  const { attemptBaseAdmission, ...rest } = diagnostics
+  const refusals =
+    attemptBaseAdmission?._tag === "QualificationRefused"
+      ? attemptBaseAdmission.refusals.filter(({ taskId }) => subject._tag === "Run" || taskId === subject.taskId)
+      : []
+  return {
+    ...rest,
+    ...(attemptBaseAdmission?._tag === "HistoricalPolicyUnspecified"
+      ? { attemptBaseAdmission }
+      : refusals.length === 0
+        ? {}
+        : { attemptBaseAdmission: { _tag: "QualificationRefused", refusals } }),
+    tasks: diagnostics.tasks.filter(({ taskId }) => subject._tag === "Run" || taskId === subject.taskId)
+  }
+}
+
 const readyFor = (
   subject: DeliveryStatusSubject,
   ready: DeliveryRuntimeReadyObservation
@@ -81,14 +100,7 @@ const readyFor = (
     entries: entriesForReady(subject, ready, projectedEntries),
     ...(ready.evaluation.diagnostics === undefined
       ? {}
-      : {
-          diagnostics: {
-            ...ready.evaluation.diagnostics,
-            tasks: ready.evaluation.diagnostics.tasks.filter(
-              ({ taskId }) => subject._tag === "Run" || taskId === subject.taskId
-            )
-          }
-        })
+      : { diagnostics: scopedDiagnostics(subject, ready.evaluation.diagnostics) })
   }
 }
 

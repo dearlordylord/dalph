@@ -1,6 +1,11 @@
+import {
+  DeliveryDiagnosticAttemptBaseAdmission,
+  DeliveryDiagnosticAuthorityEvidence,
+  DeliveryDiagnosticExecutorEvidence
+} from "./delivery-diagnostic-evidence.js"
+import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import { acceptedAttemptBasePolicy } from "../admission/fresh-attempt-lineage.js"
-import { OperationId } from "../../workflow/identity.js"
-import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { ResultRecoverySubject } from "../../workflow/protocols/result-recovery/events.js"
 /* eslint-disable functional/immutable-data -- Local reconstruction scratch is never persisted or exposed. */
 import {
@@ -15,6 +20,7 @@ import {
   TaskId,
   plannedAttemptExecutorCorrelationKey,
   samePlannedAttemptExecutorReport,
+  plannedTaskAttemptEquivalence,
   type PlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import { Schema } from "effect"
@@ -33,22 +39,7 @@ import type { TrackerGraphState } from "./relations.js"
 /** Transient descriptions of accepted history. These values authorize no action. */
 export const DeliveryDiagnostics = Schema.Struct({
   runId: RunId,
-  attemptBaseAdmission: Schema.optionalKey(
-    Schema.TaggedUnion({
-      HistoricalPolicyUnspecified: {},
-      QualificationRefused: {
-        refusals: Schema.Array(
-          Schema.Struct({
-            taskId: TaskId,
-            operationId: OperationId,
-            observedAt: JournalPosition,
-            boundary: Schema.Literals(["TargetHead", "AnchorAncestry", "ExecutionCommit"]),
-            detail: Schema.String
-          })
-        )
-      }
-    })
-  ),
+  attemptBaseAdmission: Schema.optionalKey(DeliveryDiagnosticAttemptBaseAdmission),
   trackerWait: Schema.TaggedUnion({
     None: {},
     Throttled: { observedAt: JournalPosition, retry: TrackerReadRetryEvidence },
@@ -74,6 +65,8 @@ export const DeliveryDiagnostics = Schema.Struct({
         "Delivered"
       ]),
       lastSubstantiveAt: JournalPosition,
+      authorityEvidence: Schema.optionalKey(DeliveryDiagnosticAuthorityEvidence),
+      executorEvidence: Schema.optionalKey(DeliveryDiagnosticExecutorEvidence),
       retainedAttempt: Schema.Struct({
         attemptId: AttemptId,
         runId: RunId,
@@ -133,7 +126,12 @@ type TaskDiagnostic = DeliveryDiagnostics["tasks"][number]
 const kinds: ReadonlyArray<JournalRecord["event"]["_tag"]> = [
   "PlannedAttemptExecutorWorkResponsibilityBegan",
   "PlannedAttemptExecutorWorkReported",
+  "PlannedAttemptExecutorStateObserved",
+  "PlannedAttemptExecutorCommandProjectionObserved",
+  "PlannedAttemptExecutorCommandResponseContradicted",
   "TaskTrackerFactsObserved",
+  "PlannedAttemptWorktreeObserved",
+  "TargetLineageObserved",
   "IntegratorSessionFixed",
   "IntegrationFinalitySettled"
 ]
@@ -154,6 +152,10 @@ export const projectDeliveryDiagnostics = (
     TaskId,
     { readonly descriptor: TrackerTaskDescriptor; readonly observedAt: JournalPosition }
   >()
+  type AuthorityEvidence = NonNullable<TaskDiagnostic["authorityEvidence"]>["gitWorktree"]
+  const gitEvidence = new Map<string, AuthorityEvidence>()
+  const claimEvidence = new Map<TaskId, AuthorityEvidence>()
+  const evidenceContent = new Map<string, string>()
   const titles = new Map<TaskId, { readonly title: string; readonly observedAt: JournalPosition }>()
   const records = kinds
     .flatMap((kind) => Array.from(journalRecordsOfKind(history, kind)))
@@ -165,6 +167,19 @@ export const projectDeliveryDiagnostics = (
       if (observation._tag === "CompleteTaskTrackerFacts") {
         for (const { descriptor, taskId } of observation.factFamilies[0].descriptors ?? [])
           retainedDescriptors.set(taskId, { descriptor, observedAt: position })
+      }
+      if (observation._tag === "FocusedTaskClaimFacts" || observation._tag === "FocusedTaskClaimFactsUnreadable") {
+        const taskId = observation.coverage.taskId
+        const kind = observation._tag === "FocusedTaskClaimFacts" ? observation.observation._tag : observation._tag
+        const key = `claim:${taskId}`
+        const content =
+          observation._tag === "FocusedTaskClaimFacts"
+            ? JSON.stringify([observation.operationId, observation.observation])
+            : JSON.stringify([observation.operationId, kind])
+        if (evidenceContent.get(key) !== content) {
+          evidenceContent.set(key, content)
+          claimEvidence.set(taskId, { kind, observedAt: position, operationId: observation.operationId })
+        }
       }
       if (observation._tag === "TaskTrackerFactsReadFailed") {
         const reason = observation.failure._tag === "TrackerAdapterReadError" ? observation.failure.reason : null
@@ -179,6 +194,36 @@ export const projectDeliveryDiagnostics = (
         observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
       ) {
         trackerWait = { _tag: "None" }
+      }
+    }
+    if (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") {
+      const intent = journalRecordByKey(history, intentRecordKey(event.operationId))
+      if (intent?.runId !== runId || intent.event._tag !== "GitReadIntentRecorded") continue
+      const planned = intent.event.operation.plannedAttempt
+      if (
+        event._tag === "PlannedAttemptWorktreeObserved" &&
+        (intent.event.operation._tag !== "ReadTaskWorktree" ||
+          !plannedAttemptWorktreeObservationMatchesPlan(event.observation, planned))
+      )
+        continue
+      if (
+        event._tag === "TargetLineageObserved" &&
+        (intent.event.operation._tag !== "ReadTargetLineage" ||
+          !plannedTaskAttemptEquivalence(event.plannedAttempt, planned) ||
+          event.observation.plannedBaseSha !== planned.baseSha)
+      )
+        continue
+      const key = `${plannedAttemptExecutorCorrelationKey(planned)}:${event._tag}`
+      const kind =
+        event._tag === "PlannedAttemptWorktreeObserved"
+          ? event.observation._tag
+          : event.observation.plannedBaseIsAncestorOfTargetHead
+            ? "TargetDescendsFromPlannedBase"
+            : "TargetRewrite"
+      const content = JSON.stringify([event.operationId, event.observation])
+      if (evidenceContent.get(key) !== content) {
+        evidenceContent.set(key, content)
+        gitEvidence.set(key, { kind, observedAt: position, operationId: event.operationId })
       }
     }
     if (
@@ -204,10 +249,34 @@ export const projectDeliveryDiagnostics = (
         candidateHead: { _tag: "Unavailable" },
         phase: "Preparing",
         lastSubstantiveAt: position,
+        executorEvidence: { kind: "ResponsibilityRecorded", observedAt: position },
         identity: { _tag: "Unavailable" },
         failure: { _tag: "None" },
         recovery: { _tag: "NotApplicable" }
       })
+    } else if (
+      event._tag === "PlannedAttemptExecutorStateObserved" ||
+      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+      event._tag === "PlannedAttemptExecutorCommandResponseContradicted"
+    ) {
+      const key = plannedAttemptExecutorCorrelationKey(event.plannedAttempt)
+      const task = attempts.get(key)
+      const planned = plannedAttempts.get(key)
+      if (task === undefined || planned === undefined || !plannedTaskAttemptEquivalence(planned, event.plannedAttempt))
+        continue
+      const kind =
+        event._tag === "PlannedAttemptExecutorCommandResponseContradicted"
+          ? "ExecutorReportContradiction"
+          : event.observation._tag
+      if (kind === "ExactExecutorReport" || kind === "ExecutorBeginNotCrossed") continue
+      const content =
+        event._tag === "PlannedAttemptExecutorCommandResponseContradicted"
+          ? JSON.stringify({ kind, observed: event.observed })
+          : JSON.stringify(event.observation)
+      const evidenceKey = `executor:${key}`
+      if (evidenceContent.get(evidenceKey) === content && task.executorEvidence?.kind === kind) continue
+      evidenceContent.set(evidenceKey, content)
+      attempts.set(key, { ...task, executorEvidence: { kind, observedAt: position } })
     } else if (event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.runId === runId) {
       const report = event.report
       const key = plannedAttemptExecutorCorrelationKey(report.correlation)
@@ -222,6 +291,7 @@ export const projectDeliveryDiagnostics = (
         attempts.set(key, {
           ...task,
           phase: "Rejected",
+          executorEvidence: { kind: report._tag, observedAt: position },
           lastSubstantiveAt: position,
           failure: { _tag: "None" },
           recovery: {
@@ -234,6 +304,7 @@ export const projectDeliveryDiagnostics = (
       }
       attempts.set(key, {
         ...task,
+        executorEvidence: { kind: report._tag, observedAt: position },
         lastSubstantiveAt: position,
         phase:
           result === null
@@ -277,24 +348,30 @@ export const projectDeliveryDiagnostics = (
     }
   }
   const descriptors = graph?._tag === "GraphEstablished" ? graph.observation.snapshot.toWire().tasks : []
-  const refused = Array.from(journalRecordsOfKind(history, "TaskAttemptBaseReadIntended")).flatMap(({ event }) => {
-    if (event._tag !== "TaskAttemptBaseReadIntended") return []
-    const observed = journalRecordByKey(history, outcomeRecordKey(event.operation.operationId))
-    return observed?.event._tag === "TaskAttemptBaseObserved" && observed.event.observation._tag === "Refused"
-      ? [
-          {
-            taskId: event.operation.taskId,
-            operationId: event.operation.operationId,
-            observedAt: observed.position,
-            boundary: observed.event.observation.boundary,
-            detail: observed.event.observation.detail
-          }
-        ]
-      : []
-  })
+  const refused = Array.from(journalRecordsOfKind(history, "TaskAttemptBaseReadIntended")).flatMap(
+    ({ event, runId: recordRunId }) => {
+      if (event._tag !== "TaskAttemptBaseReadIntended" || recordRunId !== runId) return []
+      const observed = journalRecordByKey(history, outcomeRecordKey(event.operation.operationId))
+      return observed?.runId === runId &&
+        observed.event._tag === "TaskAttemptBaseObserved" &&
+        observed.event.observation._tag === "Refused"
+        ? [
+            {
+              taskId: event.operation.taskId,
+              operationId: event.operation.operationId,
+              observedAt: observed.position,
+              boundary: observed.event.observation.boundary,
+              detail: "Exact attempt Base qualification refused"
+            }
+          ]
+        : []
+    }
+  )
   return {
     runId,
-    ...(acceptedAttemptBasePolicy(history) === undefined
+    ...(acceptedAttemptBasePolicy(
+      Array.from(journalRecordsOfKind(history, "WorkflowRunBegan")).filter((record) => record.runId === runId)
+    ) === undefined
       ? { attemptBaseAdmission: { _tag: "HistoricalPolicyUnspecified" as const } }
       : refused.length === 0
         ? {}
@@ -307,6 +384,16 @@ export const projectDeliveryDiagnostics = (
         const retainedDescriptor = retainedDescriptors.get(task.taskId)
         return {
           ...task,
+          authorityEvidence: {
+            gitWorktree:
+              gitEvidence.get(
+                `${plannedAttemptExecutorCorrelationKey(task.retainedAttempt)}:PlannedAttemptWorktreeObserved`
+              ) ?? null,
+            gitLineage:
+              gitEvidence.get(`${plannedAttemptExecutorCorrelationKey(task.retainedAttempt)}:TargetLineageObserved`) ??
+              null,
+            claim: claimEvidence.get(task.taskId) ?? null
+          },
           identity:
             descriptor !== undefined && graph?._tag === "GraphEstablished"
               ? { _tag: "Known", descriptor, observedAt: graph.observation.recordedAt }
