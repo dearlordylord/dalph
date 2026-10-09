@@ -148,3 +148,27 @@ activation/cancellation and application-Exit obligations remain applicable;
 submission formal controls and focused owner/Exit checks qualify the composition.
 The physical crash cuts prove the named transaction placements, not every
 possible power-loss interleaving. Passing gate totals do not expand this ledger.
+
+### Reopened storage boundary during qualification
+
+Qualification reopened the complete-history cache lifetime boundary: two
+`sqlite-scan-retention.test.ts` assertions also failed using the planned Base
+`53ecaf61c3595d2c56c515fbd9efbeb3740d7d24` SQLite owner. A heap retaining path
+ran through the native driver's prepared-statement cache, its completed fiber,
+and the parent Effect span's history-valued exit. Completion queries introduced
+an additional cached preparation path inside reads and audits, bypassing the
+uncached complete-history query protection.
+
+Completion reads now use the same uncached preparation boundary, containing
+native preparation throws as typed storage failures. The original traced
+**“releases completed auditAll history while its SQLite store stays open”** and
+**“releases the first reopened read array while retaining the current SQLite checkpoint”**
+assertions qualify this repair; tracing remains enabled. Completion, physical
+crash/reopen, expiry and host tests remain required alongside them. This changes
+query-cache lifetime, not historical interpretation, finality or retention policy.
+
+The shared MBT provenance manifest binds changed storage source bytes even when
+model transitions and lane options are unchanged. The explicit generator refreshes
+the corpus receipts under the current manifest before conformance replay; copied
+old receipts do not qualify the changed owner. Activation, cancellation and Exit
+conformance preserve their existing decisions and negative controls.

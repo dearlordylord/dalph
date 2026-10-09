@@ -13,7 +13,7 @@ import {
   type RunCompletionTiming
 } from "../completion.js"
 import { JournalHistoryDeleted, JournalDataCorruption, JournalHistoryCorruption, type JournalRecord } from "../store.js"
-import { decodeBoundary, classifyJournalMethodFailure } from "./sqlite-store-errors.js"
+import { decodeBoundary, classifyJournalMethodFailure, classifyJournalStorageFailure } from "./sqlite-store-errors.js"
 import type { makeSqliteJournalQueries } from "./sqlite-store-queries.js"
 
 const ReceiptRows = Schema.Array(
@@ -40,6 +40,12 @@ export const makeSqliteCompletions = (
   sql: SqliteClient.SqliteClient,
   queries: ReturnType<typeof makeSqliteJournalQueries>
 ) => {
+  // Completion reads may run inside a whole-history audit/read span. Cached
+  // prepare fibers retain that span's eventual result, so use the same uncached
+  // preparation boundary as complete-history queries, including native throws.
+  const containPreparationFailure = Effect.catchDefect((cause) =>
+    Effect.fail(classifyJournalStorageFailure("JournalStore.readCompletion", cause))
+  )
   const integrity = Effect.fn("RunCompletion.Sqlite.integrity")(function* (runId: RunId) {
     const partition = yield* queries.locateRunPartition(runId, "JournalStore.readCompletion")
     const table = partition === "Cold" ? "journal_records_cold" : "journal_records"
@@ -48,7 +54,10 @@ export const makeSqliteCompletions = (
       AND (position = 1 OR position = (SELECT MAX(position) FROM ${sql(table)} WHERE run_id = ${runId})
         OR position = (SELECT MAX(position) FROM ${sql(table)} WHERE run_id = ${runId} AND event_kind = 'RemotePublicationSucceeded'))
       ORDER BY position
-    `.pipe(Effect.flatMap((rows) => decodeBoundary(IntegrityRows, rows, "JournalStore.readCompletion")))
+    `.unprepared.pipe(
+      containPreparationFailure,
+      Effect.flatMap((rows) => decodeBoundary(IntegrityRows, rows, "JournalStore.readCompletion"))
+    )
     return JSON.stringify(
       rows.map((row) => ({
         position: row.position,
@@ -62,7 +71,8 @@ export const makeSqliteCompletions = (
 
   const read = Effect.fn("JournalStore.Sqlite.readCompletion")(function* (runId: RunId) {
     const rows =
-      yield* sql`SELECT completion_json, integrity_json, checksum, deletion_json FROM run_completions WHERE run_id = ${runId}`.pipe(
+      yield* sql`SELECT completion_json, integrity_json, checksum, deletion_json FROM run_completions WHERE run_id = ${runId}`.unprepared.pipe(
+        containPreparationFailure,
         Effect.flatMap((rows) => decodeBoundary(ReceiptRows, rows, "JournalStore.readCompletion"))
       )
     const row = rows[0]
@@ -70,7 +80,9 @@ export const makeSqliteCompletions = (
       const partition = yield* queries.locateRunPartition(runId, "JournalStore.readCompletion")
       const table = partition === "Cold" ? "journal_records_cold" : "journal_records"
       const terminalRows =
-        yield* sql`SELECT run_id FROM ${sql(table)} WHERE run_id = ${runId} AND event_kind = 'WorkflowRunTerminated' LIMIT 1`
+        yield* sql`SELECT run_id FROM ${sql(table)} WHERE run_id = ${runId} AND event_kind = 'WorkflowRunTerminated' LIMIT 1`.unprepared.pipe(
+          containPreparationFailure
+        )
       if (terminalRows.length > 0) {
         const records = yield* queries.loadRunRecords(runId, "JournalStore.readCompletion")
         yield* verifiedRunCompletion(runId, records, {
@@ -165,7 +177,8 @@ export const makeSqliteCompletions = (
     // Select terminal candidates from indexed event metadata; never replay active histories.
     const candidateResult =
       yield* sql`SELECT DISTINCT run_id FROM journal_records WHERE event_kind = 'WorkflowRunTerminated'
-      UNION SELECT DISTINCT run_id FROM journal_records_cold WHERE event_kind = 'WorkflowRunTerminated'`.pipe(
+      UNION SELECT DISTINCT run_id FROM journal_records_cold WHERE event_kind = 'WorkflowRunTerminated'`.unprepared.pipe(
+        containPreparationFailure,
         Effect.flatMap((rows) =>
           decodeBoundary(Schema.Array(Schema.Struct({ run_id: RunId })), rows, "JournalStore.readCompletion")
         ),
@@ -193,7 +206,8 @@ export const makeSqliteCompletions = (
     }
   })
   const identities = () =>
-    sql`SELECT run_id FROM run_completions`.pipe(
+    sql`SELECT run_id FROM run_completions`.unprepared.pipe(
+      containPreparationFailure,
       Effect.flatMap((rows) =>
         decodeBoundary(Schema.Array(Schema.Struct({ run_id: RunId })), rows, "JournalStore.auditAll")
       )
@@ -219,7 +233,8 @@ export const makeSqliteCompletions = (
     deletion: RunHistoryDeletion
   ) {
     const rows =
-      yield* sql`SELECT completion_json, integrity_json, checksum, deletion_json FROM run_completions WHERE run_id = ${runId}`.pipe(
+      yield* sql`SELECT completion_json, integrity_json, checksum, deletion_json FROM run_completions WHERE run_id = ${runId}`.unprepared.pipe(
+        containPreparationFailure,
         Effect.flatMap((rows) => decodeBoundary(ReceiptRows, rows, "JournalStore.maintainArchive"))
       )
     const row = rows[0]
@@ -232,7 +247,10 @@ export const makeSqliteCompletions = (
     yield* sql`UPDATE run_completions SET deletion_json = ${json}, checksum = ${digest(row.completion_json + row.integrity_json + json)} WHERE run_id = ${runId}`
   })
   const requireAvailable = Effect.fn("RunCompletion.Sqlite.requireAvailable")(function* (runId: RunId) {
-    const marker = yield* sql`SELECT run_id FROM run_completions WHERE run_id = ${runId} AND deletion_json IS NOT NULL`
+    const marker =
+      yield* sql`SELECT run_id FROM run_completions WHERE run_id = ${runId} AND deletion_json IS NOT NULL`.unprepared.pipe(
+        containPreparationFailure
+      )
     if (marker.length === 0) return
     const receipt = yield* read(runId)
     if (receipt._tag === "CompletedRun" && receipt.history === "Deleted")
