@@ -239,6 +239,11 @@ it("retains exact unavailable and contradictory evidence without changing execut
     executorEvidence: { kind: "ExecutorReportContradiction", observedAt: 5 }
   })
   expect(JSON.stringify(contradiction)).not.toContain("foreign")
+  expect(projectDeliveryDiagnostics(attempt.runId, [...history, reported(4, executing)]).tasks[0]).toMatchObject({
+    phase: "Executing",
+    lastSubstantiveAt: 2,
+    executorEvidence: { kind: "ExecutorWorkExecuting", observedAt: 4 }
+  })
   const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
     correlation: plannedAttemptExecutorCorrelation(attempt)
   })
@@ -323,7 +328,7 @@ it("keeps exact Git and claim evidence families separate and redacts authority-p
   expect(diagnostic.tasks[0]?.authorityEvidence).toEqual({
     gitWorktree: { observedAt: 3, operationId, kind: "ContradictoryWorktreeState" },
     gitLineage: { observedAt: 5, operationId: lineageId, kind: "TargetDescendsFromPlannedBase" },
-    claim: { observedAt: 6, operationId: claimId, kind: "ActiveTaskClaim" }
+    claim: [{ observedAt: 6, operationId: claimId, kind: "ActiveTaskClaim" }]
   })
   if (lineage.event._tag !== "TargetLineageObserved") return expect.fail("lineage fixture invalid")
   const foreignLineage = {

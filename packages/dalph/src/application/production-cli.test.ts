@@ -53,6 +53,11 @@ import {
   GitCommonDirectoryLocator,
   GitCommonDirectoryTarget,
   JournalPosition,
+  JournalRecordKey,
+  type JournalRecord,
+  FixtureTarget,
+  projectDeliveryDiagnostics,
+  workflowJournalEventVersion,
   EvidenceDigest,
   EvidenceReference,
   JournalDataCorruption,
@@ -4111,11 +4116,13 @@ it("joins only accepted evidence for the exact immutable responsibility and requ
     authorityEvidence: {
       gitLineage: null,
       gitWorktree: null,
-      claim: {
-        operationId: OperationId.make("required-claim-read"),
-        observedAt: JournalPosition.make(4),
-        kind: "FocusedTaskClaimFactsUnreadable"
-      }
+      claim: [
+        {
+          operationId: OperationId.make("required-claim-read"),
+          observedAt: JournalPosition.make(4),
+          kind: "FocusedTaskClaimFactsUnreadable"
+        }
+      ]
     }
   }
   const publicEntry = (candidate = task) => {
@@ -4159,10 +4166,86 @@ it("joins only accepted evidence for the exact immutable responsibility and requ
       ...task,
       authorityEvidence: {
         ...task.authorityEvidence,
-        claim: { ...task.authorityEvidence.claim, operationId: OperationId.make("unrelated-read") }
+        claim: task.authorityEvidence.claim.map((read) => ({
+          ...read,
+          operationId: OperationId.make("unrelated-read")
+        }))
       }
     })
   ).toMatchObject(unchanged)
+})
+
+it("preserves exact cancellation claim evidence when an unrelated later read is accepted", () => {
+  const requiredId = OperationId.make("cancellation-required-read")
+  const source = deliveryStatusOf(
+    { _tag: "Run", runId },
+    projectedStatusFixture(
+      ResponsibilityDisposition.CancelledAttemptClaimUnreadableWait({ observationOperationId: requiredId })
+    )
+  )
+  if (source instanceof Error || source._tag !== "DeliveryStatusAvailable") return expect.fail("status unavailable")
+  const entry = source.entries.find(
+    (entry) => entry._tag === "EvidenceUnavailable" && entry.evidence._tag === "ResponsibilityFacts"
+  )
+  if (
+    entry?._tag !== "EvidenceUnavailable" ||
+    entry.evidence._tag !== "ResponsibilityFacts" ||
+    entry.evidence.facts.responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility"
+  )
+    return expect.fail("responsibility missing")
+  const plannedAttempt = entry.evidence.facts.responsibility.plannedAttempt
+  const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+    runId,
+    position: JournalPosition.make(position),
+    key: JournalRecordKey.make(`claim-chronology-${position}`),
+    event
+  })
+  const target = FixtureTarget.make("claim-chronology")
+  const observed = (position: number, operationId: OperationId) =>
+    record(position, {
+      _tag: "TaskTrackerFactsObserved",
+      version: workflowJournalEventVersion,
+      operationId,
+      observation: {
+        _tag: "FocusedTaskClaimFactsUnreadable",
+        attempts: 3,
+        completeness: "Unreadable",
+        coverage: { _tag: "ExactTaskClaim", taskId: plannedAttempt.taskId },
+        operationId,
+        target
+      }
+    })
+  const history = [
+    record(2, {
+      _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
+      version: workflowJournalEventVersion,
+      plannedAttempt
+    }),
+    observed(4, requiredId)
+  ]
+  const publicEntry = (records: ReadonlyArray<JournalRecord>) => {
+    const status = publicDeliveryStatusOf({
+      ...source,
+      diagnostics: projectDeliveryDiagnostics(runId, records, undefined, target)
+    })
+    if (status._tag !== "DeliveryStatusAvailable") return expect.fail("public status unavailable")
+    return status.entries.find(
+      (entry) => entry._tag === "EvidenceUnavailable" && entry.evidence._tag === "ResponsibilityFacts"
+    )
+  }
+  const before = publicEntry(history)
+  expect(before).toMatchObject({
+    evidence: {
+      diagnostic: {
+        requiredOperation: { _tag: "ObservationRequired", operationId: requiredId },
+        lastAcceptedEvidence: { _tag: "BoundaryEvidenceAccepted", operationId: requiredId, observedAt: 4 }
+      }
+    }
+  })
+  const later = [...history, observed(5, OperationId.make("unrelated-later-claim-read"))]
+  expect(publicEntry(later)).toEqual(before)
+  expect(publicEntry(JSON.parse(JSON.stringify(later)))).toEqual(before)
+  expect(publicEntry([...later, observed(6, requiredId)])).toEqual(before)
 })
 
 it("keeps task-local Base refusal diagnostics out of an independent task status", () => {

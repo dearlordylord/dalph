@@ -11,7 +11,7 @@ export const DeliveryDiagnosticAuthorityEvidence = Schema.Struct({
   gitLineage: Schema.NullOr(
     Schema.Struct({ observedAt: JournalPosition, operationId: OperationId, kind: Schema.NonEmptyString })
   ),
-  claim: Schema.NullOr(
+  claim: Schema.Array(
     Schema.Struct({ observedAt: JournalPosition, operationId: OperationId, kind: Schema.NonEmptyString })
   )
 })

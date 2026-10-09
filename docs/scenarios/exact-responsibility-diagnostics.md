@@ -47,7 +47,10 @@ safe/terminal settlement variants remain the vocabulary for those outcomes.
    in `production-cli.test.ts`.
    `joins only accepted evidence for the exact immutable responsibility and required operation`
    in the same file rejects another task, Base or observation operation as an
-   evidence source. Existing public projection tests
+   evidence source.
+   `preserves exact cancellation claim evidence when an unrelated later read is accepted`
+   in the same file proves that a later same-task read cannot replace the required
+   operation, including after restart and a duplicate required observation. Existing public projection tests
    `localizes unavailable evidence without blocking an independent task` and
    `localizes contradictory evidence without blocking an independent task` in
    `delivery-status.test.ts` own the unchanged isolation rule.

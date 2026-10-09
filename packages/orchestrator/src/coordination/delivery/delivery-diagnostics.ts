@@ -154,7 +154,7 @@ export const projectDeliveryDiagnostics = (
   >()
   type AuthorityEvidence = NonNullable<TaskDiagnostic["authorityEvidence"]>["gitWorktree"]
   const gitEvidence = new Map<string, AuthorityEvidence>()
-  const claimEvidence = new Map<TaskId, AuthorityEvidence>()
+  const claimEvidence = new Map<TaskId, Map<string, NonNullable<AuthorityEvidence>>>()
   const evidenceContent = new Map<string, string>()
   const titles = new Map<TaskId, { readonly title: string; readonly observedAt: JournalPosition }>()
   const records = kinds
@@ -171,14 +171,16 @@ export const projectDeliveryDiagnostics = (
       if (observation._tag === "FocusedTaskClaimFacts" || observation._tag === "FocusedTaskClaimFactsUnreadable") {
         const taskId = observation.coverage.taskId
         const kind = observation._tag === "FocusedTaskClaimFacts" ? observation.observation._tag : observation._tag
-        const key = `claim:${taskId}`
+        const key = `claim:${taskId}:${observation.operationId}`
         const content =
           observation._tag === "FocusedTaskClaimFacts"
             ? JSON.stringify([observation.operationId, observation.observation])
             : JSON.stringify([observation.operationId, kind])
         if (evidenceContent.get(key) !== content) {
           evidenceContent.set(key, content)
-          claimEvidence.set(taskId, { kind, observedAt: position, operationId: observation.operationId })
+          const reads = claimEvidence.get(taskId) ?? new Map<string, NonNullable<AuthorityEvidence>>()
+          reads.set(observation.operationId, { kind, observedAt: position, operationId: observation.operationId })
+          claimEvidence.set(taskId, reads)
         }
       }
       if (observation._tag === "TaskTrackerFactsReadFailed") {
@@ -282,7 +284,12 @@ export const projectDeliveryDiagnostics = (
       const key = plannedAttemptExecutorCorrelationKey(report.correlation)
       const task = attempts.get(key)
       const previous = reports.get(key)
-      if (task === undefined || (previous !== undefined && samePlannedAttemptExecutorReport(previous, report))) continue
+      if (task === undefined) continue
+      if (previous !== undefined && samePlannedAttemptExecutorReport(previous, report)) {
+        if (task.executorEvidence?.kind !== report._tag)
+          attempts.set(key, { ...task, executorEvidence: { kind: report._tag, observedAt: position } })
+        continue
+      }
       reports.set(key, report)
       const result = report._tag === "ExecutorWorkTerminal" ? report.result : null
       const plannedAttempt = plannedAttempts.get(key)
@@ -392,7 +399,7 @@ export const projectDeliveryDiagnostics = (
             gitLineage:
               gitEvidence.get(`${plannedAttemptExecutorCorrelationKey(task.retainedAttempt)}:TargetLineageObserved`) ??
               null,
-            claim: claimEvidence.get(task.taskId) ?? null
+            claim: Array.from(claimEvidence.get(task.taskId)?.values() ?? [])
           },
           identity:
             descriptor !== undefined && graph?._tag === "GraphEstablished"

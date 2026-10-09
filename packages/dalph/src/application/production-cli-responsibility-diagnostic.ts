@@ -220,15 +220,17 @@ export const withRelevantAcceptedEvidence = (
           )
         })
       : undefined
+  const required = diagnostic.requiredOperation
   const authority =
     diagnostic.boundary === "Git"
       ? diagnostic.missingProof === "TargetRewrite" || diagnostic.missingProof === "TargetHeadUnreadable"
         ? task?.authorityEvidence?.gitLineage
         : task?.authorityEvidence?.gitWorktree
       : diagnostic.boundary === "TaskTracker"
-        ? task?.authorityEvidence?.claim
+        ? required._tag === "ObservationRequired"
+          ? task?.authorityEvidence?.claim.find((read) => read.operationId === required.operationId)
+          : task?.authorityEvidence?.claim.toSorted((left, right) => right.observedAt - left.observedAt)[0]
         : null
-  const required = diagnostic.requiredOperation
   if (
     authority !== undefined &&
     authority !== null &&
