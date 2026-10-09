@@ -403,7 +403,7 @@ it.live(
                 const records = yield* fixture.readHistory(runId)
                 let last = records.at(-1)
                 if (last === undefined) return expect.fail("paused history required")
-                const evidencePath = process.env.DALPH_RUN_CONTROL_PROFILE_OUTPUT
+                const evidencePath = process.env["DALPH_RUN_CONTROL_PROFILE_OUTPUT"]
                 const recordProgress = (phase: string) =>
                   evidencePath === undefined
                     ? Effect.void
@@ -487,7 +487,7 @@ it.live(
                 if (evidencePath !== undefined)
                   yield* fileSystem.writeFileString(evidencePath, JSON.stringify(profileResults, null, 2) + "\n")
                 yield* recordProgress("Complete")
-                expect(profileResults.every((result) => result.targetMet === true)).toBe(true)
+                expect(profileResults.every((result) => result["targetMet"] === true)).toBe(true)
                 yield* fixture.setExecutorEvidence("Ordinary")
                 yield* Deferred.succeed(release, undefined)
               })
