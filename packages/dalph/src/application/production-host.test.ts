@@ -924,7 +924,9 @@ it.effect("isolated fresh SQLite dataset starts only after exact Run selection a
   Effect.gen(function* () {
     const events = yield* Ref.make<ReadonlyArray<string>>([])
     const input = yield* makeTemporaryProductionInput
-    const storage = sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+    const storage = sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) }).pipe(
+      Layer.orDie
+    )
     const foundation = Layer.merge(ownershipLayer, storage)
     const graph = {
       acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
