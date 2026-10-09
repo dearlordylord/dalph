@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "base": "3413d06b27b6e8a03b4313b9679bb6ff53339741",
+  "candidateState": "Precommit dirty implementation diagnostic. Exact complete dirty source identity and individual timing samples were not retained; this is not candidate qualification.",
+  "environment": {
+    "node": "v24.20.0",
+    "pnpm": "10.29.3",
+    "vitest": "4.1.10",
+    "platform": "linux",
+    "architecture": "arm64",
+    "kernel": "Linux 7.0.14-orbstack-00380-ga7e0a2dc9535",
+    "onlineProcessors": 12
+  },
+  "startedAtUTC": "2026-10-09T22:34:24Z",
+  "stoppedAtUTC": "2026-10-09T22:35:55Z",
+  "interpretation": "The field localLoopbackAdmissionP95Millis was incorrectly named: it timed the public client call, handshake and application before host command entry. Four completed summaries miss 100 ms. They are retained as failed diagnostic evidence, never treated as a qualifying pass. Final candidate qualification records exact correlated server-admission and separate client/application raw samples.",
+  "capturedProgress": {
+    "phase": "BusyHistory: Pause",
+    "profileResults": [
+      {
+        "profile": "Idle",
+        "operation": "Pause",
+        "runtime": "v24.20.0",
+        "platform": "linux",
+        "architecture": "arm64",
+        "sampleCount": 20,
+        "historicalRead": "None",
+        "historicalControlRecordsAdded": 0,
+        "historyCapacityBytes": 8192,
+        "localLoopbackAdmissionP95Millis": 151.11250999999902,
+        "provisionalTargetMillis": 100,
+        "targetMet": false,
+        "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+        "provisionalCooperativeQuantumMillis": 10
+      },
+      {
+        "profile": "Idle",
+        "operation": "Cancel",
+        "runtime": "v24.20.0",
+        "platform": "linux",
+        "architecture": "arm64",
+        "sampleCount": 20,
+        "historicalRead": "None",
+        "historicalControlRecordsAdded": 0,
+        "historyCapacityBytes": 8192,
+        "localLoopbackAdmissionP95Millis": 159.07619800000248,
+        "provisionalTargetMillis": 100,
+        "targetMet": false,
+        "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+        "provisionalCooperativeQuantumMillis": 10
+      }
+    ]
+  }
+}

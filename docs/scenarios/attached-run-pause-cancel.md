@@ -103,3 +103,7 @@ samples and candidate/environment identity. A target miss blocks this slice's
 acceptance; shared CPU load is not a cause established merely by observation.
 The parent integration slice #501 must qualify its final integrated candidate
 independently.
+
+[Slice acceptance evidence and raw profiles](../evidence/issue-496-acceptance.md)
+record the exact source candidate and scoped verification; parent integration
+requires its own qualification.

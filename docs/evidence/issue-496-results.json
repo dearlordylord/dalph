@@ -1,0 +1,1526 @@
+{
+  "version": 1,
+  "base": "3413d06b27b6e8a03b4313b9679bb6ff53339741",
+  "candidate": "4c99e3367085d7f356bf44c9590f700461ccb161",
+  "candidateTree": "9f965c4381ece3a486f4fa77c8ebe2f68f725896",
+  "acceptanceTestSha256": "5a9fca50bd58ea2968cb4a564d2208d2c794c1c86411e9435c46bad93b51d258",
+  "observedAtUTC": "2026-10-09T22:53:06.532197+00:00",
+  "environment": {
+    "node": "v24.20.0",
+    "pnpm": "10.29.3",
+    "vitest": "4.1.10",
+    "platform": "linux",
+    "architecture": "arm64",
+    "kernel": "Linux 7.0.14-orbstack-00380-ga7e0a2dc9535",
+    "onlineProcessors": 12,
+    "lockfileSha256": "c196b6b9829b6fa31953130b14fc3ad471e62837796af0dd87d60206674f3f28",
+    "providers": "Hermetic tracker/executor; native Git and SQLite"
+  },
+  "scope": "Slice #496 only; final integrated #501 candidate requires independent qualification.",
+  "command": "DALPH_RUN_CONTROL_PROFILE_OUTPUT=/tmp/run-control-final-profile.json mise exec -- pnpm exec vitest run packages/dalph/src/application/running-host-run-control.acceptance.test.ts packages/dalph/test/cassettes/run-cancellation.test.ts packages/dalph/src/application/production-reactivation.test.ts packages/dalph/src/application/running-host-cli.test.ts packages/dalph/src/application/running-host-contract.test.ts packages/dalph/src/application/running-host-http.test.ts packages/dalph/src/application/running-host-mcp.test.ts packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile.json=/tmp/run-control-selected-tests.json",
+  "result": {
+    "selectedFileCount": 9,
+    "passed": 206,
+    "failed": 0,
+    "skipped": 0
+  },
+  "tests": [
+    {
+      "file": "packages/dalph/src/application/running-host-run-control.acceptance.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "CLI public clients apply whole-Run controls while history remains busy",
+          "status": "passed",
+          "durationMillis": 7615.997579000001
+        },
+        {
+          "title": "CLI lost pause replies retain the host command without replay",
+          "status": "passed",
+          "durationMillis": 4709.504365999999
+        },
+        {
+          "title": "CLI lost cancel replies retain the host command without replay",
+          "status": "passed",
+          "durationMillis": 3925.277421999999
+        },
+        {
+          "title": "MCP public clients apply whole-Run controls while history remains busy",
+          "status": "passed",
+          "durationMillis": 8135.625556999999
+        },
+        {
+          "title": "MCP lost pause replies retain the host command without replay",
+          "status": "passed",
+          "durationMillis": 4648.266039999999
+        },
+        {
+          "title": "MCP lost cancel replies retain the host command without replay",
+          "status": "passed",
+          "durationMillis": 4711.959691000004
+        },
+        {
+          "title": "CLI reports an ambiguous pause reply without retransmission",
+          "status": "passed",
+          "durationMillis": 5965.3140829999975
+        },
+        {
+          "title": "CLI reports an ambiguous cancel reply without retransmission",
+          "status": "passed",
+          "durationMillis": 4885.947607000002
+        },
+        {
+          "title": "MCP reports an ambiguous pause reply without retransmission",
+          "status": "passed",
+          "durationMillis": 3950.5380229999937
+        },
+        {
+          "title": "MCP reports an ambiguous cancel reply without retransmission",
+          "status": "passed",
+          "durationMillis": 3620.718384
+        },
+        {
+          "title": "attached cancellation retains Unavailable executor responsibility",
+          "status": "passed",
+          "durationMillis": 2397.126345000004
+        },
+        {
+          "title": "attached cancellation retains Foreign executor responsibility",
+          "status": "passed",
+          "durationMillis": 2487.943874000004
+        },
+        {
+          "title": "native repeated profiles measure local admission separately from provider settlement",
+          "status": "passed",
+          "durationMillis": 37059.742471
+        },
+        {
+          "title": "attached cancellation settles an executing attempt through exact stop abandonment and claim release",
+          "status": "passed",
+          "durationMillis": 2981.2391649999918
+        }
+      ]
+    },
+    {
+      "file": "packages/dalph/test/cassettes/run-cancellation.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "cancels an idle Run after the durable direction and fresh graph read",
+          "status": "passed",
+          "durationMillis": 680.4517749999995
+        },
+        {
+          "title": "cancels a running exact attempt through suspension, claim release, and fresh classification",
+          "status": "passed",
+          "durationMillis": 1516.7964730000003
+        },
+        {
+          "title": "cancels after admitted integration settles without rollback or replacement",
+          "status": "passed",
+          "durationMillis": 4218.403034000001
+        },
+        {
+          "title": "cancels a running exact attempt without releasing a foreign claim",
+          "status": "passed",
+          "durationMillis": 2132.130389
+        },
+        {
+          "title": "re-enters once after an unacknowledged cancellation termination append",
+          "status": "passed",
+          "durationMillis": 95.782647
+        }
+      ]
+    },
+    {
+      "file": "packages/dalph/src/application/production-reactivation.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "reports activation failures and stops repeated integration calls after provider failure",
+          "status": "passed",
+          "durationMillis": 49.554691000000275
+        },
+        {
+          "title": "explicit cancellation stops after an unreadable Suspend projection",
+          "status": "passed",
+          "durationMillis": 9.6919110000008
+        },
+        {
+          "title": "rejects a non-positive production reactivation interval at configuration decoding",
+          "status": "passed",
+          "durationMillis": 2.8637730000000374
+        },
+        {
+          "title": "keeps a cold terminal memory Run closed in production-shaped reactivation",
+          "status": "passed",
+          "durationMillis": 74.000763
+        },
+        {
+          "title": "keeps a reopened SQLite cold terminal Run closed in production-shaped reactivation",
+          "status": "passed",
+          "durationMillis": 345.8562039999997
+        },
+        {
+          "title": "production composition wires current-first tracker notifications and fresh checks",
+          "status": "passed",
+          "durationMillis": 7.219433000000208
+        },
+        {
+          "title": "a reopened SQLite Run keeps positions 232 and 233 stable until an outside wake",
+          "status": "passed",
+          "durationMillis": 4771.493829
+        },
+        {
+          "title": "an unreadable ordinary-startup graph waits for an explicit operator wake",
+          "status": "passed",
+          "durationMillis": 762.3326430000016
+        },
+        {
+          "title": "a rejected fresh foreign claim remains visible without re-reading the graph",
+          "status": "passed",
+          "durationMillis": 583.1746160000002
+        },
+        {
+          "title": "unchanged active-work refresh calls each ordinary provider once records reconfirmation and does not loop",
+          "status": "passed",
+          "durationMillis": 1430.4309030000004
+        },
+        {
+          "title": "lost or pre-subscription tracker notification is recovered by the ordinary timer and executes an active authority read",
+          "status": "passed",
+          "durationMillis": 1459.761681
+        },
+        {
+          "title": "a later tracker edit waits for the next independent notification or timer",
+          "status": "passed",
+          "durationMillis": 2987.2131579999987
+        },
+        {
+          "title": "complete authoritative constraints including a missing or foreign exact claim suspend only their affected attempt: 'changed instructions'",
+          "status": "passed",
+          "durationMillis": 2498.848181000001
+        },
+        {
+          "title": "complete authoritative constraints including a missing or foreign exact claim suspend only their affected attempt: 'completed lifecycle'",
+          "status": "passed",
+          "durationMillis": 3443.604711
+        },
+        {
+          "title": "complete authoritative constraints including a missing or foreign exact claim suspend only their affected attempt: 'target-membership loss'",
+          "status": "passed",
+          "durationMillis": 5192.946809000001
+        },
+        {
+          "title": "complete authoritative constraints including a missing or foreign exact claim suspend only their affected attempt: 'missing exact claim'",
+          "status": "passed",
+          "durationMillis": 3241.2467879999967
+        },
+        {
+          "title": "complete authoritative constraints including a missing or foreign exact claim suspend only their affected attempt: 'foreign exact claim'",
+          "status": "passed",
+          "durationMillis": 3918.0753270000023
+        },
+        {
+          "title": "complete authoritative constraints including a missing or foreign exact claim suspend only their affected attempt: 'lost planned worktree'",
+          "status": "passed",
+          "durationMillis": 5495.963875999994
+        },
+        {
+          "title": "complete authoritative constraints including a missing or foreign exact claim suspend only their affected attempt: 'incompatible target lineage'",
+          "status": "passed",
+          "durationMillis": 4284.372776999997
+        },
+        {
+          "title": "a later unfinished blocker is observed without suspending any executing attempt",
+          "status": "passed",
+          "durationMillis": 5611.1552569999985
+        },
+        {
+          "title": "accepted B F2 refresh suspends only B1 while A1 and C1 continue executing",
+          "status": "passed",
+          "durationMillis": 4024.195928000001
+        },
+        {
+          "title": "incomplete unavailable unreadable malformed or identity-contradictory active-work reads authorize no executor action",
+          "status": "passed",
+          "durationMillis": 6090.710287999995
+        },
+        {
+          "title": "AcceptedFactPublication for a Running report uses ordinary entry without A authority reads",
+          "status": "passed",
+          "durationMillis": 711.7398190000022
+        },
+        {
+          "title": "accepted executor report publication never refreshes tracker or Git authority",
+          "status": "passed",
+          "durationMillis": 2012.4438410000002
+        },
+        {
+          "title": "Operator Wake remains an ordinary entry without active authority reads",
+          "status": "passed",
+          "durationMillis": 414.9074269999983
+        },
+        {
+          "title": "accepted publication notification and timer coalesce into one trailing active refresh",
+          "status": "passed",
+          "durationMillis": 2104.9391710000054
+        },
+        {
+          "title": "hands a publication after the capacity-wait freshness cut to one nonconcurrent trailing activation",
+          "status": "passed",
+          "durationMillis": 2033.760347000003
+        },
+        {
+          "title": "returns RunMustRemainActive RunnableTransition and starts one queued trailing activation only after the current activation returns",
+          "status": "passed",
+          "durationMillis": 2410.587883
+        },
+        {
+          "title": "restart after accepted G2 preserves A0 D0 C1 E identities and does not repeat C1 Suspend",
+          "status": "passed",
+          "durationMillis": 2312.0205879999994
+        },
+        {
+          "title": "production discovers F and G without admitting them while B C and D hold capacity three",
+          "status": "passed",
+          "durationMillis": 2218.0591649999988
+        },
+        {
+          "title": "unreadable F G discovery preserves B C D and waits for another independent tracker hint",
+          "status": "passed",
+          "durationMillis": 897.1426869999996
+        },
+        {
+          "title": "a tracker edit during one active read is preserved as one serialized trailing active refresh",
+          "status": "passed",
+          "durationMillis": 2197.258329999997
+        },
+        {
+          "title": "production refresh recovers a constraint observed before a crashed suspension intent",
+          "status": "passed",
+          "durationMillis": 1981.408883000011
+        },
+        {
+          "title": "production refresh reuses a persisted suspension intent after a provider-entry crash",
+          "status": "passed",
+          "durationMillis": 1264.6963160000014
+        },
+        {
+          "title": "production refresh reconciles an accepted suspension when its response append is lost",
+          "status": "passed",
+          "durationMillis": 1341.0580980000086
+        },
+        {
+          "title": "a tracker notification without a qualifying executing subject does not invent an executing-work read",
+          "status": "passed",
+          "durationMillis": 1854.6799449999962
+        }
+      ]
+    },
+    {
+      "file": "packages/dalph/src/application/running-host-cli.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "the attached CLI reads capacity and sends the original expected revision exactly once",
+          "status": "passed",
+          "durationMillis": 216.8130799999999
+        },
+        {
+          "title": "the public CLI reads, wakes and explicitly unpauses the selected host without acquiring production services",
+          "status": "passed",
+          "durationMillis": 170.51320700000088
+        },
+        {
+          "title": "a blocked CLI writer is interrupted at five seconds with transport exit status",
+          "status": "passed",
+          "durationMillis": 3.407111000000441
+        },
+        {
+          "title": "CLI watch Cancel releases its source and causes no application Exit or task effect",
+          "status": "passed",
+          "durationMillis": 19.41719799999919
+        },
+        {
+          "title": "CLI watch BrokenStdout releases its source and causes no application Exit or task effect",
+          "status": "passed",
+          "durationMillis": 26.6449649999995
+        },
+        {
+          "title": "CLI emits a correlated Failure after initial current and abrupt host disconnect",
+          "status": "passed",
+          "durationMillis": 31.504503999998633
+        },
+        {
+          "title": "public guidance CLI routes one exact message through host command admission",
+          "status": "passed",
+          "durationMillis": 15.553208999999697
+        },
+        {
+          "title": "compact snapshot reads once and explicitly preserves NotReady",
+          "status": "passed",
+          "durationMillis": 7.088681999999608
+        },
+        {
+          "title": "compact is refused on commands before host effects",
+          "status": "passed",
+          "durationMillis": 10.772546000000148
+        }
+      ]
+    },
+    {
+      "file": "packages/dalph/src/application/running-host-contract.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "decodes revision-checked capacity requests and rejects malformed values before dispatch",
+          "status": "passed",
+          "durationMillis": 15.198081000000002
+        },
+        {
+          "title": "decodes selected-Run reads and explicit wake and Unpause before dispatch",
+          "status": "passed",
+          "durationMillis": 2.755939000000126
+        },
+        {
+          "title": "accepts explicit IPv4 origins without normalization or discovery",
+          "status": "passed",
+          "durationMillis": 6.080131999999594
+        },
+        {
+          "title": "retains only independently valid malformed-request correlation",
+          "status": "passed",
+          "durationMillis": 2.2259759999997186
+        },
+        {
+          "title": "enforces the shared encoded byte ceiling before either adapter wraps the result",
+          "status": "passed",
+          "durationMillis": 8.176358000000164
+        },
+        {
+          "title": "accepts the exact shared result limit and rejects its next encoded byte",
+          "status": "passed",
+          "durationMillis": 11.670885999999882
+        },
+        {
+          "title": "rejects a response that crosses Run identity or safe-position boundaries",
+          "status": "passed",
+          "durationMillis": 2.351227999999992
+        },
+        {
+          "title": "rejects command evidence with foreign Run, unsafe ordinal or wrong request correlation",
+          "status": "passed",
+          "durationMillis": 2.7216060000000653
+        },
+        {
+          "title": "refresh decodes only whole graph or distinct advisory IDs without client graph or root facts",
+          "status": "passed",
+          "durationMillis": 2.869897999999921
+        }
+      ]
+    },
+    {
+      "file": "packages/dalph/src/application/running-host-http.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "HTTP reads remain passive, reject wrong identities and malformed bytes, and respect Exit admission",
+          "status": "passed",
+          "durationMillis": 571.2354360000008
+        },
+        {
+          "title": "a missing explicit host fails without discovery or a production acquisition",
+          "status": "passed",
+          "durationMillis": 41.058538999999655
+        },
+        {
+          "title": "a completed command with a lost HTTP reply is unknown and is never automatically replayed",
+          "status": "passed",
+          "durationMillis": 179.45469599999979
+        },
+        {
+          "title": "a client cancelled before sending a complete request performs no command",
+          "status": "passed",
+          "durationMillis": 43.982812999999624
+        },
+        {
+          "title": "known terminal evidence rejects wake and Unpause before host command admission",
+          "status": "passed",
+          "durationMillis": 159.22719899999993
+        },
+        {
+          "title": "the client's response deadline stops its wait while the host completes the admitted command",
+          "status": "passed",
+          "durationMillis": 21.124337000000196
+        },
+        {
+          "title": "HTTP binds the configured interface and serves passive attachment reads",
+          "status": "passed",
+          "durationMillis": 22.670681999999942
+        },
+        {
+          "title": "a stalled /dalph/v1/descriptor flush closes its exact socket at five seconds and releases the host scope",
+          "status": "passed",
+          "durationMillis": 59.38797900000009
+        },
+        {
+          "title": "a stalled / flush closes its exact socket at five seconds and releases the host scope",
+          "status": "passed",
+          "durationMillis": 59.99456699999973
+        },
+        {
+          "title": "a completed /dalph/v1/descriptor flush cancels its socket deadline",
+          "status": "passed",
+          "durationMillis": 17.70847599999979
+        },
+        {
+          "title": "a completed / flush cancels its socket deadline",
+          "status": "passed",
+          "durationMillis": 26.26529500000015
+        }
+      ]
+    },
+    {
+      "file": "packages/dalph/src/application/running-host-mcp.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "MCP cancellation stops only the accepted command waiter and keeps processing requests",
+          "status": "passed",
+          "durationMillis": 29.688280999999733
+        },
+        {
+          "title": "MCP exposes reads and explicit wake and Unpause with shared results",
+          "status": "passed",
+          "durationMillis": 63.07925900000009
+        },
+        {
+          "title": "MCP rejects incompatible versions, extra tool arguments and wrong Runs without host operation calls",
+          "status": "passed",
+          "durationMillis": 19.08973700000024
+        },
+        {
+          "title": "MCP input limits and truncated framing never dispatch a host operation",
+          "status": "passed",
+          "durationMillis": 6.790346000000682
+        },
+        {
+          "title": "MCP preserves every shared passive failure through both read tools and resources",
+          "status": "passed",
+          "durationMillis": 19.814950999999382
+        },
+        {
+          "title": "MCP rejects non-finite JSON-RPC identities before touching the host",
+          "status": "passed",
+          "durationMillis": 8.70911200000046
+        },
+        {
+          "title": "MCP write deadline cancels the pending sink and returns typed failure",
+          "status": "passed",
+          "durationMillis": 3.724196999999549
+        },
+        {
+          "title": "Blocked MCP notification stdout ends the bridge at its deadline and releases every session source with stdin open",
+          "status": "passed",
+          "durationMillis": 16.91209500000059
+        },
+        {
+          "title": "MCP generates guidance identity and sends exact UTF-8 text without provider identifiers",
+          "status": "passed",
+          "durationMillis": 6.273841999999604
+        }
+      ]
+    },
+    {
+      "file": "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "classifies from one accepted prefix and rejects a contradictory publication position",
+          "status": "passed",
+          "durationMillis": 6.800305000000662
+        },
+        {
+          "title": "publishes the terminal cursor only after its termination signal is available",
+          "status": "passed",
+          "durationMillis": 137.4496079999999
+        },
+        {
+          "title": "fails closed when a terminal proof does not name its established graph read",
+          "status": "passed",
+          "durationMillis": 63.20105100000001
+        },
+        {
+          "title": "Alice receives accepted history only after append acknowledgement and never receives duplicate or older cursors",
+          "status": "passed",
+          "durationMillis": 22.058595000000423
+        },
+        {
+          "title": "selects an active subject only from a current accepted Executing lifecycle report",
+          "status": "passed",
+          "durationMillis": 180.16557699999976
+        },
+        {
+          "title": "captures only unfinished Running responsibilities at the active refresh boundary",
+          "status": "passed",
+          "durationMillis": 152.42260400000032
+        },
+        {
+          "title": "lets an admitted active refresh record its read outcome before Exit rejects a later refresh",
+          "status": "passed",
+          "durationMillis": 39.42406699999992
+        },
+        {
+          "title": "records Alice's Run cancellation once and coalesces semantic redelivery",
+          "status": "passed",
+          "durationMillis": 9.89370400000007
+        },
+        {
+          "title": "returns the existing terminal result when cancellation loses the Run-termination race",
+          "status": "passed",
+          "durationMillis": 18.87706900000012
+        },
+        {
+          "title": "requires a new complete graph after cancellation wins over a computed terminal proof",
+          "status": "passed",
+          "durationMillis": 28.121851999999308
+        },
+        {
+          "title": "rejects an unapplied Run cancellation after the application Exit cutoff",
+          "status": "passed",
+          "durationMillis": 8.847445999999763
+        },
+        {
+          "title": "an idle application Exit closes its runtime, releases the coordinator lock, and journals no Exit fact",
+          "status": "passed",
+          "durationMillis": 10.9848379999994
+        },
+        {
+          "title": "keeps the active Run alive until its exact executor-family Exit drain finishes",
+          "status": "passed",
+          "durationMillis": 7.250725000000784
+        },
+        {
+          "title": "times out instead of interrupting a non-idle Run whose family owner has not drained",
+          "status": "passed",
+          "durationMillis": 6.170049999999719
+        },
+        {
+          "title": "reconciles a lost termination acknowledgement before successful Exit",
+          "status": "passed",
+          "durationMillis": 26.495339000000058
+        },
+        {
+          "title": "retains an unrelated failed-write diagnostic after reconciling termination",
+          "status": "passed",
+          "durationMillis": 22.79476699999941
+        },
+        {
+          "title": "reopens an unfinished Run normally after an authored Exit death cut",
+          "status": "passed",
+          "durationMillis": 4.423076999999466
+        },
+        {
+          "title": "one application Exit driver and cutoff are shared by every Run bootstrap",
+          "status": "passed",
+          "durationMillis": 5.043623999999909
+        },
+        {
+          "title": "rejects a Run activation that reaches the application after the Exit cutoff",
+          "status": "passed",
+          "durationMillis": 1.6849720000000161
+        },
+        {
+          "title": "does not append Run termination when the program reaches finality only after the Exit cutoff",
+          "status": "passed",
+          "durationMillis": 16.283132000000478
+        },
+        {
+          "title": "rejects an activation queued before Exit when it reaches the cutoff after the active Run closes",
+          "status": "passed",
+          "durationMillis": 5.485711000000265
+        },
+        {
+          "title": "establishes an absent Run before activating its journal-backed runtime once",
+          "status": "passed",
+          "durationMillis": 6.267883999999867
+        },
+        {
+          "title": "retries an unacknowledged Run beginning through the same entry without appending it twice",
+          "status": "passed",
+          "durationMillis": 3.5214450000003126
+        },
+        {
+          "title": "retries a pre-commit Run beginning failure without entering activation",
+          "status": "passed",
+          "durationMillis": 9.742577999999412
+        },
+        {
+          "title": "classifies a failed beginning from the immediately reconciled durable Run fact",
+          "status": "passed",
+          "durationMillis": 4.608745000000454
+        },
+        {
+          "title": "re-enters an unfinished Run without evaluating the initial policy source",
+          "status": "passed",
+          "durationMillis": 2.596187999999529
+        },
+        {
+          "title": "imports one existing accepted history directly from startup inspection",
+          "status": "passed",
+          "durationMillis": 1.70972299999994
+        },
+        {
+          "title": "rejects a different fresh Run identity before recording its beginning",
+          "status": "passed",
+          "durationMillis": 1.354178000000502
+        },
+        {
+          "title": "rejects an established Run whose target differs before activation",
+          "status": "passed",
+          "durationMillis": 1.5588040000002366
+        },
+        {
+          "title": "names every unfinished Run and activates none when startup discovery finds several",
+          "status": "passed",
+          "durationMillis": 1.7032639999997627
+        },
+        {
+          "title": "rejects a terminated Run before constructing activation",
+          "status": "passed",
+          "durationMillis": 26.13154399999985
+        },
+        {
+          "title": "rejects a reopened cold SQLite Run before constructing activation",
+          "status": "passed",
+          "durationMillis": 263.8615839999993
+        },
+        {
+          "title": "reports one immediate retirement diagnostic after termination commits and keeps the terminal Run Hot",
+          "status": "passed",
+          "durationMillis": 10.484460000000581
+        },
+        {
+          "title": "blocks runtime construction when the startup-inspected journal prefix is invalid",
+          "status": "passed",
+          "durationMillis": 2.1813929999998436
+        },
+        {
+          "title": "uses the configured Run identity when establishment finds no unfinished Run",
+          "status": "passed",
+          "durationMillis": 0.8607990000000427
+        },
+        {
+          "title": "publishes an Operator Pause through the active journal without exposing runtime services",
+          "status": "passed",
+          "durationMillis": 8.24685799999952
+        },
+        {
+          "title": "keeps the Journal-backed quarantine direction route available after delivery stabilizes",
+          "status": "passed",
+          "durationMillis": 39.981738000000405
+        },
+        {
+          "title": "records an exact retained-resume request and wakes the ordinary Run only for the first receipt",
+          "status": "passed",
+          "durationMillis": 118.42820400000073
+        },
+        {
+          "title": "does not wake the active Run owner for receipt A after a later resume request B",
+          "status": "passed",
+          "durationMillis": 88.66683999999987
+        },
+        {
+          "title": "records a post-proof finality continuation and wakes the owner without another publication attempt",
+          "status": "passed",
+          "durationMillis": 145.6467990000001
+        },
+        {
+          "title": "rejects a wrong Run or responsibility before appending a resume receipt",
+          "status": "passed",
+          "durationMillis": 98.35825099999965
+        },
+        {
+          "title": "an accepted resume request preserves Run Pause and Exit boundaries",
+          "status": "passed",
+          "durationMillis": 145.5075479999996
+        },
+        {
+          "title": "rejects an unapplied Operator Pause after the application Exit cutoff",
+          "status": "passed",
+          "durationMillis": 7.497726999999941
+        },
+        {
+          "title": "reports a failed already-produced Pause write through the application Exit result",
+          "status": "passed",
+          "durationMillis": 8.810487999999168
+        },
+        {
+          "title": "tells Alice that her exact Run Pause is not applied",
+          "status": "passed",
+          "durationMillis": 32.01863299999968
+        },
+        {
+          "title": "does not keep the Run open for Alice's Pause subscription and ends it with the bootstrap scope",
+          "status": "passed",
+          "durationMillis": 4.119699999999284
+        },
+        {
+          "title": "serializes recovery inspection with the preceding runtime so no queued activation keeps a stale prefix",
+          "status": "passed",
+          "durationMillis": 8.914237999999386
+        },
+        {
+          "title": "drains accepted Operator calls and records termination before another recovery can enter",
+          "status": "passed",
+          "durationMillis": 17.057887000000846
+        },
+        {
+          "title": "rechecks a terminal decision after an already-accepted Operator Pause finishes appending",
+          "status": "passed",
+          "durationMillis": 12.786185999999361
+        },
+        {
+          "title": "flushes an already-started Pause append before successful Exit and preserves the applied direction",
+          "status": "passed",
+          "durationMillis": 6.722929000001386
+        },
+        {
+          "title": "reads the current Run target before applying Alice's task Pause",
+          "status": "passed",
+          "durationMillis": 11.157381000000896
+        },
+        {
+          "title": "rejects Alice's stale task Pause and Unpause visibly without applying either direction",
+          "status": "passed",
+          "durationMillis": 17.143262999999934
+        },
+        {
+          "title": "keeps an unreadable task membership distinct from stale rejection and applies nothing",
+          "status": "passed",
+          "durationMillis": 7.45256000000154
+        },
+        {
+          "title": "rejects another Run's task subject before reading this Run's target",
+          "status": "passed",
+          "durationMillis": 5.567503999998735
+        },
+        {
+          "title": "an intervening Pause cannot overtake the complete accepted Unpause callback",
+          "status": "passed",
+          "durationMillis": 29.409111999999368
+        },
+        {
+          "title": "an already paused Run announces establishment without activation or another beginning",
+          "status": "passed",
+          "durationMillis": 3.0657739999987825
+        },
+        {
+          "title": "retains accepted Unpause evidence when the owner callback fails",
+          "status": "passed",
+          "durationMillis": 4.712621000000581
+        },
+        {
+          "title": "applies Alice's Run Pause without a task-membership read",
+          "status": "passed",
+          "durationMillis": 2.642479000000094
+        },
+        {
+          "title": "applies inactive Run directions and cancellation through the installed Run owner",
+          "status": "passed",
+          "durationMillis": 11.850846000001184
+        },
+        {
+          "title": "reads inactive integration quarantine control from the Journal",
+          "status": "passed",
+          "durationMillis": 1.4368450000001758
+        },
+        {
+          "title": "keeps an initial delivery publication harmless before reactivation observers are registered",
+          "status": "passed",
+          "durationMillis": 3.638821000000462
+        },
+        {
+          "title": "does not turn the activation's initial publication into another Run activation",
+          "status": "passed",
+          "durationMillis": 3.349901999999929
+        },
+        {
+          "title": "runtime-created relations notify scheduling and ambient publication observers",
+          "status": "passed",
+          "durationMillis": 31.30287700000008
+        },
+        {
+          "title": "signals once only when a relation publication advances beyond the activation entry position",
+          "status": "passed",
+          "durationMillis": 5.958006000000751
+        },
+        {
+          "title": "retains a completed read when one relation publication also includes another pending read",
+          "status": "passed",
+          "durationMillis": 15.756627000000663
+        },
+        {
+          "title": "coalesces runtime accepted publications into one nonconcurrent ordinary activation after active refresh returns",
+          "status": "passed",
+          "durationMillis": 37.48684399999911
+        },
+        {
+          "title": "observes live executor Terminal once and releases capacity only for stopped writers",
+          "status": "passed",
+          "durationMillis": 22.79197600000043
+        },
+        {
+          "title": "observes live executor RejectedStopped once and releases capacity only for stopped writers",
+          "status": "passed",
+          "durationMillis": 67.01262299999871
+        },
+        {
+          "title": "observes live executor RejectedUnresolved once and releases capacity only for stopped writers",
+          "status": "passed",
+          "durationMillis": 54.943568000000596
+        },
+        {
+          "title": "observes safe suspension only after exact suspend intent and releases only that attempt",
+          "status": "passed",
+          "durationMillis": 38.45022700000118
+        },
+        {
+          "title": "bootstrap composition can reconstruct and manually attach the exact executing attempt",
+          "status": "passed",
+          "durationMillis": 56.79820800000016
+        },
+        {
+          "title": "recovers process death before terminal publication by reprojecting and accepting terminal once",
+          "status": "passed",
+          "durationMillis": 31.433670000000347
+        },
+        {
+          "title": "retains responsibility and position for absent unavailable unreadable or foreign projection",
+          "status": "passed",
+          "durationMillis": 54.69698199999948
+        },
+        {
+          "title": "accepted executor report publication grants no report-specific tracker read and leaves generic reactivation ordinary",
+          "status": "passed",
+          "durationMillis": 16.03892099999939
+        },
+        {
+          "title": "rejects a second process-local Run reactivation observer pair instead of stealing owner updates",
+          "status": "passed",
+          "durationMillis": 4.074491000001217
+        },
+        {
+          "title": "records and reads exact result recovery while the established Run has no active runtime",
+          "status": "passed",
+          "durationMillis": 11.738636000000042
+        },
+        {
+          "title": "guidance Run owner records metadata before steering and deduplicates exact input",
+          "status": "passed",
+          "durationMillis": 39.7597790000018
+        },
+        {
+          "title": "guidance Run owner reconciles every uncertain write without replaying ephemeral text",
+          "status": "passed",
+          "durationMillis": 126.72206200000073
+        },
+        {
+          "title": "rejects a completion-only Run before evaluating policy or constructing activation",
+          "status": "passed",
+          "durationMillis": 91.11210899999969
+        },
+        {
+          "title": "ordinary terminal settlement retires its history and expires an older whole archived Run",
+          "status": "passed",
+          "durationMillis": 34.23723400000017
+        },
+        {
+          "title": "rejects a reopened completion-only SQLite Run before constructing activation",
+          "status": "passed",
+          "durationMillis": 194.46452500000123
+        }
+      ]
+    },
+    {
+      "file": "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts",
+      "status": "passed",
+      "assertions": [
+        {
+          "title": "maps only tracker notifications and timers to active-work authority refreshes",
+          "status": "passed",
+          "durationMillis": 39.39256800000021
+        },
+        {
+          "title": "preserves a current-first tracker notification ahead of Startup",
+          "status": "passed",
+          "durationMillis": 7.596560999999383
+        },
+        {
+          "title": "rejects non-positive timer and cooldown values at the Layer boundary",
+          "status": "passed",
+          "durationMillis": 3.7544470000002548
+        },
+        {
+          "title": "rechecks after a lost notification when TestClock fires, with no Run read per timer",
+          "status": "passed",
+          "durationMillis": 2.017391999999745
+        },
+        {
+          "title": "coalesces concurrent hints behind one activation",
+          "status": "passed",
+          "durationMillis": 3.7197379999997793
+        },
+        {
+          "title": "one completed graph read wake does not create another publication-owned activation",
+          "status": "passed",
+          "durationMillis": 3.000774000000092
+        },
+        {
+          "title": "an unchanged retained wait retracts only its publication-owned trailing activation",
+          "status": "passed",
+          "durationMillis": 4.4657029999998485
+        },
+        {
+          "title": "a failed accepted graph read creates no trailing activation until an operator wake",
+          "status": "passed",
+          "durationMillis": 19.840868999999657
+        },
+        {
+          "title": "keeps an independent completed-read wake when another read fails",
+          "status": "passed",
+          "durationMillis": 2.6307710000000952
+        },
+        {
+          "title": "classifies an accepted unchanged root/dependant graph reconfirmation as a completed read",
+          "status": "passed",
+          "durationMillis": 47.68775900000037
+        },
+        {
+          "title": "'ProviderNotification' starts at most one bounded activation after a retained wait",
+          "status": "passed",
+          "durationMillis": 7.966397999999572
+        },
+        {
+          "title": "'TrackerNotification' starts at most one bounded activation after a retained wait",
+          "status": "passed",
+          "durationMillis": 4.737079999999878
+        },
+        {
+          "title": "'OperatorWake' starts at most one bounded activation after a retained wait",
+          "status": "passed",
+          "durationMillis": 2.7085219999999026
+        },
+        {
+          "title": "'ConfiguredTimer' starts at most one bounded activation after a retained wait",
+          "status": "passed",
+          "durationMillis": 13.894529000000148
+        },
+        {
+          "title": "runs one queued active refresh after admission-stalled delivery yields",
+          "status": "passed",
+          "durationMillis": 5.080331999999544
+        },
+        {
+          "title": "coalesces hints arriving during an active refresh into one trailing active refresh",
+          "status": "passed",
+          "durationMillis": 20.264954999999645
+        },
+        {
+          "title": "preserves an authority hint blocked by active finalization as one trailing active refresh",
+          "status": "passed",
+          "durationMillis": 29.010483000000022
+        },
+        {
+          "title": "keeps a blocked trailing marker ahead of a post-idle hint until it is consumed",
+          "status": "passed",
+          "durationMillis": 9.140699000000495
+        },
+        {
+          "title": "retains one trailing ordinary activation when the active handoff rejects",
+          "status": "passed",
+          "durationMillis": 5.598920000000362
+        },
+        {
+          "title": "a later timer retries an unreadable active-work refresh as a fresh authority check",
+          "status": "passed",
+          "durationMillis": 11.706385999999839
+        },
+        {
+          "title": "observes one typed activation failure, cools down, and waits for a later hint",
+          "status": "passed",
+          "durationMillis": 5.633461999999781
+        },
+        {
+          "title": "uses current-first control state: paused restart is passive and accepted Unpause activates once",
+          "status": "passed",
+          "durationMillis": 22.065927999999985
+        },
+        {
+          "title": "accepted Pause suppresses active refresh until Unpause completes its ordinary current read",
+          "status": "passed",
+          "durationMillis": 11.498343000000204
+        },
+        {
+          "title": "starts each restarted owner with fresh timer, hint, and coalescing state",
+          "status": "passed",
+          "durationMillis": 23.937401000000136
+        },
+        {
+          "title": "replays durable Pause between observer attachment and the mandatory current read",
+          "status": "passed",
+          "durationMillis": 9.046530999999959
+        },
+        {
+          "title": "stops the Run-specific timer on accepted Pause and starts one fresh timer on Unpause",
+          "status": "passed",
+          "durationMillis": 27.643181000000368
+        },
+        {
+          "title": "stops its timer when activation returns RunMayTerminate",
+          "status": "passed",
+          "durationMillis": 6.519635999999991
+        },
+        {
+          "title": "stops on an activation-observed terminated Run instead of cooling down for replay",
+          "status": "passed",
+          "durationMillis": 7.303641999999854
+        },
+        {
+          "title": "treats terminated history as closure and never schedules a fresh activation",
+          "status": "passed",
+          "durationMillis": 4.6322879999997895
+        },
+        {
+          "title": "keeps one owner per exact Run composition and lets Exit stop after the active boundary",
+          "status": "passed",
+          "durationMillis": 7.626062000000275
+        },
+        {
+          "title": "registers its drain before Exit can pass a blocking tracker-source attachment",
+          "status": "passed",
+          "durationMillis": 38.2969750000002
+        },
+        {
+          "title": "stops before consuming a wake queued at the idle handoff",
+          "status": "passed",
+          "durationMillis": 3.6634460000004765
+        }
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "profile": "Idle",
+      "operation": "Pause",
+      "runtime": "v24.20.0",
+      "platform": "linux",
+      "architecture": "arm64",
+      "sampleCount": 20,
+      "historicalRead": "None",
+      "historicalControlRecordsAdded": 0,
+      "historyCapacityBytes": 8192,
+      "localAdmissionMillis": [
+        11.016378000000259,
+        2.955587000004016,
+        7.179694999998901,
+        22.252594000005047,
+        6.735270999997738,
+        6.794064000001526,
+        8.155792999998084,
+        5.156329999997979,
+        4.444360000008601,
+        3.1611740000080317,
+        2.4813299999950686,
+        3.8016000000061467,
+        1.0460579999926267,
+        1.5103979999985313,
+        1.672525999994832,
+        1.3188119999977062,
+        0.699428000007174,
+        12.311772999993991,
+        29.48291399999289,
+        1.135643000001437
+      ],
+      "clientHandshakeThroughApplicationMillis": [
+        778.246404999998,
+        279.93966000000364,
+        284.3204359999945,
+        168.1983079999918,
+        83.34608000000298,
+        62.13287699999637,
+        45.25903300000937,
+        37.18482500000391,
+        41.515517000007094,
+        55.38494000000355,
+        30.76793400000315,
+        76.52122399999644,
+        28.706818999999086,
+        32.13845600000059,
+        30.79360099999758,
+        27.654469000000972,
+        47.56102700000338,
+        105.48142299999017,
+        144.28823000000557,
+        45.807832999998936
+      ],
+      "timingBoundary": "Server request headers received to host-owned command entry; excludes client handshake and durable application",
+      "localAdmissionP95Millis": 22.252594000005047,
+      "provisionalTargetMillis": 100,
+      "targetMet": true,
+      "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+      "provisionalCooperativeQuantumMillis": 10
+    },
+    {
+      "profile": "Idle",
+      "operation": "Cancel",
+      "runtime": "v24.20.0",
+      "platform": "linux",
+      "architecture": "arm64",
+      "sampleCount": 20,
+      "historicalRead": "None",
+      "historicalControlRecordsAdded": 0,
+      "historyCapacityBytes": 8192,
+      "localAdmissionMillis": [
+        9.237393000003067,
+        1.7613190000120085,
+        5.406084000002011,
+        22.05604900000617,
+        6.425140999999712,
+        4.896366999993916,
+        9.871278000005987,
+        3.8355180000071414,
+        9.159932999988087,
+        1.042516000001342,
+        0.8194290000101319,
+        10.900127000000793,
+        15.350654000008944,
+        5.535669000004418,
+        0.7633029999997234,
+        0.7842630000086501,
+        1.0965999999898486,
+        0.8315549999970244,
+        1.2700609999883454,
+        34.353613999992376
+      ],
+      "clientHandshakeThroughApplicationMillis": [
+        87.70231399999466,
+        70.43563000000722,
+        125.50002300000051,
+        149.90123300001142,
+        37.906543999997666,
+        42.32557099999394,
+        37.90716899999825,
+        14.163427000006777,
+        41.07909299999301,
+        6.924148999998579,
+        6.326805999997305,
+        29.953422000005958,
+        47.71327900000324,
+        18.041695000007167,
+        14.359722000008333,
+        4.514278000002378,
+        40.22228799998993,
+        34.15852799999993,
+        29.503081000002567,
+        41.89039699999557
+      ],
+      "timingBoundary": "Server request headers received to host-owned command entry; excludes client handshake and durable application",
+      "localAdmissionP95Millis": 22.05604900000617,
+      "provisionalTargetMillis": 100,
+      "targetMet": true,
+      "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+      "provisionalCooperativeQuantumMillis": 10
+    },
+    {
+      "profile": "BusyHistory",
+      "operation": "Pause",
+      "runtime": "v24.20.0",
+      "platform": "linux",
+      "architecture": "arm64",
+      "sampleCount": 20,
+      "historicalRead": "HeldBeforePreparation",
+      "historicalControlRecordsAdded": 0,
+      "historyCapacityBytes": 8192,
+      "localAdmissionMillis": [
+        2.6213739999948302,
+        1.1806429999996908,
+        2.85450299999502,
+        0.8401799999992363,
+        2.139198999997461,
+        1.2615609999920707,
+        1.2702700000081677,
+        17.98798700000043,
+        5.027952999997069,
+        2.0455740000033984,
+        1.3713129999960074,
+        1.6931929999991553,
+        14.568724999990081,
+        3.711848999999347,
+        14.651100999995833,
+        2.2629520000045886,
+        1.07843400001002,
+        1.000515000006999,
+        7.016900000002352,
+        1.8337360000004992
+      ],
+      "clientHandshakeThroughApplicationMillis": [
+        198.68898800000898,
+        116.15321200000471,
+        109.34468999999808,
+        203.48751999999513,
+        214.1761439999973,
+        344.4932419999968,
+        49.68210099999851,
+        112.28490300000703,
+        44.33476800000062,
+        63.47331399998802,
+        54.39767399999255,
+        38.91685199999483,
+        45.14782300000661,
+        30.263009000002057,
+        60.38297500000044,
+        28.655775999999605,
+        48.45124900000519,
+        87.00909500000125,
+        82.5467340000032,
+        33.13963700000022
+      ],
+      "timingBoundary": "Server request headers received to host-owned command entry; excludes client handshake and durable application",
+      "localAdmissionP95Millis": 14.651100999995833,
+      "provisionalTargetMillis": 100,
+      "targetMet": true,
+      "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+      "provisionalCooperativeQuantumMillis": 10
+    },
+    {
+      "profile": "BusyHistory",
+      "operation": "Cancel",
+      "runtime": "v24.20.0",
+      "platform": "linux",
+      "architecture": "arm64",
+      "sampleCount": 20,
+      "historicalRead": "HeldBeforePreparation",
+      "historicalControlRecordsAdded": 0,
+      "historyCapacityBytes": 8192,
+      "localAdmissionMillis": [
+        5.4149170000018785,
+        9.447480000002543,
+        10.657414000001154,
+        2.6116239999973914,
+        16.512046999996528,
+        1.3472709999914514,
+        1.1377680000005057,
+        1.1068919999961508,
+        5.4085420000046724,
+        2.1622000000061234,
+        18.81274900000426,
+        77.43819699999585,
+        0.7701369999995222,
+        13.076201999996556,
+        16.571297999995295,
+        80.18857199999911,
+        9.370311999999103,
+        8.536882000000332,
+        1.996155999993789,
+        1.8279449999972712
+      ],
+      "clientHandshakeThroughApplicationMillis": [
+        81.86255700000038,
+        30.442179000005126,
+        34.77549599998747,
+        28.66527599999972,
+        41.121177000008174,
+        97.19125200000417,
+        155.25873300000967,
+        122.15159599999606,
+        88.57774399999471,
+        71.06926499999827,
+        32.32629100000486,
+        110.36724799999502,
+        122.24476400000276,
+        88.85212300000421,
+        63.2987279999943,
+        119.42867999999726,
+        24.39621000000625,
+        42.0466080000042,
+        8.123709000006784,
+        17.545479999986128
+      ],
+      "timingBoundary": "Server request headers received to host-owned command entry; excludes client handshake and durable application",
+      "localAdmissionP95Millis": 77.43819699999585,
+      "provisionalTargetMillis": 100,
+      "targetMet": true,
+      "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+      "provisionalCooperativeQuantumMillis": 10
+    },
+    {
+      "profile": "ExpandingHistory",
+      "operation": "Pause",
+      "runtime": "v24.20.0",
+      "platform": "linux",
+      "architecture": "arm64",
+      "sampleCount": 20,
+      "historicalRead": "ConcurrentNativePreparation",
+      "historicalControlRecordsAdded": 256,
+      "historyCapacityBytes": 8192,
+      "localAdmissionMillis": [
+        2.687707999997656,
+        0.9989730000088457,
+        1.0026820000057342,
+        8.485589999996591,
+        0.8877639999991516,
+        0.6127179999893997,
+        1.257144999995944,
+        1.9175300000060815,
+        8.101250000006985,
+        4.396317999999155,
+        2.8087520000117365,
+        2.2594519999984186,
+        3.4462619999976596,
+        0.8156380000000354,
+        1.095476000002236,
+        4.738115000000107,
+        0.6745939999964321,
+        0.8631380000006175,
+        1.5896500000089873,
+        0.7002610000054119
+      ],
+      "clientHandshakeThroughApplicationMillis": [
+        39.63598799999454,
+        327.5854799999943,
+        282.03256800000963,
+        224.3778020000027,
+        252.78940700000385,
+        124.80805400000827,
+        372.305171,
+        288.4186250000057,
+        276.6274839999969,
+        225.17227199999616,
+        314.9502439999924,
+        177.22140700000455,
+        181.72135000000708,
+        163.46015199999965,
+        133.68352399999276,
+        127.70293200000015,
+        110.13653600000544,
+        109.44760899999528,
+        105.512464000014,
+        79.73681600000418
+      ],
+      "timingBoundary": "Server request headers received to host-owned command entry; excludes client handshake and durable application",
+      "localAdmissionP95Millis": 8.101250000006985,
+      "provisionalTargetMillis": 100,
+      "targetMet": true,
+      "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+      "provisionalCooperativeQuantumMillis": 10
+    },
+    {
+      "profile": "ExpandingHistory",
+      "operation": "Cancel",
+      "runtime": "v24.20.0",
+      "platform": "linux",
+      "architecture": "arm64",
+      "sampleCount": 20,
+      "historicalRead": "ConcurrentNativePreparation",
+      "historicalControlRecordsAdded": 256,
+      "historyCapacityBytes": 8192,
+      "localAdmissionMillis": [
+        10.282408999992185,
+        3.247466999993776,
+        2.037905999997747,
+        1.665859000000637,
+        2.2267419999989215,
+        3.176091000001179,
+        5.364623999994365,
+        3.172340000004624,
+        1.7276100000017323,
+        0.789969999997993,
+        0.7312609999935376,
+        0.7103019999922253,
+        1.138267000002088,
+        1.224186000006739,
+        0.8700559999997495,
+        2.476330000004964,
+        3.4178030000039143,
+        1.171518000002834,
+        1.1317260000068927,
+        2.844584999998915
+      ],
+      "clientHandshakeThroughApplicationMillis": [
+        57.49030600000697,
+        49.706893000009586,
+        42.23032000000239,
+        14.425682000000961,
+        34.181320000003325,
+        45.13348899999983,
+        39.106188000005204,
+        26.660745000001043,
+        79.21076599998923,
+        20.520359000001918,
+        7.370739000005415,
+        6.884107000005315,
+        34.34532300000137,
+        12.917573999991873,
+        19.46630100000766,
+        15.203193000008469,
+        69.25548699998762,
+        31.15406499999517,
+        26.862997999996878,
+        22.31176100000448
+      ],
+      "timingBoundary": "Server request headers received to host-owned command entry; excludes client handshake and durable application",
+      "localAdmissionP95Millis": 5.364623999994365,
+      "provisionalTargetMillis": 100,
+      "targetMet": true,
+      "providerLatency": "Excluded from admission timing; foreign executor responsibility remains retained",
+      "provisionalCooperativeQuantumMillis": 10
+    }
+  ],
+  "logs": [
+    {
+      "log": "/tmp/run-control-final-build.log",
+      "sha256": "b4c3c4af1d94c524a393612e8d7182692c93c26d9df76609d019427d171975c5"
+    },
+    {
+      "log": "/tmp/run-control-check-fast.log",
+      "sha256": "e070987c38a24ba3481b5d556b41641c2d454d4cd020aa2cf3aac3fe3d6a1802"
+    },
+    {
+      "log": "/tmp/run-control-typecheck-repair.log",
+      "sha256": "7f551cfcfba7dfec7b013ba1b20f4ee5d42d265223b25c863c790dea5a98e653"
+    },
+    {
+      "log": "/tmp/run-control-check-fast-final.log",
+      "sha256": "15e8552287957844a5a21aa0aff8f88e639c26dc07212ea9b0f0d6830923dfd8"
+    },
+    {
+      "log": "/tmp/run-control-docs.log",
+      "sha256": "234d002b0a59d8cac942612d58148cdc5fcfab2e4720f131dd40049c101588a4"
+    },
+    {
+      "log": "/tmp/run-control-selected-tests.log",
+      "sha256": "5ea4d693060ff22c6ac5e309f5d89a81e609b49354af2dc1b326608094ac9158"
+    },
+    {
+      "log": "/tmp/run-control-selected-tests.json",
+      "sha256": "b422e9b82580286e5a0439809fbbe329522d52c0229e7959635b62359d349abd"
+    }
+  ],
+  "measurementInterpretation": {
+    "localAdmission": "Exact request-ID server headers-received clock to host-owned command entry, including body decode, correlation and compact terminal fence; before durable application.",
+    "clientClock": "Separate same-request duration from public client call through handshake and application reply. The native HTTP API profile has no CLI/MCP child startup; child functional tests are separate.",
+    "provider": "Settlement is excluded from the admission clock and independently exercised with held executor observation and exact stop/abandonment/claim-release cuts.",
+    "sharedLoad": "No causal shared-load attribution is established or used to waive the target.",
+    "quantum": "10 ms is an unmeasured provisional reference, not a hard real-time claim."
+  },
+  "review": {
+    "reviewedImplementationCandidate": "7d093aaf0ca089790ebe8d3d1a559dcf21d53d1a",
+    "result": "No reasonable blocking findings; subsequent source change is two TypeScript bracket accesses in the profile test."
+  },
+  "scopeLimits": [
+    "No full local gate or live-provider qualification claim.",
+    "Independent #501 qualification on the final integrated candidate remains required."
+  ]
+}
