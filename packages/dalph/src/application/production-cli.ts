@@ -848,7 +848,6 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     ProductionRunSelectionConflict,
     ProductionCancellationRunNotFound,
     StartupRecoveryBlocked,
-    workflowJournalEventVersion,
     TraceCausalPredecessorContradiction,
     TraceCausalPredecessorMissing,
     TraceCausalPredecessorNotProjected,
