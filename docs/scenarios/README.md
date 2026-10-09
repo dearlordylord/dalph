@@ -185,3 +185,5 @@ banners in the retained files describe their individual limits.
 - [Settle one promoted task without completing the Run](integration-finality.md)
 - [Complete one promoted task before a later graph read releases dependants](complete-task-and-release-dependants.md)
 - [Qualify production evidence storage and sealed evidence history](production-evidence-store.md)
+
+- [Recover an interrupted tool item before continuing its attempt](recover-interrupted-tool-item.md): exact item retirement and fresh stopped custody before same-attempt continuation.

@@ -544,6 +544,10 @@ export interface CodexAppServerService {
   readonly stopRetainedLaunch?: (launch: CodexServerLaunchRecord) => Effect.Effect<void, CodexAppServerFailure>
   /** Fresh exact-launch stop and writer proof; callers must already own durable stop intent. */
   readonly stopOwnedLaunch?: (launch: CodexServerLaunchRecord) => Effect.Effect<void, CodexAppServerFailure>
+  /** Read-only fresh proof that one retained launch, its group and token writers remain absent. */
+  readonly verifyStoppedLaunch?: (launch: CodexServerLaunchRecord) => Effect.Effect<void, CodexAppServerFailure>
+  /** Fresh independent storage ownership proof before stopped-custody publication or writer admission. */
+  readonly verifyStorageOwnership?: Effect.Effect<void, CodexAppServerFailure>
   /** Process-level protocol failures wake existing observers without inventing a completion identity. */
   readonly attachProtocolFailures?: Effect.Effect<Stream.Stream<CodexAppServerFailure>, never, Scope.Scope>
   /** Subscribe before turn/start so an idle transition can diagnose an abortion even when completion delivery is lost. */
@@ -4180,6 +4184,35 @@ export const codexAppServerLayer = (
         serverPid: childPid,
         serverLaunch: liveLaunch,
         stopOwnedLaunch,
+        verifyStoppedLaunch: Effect.fn("CodexAppServer.verifyStoppedLaunch")(function* (
+          prior: CodexServerLaunchRecord
+        ) {
+          if (Option.isNone(processGroupCensus))
+            return yield* operationFailure("close", "Ownership", "process group proof unavailable")
+          const launch = yield* ownership.observe(prior)
+          const group = yield* processGroupCensus.value.observe(prior)
+          const writers = yield* Effect.tryPromise({
+            try: () => observeOwnedActivityProcesses([], native, prior.incarnation, prior.pid ?? undefined),
+            catch: closeHandleFailure
+          })
+          if (launch._tag !== "Absent" || group._tag !== "Absent" || writers._tag !== "Absent")
+            return yield* operationFailure("close", "Ownership", "retained launch writers are live or unproved")
+        }),
+        verifyStorageOwnership:
+          store.verifyServerLease === undefined
+            ? Effect.fail(operationFailure("close", "Ownership", "storage ownership proof unavailable"))
+            : store
+                .verifyServerLease((owner) =>
+                  ownership.observe(owner).pipe(
+                    Effect.map((observed) =>
+                      observed._tag === "ExactLive" ? { _tag: "ExactLive" as const } : observed
+                    ),
+                    Effect.mapError(
+                      (error) => new CodexAttemptStoreFailure({ operation: "acquireServerLease", detail: error.detail })
+                    )
+                  )
+                )
+                .pipe(Effect.mapError(closeHandleFailure)),
         stopRetainedLaunch,
         ...(selected.requireUnattendedPolicy === true ? { unattendedPolicyAdmission: Effect.void } : {}),
         startThread,

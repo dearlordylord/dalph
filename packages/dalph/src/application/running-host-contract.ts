@@ -276,14 +276,20 @@ export const RunningHostRunControl = Schema.TaggedUnion({
   }
 })
 export type RunningHostRunControl = typeof RunningHostRunControl.Type
+// Named codec boundaries keep declaration emission bounded while preserving
+// the exact decoded and encoded public wire types and the runtime schemas.
+const SnapshotValue: Schema.Codec<RunningHostSnapshot, typeof RunningHostSnapshot.Encoded> = RunningHostSnapshot
+const InspectionValue: Schema.Codec<RunningHostInspectionSnapshot, typeof RunningHostInspectionSnapshot.Encoded> =
+  RunningHostInspectionSnapshot
+const RunControlValue: Schema.Codec<RunningHostRunControl, typeof RunningHostRunControl.Encoded> = RunningHostRunControl
 const Value = Schema.Union([
   OccurrencePage,
   OccurrenceTooLarge,
   Schema.TaggedStruct("CapacityRead", { policy: RunControlPolicy }),
   Schema.TaggedStruct("CapacityApplied", { policy: RunControlPolicy }),
-  RunningHostSnapshot,
-  RunningHostInspectionSnapshot,
-  RunningHostRunControl,
+  SnapshotValue,
+  InspectionValue,
+  RunControlValue,
   Schema.TaggedStruct("ResultRecoveryDirectionRecorded", {
     recovery: ApplyResultRecoveryRequest,
     acceptedAt: TraceCursor
@@ -335,7 +341,7 @@ const RunningHostEnvelopeShape = Schema.Union([
     result: Schema.TaggedStruct("Failure", { error: RunningHostError })
   })
 ])
-export const RunningHostEnvelope = RunningHostEnvelopeShape.check(
+export const RunningHostEnvelope: typeof RunningHostEnvelopeShape = RunningHostEnvelopeShape.check(
   Schema.makeFilter(
     (envelope) =>
       (envelope.result._tag === "Failure" &&

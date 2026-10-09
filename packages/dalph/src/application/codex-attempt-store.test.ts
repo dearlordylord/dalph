@@ -1414,3 +1414,106 @@ it.effect("persists recovery permission and predecessor before native reopen wit
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
+
+it.effect("fresh storage custody refuses missing, contradictory and released lease ownership", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-tool-storage-proof-" })
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        if (store.verifyServerLease === undefined) return yield* Effect.die("native storage proof missing")
+        expect(
+          (yield* store.verifyServerLease(() => Effect.succeed({ _tag: "ExactLive" })).pipe(Effect.result))._tag
+        ).toBe("Failure")
+        yield* store.acquireServerLease(leaseOwner, () => Effect.succeed({ _tag: "Absent" }))
+        yield* store.verifyServerLease(() => Effect.succeed({ _tag: "ExactLive" }))
+        for (const observation of [
+          { _tag: "Absent" },
+          { _tag: "Contradictory", detail: "foreign owner" },
+          { _tag: "Unreadable", detail: "owner unavailable" }
+        ] as const) {
+          expect((yield* store.verifyServerLease(() => Effect.succeed(observation)).pipe(Effect.result))._tag).toBe(
+            "Failure"
+          )
+        }
+        yield* store.releaseServerLease(leaseOwner)
+        expect(
+          (yield* store.verifyServerLease(() => Effect.succeed({ _tag: "ExactLive" })).pipe(Effect.result))._tag
+        ).toBe("Failure")
+      }).pipe(Effect.provide(nodeLayer(`${root}/executor-private-state.json`)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reads exact historical launch without clearing it and rejects contradictory launch history", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-tool-launch-history-" })
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        if (store.readRetainedServerLaunch === undefined) return yield* Effect.die("native launch history missing")
+        const launch = CodexServerLaunchRecord.make({
+          command: ["codex", "app-server"],
+          incarnation: CodexServerIncarnation.make("historical-tool-owner"),
+          phase: "Live",
+          pid: 101
+        })
+        yield* store.writeServerLaunch(launch)
+        yield* store.clearServerLaunch(launch.incarnation)
+        expect(yield* store.readRetainedServerLaunch(launch.incarnation)).toEqual(Option.some(launch))
+        expect(yield* store.readServerLaunch()).toEqual(Option.none())
+        yield* store.writeServerLaunch({ ...launch, pid: 202 })
+        expect((yield* store.readRetainedServerLaunch(launch.incarnation).pipe(Effect.result))._tag).toBe("Failure")
+      }).pipe(Effect.provide(nodeLayer(`${root}/executor-private-state.json`)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("recovers no-item containment obligations from exact Suspend history and rejects foreign queries", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-no-item-suspend-history-" })
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        if (store.readSuspensionLaunches === undefined) return yield* Effect.die("suspension history proof missing")
+        const owner = CodexServerLaunchRecord.make({
+          command: ["codex", "app-server"],
+          phase: "Live",
+          pid: 101,
+          incarnation: CodexServerIncarnation.make("no-item-suspended-launch")
+        })
+        const intent = { ...suspensionStopIntended, turnStartIncarnation: owner.incarnation }
+        yield* store.writeServerLaunch(owner)
+        yield* store.writeAttempt(intent)
+        yield* store.clearServerLaunch(owner.incarnation)
+        expect(
+          yield* store.readSuspensionLaunches(attempt.runId, attempt.attemptId, intent.threadId, intent.worktree)
+        ).toEqual([owner])
+        expect(
+          (yield* store
+            .readSuspensionLaunches(
+              attempt.runId,
+              attempt.attemptId,
+              CodexThreadId.make("foreign-thread"),
+              intent.worktree
+            )
+            .pipe(Effect.result))._tag
+        ).toBe("Failure")
+        expect(
+          (yield* store
+            .readSuspensionLaunches(
+              attempt.runId,
+              attempt.attemptId,
+              intent.threadId,
+              WorktreeLocator.make("/foreign/worktree")
+            )
+            .pipe(Effect.result))._tag
+        ).toBe("Failure")
+        expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(intent))
+      }).pipe(Effect.provide(nodeLayer(`${root}/executor-private-state.json`)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)

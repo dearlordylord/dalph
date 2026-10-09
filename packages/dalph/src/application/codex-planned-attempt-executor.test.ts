@@ -8277,6 +8277,7 @@ for (const fence of ["StopIntended", "LimitReached"] as const) {
     const app = {
       ...harness.app,
       close: Effect.suspend(() => cachedClose),
+      verifyStorageOwnership: Effect.void,
       stopOwnedLaunch: (owned: CodexServerLaunchRecord) =>
         Effect.suspend(() => {
           expect(owned).toEqual(launch)
@@ -8553,5 +8554,362 @@ for (const persistenceFails of [true, false]) {
           }).pipe(Effect.provide(layerFor({ ...harness, app }, undefined, undefined, undefined, store)))
         })
       )
+  )
+}
+
+const recoveryLaunch = CodexServerLaunchRecord.make({
+  command: ["codex", "app-server"],
+  incarnation: CodexServerIncarnation.make("recovery-original"),
+  phase: "Live",
+  pid: 101
+})
+const recoveryItem = CodexToolEffectRecord.cases.Started.make({
+  runId: correlation.runId,
+  attemptId: correlation.attemptId,
+  threadId: CodexThreadId.make("codex-thread-issue-58"),
+  turnId: CodexTurnId.make("codex-turn-1"),
+  itemId: CodexToolItemId.make("interrupted-original-tool"),
+  incarnation: recoveryLaunch.incarnation,
+  worktree,
+  startedAtMilliseconds: 0,
+  deadlineMilliseconds: 60_000
+})
+
+it.effect("retires an interrupted item before same-attempt continuation and never renews its timer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const calls: Array<string> = []
+      const harness = makeHarness({ incarnation: recoveryLaunch.incarnation, serverLaunch: recoveryLaunch })
+      const originalApp: CodexAppServerService = {
+        ...harness.app,
+        verifyStorageOwnership: Effect.sync(() => {
+          calls.push("storage")
+        }),
+        stopOwnedLaunch: (launch) =>
+          Effect.sync(() => {
+            expect(launch).toEqual(recoveryLaunch)
+            expect(harness.currentRecord()?._tag).toBe("SuspensionStopIntended")
+            expect(harness.toolEffectRecords()).toMatchObject([
+              { _tag: "Started", suspensionCustody: { _tag: "StopIntended" } }
+            ])
+            calls.push("stop-original")
+          })
+      }
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        if (harness.store.writeToolEffect === undefined) return yield* Effect.die("tool store absent")
+        yield* harness.store.writeToolEffect(recoveryItem)
+        yield* harness.app.interruptTurn(recoveryItem.threadId, recoveryItem.turnId)
+        expect(yield* executor.requestSuspension(attempt)).toMatchObject({
+          _tag: "ExecutorWorkSafelySuspended",
+          correlation
+        })
+        expect(yield* executor.resume(request).pipe(Effect.result)).toMatchObject({ _tag: "Failure" })
+        expect(harness.turnCount()).toBe(1)
+      }).pipe(Effect.provide(layerFor({ ...harness, app: originalApp })))
+      expect(calls).toEqual(["storage", "stop-original", "storage"])
+      const retired = harness.toolEffectRecords()[0]
+      expect(retired).toMatchObject({
+        ...recoveryItem,
+        suspensionCustody: { _tag: "Stopped", serverLaunch: recoveryLaunch }
+      })
+      const successor = CodexServerIncarnation.make("recovery-successor")
+      let proofAvailable = true
+      const successorApp: CodexAppServerService = {
+        ...harness.app,
+        incarnation: successor,
+        serverLaunch: { ...recoveryLaunch, incarnation: successor, pid: 202 },
+        verifyStorageOwnership: Effect.sync(() => {
+          calls.push("successor-storage")
+        }),
+        verifyStoppedLaunch: (launch) =>
+          Effect.suspend(() => {
+            if (!proofAvailable)
+              return Effect.fail(
+                new CodexAppServerFailure({
+                  kind: "Ownership",
+                  operation: "close",
+                  detail: "fresh old writer proof unavailable"
+                })
+              )
+            return Effect.sync(() => {
+              expect(launch).toEqual(recoveryLaunch)
+              expect(harness.turnCount()).toBeGreaterThanOrEqual(1)
+              calls.push("fresh-original-proof")
+            })
+          }),
+        stopOwnedLaunch: () => Effect.die("old deadline must not stop a successor")
+      }
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        proofAvailable = false
+        expect((yield* executor.resume(request).pipe(Effect.result))._tag).toBe("Failure")
+        expect(harness.turnCount()).toBe(1)
+        expect(harness.toolEffectRecords()[0]).toEqual(retired)
+        proofAvailable = true
+        expect(yield* executor.resume(request)).toMatchObject({ _tag: "ExecutorWorkExecuting", correlation })
+        expect(harness.currentRecord()).toMatchObject({
+          _tag: "Running",
+          correlationRunId: attempt.runId,
+          correlationAttemptId: attempt.attemptId,
+          worktree: attempt.worktree,
+          priorObservedTurnId: recoveryItem.turnId,
+          observedTurnId: "codex-turn-2"
+        })
+        const attachment = yield* lifecycle.attach(correlation)
+        const changes = yield* Stream.runDrain(attachment.changes).pipe(Effect.forkChild)
+        yield* TestClock.adjust(Duration.seconds(61))
+        expect(changes.pollUnsafe()).toBeUndefined()
+        expect(harness.toolEffectRecords()[0]).toEqual(retired)
+        expect(harness.turnCount()).toBe(2)
+        expect(harness.threadStarts()).toBe(1)
+        expect(harness.closeCount()).toBe(0)
+        yield* attachment.close
+        if (harness.store.writeToolEffect === undefined) return yield* Effect.die("tool writer missing")
+        const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+        yield* harness.store.writeToolEffect({
+          ...recoveryItem,
+          turnId: CodexTurnId.make("codex-turn-2"),
+          itemId: CodexToolItemId.make("successor-current-tool"),
+          incarnation: successor,
+          startedAtMilliseconds: now,
+          deadlineMilliseconds: now + 60_000
+        })
+        expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting" }
+        })
+      }).pipe(Effect.provide(layerFor({ ...harness, app: successorApp })))
+      expect(calls.slice(3, 7)).toEqual([
+        "successor-storage",
+        "successor-storage",
+        "fresh-original-proof",
+        "successor-storage"
+      ])
+      expect(attempt.baseSha).toBe(request.plannedAttempt.baseSha)
+    })
+  )
+)
+
+for (const fault of ["UnavailableLaunch", "ForeignLaunch", "Storage"] as const) {
+  it.effect(`retained interrupted item blocks suspension and admission with ${fault} custody`, () => {
+    const harness = makeHarness({ incarnation: recoveryLaunch.incarnation, serverLaunch: recoveryLaunch })
+    let stopped = 0
+    const failure = new CodexAppServerFailure({ kind: "Ownership", operation: "close", detail: fault })
+    const app: CodexAppServerService = {
+      ...harness.app,
+      steerTurn: (_thread, turn) => Effect.succeed(turn),
+      verifyStorageOwnership: fault === "Storage" ? Effect.fail(failure) : Effect.void,
+      stopOwnedLaunch: () =>
+        Effect.sync(() => {
+          stopped += 1
+        }).pipe(Effect.andThen(Effect.fail(failure)))
+    }
+    return Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      if (harness.store.writeToolEffect === undefined) return yield* Effect.die("tool store absent")
+      yield* harness.store.writeToolEffect(
+        fault === "ForeignLaunch" ? { ...recoveryItem, threadId: CodexThreadId.make("foreign") } : recoveryItem
+      )
+      expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Suspend" })).toMatchObject({
+        _tag: "Unreadable"
+      })
+      expect(yield* executor.resume(request).pipe(Effect.result)).toMatchObject({ _tag: "Failure" })
+      expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+        _tag: "Unreadable"
+      })
+      if (executor.selectGuidanceTarget === undefined) return yield* Effect.die("guidance absent")
+      expect(yield* executor.selectGuidanceTarget(attempt)).toMatchObject({ _tag: "Refused" })
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.threadStarts()).toBe(1)
+      expect(harness.toolEffectRecords()[0]?._tag).toBe("Started")
+      expect(stopped).toBe(fault === "UnavailableLaunch" ? 1 : 0)
+    }).pipe(Effect.provide(layerFor({ ...harness, app })))
+  })
+}
+
+for (const cut of ["SuspendIntent", "StopIntended", "ContainmentStop", "Stopped", "Safe"] as const) {
+  for (const disposition of ["Started", "LimitReached"] as const) {
+    it.effect(`reopens tool suspension after ${cut} observation loss preserving ${disposition}`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const stateDirectory = realpathSync(yield* fs.makeTempDirectoryScoped())
+        const harness = makeHarness({ incarnation: recoveryLaunch.incarnation, serverLaunch: recoveryLaunch })
+        let crashed = false
+        let recovering = false
+        const calls: Array<string> = []
+        const app: CodexAppServerService = {
+          ...harness.app,
+          verifyStorageOwnership: Effect.void,
+          stopOwnedLaunch: (launch) =>
+            Effect.sync(() => {
+              expect(launch).toEqual(recoveryLaunch)
+              calls.push("fresh-stop")
+            }).pipe(
+              Effect.andThen(
+                Effect.suspend(() => {
+                  if (!recovering && !crashed && cut === "ContainmentStop") {
+                    crashed = true
+                    return Effect.die("lost containment stop observation")
+                  }
+                  return Effect.void
+                })
+              )
+            )
+        }
+        const activation = (initial: boolean) =>
+          withReopenedReplacementStore(stateDirectory, (nativeStore) => {
+            const store: CodexAttemptStoreService = {
+              ...nativeStore,
+              writeToolEffect: (item) =>
+                Effect.gen(function* () {
+                  if (nativeStore.writeToolEffect === undefined) return yield* Effect.die("tool writer missing")
+                  yield* nativeStore.writeToolEffect(item)
+                  calls.push("suspensionCustody" in item ? item.suspensionCustody._tag : item._tag)
+                  if (!recovering && !crashed && "suspensionCustody" in item && item.suspensionCustody._tag === cut) {
+                    crashed = true
+                    return yield* Effect.die("lost item custody observation")
+                  }
+                }),
+              writeAttempt: (record) =>
+                nativeStore.writeAttempt(record).pipe(
+                  Effect.andThen(
+                    Effect.suspend(() => {
+                      calls.push(record._tag)
+                      if (
+                        !recovering &&
+                        !crashed &&
+                        ((cut === "Safe" && record._tag === "SafelySuspended") ||
+                          (cut === "SuspendIntent" && record._tag === "SuspensionStopIntended"))
+                      ) {
+                        crashed = true
+                        return Effect.die("lost safe observation")
+                      }
+                      return Effect.void
+                    })
+                  )
+                )
+            }
+            return Effect.gen(function* () {
+              const executor = yield* PlannedAttemptExecutor
+              if (initial) {
+                yield* nativeStore.writeServerLaunch(recoveryLaunch)
+                yield* executor.begin(request, { _tag: "InitialDelivery" })
+                if (nativeStore.writeToolEffect === undefined) return yield* Effect.die("tool writer missing")
+                yield* nativeStore.writeToolEffect(
+                  disposition === "Started"
+                    ? recoveryItem
+                    : CodexToolEffectRecord.cases.LimitReached.make({
+                        ...recoveryItem,
+                        _tag: "LimitReached",
+                        serverLaunch: recoveryLaunch,
+                        reason: "Elapsed",
+                        stopIntentAtMilliseconds: 60_000,
+                        stoppedAtMilliseconds: 60_001
+                      })
+                )
+              }
+              return yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Suspend" })
+            }).pipe(Effect.provide(layerFor({ ...harness, app, store })))
+          })
+        expect((yield* activation(true).pipe(Effect.exit))._tag).toBe("Failure")
+        expect(crashed).toBe(true)
+        recovering = true
+        expect(yield* activation(false)).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkSafelySuspended", correlation }
+        })
+        yield* withReopenedReplacementStore(stateDirectory, (store) =>
+          Effect.gen(function* () {
+            if (store.listToolEffects === undefined) return yield* Effect.die("tool inventory absent")
+            expect(yield* store.listToolEffects(correlation.runId, correlation.attemptId)).toMatchObject([
+              {
+                _tag: disposition,
+                startedAtMilliseconds: 0,
+                deadlineMilliseconds: 60_000,
+                suspensionCustody: { _tag: "Stopped", serverLaunch: recoveryLaunch }
+              }
+            ])
+            expect(yield* store.readAttempt(correlation.runId, correlation.attemptId)).toMatchObject({
+              _tag: "Some",
+              value: { _tag: "SafelySuspended" }
+            })
+          })
+        )
+        expect(harness.turnCount()).toBe(1)
+        expect(harness.threadStarts()).toBe(1)
+        expect(calls.lastIndexOf("fresh-stop")).toBeLessThan(calls.lastIndexOf("SafelySuspended"))
+      }).pipe(Effect.provide(NodeServices.layer))
+    )
+  }
+}
+
+for (const completedAt of [10, 60_001]) {
+  it.effect(`ignores a queued retired item completion at ${completedAt} without an unreadable projection`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+        const queued = yield* Deferred.make<void>()
+        const harness = makeHarness({
+          incarnation: recoveryLaunch.incarnation,
+          serverLaunch: recoveryLaunch,
+          toolEffects: PubSub.subscribe(notifications).pipe(
+            Effect.map((subscription) =>
+              Stream.unfold(undefined, () =>
+                PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+              ).pipe(Stream.tap(() => Deferred.succeed(queued, undefined)))
+            )
+          )
+        })
+        const app: CodexAppServerService = {
+          ...harness.app,
+          verifyStorageOwnership: Effect.void,
+          verifyStoppedLaunch: () => Effect.void,
+          stopOwnedLaunch: () =>
+            Effect.gen(function* () {
+              // The upstream has received completion while Suspend owns attemptGate.
+              // Its item handler must reconcile the subsequently retired destination.
+              yield* PubSub.publish(notifications, {
+                phase: "Completed",
+                threadId: recoveryItem.threadId,
+                turnId: recoveryItem.turnId,
+                itemId: recoveryItem.itemId,
+                observedAtMilliseconds: completedAt
+              })
+              yield* Deferred.await(queued)
+            })
+        }
+        yield* Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+          if (harness.store.writeToolEffect === undefined) return yield* Effect.die("tool writer missing")
+          yield* harness.store.writeToolEffect(recoveryItem)
+          const attachment = yield* lifecycle.attach(correlation)
+          const projections: Array<string> = []
+          yield* Stream.runForEach(attachment.changes, (projection) =>
+            Effect.sync(() => {
+              projections.push(projection._tag)
+            })
+          ).pipe(Effect.forkChild)
+          expect(yield* executor.requestSuspension(attempt)).toMatchObject({ _tag: "ExecutorWorkSafelySuspended" })
+          for (let iteration = 0; iteration < 5; iteration += 1) yield* Effect.yieldNow
+          yield* TestClock.adjust(Duration.seconds(61))
+          expect(projections).not.toContain("Unreadable")
+          expect(harness.toolEffectRecords()).toMatchObject([
+            { ...recoveryItem, suspensionCustody: { _tag: "Stopped" } }
+          ])
+          expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+            _tag: "Exact",
+            report: { _tag: "ExecutorWorkSafelySuspended" }
+          })
+          expect(harness.turnCount()).toBe(1)
+          yield* attachment.close
+        }).pipe(Effect.provide(layerFor({ ...harness, app })))
+      })
+    )
   )
 }
