@@ -4,7 +4,8 @@ Scope: [#488](https://github.com/dearlordylord/dalph/issues/488), the first slic
 [#487](https://github.com/dearlordylord/dalph/issues/487). Parent scenarios 1 and
 11 and the Available-history identity/integrity portions of 9 and 13 govern
 this work. [Deleted-history expiry](archived-run-expiry.md) extends these contracts in #489;
-startup and idle periodic scheduling remain pending #490.
+[#490's startup and idle periodic scheduling](archived-run-expiry.md#the-existing-host-maintains-archives-without-another-termination)
+uses the same owning retention operation.
 
 ## Governing behavior
 

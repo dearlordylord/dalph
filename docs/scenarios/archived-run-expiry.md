@@ -2,8 +2,8 @@
 
 Scope: [#489](https://github.com/dearlordylord/dalph/issues/489), governed by
 [#487's accepted chronological scenarios](https://github.com/dearlordylord/dalph/issues/487).
-#488's compact results and #489's expiry operation are established before
-#490 adds startup and idle periodic triggers.
+#488's compact results and #489's expiry operation underpin #490's startup and
+idle periodic triggers.
 
 ## Governing behavior
 
@@ -111,6 +111,9 @@ artifact or physical file-compaction boundary is called by maintenance.
 The accepted [parent scenarios](https://github.com/dearlordylord/dalph/issues/487)
 govern the combined #488–#490 candidate. Names below describe the exact seams;
 store contracts and composed host tests together establish the result.
+
+The [integrated acceptance record](../evidence/issue-487-acceptance.md) binds
+this mapping to the exact runtime candidate and named observed test results.
 
 | Parent scenario | Delivered outcome and named evidence |
 | --- | --- |

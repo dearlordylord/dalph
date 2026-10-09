@@ -13,7 +13,10 @@ live under [adr/](adr).
 
 The Journal owner preserves compact terminal results independently of detailed
 history. Ordinary settlement retires the complete history losslessly, then
-performs one finite whole-history retention pass. [Journal and reconstruction](architecture/journal-and-reconstruction.md#independently-readable-completion)
+performs one finite whole-history retention pass. The established host also
+runs that operation at startup and one minute after each completed scheduled
+pass, yielding between atomic units and draining it on graceful Exit.
+[Journal and reconstruction](architecture/journal-and-reconstruction.md#independently-readable-completion)
 owns saved-byte accounting, atomic deletion and explicit Deleted reads. Current
 tracker, Git and execution facts retain their own authorities.
 
