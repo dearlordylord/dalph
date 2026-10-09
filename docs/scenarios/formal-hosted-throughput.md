@@ -95,6 +95,32 @@ the workflow journal.
   native cold-cache diagnostic exercises two Quint/TLC children: concurrent
   startup reproduces the bind failure; sequential startup completes both proofs.
 
+## A hosted timeout retains the checker phase and TLC progress
+
+- **Starting facts:** the hosted shard retains a bounded child's output. The
+  canonical verify command uses verbosity one, which otherwise hides TLC's
+  phase, worker configuration and enumeration progress before its final verdict.
+- **Trigger and boundary calls:** the hosted runner enables the pinned Quint
+  patch's diagnostic output flag. Quint retains its compilation and checker
+  phase messages, and forwards TLC stdout and stderr to the existing bounded
+  child output and log. It uses the original command tokens and checker settings.
+- **Visible and forbidden results:** a completed proof keeps its verdict; a
+  failed or timed-out child retains any emitted phase/progress alongside the
+  original failure and custody evidence. Output never establishes success by
+  itself, extends a deadline, changes a model or invariant, or replaces the
+  required stopped-writer proof. Without the flag, ordinary low-verbosity output
+  remains unchanged.
+- **Crash/retry:** the existing process-group cleanup and fail-fast behavior
+  remain authoritative. Partial progress is diagnostic only, never a certificate.
+- **Acceptance tests:** `quint-hosted-diagnostics.test.mjs` exercises the patched
+  TLC stdout/stderr boundary with controlled success and violation exits. A
+  focused native tiny-model check verifies real phase/progress output with the
+  canonical low-verbosity arguments. Hosted CI still requires all three exact
+  certificates and the complete unchanged canonical profile.
+  The controlled stream fixture belongs to the existing formal-controls batch:
+  it catches a missing or broken installed patch before hosted submission, takes
+  less than one second, and needs no real checker distribution or model run.
+
 ## GitHub avoids formal execution when the exact change cannot affect it
 
 - **Affected person and starting facts:** a maintainer opens or updates a pull

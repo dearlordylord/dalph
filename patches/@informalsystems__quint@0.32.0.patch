@@ -1,6 +1,8 @@
+diff --git a/dist/src/apalache.js b/dist/src/apalache.js
+index c1217a2ac18a858337c1e8806b8a5a80e5bc4d37..8981979f2e69723bf3e5d338d6554e3c6e8cfd4c 100644
 --- a/dist/src/apalache.js
 +++ b/dist/src/apalache.js
-@@ -47,6 +47,7 @@
+@@ -47,6 +47,7 @@ exports.createConfig = createConfig;
  exports.serverEndpointToConnectionString = serverEndpointToConnectionString;
  exports.fetchApalache = fetchApalache;
  exports.connect = connect;
@@ -8,7 +10,7 @@
  /**
   * Interface to Apalache
   *
-@@ -253,7 +254,7 @@
+@@ -253,7 +254,7 @@ async function loadProtoDefViaReflection(serverEndpoint, retry) {
          let fileDescriptorProtos = protoDefResponse.file_descriptor_response.file_descriptor_proto.map(bytes => protobufDescriptor.FileDescriptorProto.decode(bytes));
          // Use proto-loader to load the FileDescriptorProto wrapped in a FileDescriptorSet
          return (0, either_1.right)(proto.loadFileDescriptorSetFromObject({ file: fileDescriptorProtos }, grpcStubOptions));
@@ -17,7 +19,7 @@
  }
  function loadGrpcClient(serverEndpoint, protoDef) {
      const protoDescriptor = grpc.loadPackageDefinition(protoDef);
-@@ -303,6 +304,13 @@
+@@ -303,6 +304,13 @@ function downloadAndUnpackApalache(apalacheVersion) {
   *    - a `left<ApalacheError>` indicating an error.
   */
  async function fetchApalache(apalacheVersion, verbosityLevel) {
@@ -31,7 +33,7 @@
      const filename = process.platform === 'win32' ? 'apalache-mc.bat' : 'apalache-mc';
      const apalacheBinary = path_1.default.join((0, config_1.apalacheDistDir)(apalacheVersion), 'apalache', 'bin', filename);
      if (fs_1.default.existsSync(apalacheBinary)) {
-@@ -371,7 +379,22 @@
+@@ -371,7 +379,22 @@ async function fetchApalache(apalacheVersion, verbosityLevel) {
   *    - a `right<Apalache>` equal to the path the Apalache dist was unpacked to,
   *    - a `left<ApalacheError>` indicating an error.
   */
@@ -54,24 +56,29 @@
      // Try to connect to Shai, and try to ping it
      const connectionResult = await tryConnect(serverEndpoint);
      // We managed to connect, simply return this connection
+diff --git a/dist/src/rust/binaryManager.js b/dist/src/rust/binaryManager.js
+index 264b4254dba1f61b8f3ce794a9407f73f1813704..6fd59b88260943494955c2f6a471e45689a41f69 100644
 --- a/dist/src/rust/binaryManager.js
 +++ b/dist/src/rust/binaryManager.js
-@@ -40,6 +40,9 @@
-     const executablePath = path_1.default.join(evaluatorDir, executable);
+@@ -41,6 +41,9 @@ async function getRustEvaluatorPath(version = exports.QUINT_EVALUATOR_VERSION) {
      if (await exists(executablePath)) {
          return executablePath;
-+    }
+     }
 +    if (process.env.DALPH_QUINT_OWNED_SERVER_ENDPOINT !== undefined) {
 +        throw new Error('Owned-server verification requires the prepared Rust evaluator; downloading is disabled');
-     }
++    }
      // Otherwise, fetch it from GitHub releases
      return await fetchEvaluator(version, assetName, executable);
+ }
+diff --git a/dist/src/tlc.js b/dist/src/tlc.js
+index 6fe3bbfc0a7acb069ca576afbed11a230f1cd124..844117c9ecdd252be7297defd4ad60f4de9f43af 100644
 --- a/dist/src/tlc.js
 +++ b/dist/src/tlc.js
-@@ -103,6 +103,13 @@
+@@ -103,6 +103,14 @@ function tlcErr(explanation, isViolation) {
      return { explanation, errors: [], isViolation };
  }
  async function verify(config, apalacheVersion, runtimeConfig = {}, verbosityLevel = 2) {
++    const retainTlcOutput = verbosityLevel >= TLC_OUTPUT_VERBOSITY || process.env.DALPH_QUINT_TLC_DIAGNOSTICS === '1';
 +    const owned = process.env.DALPH_QUINT_OWNED_SERVER_ENDPOINT !== undefined;
 +    const javaExecutable = owned ? process.env.DALPH_QUINT_JAVA_EXECUTABLE : 'java';
 +    const javaUserHome = owned ? process.env.DALPH_QUINT_JAVA_USER_HOME : undefined;
@@ -82,7 +89,7 @@
      const jarResult = findApalacheJar(apalacheVersion);
      if (jarResult.isLeft()) {
          return (0, either_1.left)(tlcErr(jarResult.value, false));
-@@ -117,7 +124,8 @@
+@@ -117,7 +125,8 @@ async function verify(config, apalacheVersion, runtimeConfig = {}, verbosityLeve
      fs_1.default.writeFileSync(tlaFile, config.tlaCode);
      fs_1.default.writeFileSync(cfgFile, generateCfg(config));
      return new Promise(resolve => {
@@ -92,3 +99,40 @@
              maxHeap,
              stackSize,
              '-cp',
+@@ -131,12 +140,12 @@ async function verify(config, apalacheVersion, runtimeConfig = {}, verbosityLeve
+             tlaFile,
+         ]);
+         proc.stdout.on('data', data => {
+-            if (verbosityLevel >= TLC_OUTPUT_VERBOSITY) {
++            if (retainTlcOutput) {
+                 process.stdout.write(data.toString());
+             }
+         });
+         proc.stderr.on('data', data => {
+-            if (verbosityLevel >= TLC_OUTPUT_VERBOSITY) {
++            if (retainTlcOutput) {
+                 process.stderr.write(data.toString());
+             }
+         });
+diff --git a/dist/src/verify.js b/dist/src/verify.js
+index a2d8f94602eaae54a49f48006b838953e5880add..1fb33a443d9a9ea2f8eea40b9c3928c164a994e1 100644
+--- a/dist/src/verify.js
++++ b/dist/src/verify.js
+@@ -43,7 +43,7 @@ async function verifyWithTlcBackend(prev, verifying, verbosityLevel) {
+     }
+     const verifyingFlat = { ...prev, modules: [mainModule.value] };
+     const parsedSpec = (0, cliReporting_1.outputJson)(verifyingFlat);
+-    if (verbosity_1.verbosity.hasProgress(verbosityLevel)) {
++    if (verbosity_1.verbosity.hasProgress(verbosityLevel) || process.env.DALPH_QUINT_TLC_DIAGNOSTICS === '1') {
+         console.log(chalk_1.default.green('[TLC]') + ' Compiling to TLA+ (via Apalache)...');
+     }
+     const tlaResult = await (0, compileToTlaplus_1.compileToTlaplus)(args.serverEndpoint, args.apalacheVersion, parsedSpec, verbosityLevel);
+@@ -57,7 +57,7 @@ async function verifyWithTlcBackend(prev, verifying, verbosityLevel) {
+     if (distResult.isLeft()) {
+         return (0, cliReporting_1.cliErr)('error', { ...verifying, errors: distResult.value.errors });
+     }
+-    if (verbosity_1.verbosity.hasProgress(verbosityLevel)) {
++    if (verbosity_1.verbosity.hasProgress(verbosityLevel) || process.env.DALPH_QUINT_TLC_DIAGNOSTICS === '1') {
+         console.log(chalk_1.default.green('[TLC]') + ' Running TLC model checker...\n');
+     }
+     const startMs = Date.now();

@@ -20,7 +20,11 @@ const { reportPath, shard } = parseArguments(process.argv.slice(2))
 assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
 const binding = readQuintHostedShardBinding()
 const affectedFamilies = await hostedAffectedQuintFamilies({ binding, profile: createQuintEffectiveProfile() })
-const report = await runQuintEffectiveProfile({ hostedShard: shard, affectedFamilies })
+const report = await runQuintEffectiveProfile({
+  hostedShard: shard,
+  affectedFamilies,
+  environment: { ...process.env, DALPH_QUINT_TLC_DIAGNOSTICS: "1" }
+})
 assertQuintHostedCommandCustody(report)
 const envelope = {
   version: 1,
