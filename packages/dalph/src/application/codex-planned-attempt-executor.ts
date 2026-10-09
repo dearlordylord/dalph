@@ -1158,17 +1158,8 @@ const makeCodexPlannedAttemptExecutorContext = (
         }
         const record = yield* store.readAttempt(correlation.runId, correlation.attemptId)
         if (Option.isNone(record) || hasUnreconciledHistoricalTool(effects, record.value)) return true
-        const retired = effects.filter(hasStoppedToolCustody)
-        if (retired.length > 0) {
-          const verifyStoppedLaunch = app.verifyStoppedLaunch
-          if (verifyStoppedLaunch === undefined) return true
-          const proof = yield* Effect.gen(function* () {
-            yield* verifyToolStorageOwnership()
-            for (const item of retired) {
-              if (!("suspensionCustody" in item)) return yield* new CodexTurnBoundaryUnknown({})
-              yield* verifyStoppedLaunch(item.suspensionCustody.serverLaunch)
-            }
-          }).pipe(Effect.result)
+        if (effects.some(hasStoppedToolCustody) && isThreadBackedRecord(record.value)) {
+          const proof = yield* proveRetiredToolCustody(correlation, record.value).pipe(Effect.result)
           if (Result.isFailure(proof)) return true
         }
         return yield* Effect.sync(() => {
@@ -2625,6 +2616,19 @@ const makeCodexPlannedAttemptExecutorContext = (
           return yield* new CodexTurnBoundaryUnknown({})
         launches.set(launch.incarnation, launch)
       }
+      if (store.readSuspensionLaunches !== undefined) {
+        for (const launch of yield* store.readSuspensionLaunches(
+          correlation.runId,
+          correlation.attemptId,
+          record.threadId,
+          record.worktree
+        )) {
+          const prior = launches.get(launch.incarnation)
+          if (prior !== undefined && !Schema.toEquivalence(CodexServerLaunchRecord)(prior, launch))
+            return yield* new CodexTurnBoundaryUnknown({})
+          launches.set(launch.incarnation, launch)
+        }
+      }
       if (launches.size === 0) return
       if (app.verifyStoppedLaunch === undefined || (admittingWriter && launches.has(app.incarnation)))
         return yield* new CodexTurnBoundaryUnknown({})
@@ -2647,6 +2651,15 @@ const makeCodexPlannedAttemptExecutorContext = (
         )
           return yield* new CodexTurnBoundaryUnknown({})
         const launches = new Map<CodexServerIncarnation, CodexServerLaunchRecord>()
+        if (store.readSuspensionLaunches !== undefined) {
+          for (const launch of yield* store.readSuspensionLaunches(
+            correlation.runId,
+            correlation.attemptId,
+            record.threadId,
+            record.worktree
+          ))
+            launches.set(launch.incarnation, launch)
+        }
         for (const item of items) {
           const custody = "suspensionCustody" in item ? item.suspensionCustody : undefined
           const retainedLaunch =
@@ -4323,6 +4336,9 @@ const makeCodexPlannedAttemptExecutorContext = (
               const itemId = CodexToolItemId.make(item.itemId)
               const found = yield* readToolEffect(correlation, retainedTurnId, itemId)
               const retained = Option.isSome(found) ? found.value : undefined
+              // Retirement is a stop disposition, not a delayed completion.
+              // Queued notifications cannot mutate it or close a successor's admission.
+              if (retained !== undefined && "suspensionCustody" in retained) return undefined
               if (item.phase === "Malformed") {
                 if (
                   retained !== undefined &&

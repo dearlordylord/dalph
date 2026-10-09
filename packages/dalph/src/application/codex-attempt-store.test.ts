@@ -1470,3 +1470,50 @@ it.effect("reads exact historical launch without clearing it and rejects contrad
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
+
+it.effect("recovers no-item containment obligations from exact Suspend history and rejects foreign queries", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-no-item-suspend-history-" })
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        if (store.readSuspensionLaunches === undefined) return yield* Effect.die("suspension history proof missing")
+        const owner = CodexServerLaunchRecord.make({
+          command: ["codex", "app-server"],
+          phase: "Live",
+          pid: 101,
+          incarnation: CodexServerIncarnation.make("no-item-suspended-launch")
+        })
+        const intent = { ...suspensionStopIntended, turnStartIncarnation: owner.incarnation }
+        yield* store.writeServerLaunch(owner)
+        yield* store.writeAttempt(intent)
+        yield* store.clearServerLaunch(owner.incarnation)
+        expect(
+          yield* store.readSuspensionLaunches(attempt.runId, attempt.attemptId, intent.threadId, intent.worktree)
+        ).toEqual([owner])
+        expect(
+          (yield* store
+            .readSuspensionLaunches(
+              attempt.runId,
+              attempt.attemptId,
+              CodexThreadId.make("foreign-thread"),
+              intent.worktree
+            )
+            .pipe(Effect.result))._tag
+        ).toBe("Failure")
+        expect(
+          (yield* store
+            .readSuspensionLaunches(
+              attempt.runId,
+              attempt.attemptId,
+              intent.threadId,
+              WorktreeLocator.make("/foreign/worktree")
+            )
+            .pipe(Effect.result))._tag
+        ).toBe("Failure")
+        expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(intent))
+      }).pipe(Effect.provide(nodeLayer(`${root}/executor-private-state.json`)))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)

@@ -933,6 +933,13 @@ export interface CodexAttemptStoreService {
   readonly readRetainedServerLaunch?: (
     incarnation: CodexServerIncarnation
   ) => Effect.Effect<Option.Option<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
+  /** Exact launch obligations retained by existing Suspend intents, including turns without items. */
+  readonly readSuspensionLaunches?: (
+    runId: RunId,
+    attemptId: AttemptId,
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  ) => Effect.Effect<ReadonlyArray<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
   readonly writeServerLaunch: (record: CodexServerLaunchRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   readonly clearServerLaunch: (incarnation: CodexServerIncarnation) => Effect.Effect<void, CodexAttemptStoreFailure>
   /** Original namespace/startup deadline survives independent launch cleanup. */
@@ -1896,9 +1903,7 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
             }).pipe(Effect.mapError(storeOperationFailure.bind(undefined, operation)))
           )
         )
-      const readRetainedServerLaunch = Effect.fn("CodexAttemptStore.readRetainedServerLaunch")(function* (
-        incarnation: CodexServerIncarnation
-      ) {
+      const readRetainedSnapshots = Effect.fn("CodexAttemptStore.readRetainedSnapshots")(function* () {
         yield* guard("readServerLaunch", Effect.void)
         yield* validatePrivateDescriptor(snapshotFile, filename, native).pipe(
           Effect.mapError(
@@ -1910,7 +1915,7 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
           catch: (error) => new CodexAttemptStoreFailure({ operation: "readServerLaunch", detail: String(error) })
         })
         const lines = text.split("\n").filter((line) => line.trim().length > 0)
-        let found: CodexServerLaunchRecord | undefined
+        const snapshots: Array<CodexAttemptStoreSnapshot> = []
         for (const [index, line] of lines.entries()) {
           const snapshot = parseChecksummedSnapshotLine(line)
           if (snapshot === undefined) {
@@ -1921,16 +1926,70 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
               detail: "retained launch history is unreadable"
             })
           }
-          const launch = snapshot.serverLaunch
-          if (launch === null || launch.incarnation !== incarnation || launch.phase !== "Live") continue
-          if (found !== undefined && !Schema.toEquivalence(CodexServerLaunchRecord)(found, launch))
-            return yield* new CodexAttemptStoreFailure({
-              operation: "readServerLaunch",
-              detail: "retained launch observations contradict each other"
-            })
-          found = launch
+          snapshots.push(snapshot)
         }
-        return Option.fromUndefinedOr(found)
+        return snapshots
+      })
+      const historicalLaunches = (
+        snapshots: ReadonlyArray<CodexAttemptStoreSnapshot>,
+        incarnations: ReadonlySet<CodexServerIncarnation>
+      ) =>
+        Effect.gen(function* () {
+          const launches = new Map<CodexServerIncarnation, CodexServerLaunchRecord>()
+          for (const snapshot of snapshots) {
+            const launch = snapshot.serverLaunch
+            if (launch === null || !incarnations.has(launch.incarnation) || launch.phase !== "Live") continue
+            const prior = launches.get(launch.incarnation)
+            if (prior !== undefined && !Schema.toEquivalence(CodexServerLaunchRecord)(prior, launch))
+              return yield* new CodexAttemptStoreFailure({
+                operation: "readServerLaunch",
+                detail: "retained launch observations contradict each other"
+              })
+            launches.set(launch.incarnation, launch)
+          }
+          return launches
+        })
+      const readRetainedServerLaunch = Effect.fn("CodexAttemptStore.readRetainedServerLaunch")(function* (
+        incarnation: CodexServerIncarnation
+      ) {
+        const launches = yield* historicalLaunches(yield* readRetainedSnapshots(), new Set([incarnation]))
+        return Option.fromUndefinedOr(launches.get(incarnation))
+      })
+      const readSuspensionLaunches = Effect.fn("CodexAttemptStore.readSuspensionLaunches")(function* (
+        runId: RunId,
+        attemptId: AttemptId,
+        threadId: CodexThreadId,
+        worktree: WorktreeLocator
+      ) {
+        const snapshots = yield* readRetainedSnapshots()
+        const incarnations = new Set<CodexServerIncarnation>()
+        for (const snapshot of snapshots) {
+          for (const record of snapshot.attempts) {
+            if (
+              record.correlationRunId !== runId ||
+              record.correlationAttemptId !== attemptId ||
+              record._tag !== "SuspensionStopIntended"
+            )
+              continue
+            if (
+              record.threadId !== threadId ||
+              record.worktree !== worktree ||
+              record.turnStartIncarnation === undefined
+            )
+              return yield* new CodexAttemptStoreFailure({
+                operation: "readServerLaunch",
+                detail: "retained suspension ownership is foreign or incomplete"
+              })
+            incarnations.add(record.turnStartIncarnation)
+          }
+        }
+        const launches = yield* historicalLaunches(snapshots, incarnations)
+        if (launches.size !== incarnations.size)
+          return yield* new CodexAttemptStoreFailure({
+            operation: "readServerLaunch",
+            detail: "retained suspension launch is unavailable"
+          })
+        return [...launches.values()]
       })
       const readAttempt: CodexAttemptStoreService["readAttempt"] = (runId, attemptId) =>
         guard(
@@ -2316,7 +2375,9 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         writeAttempt: (record) => writeAttempt(record),
         writeResultRecovery: (record, recovery) => writeAttempt(record, recovery),
         readServerLaunch,
-        readRetainedServerLaunch,
+        readRetainedServerLaunch: (incarnation) => persistence.withPermit(readRetainedServerLaunch(incarnation)),
+        readSuspensionLaunches: (runId, attemptId, threadId, worktree) =>
+          persistence.withPermit(readSuspensionLaunches(runId, attemptId, threadId, worktree)),
         writeServerLaunch,
         clearServerLaunch,
         readServerStartup,

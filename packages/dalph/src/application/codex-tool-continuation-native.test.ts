@@ -15,7 +15,11 @@ class NativeCustodyControllerFailure extends Schema.TaggedError<NativeCustodyCon
 
 const vitestEntry = fileURLToPath(new URL("../../../../node_modules/vitest/vitest.mjs", import.meta.url))
 const driver = "packages/dalph/src/application/codex-tool-continuation-driver.test.ts"
-const runController = (directory: string, disposition: "Started" | "LimitReached", phase: "seed" | "recover") =>
+const runController = (
+  directory: string,
+  disposition: "Started" | "LimitReached",
+  phase: "seed" | "recover" | "admit"
+) =>
   Effect.tryPromise({
     try: (signal) =>
       new Promise<{ readonly code: number | null; readonly signal: string | null; readonly output: string }>(
@@ -53,7 +57,9 @@ for (const disposition of ["Started", "LimitReached"] as const) {
         // Preserve the native store and launch fences on failure. Remove only after
         // both controllers exit successfully with their exact containment stopped.
         const directory = realpathSync(yield* fs.makeTempDirectory({ prefix: "dalph-native-tool-continuation-" }))
-        for (const phase of ["seed", "recover"] as const) {
+        const phases =
+          disposition === "Started" ? (["seed", "recover", "admit"] as const) : (["seed", "recover"] as const)
+        for (const phase of phases) {
           const result = yield* runController(directory, disposition, phase)
           expect(result, `${phase} native evidence retained at ${directory}: ${result.output}`).toMatchObject({
             code: 0,

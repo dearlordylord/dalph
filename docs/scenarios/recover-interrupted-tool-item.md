@@ -35,8 +35,10 @@ foreign or contradictory, no new writer or success observation is authorized.
 Release and cleanup remain gated by the existing terminal writer-custody protocol.
 
 Native launch history is read from the existing append-only private snapshots to
-recover a Started item's launch, or the launch of a later interrupted turn that
-had no tool item. Contradictory exact-incarnation history is rejected. History is
+recover a Started item's launch and every exact launch retained by a Suspend stop
+intent, including later interrupted turns with no item. All these launch
+obligations remain in fresh admission, guidance, replacement and terminal proofs
+after a newer turn is admitted. Contradictory exact-incarnation history is rejected. History is
 never rewritten or used to infer that a process has stopped.
 
 ## Accepted chronologies and tests
@@ -99,3 +101,14 @@ The focused production build exposed TS7056 declaration-size errors in
 wire types and the same runtime schema objects; the envelope annotation retains
 its original schema type. The focused Dalph build and running-host contract/HTTP
 consumer tests cover this declaration-only prerequisite to pinning a real runtime.
+
+The Started physical recovery case also stops a distinct successor incarnation
+whose turn has no item, exits that controller and reopens again. An unavailable
+fresh read for that exact launch blocks Resume without another turn; a later
+exact read admits one fourth turn under the same attempt. Store test `recovers
+no-item containment obligations from exact Suspend history and rejects foreign
+queries` checks the history ownership boundary. Tests `ignores a queued retired
+item completion at … without an unreadable projection` enqueue early and expired
+completions while Suspend holds admission; neither can alter retired evidence or
+poison later observation. These repairs introduce no additional durable boundary:
+they read existing stop intents and ignore already retired notifications.

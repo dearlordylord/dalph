@@ -8796,6 +8796,7 @@ for (const cut of ["SuspendIntent", "StopIntended", "ContainmentStop", "Stopped"
             return Effect.gen(function* () {
               const executor = yield* PlannedAttemptExecutor
               if (initial) {
+                yield* nativeStore.writeServerLaunch(recoveryLaunch)
                 yield* executor.begin(request, { _tag: "InitialDelivery" })
                 if (nativeStore.writeToolEffect === undefined) return yield* Effect.die("tool writer missing")
                 yield* nativeStore.writeToolEffect(
@@ -8844,4 +8845,71 @@ for (const cut of ["SuspendIntent", "StopIntended", "ContainmentStop", "Stopped"
       }).pipe(Effect.provide(NodeServices.layer))
     )
   }
+}
+
+for (const completedAt of [10, 60_001]) {
+  it.effect(`ignores a queued retired item completion at ${completedAt} without an unreadable projection`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const notifications = yield* PubSub.unbounded<CodexToolEffectNotification>()
+        const queued = yield* Deferred.make<void>()
+        const harness = makeHarness({
+          incarnation: recoveryLaunch.incarnation,
+          serverLaunch: recoveryLaunch,
+          toolEffects: PubSub.subscribe(notifications).pipe(
+            Effect.map((subscription) =>
+              Stream.unfold(undefined, () =>
+                PubSub.take(subscription).pipe(Effect.map((item) => [item, undefined] as const))
+              ).pipe(Stream.tap(() => Deferred.succeed(queued, undefined)))
+            )
+          )
+        })
+        const app: CodexAppServerService = {
+          ...harness.app,
+          verifyStorageOwnership: Effect.void,
+          verifyStoppedLaunch: () => Effect.void,
+          stopOwnedLaunch: () =>
+            Effect.gen(function* () {
+              // The upstream has received completion while Suspend owns attemptGate.
+              // Its item handler must reconcile the subsequently retired destination.
+              yield* PubSub.publish(notifications, {
+                phase: "Completed",
+                threadId: recoveryItem.threadId,
+                turnId: recoveryItem.turnId,
+                itemId: recoveryItem.itemId,
+                observedAtMilliseconds: completedAt
+              })
+              yield* Deferred.await(queued)
+            })
+        }
+        yield* Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+          if (harness.store.writeToolEffect === undefined) return yield* Effect.die("tool writer missing")
+          yield* harness.store.writeToolEffect(recoveryItem)
+          const attachment = yield* lifecycle.attach(correlation)
+          const projections: Array<string> = []
+          yield* Stream.runForEach(attachment.changes, (projection) =>
+            Effect.sync(() => {
+              projections.push(projection._tag)
+            })
+          ).pipe(Effect.forkChild)
+          expect(yield* executor.requestSuspension(attempt)).toMatchObject({ _tag: "ExecutorWorkSafelySuspended" })
+          for (let iteration = 0; iteration < 5; iteration += 1) yield* Effect.yieldNow
+          yield* TestClock.adjust(Duration.seconds(61))
+          expect(projections).not.toContain("Unreadable")
+          expect(harness.toolEffectRecords()).toMatchObject([
+            { ...recoveryItem, suspensionCustody: { _tag: "Stopped" } }
+          ])
+          expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+            _tag: "Exact",
+            report: { _tag: "ExecutorWorkSafelySuspended" }
+          })
+          expect(harness.turnCount()).toBe(1)
+          yield* attachment.close
+        }).pipe(Effect.provide(layerFor({ ...harness, app })))
+      })
+    )
+  )
 }

@@ -61,6 +61,10 @@ const receive = (m) => {
   reply(m.id, {})
 }
 let buffer = ""
+process.on("SIGTERM", () => {
+  for (const turn of thread.turns) if (turn.status === "inProgress") turn.status = "interrupted"
+  thread.status = "idle"; save(); process.exit(0)
+})
 process.stdin.setEncoding("utf8")
 process.stdin.on("data", chunk => {
   buffer += chunk
@@ -82,7 +86,7 @@ driverTest(
     Effect.scoped(
       Effect.gen(function* () {
         if (
-          (phase !== "seed" && phase !== "recover" && phase !== "proveStopped") ||
+          (phase !== "seed" && phase !== "recover" && phase !== "proveStopped" && phase !== "admit") ||
           (disposition !== "Started" && disposition !== "LimitReached") ||
           directory === undefined
         )
@@ -108,16 +112,24 @@ driverTest(
         })
         const request = PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, specification })
         const correlation = plannedAttemptExecutorCorrelation(attempt)
+        let blockedLaunchPid: number | undefined
+        const native = {
+          ...isolatedCodexProcessNativeService,
+          readFile: (filename: string) =>
+            filename === `/proc/${blockedLaunchPid}/stat`
+              ? Promise.reject(
+                  Object.assign(new Error("controlled unavailable old current launch"), { code: "EACCES" })
+                )
+              : isolatedCodexProcessNativeService.readFile(filename)
+        }
         const appLayer = codexAppServerNodeLayer(
           { executable, environment: { CODEX_HOME: `${directory}/provider-home` } },
-          isolatedCodexProcessNativeService
+          native
         ).pipe(Layer.provideMerge(nodeCodexAttemptStoreLayer({ stateDirectory: `${directory}/private` })))
         const layer = codexPlannedAttemptExecutorLayerWithOptions({
           toolEffectPolicy: CodexToolEffectPolicy.make({ defaultLimitMilliseconds: 1_000, longCommands: [] })
         }).pipe(
-          Layer.provideMerge(
-            codexOwnedActivityCensusLayer(isolatedCodexProcessNativeService).pipe(Layer.provideMerge(appLayer))
-          ),
+          Layer.provideMerge(codexOwnedActivityCensusLayer(native).pipe(Layer.provideMerge(appLayer))),
           Layer.provide(
             Layer.succeed(GitCommand, {
               run: () => Effect.succeed({ exitCode: 0, stdout: "", stderr: "" }),
@@ -184,6 +196,49 @@ driverTest(
                 })
               )
             expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(executing))
+            return
+          }
+          if (phase === "admit") {
+            if (store.readSuspensionLaunches === undefined)
+              return yield* Effect.die("suspension launch history missing")
+            const original = (yield* store.listToolEffects(attempt.runId, attempt.attemptId))[0]
+            if (original === undefined) return yield* Effect.die("original item missing")
+            const launches = yield* store.readSuspensionLaunches(
+              attempt.runId,
+              attempt.attemptId,
+              original.threadId,
+              attempt.worktree
+            )
+            expect(launches).toHaveLength(2)
+            const record = yield* store.readAttempt(attempt.runId, attempt.attemptId)
+            if (Option.isNone(record) || record.value._tag !== "SafelySuspended")
+              return yield* Effect.die("same attempt Safe missing")
+            const suspended = record.value
+            const current = launches.find((launch) => launch.incarnation === suspended.turnStartIncarnation)
+            if (current === undefined || current.pid === null)
+              return yield* Effect.die("no-item current launch missing")
+            const items = yield* store.listToolEffects(attempt.runId, attempt.attemptId)
+            expect(items.every((item) => item.incarnation !== current.incarnation)).toBe(true)
+            blockedLaunchPid = current.pid
+            expect((yield* executor.resume(request).pipe(Effect.result))._tag).toBe("Failure")
+            expect((yield* app.listThreadTurns(record.value.threadId)).map((turn) => turn.id)).toEqual([
+              "native-turn-1",
+              "native-turn-2",
+              "native-turn-3"
+            ])
+            expect(yield* store.listToolEffects(attempt.runId, attempt.attemptId)).toEqual(items)
+            blockedLaunchPid = undefined
+            expect(yield* executor.resume(request)).toMatchObject({ _tag: "ExecutorWorkExecuting", correlation })
+            expect((yield* app.listThreadTurns(record.value.threadId)).map((turn) => turn.id)).toEqual([
+              "native-turn-1",
+              "native-turn-2",
+              "native-turn-3",
+              "native-turn-4"
+            ])
+            expect(yield* executor.requestSuspension(attempt)).toMatchObject({
+              _tag: "ExecutorWorkSafelySuspended",
+              correlation
+            })
             return
           }
           if (phase === "proveStopped") {
