@@ -1,6 +1,7 @@
 import type { RunningHostError, RunningHostRequest, RunningHostEnvelope } from "./running-host-contract.js"
 
 const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], ReadonlyArray<string>>> = {
+  ReadOccurrencePage: ["OccurrencePage", "OccurrenceTooLarge"],
   ReadSnapshot: ["NotReady", "Ready", "Closed"],
   ReadInspectionSnapshot: ["InspectionSnapshot"],
   RefreshInspection: ["InspectionSnapshot"],
@@ -17,7 +18,12 @@ const successTags: Readonly<Record<RunningHostRequest["operation"]["_tag"], Read
   Unpause: ["UnpauseApplied"],
   WatchSnapshots: []
 }
-const inspectionOperations = ["ReadInspectionSnapshot", "RefreshInspection", "WatchInspection"] as const
+const inspectionOperations = [
+  "ReadOccurrencePage",
+  "ReadInspectionSnapshot",
+  "RefreshInspection",
+  "WatchInspection"
+] as const
 const compatibleFailures: Readonly<
   Record<RunningHostError["_tag"], ReadonlyArray<RunningHostRequest["operation"]["_tag"]>>
 > = {
@@ -36,6 +42,7 @@ const compatibleFailures: Readonly<
     "SendExecutorGuidance"
   ],
   ReadFailed: [
+    "ReadOccurrencePage",
     "ReadSnapshot",
     "ReadRunControl",
     "ReadCapacity",
@@ -45,6 +52,7 @@ const compatibleFailures: Readonly<
     "WatchInspection"
   ],
   ProjectionFailed: [
+    "ReadOccurrencePage",
     "ReadSnapshot",
     "ReadRunControl",
     "ReadCapacity",

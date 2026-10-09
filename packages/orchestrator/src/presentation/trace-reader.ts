@@ -1039,6 +1039,8 @@ export type PreparedTrace = PreparedTraceSnapshot
 
 /** Read-only trace service; it exposes projection reads only. */
 export interface TraceReaderService {
+  /** Occurrences only: validates the fixed prefix without graph, facets or causal-edge expansion. */
+  readonly readOccurrencesAt: (cursor: TraceCursor) => Effect.Effect<TraceHistory, TraceReaderError | JournalStoreError>
   readonly snapshotAdmission: (
     cursor: TraceCursor,
     byteBudget: TraceSnapshotByteBudget
@@ -2611,6 +2613,10 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
   const completeTraceIndexes = new WeakMap<ReadonlyArray<JournalRecord>, CompleteTraceIndex>()
   const historiesByIndex = new WeakMap<CompleteTraceIndex, TraceHistory>()
   const preparedByIndex = new WeakMap<CompleteTraceIndex, PreparedTrace>()
+  const occurrenceHistories = new WeakMap<
+    ReadonlyArray<JournalRecord>,
+    { readonly cursor: TraceCursor; readonly history: TraceHistory }
+  >()
   let lastRead: { readonly records: ReadonlyArray<JournalRecord>; readonly view: TraceAtCursor } | undefined
   const completeTraceIndexFor = (runId: RunId, records: ReadonlyArray<JournalRecord>) => {
     const cached = completeTraceIndexes.get(records)
@@ -2737,7 +2743,19 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
     readRecords(cursor.runId).pipe(
       Effect.flatMap((records) => snapshotAdmissionFromRecords(cursor, records, byteBudget))
     )
-  return { causalPredecessor, prepare, read, readAt, snapshotAdmission }
+  const readOccurrencesAt = Effect.fn("TraceReader.readOccurrencesAt")(function* (cursor: TraceCursor) {
+    const records = yield* readRecords(cursor.runId)
+    const cached = occurrenceHistories.get(records)
+    if (cached !== undefined && cached.cursor.runId === cursor.runId && cached.cursor.position === cursor.position)
+      return cached.history
+    yield* Effect.yieldNow
+    const prefix = yield* cursorPrefixOf(cursor, records)
+    const history = yield* historyFromRecords(cursor.runId, prefix)
+    // At most one selected prefix per immutable read, with no retained graph or facets.
+    occurrenceHistories.set(records, { cursor, history })
+    return history
+  })
+  return { causalPredecessor, prepare, read, readAt, snapshotAdmission, readOccurrencesAt }
 }
 
 /** Public helper for callers that already hold the read-only service. */
