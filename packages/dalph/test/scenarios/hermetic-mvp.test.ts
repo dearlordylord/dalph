@@ -51,6 +51,7 @@ import {
   JournalDatabaseLocator,
   JournaledRunBootstrap,
   JournalStore,
+  type JournalRecord,
   nodeEvidenceStoreLayer,
   nodeGitDirectPublicationLayer,
   nodeGitCommandLayer,
@@ -136,7 +137,8 @@ const runHermeticMvpJourney = (
   exhaustAutomaticSuccessorBounds = false,
   grantExhaustedSuccessor = false,
   progressUnrelatedTarget?: () => Effect.Effect<void, unknown, never>,
-  taskLabel: "A" | "B" = "A"
+  taskLabel: "A" | "B" = "A",
+  crashAfterPublication = false
 ) =>
   Effect.gen(function* () {
     const competingHeadRace =
@@ -144,6 +146,7 @@ const runHermeticMvpJourney = (
       competingHeadBetweenDiscoveryAndPush ||
       competingHeadAfterLostPushResponse ||
       exhaustAutomaticSuccessorBounds
+    const nativePublication = competingHeadRace || crashAfterPublication
     const fileSystem = yield* FileSystem.FileSystem
     const git = yield* GitCommand
     const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -178,9 +181,9 @@ const runHermeticMvpJourney = (
         yield* runInWorktree(git, repository, ["rev-parse", "HEAD"], "read initial commit")
       )
       const integrationRef = IntegrationTargetRef.make(
-        competingHeadRace ? "refs/heads/integration-target" : "refs/heads/master"
+        nativePublication ? "refs/heads/integration-target" : "refs/heads/master"
       )
-      if (competingHeadRace) {
+      if (nativePublication) {
         yield* runInWorktree(
           git,
           repository,
@@ -254,10 +257,10 @@ const runHermeticMvpJourney = (
         worktree
       })
       const integrationTarget = IntegrationTarget.make({
-        repository: GitRepositoryLocator.make(competingHeadRace ? repository + "/.git" : bareRemote),
+        repository: GitRepositoryLocator.make(nativePublication ? repository + "/.git" : bareRemote),
         ref: integrationRef
       })
-      const remotePublicationTarget = competingHeadRace
+      const remotePublicationTarget = nativePublication
         ? RemotePublicationTarget.make({
             branch: RemotePublicationBranchRef.make("refs/heads/master"),
             endpoint: RemotePublicationEndpoint.make(bareRemote)
@@ -299,6 +302,10 @@ const runHermeticMvpJourney = (
           return Ref.update(runtimeTrace, (entries) => [...entries.slice(-19), entry])
         }
       })
+      const publicationPrefix = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const publicationAppliedWithoutResponse = yield* Deferred.make<void>()
+      const publicationCustodyReconciliations = yield* Ref.make(0)
+      const publicationRecoveryTrace = yield* Ref.make<ReadonlyArray<string>>([])
       const promotionAppliedWithoutResponse = yield* Deferred.make<void>()
       const terminalProjectionReady = yield* Deferred.make<void>()
 
@@ -317,7 +324,7 @@ const runHermeticMvpJourney = (
       const actualCompetingPushCalls = yield* Ref.make(0)
       const suppressedNonFastForwardResponses = yield* Ref.make(0)
       const remotePublicationGitLayer = yield* Effect.gen(function* () {
-        if (!competingHeadRace) return remotePublicationGitLayerForProductionTest
+        if (!nativePublication) return remotePublicationGitLayerForProductionTest
         const publicationGitCommand = yield* GitCommand.pipe(
           Effect.provide(
             nodeGitCommandLayer.pipe(
@@ -338,6 +345,11 @@ const runHermeticMvpJourney = (
           RemotePublicationGit,
           RemotePublicationGit.of({
             ...gitAuthority,
+            reconcileSenderCustody: (request, ordinal) =>
+              gitAuthority.reconcileSenderCustody(request, ordinal).pipe(
+                Effect.tap(() => Ref.update(publicationCustodyReconciliations, (count) => count + 1)),
+                Effect.tap(() => Ref.update(publicationRecoveryTrace, (entries) => [...entries, "custody-stopped"]))
+              ),
             observe: (request) =>
               Effect.gen(function* () {
                 const alreadyObserved = yield* Ref.getAndSet(publicationObserved, true)
@@ -351,11 +363,22 @@ const runHermeticMvpJourney = (
                   ).pipe(Effect.orDie)
                   yield* Ref.set(outsideHeadPublished, true)
                 }
+                if (crashAfterPublication && (yield* Ref.get(candidatePublicationPushCalls)) > 0) {
+                  expect(yield* Ref.get(publicationCustodyReconciliations)).toBeGreaterThan(0)
+                  yield* Ref.update(publicationRecoveryTrace, (entries) => [...entries, "observe-pinned-branch"])
+                }
                 return yield* gitAuthority.observe(request)
               }),
             push: (request, attemptOrdinal) =>
               Effect.gen(function* () {
                 const candidatePush = yield* Ref.updateAndGet(candidatePublicationPushCalls, (count) => count + 1)
+                if (crashAfterPublication) {
+                  expect(candidatePush).toBe(1)
+                  const result = yield* gitAuthority.push(request, attemptOrdinal)
+                  expect(result._tag).toBe("Applied")
+                  yield* Deferred.succeed(publicationAppliedWithoutResponse, undefined)
+                  return yield* Effect.die("coordinator loses publication response after native sender stops")
+                }
                 if (exhaustAutomaticSuccessorBounds) {
                   if (grantExhaustedSuccessor && candidatePush === 4) {
                     return yield* gitAuthority.push(request, attemptOrdinal)
@@ -655,7 +678,7 @@ const runHermeticMvpJourney = (
               return yield* Effect.die("an ungranted fourth Integrator provider start reached the test boundary")
             }
             const acceptedCommit = request.correlation.session.acceptedResult.commit
-            const candidateRepository = competingHeadRace ? repository + "/.git" : bareRemote
+            const candidateRepository = nativePublication ? repository + "/.git" : bareRemote
             const tree = yield* runInGitDirectory(
               git,
               candidateRepository,
@@ -820,6 +843,32 @@ const runHermeticMvpJourney = (
           yield* Fiber.await(initialCoordinator)
         })
       )
+
+      if (crashAfterPublication) {
+        yield* Deferred.await(publicationAppliedWithoutResponse)
+        const prefix = yield* Effect.gen(function* () {
+          return yield* (yield* JournalStore).read(runId)
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+        yield* Ref.set(publicationPrefix, prefix)
+        expect(prefix.filter(hasEventTag("WorkflowRunBegan"))[0]?.event).toMatchObject({ remotePublicationTarget })
+        expect(prefix.filter(hasEventTag("RemotePublicationIntended"))).toHaveLength(1)
+        expect(prefix.filter(hasEventTag("RemotePublicationAttemptIntended"))).toHaveLength(1)
+        expect(prefix.filter(hasEventTag("RemotePublicationSucceeded"))).toHaveLength(0)
+        expect(prefix.filter(hasEventTag("TargetPromotionAttemptIntended"))).toHaveLength(0)
+        expect(prefix.filter(hasEventTag("CompletionTaskAttemptIntended"))).toHaveLength(0)
+        expect(
+          yield* runInGitDirectory(
+            git,
+            bareRemote,
+            ["rev-parse", "refs/heads/master"],
+            "prove remote publication before reopen"
+          )
+        ).toBe(Option.getOrThrow(yield* Ref.get(integratorCandidate)))
+        expect(
+          yield* runInWorktree(git, repository, ["rev-parse", integrationRef], "prove local promotion has not happened")
+        ).toBe(baseSha)
+        expect(yield* Ref.get(lifecycle)).toBe("Open")
+      }
 
       if (crashAfterPromotion) {
         yield* Deferred.await(promotionAppliedWithoutResponse)
@@ -1375,6 +1424,24 @@ const runHermeticMvpJourney = (
         observation: { _tag: "Commit", directParents: [expectedTargetHead, decodedEvidence.commit] }
       })
       expect(qualificationAt).toBeGreaterThanOrEqual(0)
+      if (crashAfterPublication) {
+        const originalPrefix = yield* Ref.get(publicationPrefix)
+        expect(records.slice(0, originalPrefix.length)).toEqual(originalPrefix)
+        const intents = records.filter(hasEventTag("RemotePublicationIntended"))
+        const attempts = records.filter(hasEventTag("RemotePublicationAttemptIntended"))
+        const proofs = records.filter(hasEventTag("RemotePublicationSucceeded"))
+        expect(intents).toHaveLength(1)
+        expect(attempts).toHaveLength(1)
+        expect(proofs).toHaveLength(1)
+        expect(proofs[0]?.event).toMatchObject({
+          proof: { _tag: "ReconciledCandidateCurrent", attemptOrdinal: 1, remoteHead: targetHead }
+        })
+        expect(proofs[0]?.event.correlation).toEqual(intents[0]?.event.correlation)
+        expect(attempts[0]?.event.correlation).toEqual(intents[0]?.event.correlation)
+        expect(yield* Ref.get(candidatePublicationPushCalls)).toBe(1)
+        expect(yield* Ref.get(publicationRecoveryTrace)).toEqual(["custody-stopped", "observe-pinned-branch"])
+        expect(eventTags.indexOf("RemotePublicationSucceeded")).toBeLessThan(promotionAttemptAt)
+      }
       expect(promotionAttemptAt).toBeGreaterThan(qualificationAt)
       expect(promotionSucceededAt).toBeGreaterThan(promotionAttemptAt)
       expect(completionAttemptAt).toBeGreaterThan(promotionSucceededAt)
@@ -1592,4 +1659,10 @@ it.live(
       runHermeticMvpJourney(false, false, false, false, false, false, undefined, "B")
     ),
   240_000
+)
+
+it.live(
+  "restarts the same Run after native Git publishes M without acknowledgement and reconciles stopped custody before promotion",
+  () => runHermeticMvpJourney(false, false, false, false, false, false, undefined, "A", true),
+  120_000
 )
