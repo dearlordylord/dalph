@@ -129,6 +129,7 @@ Git history.
 - [Navigate a large observed Run without losing identity](large-run-navigation.md)
 - [Run one task through a hermetic no-crash Dalph lifecycle](hermetic-no-crash-lifecycle.md)
 - [Two ready tasks overlap while one target integrates in journal order](hermetic-concurrency-and-serialized-integration.md)
+- [Restart after Git publishes the candidate without acknowledgement](restart-after-remote-publication.md)
 - [Restart after Git promotes the target without returning](crash-after-target-promotion.md)
 - [Release a dependant from fresh tracker success and audit exact owned resources](tracker-release-and-resource-census.md)
 - [Converge the bounded MVP and presentation parent acceptance](final-parent-acceptance.md)
