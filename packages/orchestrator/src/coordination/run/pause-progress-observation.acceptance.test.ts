@@ -58,7 +58,7 @@ import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import {
   DeliveryRuntimeObservationObserver,
-  DeliveryRuntimeObservationPublication
+  DeliveryRuntimeObservationUpdates
 } from "../delivery/delivery-runtime-observation.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { DeliveryRelationInputObserver } from "../delivery/delivery-relation-input-observer.js"
@@ -620,7 +620,7 @@ const updateLatestJournaledRuntimeObservation = Effect.fn(
   "PauseProgressAcceptance.updateLatestJournaledRuntimeObservation"
 )(function* (runId: RunId) {
   const journal = yield* Journal
-  const publication = yield* DeliveryRuntimeObservationPublication
+  const publication = yield* DeliveryRuntimeObservationUpdates
   const resources = yield* DeliveryRuntimeResources
   const recovery = yield* makeRunRecoveryProjection(runId, undefined, resources.integrationTargets)
   const relations = yield* makeReactiveDeliveryRelationsLayer(

@@ -69,7 +69,7 @@ returning a `DeliveryPlanningCatchUpBoundary`. `DeliveryGraphView` is the derive
 current descriptive value; `DeliveryRelationInputObserver` observes its coherent
 input bundle without writing history. `DeliveryRuntimeEvaluation` is the derived
 value consumed through the in-process current signal. The runtime's
-`DeliveryRuntimeObservationPublication.updateLatest` replaces the latest passive
+`DeliveryRuntimeObservationUpdates.updateLatest` replaces the latest passive
 observation; its paired signal actually publishes changes to subscribers.
 These are distinct boundaries, with no additional transport or durable authority.
 

@@ -284,7 +284,7 @@ interface DeliveryRuntimeObservationObserverService {
   readonly observe: (observation: DeliveryRuntimeReadyObservation) => Effect.Effect<void>
 }
 
-/** Optional passive observer of each process-local runtime publication; production is inert by default. */
+/** Optional passive observer of each latest process-local runtime observation update; production is inert by default. */
 export const DeliveryRuntimeObservationObserver = Context.Reference<DeliveryRuntimeObservationObserverService>(
   "@dalph/DeliveryRuntimeObservationObserver",
   { defaultValue: () => ({ observe: () => Effect.void }) }
@@ -298,7 +298,7 @@ export type DeliveryRuntimeObservationState = Data.TaggedEnum<{
 
 export const DeliveryRuntimeObservationState = Data.taggedEnum<DeliveryRuntimeObservationState>()
 
-export interface DeliveryRuntimeObservationPublicationService {
+export interface DeliveryRuntimeObservationUpdatesService {
   readonly close: Effect.Effect<void>
   readonly updateLatest: (
     evaluation: DeliveryRuntimeEvaluation,
@@ -307,15 +307,15 @@ export interface DeliveryRuntimeObservationPublicationService {
 }
 
 /** Internal mutation authority paired with the read-only signal exposed by runtime resources. */
-export interface DeliveryRuntimeObservationController extends DeliveryRuntimeObservationPublicationService {
+export interface DeliveryRuntimeObservationController extends DeliveryRuntimeObservationUpdatesService {
   readonly signal: CurrentSignal<DeliveryRuntimeObservationState>
 }
 
 /** Write capability retained by the delivery runtime; passive observers receive only the paired signal. */
-export class DeliveryRuntimeObservationPublication extends Context.Service<
-  DeliveryRuntimeObservationPublication,
-  DeliveryRuntimeObservationPublicationService
->()("@dalph/DeliveryRuntimeObservationPublication") {}
+export class DeliveryRuntimeObservationUpdates extends Context.Service<
+  DeliveryRuntimeObservationUpdates,
+  DeliveryRuntimeObservationUpdatesService
+>()("@dalph/DeliveryRuntimeObservationUpdates") {}
 
 export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRuntimeObservation.makeController")(
   function* () {

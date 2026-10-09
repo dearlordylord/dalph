@@ -12,7 +12,7 @@ import type { CurrentSignal, DeliveryTaskWorkAdmissionBasis } from "./relations.
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import {
   makeDeliveryRuntimeObservationController,
-  DeliveryRuntimeObservationPublication,
+  DeliveryRuntimeObservationUpdates,
   type DeliveryRuntimeObservationController,
   type DeliveryRuntimeObservationState
 } from "./delivery-runtime-observation.js"
@@ -106,8 +106,8 @@ export const deliveryRuntimeResourceCapabilitiesLayer = (capabilities: DeliveryR
   Layer.mergeAll(
     Layer.succeed(DeliveryRuntimeResources, DeliveryRuntimeResources.of(capabilities.resources)),
     Layer.succeed(
-      DeliveryRuntimeObservationPublication,
-      DeliveryRuntimeObservationPublication.of(capabilities.observation)
+      DeliveryRuntimeObservationUpdates,
+      DeliveryRuntimeObservationUpdates.of(capabilities.observation)
     ),
     Layer.succeed(DeliveryRuntimeResourceCapabilityPair, DeliveryRuntimeResourceCapabilityPair.of(capabilities))
   )
@@ -121,8 +121,8 @@ export const deliveryRuntimeResourcesLayer = (applicationExitAdmission: Applicat
       return Context.empty().pipe(
         Context.add(DeliveryRuntimeResources, DeliveryRuntimeResources.of(capabilities.resources)),
         Context.add(
-          DeliveryRuntimeObservationPublication,
-          DeliveryRuntimeObservationPublication.of(capabilities.observation)
+          DeliveryRuntimeObservationUpdates,
+          DeliveryRuntimeObservationUpdates.of(capabilities.observation)
         ),
         Context.add(DeliveryRuntimeResourceCapabilityPair, DeliveryRuntimeResourceCapabilityPair.of(capabilities))
       )

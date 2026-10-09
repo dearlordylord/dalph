@@ -74,7 +74,7 @@ import {
   type DeliveryProposalDerivationIssue
 } from "./delivery-action-proposal.js"
 import {
-  DeliveryRuntimeObservationPublication,
+  DeliveryRuntimeObservationUpdates,
   DeliveryRuntimeObservationState,
   type DeliveryRuntimeLiveOwnerSnapshot
 } from "./delivery-runtime-observation.js"
@@ -2763,8 +2763,8 @@ it.effect("calls no instrumented authority or mutation boundary while status cha
           forbidden<typeof DeliveryRuntimeResourceCapabilityPair.Service>("DeliveryRuntimeResourceCapabilityPair")
         ),
         Context.add(
-          DeliveryRuntimeObservationPublication,
-          forbidden<typeof DeliveryRuntimeObservationPublication.Service>("DeliveryRuntimeObservationPublication")
+          DeliveryRuntimeObservationUpdates,
+          forbidden<typeof DeliveryRuntimeObservationUpdates.Service>("DeliveryRuntimeObservationUpdates")
         ),
         Context.add(DeliveryActionExecutor, forbidden<typeof DeliveryActionExecutor.Service>("DeliveryActionExecutor")),
         Context.add(
