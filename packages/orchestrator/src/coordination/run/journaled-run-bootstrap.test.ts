@@ -2351,13 +2351,25 @@ it.effect("rejects a terminated Run before constructing activation", () =>
       )
       expect((yield* storage.scanHot()).runs).toEqual([])
       expect((yield* storage.auditAll()).runs).toContainEqual(expect.objectContaining({ runId, partition: "Cold" }))
-      const bootstrap = yield* buildBootstrap(runId, storage)
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        JournalStore.of({
+          ...storage,
+          read: () => Effect.die("known completion must not replay history"),
+          scanHot: () => Effect.die("known completion must not scan histories")
+        })
+      )
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunTerminated")
       expect(yield* bootstrap.awaitEstablished).toEqual(
         expect.objectContaining({ acceptedAt: expect.any(Number), runId, target })
       )
       expect(yield* bootstrap.runTermination.await).toMatchObject({ disposition: "Completed" })
       expect(yield* bootstrap.acceptedHistory.get).toEqual((yield* bootstrap.runTermination.await).terminatedAt)
+      expect(
+        yield* bootstrap
+          .readRunReactivationControl(FixtureTarget.make("foreign-completed-target"), runId)
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "WorkflowRunTargetMismatch" })
       const runtimeEntered = yield* Ref.make(false)
 
       const failure = yield* bootstrap

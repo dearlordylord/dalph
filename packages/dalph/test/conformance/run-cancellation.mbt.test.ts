@@ -913,6 +913,7 @@ const makeStorage = (
     })
 
   return {
+    readCompletion: (runId: RunId) => Effect.succeed({ _tag: "NoCompletion" as const, runId }),
     append,
     beginRun,
     read: () => Effect.succeed(readRecords()),

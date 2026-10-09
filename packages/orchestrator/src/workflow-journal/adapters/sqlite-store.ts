@@ -1,6 +1,8 @@
+import { completedRunRecoveryFailure, RunCompletionTime } from "../completion.js"
+import { makeSqliteCompletions } from "./sqlite-completion.js"
 import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Cause, Config, Effect, Exit, HashMap, Layer, Option, Ref, Semaphore } from "effect"
+import { Cause, Clock, Config, Effect, Exit, HashMap, Layer, Option, Ref, Semaphore } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import type { RemotePublicationTarget, RunId } from "@dalph/contracts"
@@ -20,6 +22,7 @@ import {
   JournalPartitionContradiction,
   JournalStore,
   JournalStoreContradiction,
+  WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated
 } from "../store.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord } from "../store.js"
@@ -54,6 +57,10 @@ interface SqliteJournalTestConfig extends SqliteJournalStoreConfig {
   /** Counts complete partition loads without exposing mutable adapter state. */
   readonly onPartitionRowsQueried?: (partition: "Hot" | "Cold", runId: RunId, rowCount: number) => Effect.Effect<void>
   /** Deterministic lost-response or concurrency cut after append COMMIT and before checkpoint publication. */
+  readonly beforeBackfillCommit?: () => Effect.Effect<void, string>
+  readonly afterBackfillCommit?: () => Effect.Effect<void, string>
+  readonly beforeCompletionCommit?: () => Effect.Effect<void, string>
+  readonly afterCompletionCommit?: () => Effect.Effect<void, string>
   readonly afterAppendCommit?: () => Effect.Effect<void, string>
   /** Counts rows inserted through the append path. */
   readonly onAppendInserted?: (runId: RunId) => Effect.Effect<void>
@@ -140,7 +147,21 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           locateRunPartition,
           scanPartition
         } = queries
+        const completions = makeSqliteCompletions(sql, queries)
+        yield* completions.reconcile().pipe(
+          Effect.tap(() => testConfig?.beforeBackfillCommit?.() ?? Effect.void),
+          sql.withTransaction,
+          Effect.tap(() => testConfig?.afterBackfillCommit?.() ?? Effect.void),
+          Effect.mapError((failure) => classifyJournalMethodFailure("JournalStore.readCompletion", failure))
+        )
         const serialization = yield* Semaphore.make(1)
+        const readCompletion = (runId: RunId) =>
+          serialization.withPermit(
+            completions.read(runId).pipe(
+              sql.withTransaction,
+              Effect.mapError((failure) => classifyJournalMethodFailure("JournalStore.readCompletion", failure))
+            )
+          )
         const checkpoints = yield* Ref.make(HashMap.empty<RunId, SqliteStorageCheckpoint>())
         const readSnapshots = yield* Ref.make(HashMap.empty<RunId, SqlitePartitionSnapshot>())
         const invalidateRead = (runId: RunId) => Ref.update(readSnapshots, HashMap.remove(runId))
@@ -171,6 +192,9 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         ) {
           return yield* serialization.withPermit(
             Effect.gen(function* () {
+              const completion = yield* completions.read(runId)
+              if (completion._tag === "CompletedRun")
+                return yield* new WorkflowRunAlreadyBegan({ runId, beganAt: JournalPosition.make(1) })
               const existing = yield* loadRunRecords(runId, "JournalStore.beginRun")
               const decision = decideWorkflowRunBeginning(
                 existing,
@@ -202,6 +226,12 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           const encoded = encodeJournalEvent(event)
           return yield* serialization.withPermit(
             Effect.gen(function* () {
+              const completion = yield* completions.read(runId)
+              if (completion._tag === "CompletedRun")
+                return yield* new WorkflowRunAlreadyTerminated({
+                  runId,
+                  terminatedAt: completion.completion.terminatedAt
+                })
               const checkpoint = yield* loadCurrentSnapshot(runId, "JournalStore.append")
               const checkpointDecision = decideSqliteAppendCheckpoint(checkpoint, runId)
               if (checkpointDecision._tag === "Rejected") return yield* checkpointDecision.error
@@ -263,6 +293,9 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         ) {
           return yield* serialization.withPermit(
             Effect.gen(function* () {
+              const completion = yield* completions.read(runId)
+              const failure = completedRunRecoveryFailure(runId, target, completion)
+              if (failure !== undefined) return yield* failure
               const snapshot = yield* loadRunSnapshot(runId, "JournalStore.readRunForRecovery").pipe(
                 sql.withTransaction,
                 Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.readRunForRecovery", cause))
@@ -271,7 +304,8 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
               return yield* readRecoverableRunBeginning(snapshot.records, runId, target)
             }).pipe(
               Effect.ensuring(invalidateRead(runId)),
-              Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void))
+              Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)),
+              Effect.mapError((failure) => classifyJournalMethodFailure("JournalStore.readRunForRecovery", failure))
             )
           )
         })
@@ -324,7 +358,9 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
               const contradictoryRunId = [...hot.rowRunIds].find((candidate) => cold.rowRunIds.has(candidate))
               if (contradictoryRunId !== undefined)
                 return yield* new JournalPartitionContradiction({ runId: contradictoryRunId })
-              return { issues: [...hot.issues, ...cold.issues], runs: [...hot.runs, ...cold.runs] }
+              const audit = { issues: [...hot.issues, ...cold.issues], runs: [...hot.runs, ...cold.runs] }
+              yield* completions.audit(audit)
+              return audit
             }).pipe(
               sql.withTransaction,
               Effect.ensuring(invalidateAll),
@@ -337,6 +373,7 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         const retireTerminalRun = Effect.fn("JournalStore.Sqlite.retireTerminalRun")(function* (runId: RunId) {
           return yield* serialization.withPermit(
             retireSqlite(runId).pipe(
+              Effect.tap(() => completions.read(runId)),
               sql.withTransaction,
               Effect.tap(() => testConfig?.afterRetirementCommit?.() ?? Effect.void),
               Effect.ensuring(invalidate(runId)),
@@ -352,6 +389,12 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         ) {
           return yield* serialization.withPermit(
             Effect.gen(function* () {
+              const completion = yield* completions.read(runId)
+              if (completion._tag === "CompletedRun")
+                return yield* new WorkflowRunAlreadyTerminated({
+                  runId,
+                  terminatedAt: completion.completion.terminatedAt
+                })
               const cold = yield* hasPartitionRows("Cold", runId, "JournalStore.terminateRun")
               const records = yield* loadRunRecords(runId, "JournalStore.terminateRun")
               const decision = decideWorkflowRunTermination(records, runId, disposition, evidence)
@@ -369,16 +412,23 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
               }
               const record = decision.record
               yield* insertLifecycleRecord(record)
+              yield* completions.save(runId, [...records, record], {
+                _tag: "Known",
+                completedAt: RunCompletionTime.make(yield* Clock.currentTimeMillis)
+              })
+              yield* testConfig?.beforeCompletionCommit?.() ?? Effect.void
               return record
             }).pipe(
               sql.withTransaction,
               Effect.ensuring(invalidate(runId)),
+              Effect.tap(() => testConfig?.afterCompletionCommit?.() ?? Effect.void),
               Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.terminateRun", cause))
             )
           )
         })
 
         return JournalStore.of({
+          readCompletion,
           append,
           auditAll,
           beginRun,

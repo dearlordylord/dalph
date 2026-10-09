@@ -19,6 +19,7 @@ import {
   acceptedJournalRecordsForKind,
   journalRecordAt,
   type JournaledRunTermination,
+  type RunCompletion,
   GithubGraphqlClient,
   type GithubGraphqlExecution,
   GithubGraphqlRequestError,
@@ -200,6 +201,7 @@ export interface ProductionHostObservation {
 export interface ProductionPassiveRunControl {
   readonly direction: "RunPaused" | "RunUnpaused" | "RunTerminated"
   readonly observedAt: TraceCursor
+  readonly completion?: RunCompletion
   readonly termination: JournaledRunTermination | null
 }
 
@@ -1321,7 +1323,20 @@ export const withDecodedProductionRepositoryHost = <
       const attachedUnpauseBoundary = yield* Ref.make<"Open" | "NeedsJournalReconciliation">("Open")
       const attachedUnpauseCommands = yield* Semaphore.make(1)
       const acceptedReader = Context.getOption(run, AcceptedJournalReader)
+      const completionReader = Context.get(foundation, RunLifecycleJournal)
       const readRunControl = Effect.gen(function* () {
+        const completion = yield* completionReader
+          .readCompletion(selection.runId)
+          .pipe(Effect.mapError(() => new ProductionPassiveControlUnavailable({})))
+        if (completion._tag === "CompletedRun") {
+          const observedAt = TraceCursor.make({ runId: selection.runId, position: completion.completion.terminatedAt })
+          return {
+            direction: "RunTerminated" as const,
+            observedAt,
+            completion: completion.completion,
+            termination: { disposition: completion.completion.disposition, terminatedAt: observedAt }
+          } satisfies ProductionPassiveRunControl
+        }
         if (Option.isNone(acceptedReader)) return yield* new ProductionPassiveControlUnavailable({})
         const prefix = yield* acceptedReader.value
           .readAccepted(selection.runId)

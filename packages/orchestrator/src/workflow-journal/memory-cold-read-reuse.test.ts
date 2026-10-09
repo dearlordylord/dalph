@@ -142,8 +142,9 @@ it.effect(
       // The final noncanonical envelope triggers the existing raw diagnostic
       // replay after three indexed records; each failure must repeat both.
       const indexedRecordsBeforeMalformedEnvelope = 3
-      expect(counts.validations).toBe(valid.length + 4 * (indexedRecordsBeforeMalformedEnvelope + malformed.length))
-      expect(counts.materializations).toEqual([valid.length])
+      // Legacy adoption validated the valid sibling before this read observation began.
+      expect(counts.validations).toBe(4 * (indexedRecordsBeforeMalformedEnvelope + malformed.length))
+      expect(counts.materializations).toEqual([])
     }).pipe(Effect.provide(memoryJournalStoreLayerFromPartitionRecords({ cold: [...malformed, ...valid] })))
   }
 )

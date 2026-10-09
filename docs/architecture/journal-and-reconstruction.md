@@ -89,6 +89,26 @@ See
 [ADR 0011](../adr/0011-establish-runs-idempotently-before-activation.md) and
 [the accepted chronology](../scenarios/run-establishment-and-activation.md).
 
+## Independently readable completion
+
+Dalph commits a compact completion record with accepted termination in one
+storage transition. `JournalStore.readCompletion` and the lifecycle capability
+read that result without full-history replay or repair. The terminal public
+Run-control response includes the result and typed Available history, and
+bootstrap checks it before lazy policy or activation. Active controls keep
+using their accepted prefix. A foreign target and contradictory storage facts
+fail closed.
+
+Supported SQLite generation 1/2 histories migrate to generation 3. Open-time
+reconciliation canonically validates legacy terminal candidates and records
+Unknown original time with the first committed verification baseline; it
+preserves all Hot/Cold rows. Already established records use independent
+integrity reads, never another baseline. Invalid histories are reported by exact
+reads/audits and never adopted. Cold failures do not prevent unrelated Hot
+recovery. No retention timer or deletion is added. The
+[completion scenarios and evidence limits](../scenarios/compact-run-completion.md)
+map owner, migration, bootstrap and public checks; Deleted details remain #489.
+
 ## Complete-history reconstruction
 
 On startup, while holding coordinator ownership, Dalph calls `scanHot` to
@@ -164,8 +184,8 @@ models. The live activation may incrementally fold later records after its last
 applied position, but that cache is discarded after process loss and never
 replaces complete-history validation on the next establishment.
 
-The SQLite journal schema remains generation 2 because this change adds no
-columns or migration rows. Its payload semantics advance independently to
+The SQLite journal schema is generation 3 for independently stored completion
+records. Its payload semantics remain independently at
 journal event version 14: active-work checks use the ordinary tracker and Git
 read intents and outcomes, while the `TrackerNotification` or `Timer` source
 remains process-local and is never copied into workflow history. The event

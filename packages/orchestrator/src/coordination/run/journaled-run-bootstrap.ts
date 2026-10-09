@@ -958,6 +958,15 @@ export const journaledRunBootstrapLayer = (
                       }
                       return cached
                     }
+                    const completion = yield* lifecycle.readCompletion(runId)
+                    if (completion._tag === "CompletedRun") {
+                      const mismatch = requestedTargetMismatch(runId, completion.completion.target, target)
+                      if (mismatch !== undefined) return yield* mismatch
+                      return yield* new WorkflowRunAlreadyTerminated({
+                        runId,
+                        terminatedAt: completion.completion.terminatedAt
+                      })
+                    }
                     const initial = yield* inspectStartupRecovery(
                       runId,
                       lifecycle,
@@ -1069,6 +1078,25 @@ export const journaledRunBootstrapLayer = (
         Effect.gen(function* () {
           if (runId !== expectedRunId) {
             return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
+          }
+          const completion = yield* lifecycle.readCompletion(runId)
+          if (completion._tag === "CompletedRun") {
+            const mismatch = requestedTargetMismatch(runId, completion.completion.target, target)
+            if (mismatch !== undefined) return yield* mismatch
+            yield* processRuntimeCapabilities.observation.close
+            yield* Deferred.succeed(
+              runTermination,
+              JournaledRunTermination.make({
+                disposition: completion.completion.disposition,
+                terminatedAt: TraceCursor.make({ position: completion.completion.terminatedAt, runId })
+              })
+            )
+            yield* publishAcceptedHistory(runId, completion.completion.terminatedAt)
+            yield* Deferred.succeed(
+              established,
+              JournaledRunEstablished.make({ acceptedAt: completion.completion.terminatedAt, runId, target })
+            )
+            return "RunTerminated" as const
           }
           const establishedJournal = yield* establishStoredJournal(target)
           if (Option.isNone(establishedJournal)) return "RunUnpaused" as const

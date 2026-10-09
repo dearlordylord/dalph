@@ -1165,3 +1165,5 @@ export {
 } from "./workflow/protocols/task-attempt-planning/retry.js"
 
 export { TaskAttemptBaseRetryRequested } from "./workflow/registry/occurrence-projection.js"
+
+export * from "./workflow-journal/completion.js"

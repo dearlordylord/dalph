@@ -6,7 +6,7 @@ import { JournalSchemaVersion } from "../identity.js"
 import { JournalDataCorruption, JournalSchemaIncompatible } from "../store.js"
 import { classifyJournalStorageFailure, decodeBoundary } from "./sqlite-store-errors.js"
 
-const currentJournalSchemaVersionValue = 2
+const currentJournalSchemaVersionValue = 3
 const currentJournalSchemaVersion = JournalSchemaVersion.make(currentJournalSchemaVersionValue)
 const journalMigrationId = 2
 const MigrationVersionRows = Schema.Tuple([Schema.Struct({ schema_version: JournalSchemaVersion })])
@@ -49,12 +49,25 @@ export const migrateJournal = Effect.fn("JournalStore.Sqlite.migrate")(function*
       ) STRICT
     `
     if (afterColdTableCreated !== undefined) yield* afterColdTableCreated()
+    yield* migrationSql`PRAGMA user_version = ${migrationSql.literal(String(journalMigrationId))}`
+  })
+  const createCompletions = Effect.gen(function* () {
+    const migrationSql = yield* SqlClient.SqlClient
+    yield* migrationSql`CREATE TABLE run_completions (
+      run_id TEXT PRIMARY KEY NOT NULL,
+      completion_json TEXT NOT NULL,
+      integrity_json TEXT NOT NULL,
+      checksum TEXT NOT NULL
+    ) STRICT`
+    yield* migrationSql`CREATE INDEX journal_terminal_runs ON journal_records(event_kind, run_id)`
+    yield* migrationSql`CREATE INDEX journal_cold_terminal_runs ON journal_records_cold(event_kind, run_id)`
     yield* migrationSql`PRAGMA user_version = ${migrationSql.literal(String(currentJournalSchemaVersionValue))}`
   })
   yield* SqliteMigrator.run({
     loader: Effect.succeed([
       [1, "create_current_journal_records", Effect.succeed(createCurrentJournal)],
-      [journalMigrationId, "create_cold_journal_records", Effect.succeed(createColdJournal)]
+      [journalMigrationId, "create_cold_journal_records", Effect.succeed(createColdJournal)],
+      [currentJournalSchemaVersionValue, "create_run_completions", Effect.succeed(createCompletions)]
     ]),
     table: "effect_sql_migrations"
   }).pipe(

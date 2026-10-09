@@ -1,10 +1,18 @@
+import {
+  adoptMemoryCompletions,
+  readMemoryCompletion,
+  memoryTerminationTransition,
+  type MemoryJournalState
+} from "./memory-completion.js"
+import { RunCompletionTime, type RunCompletion } from "../completion.js"
 import type { AttemptBasePolicy } from "../../workflow/protocols/task-attempt-planning/base.js"
 import { type RemotePublicationTarget, type RunId } from "@dalph/contracts"
-import { Effect, Layer, Ref, Schema } from "effect"
+import { Clock, Effect, Layer, Ref, Schema } from "effect"
 import { JournalPosition, type JournalRecordKey } from "../identity.js"
 import {
   type AppendableWorkflowJournalEvent,
   type JournalRecord,
+  type JournalStoreOperation,
   JournalHistoryCorruption,
   JournalHistoryNotTerminal,
   JournalPartitionContradiction,
@@ -13,30 +21,25 @@ import {
   journalStoreCapabilities,
   unpublishedInRunJournalTestLayer,
   type JournalTerminalHistoryRetirement,
-  type WorkflowRunAlreadyBegan,
+  WorkflowRunAlreadyBegan,
+  WorkflowRunTargetMismatch,
   WorkflowRunAlreadyTerminated,
-  type WorkflowRunTerminationEvidenceInvalid,
   type WorkflowRunIdentityAlreadyUsed,
   WorkflowRunNotBegan
 } from "../store.js"
 import { WorkflowJournalEvent } from "../../workflow/registry/event.js"
-import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
-import {
-  decideWorkflowRunBeginning,
-  decideWorkflowRunTermination,
-  readRecoverableRunBeginning
-} from "../run-lifecycle.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { decideWorkflowRunBeginning, readRecoverableRunBeginning } from "../run-lifecycle.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
 import { decideJournalPartitionHistory } from "../partition-history.js"
 import type { JournalScan } from "../recovery-model.js"
 
-interface MemoryJournalState {
-  readonly hotRecordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
-  readonly coldRecordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
-}
-
-const emptyMemoryJournalState = (): MemoryJournalState => ({ coldRecordsByRun: new Map(), hotRecordsByRun: new Map() })
+const emptyMemoryJournalState = (): MemoryJournalState => ({
+  completions: new Map(),
+  coldRecordsByRun: new Map(),
+  hotRecordsByRun: new Map()
+})
 
 const recordsByRun = (records: ReadonlyArray<JournalRecord>): ReadonlyMap<RunId, ReadonlyArray<JournalRecord>> => {
   return records.reduce(
@@ -167,7 +170,10 @@ const hotMemoryRetirementTransition = (
   }
   const coldRecordsByRun = new Map([...current.coldRecordsByRun, [runId, hot] as const])
   const hotRecordsByRun = new Map([...current.hotRecordsByRun].filter(([candidate]) => candidate !== runId))
-  return [Effect.succeed({ _tag: "Retired", from: "Hot", runId, to: "Cold" }), { coldRecordsByRun, hotRecordsByRun }]
+  return [
+    Effect.succeed({ _tag: "Retired", from: "Hot", runId, to: "Cold" }),
+    { ...current, coldRecordsByRun, hotRecordsByRun }
+  ]
 }
 
 const memoryRetirementTransition = (current: MemoryJournalState, runId: RunId): MemoryRetirementTransition => {
@@ -183,11 +189,23 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
   Layer.effect(
     JournalStore,
     Effect.gen(function* () {
-      const state = yield* Ref.make<MemoryJournalState>(initial)
+      const baseline = RunCompletionTime.make(yield* Clock.currentTimeMillis)
+      const completions = adoptMemoryCompletions(initial, baseline)
+      const state = yield* Ref.make<MemoryJournalState>({ ...initial, completions })
+      const readCompletion = Effect.fn("JournalStore.Memory.readCompletion")(function* (
+        runId: RunId,
+        operation: JournalStoreOperation = "JournalStore.readCompletion"
+      ) {
+        const current = yield* Ref.get(state)
+        return yield* readMemoryCompletion(current, runId, operation)
+      })
       // These immutable roots belong to this layer's Cold partition. Weak identity
       // retention fits their lifetime; Effect Cache's capacity/TTL eviction does
       // not. This is neither caller-array acceptance nor mutation isolation.
       const validatedColdRoots = new WeakMap<ReadonlyArray<JournalRecord>, RunId>()
+      for (const [runId, records] of initial.coldRecordsByRun) {
+        if (!initial.completions.has(runId) && completions.has(runId)) validatedColdRoots.set(records, runId)
+      }
       const readColdHistory = (
         runId: RunId,
         records: ReadonlyArray<JournalRecord>,
@@ -211,6 +229,9 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         remotePublicationTarget: RemotePublicationTarget,
         attemptBasePolicy?: AttemptBasePolicy
       ) {
+        const receipt = yield* readCompletion(runId)
+        if (receipt._tag === "CompletedRun")
+          return yield* new WorkflowRunAlreadyBegan({ runId, beganAt: JournalPosition.make(1) })
         const update = (
           current: MemoryJournalState
         ): readonly [
@@ -249,6 +270,9 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         key: JournalRecordKey,
         event: AppendableWorkflowJournalEvent
       ) {
+        const receipt = yield* readCompletion(runId)
+        if (receipt._tag === "CompletedRun")
+          return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: receipt.completion.terminatedAt })
         const result = yield* Ref.modify(state, (current) => memoryAppendTransition(current, runId, key, event))
         return yield* result
       })
@@ -264,6 +288,16 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         runId: RunId,
         target: TrackerTarget
       ) {
+        const receipt = yield* readCompletion(runId, "JournalStore.readRunForRecovery")
+        if (receipt._tag === "CompletedRun") {
+          if (taskTrackerTargetKey(receipt.completion.target) !== taskTrackerTargetKey(target))
+            return yield* new WorkflowRunTargetMismatch({
+              recordedTarget: receipt.completion.target,
+              requestedTarget: target,
+              runId
+            })
+          return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: receipt.completion.terminatedAt })
+        }
         const current = yield* Ref.get(state)
         const { cold, hot } = locateRun(current, runId)
         if (cold !== undefined && hot !== undefined) return yield* new JournalPartitionContradiction({ runId })
@@ -292,6 +326,7 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         )
         if (contradictoryRunId !== undefined)
           return yield* new JournalPartitionContradiction({ runId: contradictoryRunId })
+        for (const runId of current.completions.keys()) yield* readCompletion(runId)
         const hot = [...current.hotRecordsByRun]
         const cold = [...current.coldRecordsByRun]
         const issues = [
@@ -312,6 +347,7 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
       })
 
       const retireTerminalRun = Effect.fn("JournalStore.Memory.retireTerminalRun")(function* (runId: RunId) {
+        yield* readCompletion(runId, "JournalStore.retireTerminalRun")
         const result = yield* Ref.modify(state, (current) => memoryRetirementTransition(current, runId))
         return yield* result
       })
@@ -321,49 +357,18 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         disposition: RunTerminationDisposition,
         evidence: RunFinalityEvidence
       ) {
-        const update = (
-          current: MemoryJournalState
-        ): readonly [
-          Effect.Effect<
-            JournalRecord,
-            | WorkflowRunAlreadyTerminated
-            | WorkflowRunNotBegan
-            | WorkflowRunTerminationEvidenceInvalid
-            | JournalPartitionContradiction
-            | JournalHistoryCorruption
-          >,
-          MemoryJournalState
-        ] => {
-          const { cold, hot } = locateRun(current, runId)
-          if (cold !== undefined && hot !== undefined)
-            return [Effect.fail(new JournalPartitionContradiction({ runId })), current]
-          const records = hot ?? cold ?? []
-          const decision = decideWorkflowRunTermination(records, runId, disposition, evidence)
-          if (decision._tag === "LifecycleTransitionRejected") {
-            return [Effect.fail(decision.failure), current]
-          }
-          if (cold !== undefined) {
-            return [
-              Effect.fail(
-                new JournalHistoryCorruption({
-                  detail: "cold partition contains nonterminal history",
-                  operation: "JournalStore.terminateRun",
-                  partition: "Cold",
-                  runId
-                })
-              ),
-              current
-            ]
-          }
-          const record = decision.record
-          const hotRecordsByRun = new Map([...current.hotRecordsByRun, [runId, [...records, record]] as const])
-          return [Effect.succeed(record), { ...current, hotRecordsByRun }]
-        }
+        const receipt = yield* readCompletion(runId)
+        if (receipt._tag === "CompletedRun")
+          return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: receipt.completion.terminatedAt })
+        const timing = { _tag: "Known" as const, completedAt: RunCompletionTime.make(yield* Clock.currentTimeMillis) }
+        const update = (current: MemoryJournalState) =>
+          memoryTerminationTransition(current, runId, disposition, evidence, timing)
         const result = yield* Ref.modify(state, update)
         return yield* result
       })
 
       return JournalStore.of({
+        readCompletion,
         append,
         auditAll,
         beginRun,
@@ -383,11 +388,13 @@ export const memoryJournalTestLayer = unpublishedInRunJournalTestLayer.pipe(Laye
 
 /** Test-only storage seam for injecting exact typed rows into either partition. */
 export const memoryJournalStoreLayerFromPartitionRecords = (input: {
+  readonly completions?: ReadonlyArray<RunCompletion>
   readonly cold?: ReadonlyArray<JournalRecord>
   readonly hot?: ReadonlyArray<JournalRecord>
 }) =>
   journalStoreCapabilities(
     memoryRawJournalStoreLayer({
+      completions: new Map((input.completions ?? []).map((receipt) => [receipt.runId, receipt])),
       coldRecordsByRun: recordsByRun(input.cold ?? []),
       hotRecordsByRun: recordsByRun(input.hot ?? [])
     })
@@ -395,6 +402,7 @@ export const memoryJournalStoreLayerFromPartitionRecords = (input: {
 
 /** Raw malformed/cold fixtures deliberately bypass accepted Journal acquisition. */
 export const memoryJournalTestLayerFromPartitionRecords = (input: {
+  readonly completions?: ReadonlyArray<RunCompletion>
   readonly cold?: ReadonlyArray<JournalRecord>
   readonly hot?: ReadonlyArray<JournalRecord>
 }) => unpublishedInRunJournalTestLayer.pipe(Layer.provideMerge(memoryJournalStoreLayerFromPartitionRecords(input)))

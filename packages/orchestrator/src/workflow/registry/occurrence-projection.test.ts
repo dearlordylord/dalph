@@ -1440,6 +1440,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
       })
       const records = yield* Ref.make(prefix)
       const journal = JournalStore.of({
+        readCompletion: (runId) => Effect.succeed({ _tag: "NoCompletion", runId }),
         append: (recordRunId, key, event) =>
           Ref.modify(records, (current) => {
             const existing = current.find((record) => record.key === key)
@@ -1479,6 +1480,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         Layer.succeed(
           RunLifecycleJournal,
           RunLifecycleJournal.of({
+            readCompletion: journal.readCompletion,
             beginRun: journal.beginRun,
             read: journal.read,
             readRunForRecovery: journal.readRunForRecovery,

@@ -1,3 +1,4 @@
+import type { RunCompletionInspection } from "./completion.js"
 import type { AttemptBasePolicy } from "../workflow/protocols/task-attempt-planning/base.js"
 // @effect-diagnostics lazyEffect:off
 import { Context, Effect, Layer, Schema } from "effect"
@@ -40,7 +41,8 @@ export const JournalStoreOperation = Schema.Literals([
   "JournalStore.readRunForRecovery",
   "JournalStore.scanHot",
   "JournalStore.auditAll",
-  "JournalStore.retireTerminalRun"
+  "JournalStore.retireTerminalRun",
+  "JournalStore.readCompletion"
 ])
 export type JournalStoreOperation = typeof JournalStoreOperation.Type
 
@@ -240,6 +242,8 @@ export const journalAppendFailureDisposition = (failure: unknown): JournalAppend
 export type JournalReadError = JournalError | InRunJournalRunMismatch | JournalStoreError
 
 export interface JournalStoreService {
+  /** Independently reads durable completion metadata; never replays or repairs history. */
+  readonly readCompletion: (runId: RunId) => Effect.Effect<RunCompletionInspection, JournalStoreError>
   readonly beginRun: (
     runId: RunId,
     target: TrackerTarget,
@@ -285,6 +289,7 @@ export class JournalStore extends Context.Service<JournalStore, JournalStoreServ
 
 /** Bootstrap and post-runtime Run lifecycle access; ordinary workflow services never receive it. */
 export interface RunLifecycleJournalService {
+  readonly readCompletion: JournalStoreService["readCompletion"]
   readonly beginRun: JournalStoreService["beginRun"]
   readonly read: JournalStoreService["read"]
   readonly readRunForRecovery: JournalStoreService["readRunForRecovery"]
@@ -310,6 +315,7 @@ export const journalStoreCapabilities = <E, R>(
         Context.add(
           RunLifecycleJournal,
           RunLifecycleJournal.of({
+            readCompletion: journal.readCompletion,
             beginRun: journal.beginRun,
             read: journal.read,
             readRunForRecovery: journal.readRunForRecovery,

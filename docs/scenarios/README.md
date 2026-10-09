@@ -85,6 +85,7 @@ Git history.
 - [Queue accepted results and cross the integration cutoff](queue-accepted-integration.md)
 - [Recover or quarantine one integration session](recover-or-quarantine-integration-session.md)
 - [Exact durable-resource cleanup dispositions](disposition-cleanup.md)
+- [Read one durable Run completion independently](compact-run-completion.md)
 - [Retire terminal workflow-journal history without changing its meaning](terminal-history-retirement.md)
 - [Store repeated journal values once without changing workflow history](compact-journal-payloads.md)
 - [Reuse unchanged journal reads and store independent gzip payloads](journal-read-cache-and-gzip.md)
