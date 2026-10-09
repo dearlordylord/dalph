@@ -78,7 +78,10 @@ export function classifyJournalMethodFailure(
   operation: "JournalStore.append",
   cause: unknown
 ): JournalStoreContradiction | JournalStoreError | WorkflowRunAlreadyTerminated | JournalPartitionContradiction
-export function classifyJournalMethodFailure(operation: "JournalStore.read", cause: unknown): JournalStoreError
+export function classifyJournalMethodFailure(
+  operation: "JournalStore.read" | "JournalStore.readCompletion",
+  cause: unknown
+): JournalStoreError
 export function classifyJournalMethodFailure(
   operation: "JournalStore.readRunForRecovery",
   cause: unknown
@@ -97,6 +100,20 @@ export function classifyJournalMethodFailure(
 ): JournalStoreError | WorkflowRunNotBegan | JournalHistoryNotTerminal | JournalPartitionContradiction
 export function classifyJournalMethodFailure(operation: StoreOperation, cause: unknown) {
   return Match.value(cause).pipe(
+    Match.when(
+      Match.instanceOf(JournalHistoryCorruption),
+      (failure) =>
+        new JournalHistoryCorruption({
+          detail: failure.detail,
+          partition: failure.partition,
+          runId: failure.runId,
+          operation
+        })
+    ),
+    Match.when(
+      Match.instanceOf(JournalStorageUnavailable),
+      (failure) => new JournalStorageUnavailable({ detail: failure.detail, operation })
+    ),
     Match.whenOr(
       Match.instanceOf(JournalStoreContradiction),
       Match.instanceOf(WorkflowRunAlreadyBegan),

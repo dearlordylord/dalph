@@ -811,6 +811,7 @@ const makeRunActivationDriverImplementation = () => {
   }
 
   const journal = JournalStore.of({
+    readCompletion: (runId) => Effect.succeed({ _tag: "NoCompletion" as const, runId }),
     append: (eventRunId, key, event) => Effect.sync(() => append(eventRunId, key, event)),
     beginRun: (eventRunId, eventTarget, policy, _publication, attemptBasePolicy) =>
       Effect.sync(() => begin(eventRunId, eventTarget, policy, attemptBasePolicy)),

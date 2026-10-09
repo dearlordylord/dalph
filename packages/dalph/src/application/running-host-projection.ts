@@ -4,6 +4,7 @@ import {
   deliveryStatusOf,
   type DeliveryRuntimeObservationState,
   type JournaledRunTermination,
+  type RunCompletion,
   type TraceCursor
 } from "@dalph/orchestrator"
 import { Effect, Order, Schema } from "effect"
@@ -105,6 +106,7 @@ export const projectRunningHostSnapshot = Effect.fn("RunningHost.projectSnapshot
 export interface RunningHostControlObservation {
   readonly direction: "RunPaused" | "RunUnpaused" | "RunTerminated"
   readonly observedAt: TraceCursor
+  readonly completion?: RunCompletion
   readonly termination: JournaledRunTermination | null
 }
 export interface RunningHostFinalityFailure {
@@ -127,7 +129,25 @@ export const projectRunningHostRunControl = Effect.fn("RunningHost.projectRunCon
         failed("TerminationEvidenceMissing", "Terminal control requires its exact accepted termination occurrence.")
       )
     }
+    if (
+      observation.completion !== undefined &&
+      (observation.completion.runId !== observation.observedAt.runId ||
+        observation.completion.terminatedAt !== observation.termination.terminatedAt.position ||
+        observation.completion.disposition !== observation.termination.disposition)
+    )
+      return yield* Effect.fail(
+        failed("CompletionEvidenceConflict", "Compact completion disagrees with accepted termination.")
+      )
     return RunningHostRunControl.cases.RunTerminated.make({
+      ...(observation.completion === undefined
+        ? {}
+        : {
+            completionResult: {
+              _tag: "CompletedRun" as const,
+              completion: observation.completion,
+              history: "Available" as const
+            }
+          }),
       terminationEvidence: { _tag: "Accepted", ...observation.termination }
     })
   }

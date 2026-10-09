@@ -529,6 +529,19 @@ requires a separately accepted conclusive Run-failure protocol and is not a V1
 disposition.
 _Avoid_: Executor terminal report, process exit, safe suspension
 
+**Run completion record**:
+The compact durable result of one accepted whole-Run termination: exact Run and
+tracker target, disposition, terminal journal position, known completion time
+or explicit unknown original time with a conservative first-verification
+baseline, and the last proven recorded publication when applicable. It retains
+workflow history's outcome, not current tracker, Git or executor authority.
+_Avoid_: Full finality tree, runtime projection, current remote head
+
+**Run history availability**:
+Whether the detailed chronology of a known completed Run is Available or
+Deleted. Deleted details do not mean an unknown Run or authorize another Begin.
+_Avoid_: Terminal disposition, Hot/Cold placement, activation state
+
 **Run cancellation**:
 The Operator's durable direction to stop admitting forward work for one exact
 Run and settle or durably abandon all of its existing workflow

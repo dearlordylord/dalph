@@ -133,6 +133,35 @@ it.live(
                 expect(record?.position).toBe(terminal.terminatedAt.position)
                 const trackerCalls = yield* Ref.get(fixture.trackerCalls)
                 const gitCalls = yield* Ref.get(fixture.gitCalls)
+                const publication = before.findLast(({ event }) => event._tag === "RemotePublicationSucceeded")
+                if (publication?.event._tag !== "RemotePublicationSucceeded")
+                  return yield* Effect.die("terminal fixture requires recorded publication")
+                const result = yield* callRunningHost(address, runId, { _tag: "ReadRunControl" })
+                expect(result).toMatchObject({
+                  result: {
+                    _tag: "Success",
+                    value: {
+                      _tag: "RunTerminated",
+                      completionResult: {
+                        _tag: "CompletedRun",
+                        history: "Available",
+                        completion: {
+                          runId,
+                          disposition: terminal.disposition,
+                          terminatedAt: terminal.terminatedAt.position,
+                          timing: { _tag: "Known" },
+                          publication: {
+                            _tag: "RecordedPublication",
+                            candidateCommit: publication.event.correlation.qualifiedCandidate.candidateCommit,
+                            target: publication.event.correlation.target,
+                            proof: publication.event.proof,
+                            recordedAt: publication.position
+                          }
+                        }
+                      }
+                    }
+                  }
+                })
                 for (const operation of operations)
                   expect(yield* callRunningHost(address, runId, operation)).toMatchObject({
                     result: { _tag: "Failure", error: { _tag: "RunClosed", runId, ...terminal } }
