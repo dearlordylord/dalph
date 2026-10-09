@@ -1,3 +1,4 @@
+import { SavedArchiveBytes } from "../../../orchestrator/src/workflow-journal/archive-retention.js"
 import { corpusReplayFor } from "../../../../scripts/mbt-corpus-replay.mjs"
 import { deriveFreshWorkflowEntryCapableTaskIds } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
 import {
@@ -811,7 +812,14 @@ const makeRunActivationDriverImplementation = () => {
   }
 
   const journal = JournalStore.of({
-    maintainArchive: () => Effect.die("model driver must not maintain archives"),
+    maintainArchive: () =>
+      Effect.succeed({
+        savedBytes: SavedArchiveBytes.make(0),
+        excessBytes: SavedArchiveBytes.make(0),
+        expiredBacklog: 0,
+        deletedRuns: [],
+        deferred: "None"
+      }),
     readCompletion: (runId) => Effect.succeed({ _tag: "NoCompletion" as const, runId }),
     append: (eventRunId, key, event) => Effect.sync(() => append(eventRunId, key, event)),
     beginRun: (eventRunId, eventTarget, policy, _publication, attemptBasePolicy) =>
