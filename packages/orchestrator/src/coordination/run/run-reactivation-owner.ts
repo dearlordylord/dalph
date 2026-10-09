@@ -33,6 +33,8 @@ export type RunReactivationHint = Data.TaggedEnum<{
   TrackerNotification: Record<never, never>
   AcceptedFactPublication: Record<never, never>
   OperatorWake: Record<never, never>
+  /** Offered only after the existing RunCancellationApplied boundary returns. */
+  CancellationApplied: Record<never, never>
   Timer: Record<never, never>
 }>
 
@@ -49,6 +51,8 @@ export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   /** Exact workflow Run whose Journal-backed control state this owner serves. */
   readonly runId: RunId
   readonly activate: (opportunity: RunActivationOpportunity) => Effect.Effect<RunFinalityDecisionValue, E, R>
+  /** Reuses the cancellation workflow after durable application; it never applies Unpause. */
+  readonly activateCancellation?: () => Effect.Effect<RunFinalityDecisionValue, E, R>
   /** Establishes the Run and captures its validated-prefix Running subjects before active reads. */
   readonly activateActiveWorkAuthorityRefresh: (
     source: ActiveWorkAuthorityRefreshSource
@@ -171,6 +175,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       // Registration precedes the authoritative read below. The callback can
       // therefore capture a Pause accepted in the attach/read interval; the
       // mandatory reread then current-first replays the durable state.
+      const cancellationWakePending = yield* Ref.make(false)
       const controlState = yield* Ref.make<RunReactivationControlState>("RunUnpaused")
       const controlRevision = yield* Ref.make(0)
       const timerFiber = yield* Ref.make<Option.Option<Fiber.Fiber<void, never>>>(Option.none())
@@ -284,7 +289,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         Effect.gen(function* () {
           if (yield* Ref.get(stopped)) return
           const current = yield* Ref.get(controlState)
-          if (current !== "RunUnpaused") return
+          if (hint._tag === "CancellationApplied") yield* Ref.set(cancellationWakePending, true)
+          if (current !== "RunUnpaused" && !(yield* Ref.get(cancellationWakePending))) return
           const phase = yield* Ref.get(activationPhase)
           // Once the handoff has promised one activation, later hints
           // coalesce into or strengthen it. They must not slide its marker out
@@ -425,7 +431,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
 
       const processHintAttempt = Effect.fn("RunReactivationOwner.processHint")(function* (hint?: RunReactivationHint) {
         if (yield* Ref.get(stopped)) return
-        if ((yield* Ref.get(controlState)) === "RunPaused") return
+        const cancellationWake = yield* Ref.getAndSet(cancellationWakePending, false)
+        if ((yield* Ref.get(controlState)) === "RunPaused" && !cancellationWake) return
         /* v8 ignore next -- @preserve Initial terminal history stops before queue consumption, and no process-local command can create RunTerminated. */
         if ((yield* Ref.get(controlState)) === "RunTerminated") {
           yield* requestStop()
@@ -433,9 +440,11 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         }
 
         const decision = yield* (
-          hint !== undefined && (hint._tag === "TrackerNotification" || hint._tag === "Timer")
-            ? options.activateActiveWorkAuthorityRefresh(hint._tag)
-            : options.activate(RunActivationOpportunity.OrdinaryRunEntry())
+          cancellationWake && options.activateCancellation !== undefined
+            ? options.activateCancellation()
+            : !cancellationWake && hint !== undefined && (hint._tag === "TrackerNotification" || hint._tag === "Timer")
+              ? options.activateActiveWorkAuthorityRefresh(hint._tag)
+              : options.activate(RunActivationOpportunity.OrdinaryRunEntry())
         ).pipe(Effect.mapError((failure) => ({ _tag: "Activate" as const, failure })))
         if (decision._tag === "RunMayTerminate") yield* requestStop()
       })

@@ -277,6 +277,8 @@ export const runRunningHostMcp = Effect.fn("RunningHost.runMcp")(
             operation._tag === "SetCapacity" ||
             operation._tag === "StartWork" ||
             operation._tag === "Unpause" ||
+            operation._tag === "Pause" ||
+            operation._tag === "Cancel" ||
             operation._tag === "Refresh" ||
             operation._tag === "ApplyResultRecoveryDirection" ||
             operation._tag === "SendExecutorGuidance"

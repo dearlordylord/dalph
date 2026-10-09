@@ -157,13 +157,18 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       request.operation._tag === "SetCapacity" ||
       request.operation._tag === "StartWork" ||
       request.operation._tag === "Unpause" ||
+      request.operation._tag === "Pause" ||
+      request.operation._tag === "Cancel" ||
       request.operation._tag === "Refresh" ||
       request.operation._tag === "ApplyResultRecoveryDirection" ||
       request.operation._tag === "RetryTaskAttemptBase" ||
       request.operation._tag === "SendExecutorGuidance"
     ) {
       const commandOperation = request.operation._tag
-      const control = yield* observation.readRunControl.pipe(
+      const termination = yield* (
+        observation.readCommandTermination ??
+        observation.readRunControl.pipe(Effect.map((control) => control.termination))
+      ).pipe(
         Effect.mapError(
           (): RunningHostError => ({
             _tag: "CommandFailed",
@@ -174,12 +179,16 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
           })
         )
       )
-      if (control.termination !== null) {
+      if (termination !== null) {
         const receipt = yield* readRecordedBaseRetryReceipt(observation.taskAttemptBaseRetryControl, request)
         if (Option.isSome(receipt)) return runningHostSuccessEnvelope(request, receipt.value)
-        return yield* Effect.fail<RunningHostError>({ _tag: "RunClosed", runId: request.runId, ...control.termination })
+        return yield* Effect.fail<RunningHostError>({ _tag: "RunClosed", runId: request.runId, ...termination })
       }
-      if (Option.isSome(yield* observation.activationFailure))
+      if (
+        request.operation._tag !== "Pause" &&
+        request.operation._tag !== "Cancel" &&
+        Option.isSome(yield* observation.activationFailure)
+      )
         return yield* Effect.fail<RunningHostError>({
           _tag: "CommandFailed",
           operation: request.operation._tag,

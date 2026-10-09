@@ -29,6 +29,7 @@ Git history.
 - [Attach to an explicit Docker IPv4 address](running-host-docker-ip.md)
 - [Define control-plane latency and responsiveness budgets](control-plane-latency-and-responsiveness.md)
 - [Keep one position for one admitted planned task attempt](conflicting-capacity-observation.md)
+- [Apply attached whole-Run Pause and Cancel](attached-run-pause-cancel.md)
 - [Pause or unpause a whole Run](pause-whole-run.md)
 - [Pause one task and its grouping descendants](pause-task-grouping-descendants.md)
 - [Reconcile changed task instructions, lifecycle, and membership](reconcile-changed-task-facts.md)

@@ -12,7 +12,7 @@ import {
 
 /** Attached reads and explicit wake commands share the existing host protocol. */
 export const makeRunningHostAttachedCommand = (
-  name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume",
+  name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume" | "pause" | "cancel",
   outputLayer: Layer.Layer<RunningHostCliOutput>
 ) =>
   Command.make(
@@ -54,7 +54,11 @@ export const makeRunningHostAttachedCommand = (
                   ? "ReadCapacity"
                   : name === "start"
                     ? "StartWork"
-                    : "Unpause"
+                    : name === "pause"
+                      ? "Pause"
+                      : name === "cancel"
+                        ? "Cancel"
+                        : "Unpause"
         })
         yield* (compact ? presentCompactEnvelope : presentEnvelope)(envelope)
       }).pipe(

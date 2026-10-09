@@ -62,7 +62,9 @@ export const makeRunningHostMcpOperation = Effect.fn("RunningHostMcp.operation")
     dalph_read_run_control: { _tag: "ReadRunControl" },
     dalph_read_capacity: { _tag: "ReadCapacity" },
     dalph_start_work: { _tag: "StartWork" },
-    dalph_unpause: { _tag: "Unpause" }
+    dalph_unpause: { _tag: "Unpause" },
+    dalph_pause: { _tag: "Pause" },
+    dalph_cancel: { _tag: "Cancel" }
   }
   return operations[name] ?? null
 })

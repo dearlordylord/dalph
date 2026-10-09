@@ -406,17 +406,17 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
   runId: RunId,
   options: ProductionRunReactivationOptions
 ) => {
-  const activation = (opportunity: RunActivationOpportunityValue) => {
-    if (options.cancelBeforeDelivery !== true) {
-      return runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
-    }
-    return runCancellationWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId)).pipe(
+  const activateCancellation = () =>
+    runCancellationWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId)).pipe(
       Effect.flatMap((decision) => requireProductionCancellationTermination(runId, decision)),
       Effect.catchTag("PlannedAttemptExecutorProjectionUnreadable", () =>
         Effect.fail(new ProductionCancellationBlocked({ blocker: "PlannedAttemptExecutorProjectionUnreadable", runId }))
       )
     )
-  }
+  const activation = (opportunity: RunActivationOpportunityValue) =>
+    options.cancelBeforeDelivery === true
+      ? activateCancellation()
+      : runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
   const activateActiveWorkAuthorityRefresh = (source: "TrackerNotification" | "Timer") =>
     runWorkflowWithActiveWorkAuthorityRefresh(
       target,
@@ -430,6 +430,7 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
   })
   const ownerLayer = runReactivationOwnerLayer({
     activate: activation,
+    activateCancellation,
     activateActiveWorkAuthorityRefresh,
     activationInterval: options.activationInterval ?? defaultProductionRunReactivationInterval,
     failureCooldown: options.failureCooldown ?? defaultProductionRunReactivationCooldown,
