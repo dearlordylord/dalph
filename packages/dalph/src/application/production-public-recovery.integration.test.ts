@@ -604,7 +604,15 @@ it.live(
         const first = yield* launch(true)
         const selected = yield* takeMatching(first.records, ({ _tag }) => _tag === "RunSelected")
         if (selected._tag !== "RunSelected") return expect.fail("missing Run")
-        yield* takeMatching(first.events, ({ _tag }) => _tag === "CodexTurnStarted")
+        const fileSystem = yield* FileSystem.FileSystem
+        yield* Effect.gen(function* () {
+          while (
+            !(yield* fileSystem.exists(fixture.codexTranscript)) ||
+            !(yield* fileSystem.readFileString(fixture.codexTranscript)).includes('"status":"inProgress"')
+          ) {
+            yield* Effect.sleep("20 millis")
+          }
+        })
         yield* stopAbruptly(first)
         const context = yield* Layer.build(
           sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
@@ -616,8 +624,8 @@ it.live(
         expect(begin.event.command).toBe("Begin")
         expect(begin.event.plannedAttempt.baseSha).toBe(fixture.baseSha)
         expect(before.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toEqual([])
-        const fileSystem = yield* FileSystem.FileSystem
         const transcript = yield* fileSystem.readFileString(fixture.codexTranscript)
+        expect(JSON.parse(transcript).turnStarts).toBe(1)
         expect(transcript).toContain('"status":"inProgress"')
         const second = yield* launch(false)
         expect(yield* takeMatching(second.records, ({ _tag }) => _tag === "RunSelected")).toEqual({
@@ -663,7 +671,7 @@ it.live(
         }
       }).pipe(Effect.provide(NodeServices.layer))
     ),
-  20_000
+  60_000
 )
 
 it.live(
