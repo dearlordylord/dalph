@@ -21,6 +21,7 @@ import {
   TrackerTarget
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
+import { observerJsonBytes, observerRetentionLimits, observerStructuralBytes } from "./running-host-observer-budget.js"
 
 export { LocalHostAddress } from "./running-host-address.js"
 export { RunningHostSnapshot, RunningHostInspectionSnapshot } from "./running-host-snapshot.js"
@@ -185,6 +186,10 @@ export const RunningHostError = Schema.TaggedUnion({
     maximumBytes: PositiveCount,
     measuredBytes: Schema.NullOr(Count)
   },
+  ObserverRetentionExceeded: {
+    boundary: Schema.Literals(["Preparation", "Presentation"]),
+    maximumBytes: PositiveCount
+  },
   SubscriptionLimitExceeded: { scope: Schema.Literals(["Host", "McpSession"]), limit: PositiveCount, current: Count },
   WriteTimedOut: {
     subject: Schema.Union([
@@ -219,6 +224,8 @@ export const watchFrameEnds = (value: RunningHostWatchFrame) =>
   value.frame._tag === "Failure" || value.frame.value._tag === "Closed"
 export const encodeRunningHostWatchFrame: (frame: RunningHostWatchFrame) => Effect.Effect<string, RunningHostError> =
   Effect.fn("RunningHost.encodeWatchFrame")(function* (frame: RunningHostWatchFrame) {
+    yield* observerStructuralBytes(frame, observerRetentionLimits.presentationBytes, "Presentation")
+    yield* observerJsonBytes(frame, runningHostLimits.resultBytes)
     const encoded = yield* Schema.encodeUnknownEffect(RunningHostWatchFrame)(frame, { onExcessProperty: "error" }).pipe(
       Effect.mapError(
         (): RunningHostError => ({

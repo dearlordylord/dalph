@@ -1,3 +1,6 @@
+import { observerRetentionLimits, observerStructuralBytes } from "./running-host-observer-budget.js"
+import type { DeliveryRuntimeObservationState } from "@dalph/orchestrator"
+import type { RunningHostInspection, RunningHostInspectionService } from "./running-host-inspection.js"
 import { integrationActivationReadFailure } from "./running-host-activation-failure.js"
 /* eslint-disable import/no-nodejs-modules -- This adapter owns one exact observation response. */
 import type { ServerResponse } from "node:http"
@@ -16,7 +19,6 @@ import {
 } from "./running-host-contract.js"
 import { projectRunningHostSnapshot } from "./running-host-projection.js"
 import { makeRunningHostWatchStage } from "./running-host-watch-stage.js"
-import type { RunningHostInspectionService } from "./running-host-inspection.js"
 
 const httpOk = 200
 
@@ -137,40 +139,55 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
           ),
           () => Ref.update(count, (current) => current - 1)
         )
-        const attachment = yield* observation.current.attach.pipe(
-          Effect.mapError(
-            (): RunningHostError => ({
-              _tag: "ReadFailed",
-              causeTag: "ObservationUnavailable",
-              detail: "The current source is unavailable."
-            })
-          )
-        )
+        const currentSignal = observation.watchCurrent ?? observation.current.latest ?? observation.current
+        const attachment = yield* currentSignal.attach
         const states = Stream.concat(Stream.make(attachment.current), attachment.changes)
         const inspect =
           request.operation._tag === "WatchInspection" && inspection !== undefined ? yield* inspection : undefined
         const source =
           inspect === undefined
             ? states
-            : Stream.merge(states, inspect.changes.pipe(Stream.mapEffect(() => observation.current.get)))
-        return source.pipe(
-          Stream.mapEffect((state) =>
-            projectRunningHostSnapshot(request.runId, state).pipe(
-              Effect.flatMap((value) =>
-                inspect === undefined
-                  ? Effect.succeed(frame({ _tag: "Snapshot", value }))
-                  : inspect.current.pipe(
-                      Effect.map((current) =>
-                        frame({
-                          _tag: "Inspection",
-                          value: { _tag: "InspectionSnapshot", run: value, inspection: current }
-                        })
-                      )
-                    )
-              ),
-              Effect.tap(encodeRunningHostWatchFrame)
+            : Stream.merge(
+                states,
+                (inspect.latest?.changes ?? inspect.changes).pipe(Stream.mapEffect(() => currentSignal.get))
+              )
+        type Borrowed =
+          | {
+              readonly _tag: "State"
+              readonly state: DeliveryRuntimeObservationState
+              readonly inspection: RunningHostInspection | undefined
+            }
+          | { readonly _tag: "Failure"; readonly error: RunningHostError }
+        const borrowed = yield* makeRunningHostWatchStage<Borrowed>(
+          source.pipe(
+            Stream.mapEffect((state) =>
+              Effect.map(
+                inspect === undefined ? Effect.succeed(undefined) : (inspect.latest?.get ?? inspect.current),
+                (inspection): Borrowed => ({ _tag: "State", state, inspection })
+              )
             )
-          )
+          ),
+          (value) => value._tag === "Failure" || (inspect === undefined && value.state._tag === "Closed"),
+          (error) => ({ _tag: "Failure", error })
+        )
+        const values = Stream.concat(Stream.fromEffect(borrowed.takeInitial), Stream.fromEffectRepeat(borrowed.take))
+        return values.pipe(
+          Stream.mapEffect((value) =>
+            Effect.gen(function* () {
+              if (value._tag === "Failure") return frame({ _tag: "Failure", error: value.error })
+              // Charge the single borrowed oversized input before any disposable
+              // graph/status projection, schema clone, or JSON allocation.
+              yield* observerStructuralBytes(value, observerRetentionLimits.preparationBytes, "Preparation")
+              const snapshot = yield* projectRunningHostSnapshot(request.runId, value.state)
+              return value.inspection === undefined
+                ? frame({ _tag: "Snapshot", value: snapshot })
+                : frame({
+                    _tag: "Inspection",
+                    value: { _tag: "InspectionSnapshot", run: snapshot, inspection: value.inspection }
+                  })
+            })
+          ),
+          Stream.ensuring(borrowed.stop)
         )
       })
     )
@@ -184,7 +201,8 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
     const stage = yield* makeRunningHostWatchStage(
       Stream.merge(source, Stream.fromEffect(providerFailure)),
       watchFrameEnds,
-      (error) => frame({ _tag: "Failure", error })
+      (error) => frame({ _tag: "Failure", error }),
+      encodeRunningHostWatchFrame
     )
     response.writeHead(httpOk, { "content-type": "application/x-ndjson", connection: "close" })
     const disconnected = Effect.callback<never, RunningHostError>((resume) => {

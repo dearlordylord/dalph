@@ -266,8 +266,19 @@ it.live(
           _tag: "Success",
           value: { _tag: "RunTerminated", terminationEvidence: { _tag: "Accepted", ...termination } }
         }
-        expect(readEnvelope(terminalCli.stdout).result).toEqual(expected)
-        expect(mcpEnvelope(terminalMcp.stdout).result).toEqual(expected)
+        const terminalResult = readEnvelope(terminalCli.stdout).result
+        expect(terminalResult).toMatchObject(expected)
+        expect(terminalResult).toMatchObject({
+          _tag: "Success",
+          value: {
+            completionResult: {
+              _tag: "CompletedRun",
+              history: "Available",
+              completion: { runId, target: fixture.configuration.target, disposition: "Completed" }
+            }
+          }
+        })
+        expect(mcpEnvelope(terminalMcp.stdout).result).toEqual(terminalResult)
         expect(yield* Ref.get(fixture.failures)).toEqual([])
         expect(yield* Ref.get(fixture.exitCalls)).toBe(0)
         yield* Deferred.succeed(releaseHost, undefined)

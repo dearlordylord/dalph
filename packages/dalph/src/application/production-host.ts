@@ -1,3 +1,4 @@
+import { readRunningHostWatchCurrent } from "./running-host-watch-diagnostics.js"
 /* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
 import {
@@ -218,6 +219,8 @@ export class ProductionPassiveControlUnavailable extends Schema.TaggedError<Prod
 
 /** Listener ownership survives delivery settlement and typed activation failure. */
 export interface ProductionRunningHostObservation<E> extends ProductionHostObservation {
+  /** Disposable watch preparation can refuse before allocating diagnostics. */
+  readonly watchCurrent?: CurrentSignal<DeliveryRuntimeObservationState, RunningHostError>
   /** Acquires one listener-scoped inspection owner from the existing reader. */
   readonly inspection?: Effect.Effect<RunningHostInspectionService, never, Scope.Scope>
   readonly target: ProductionRepositoryHostConfiguration["target"]
@@ -1410,6 +1413,22 @@ export const withDecodedProductionRepositoryHost = <
           Stream.takeUntil((state) => state._tag === "Closed")
         )
       )
+      const diagnosticWatchCurrent = currentSignalFromCurrentFirstStream(
+        Stream.merge(
+          (source.current.latest ?? source.current).changes.pipe(Stream.map(() => undefined)),
+          (source.acceptedHistory.latest ?? source.acceptedHistory).changes.pipe(Stream.map(() => undefined))
+        ).pipe(
+          Stream.mapEffect(() =>
+            readRunningHostWatchCurrent(
+              source.current.latest ?? source.current,
+              Option.getOrUndefined(acceptedReader),
+              selection.runId,
+              configuration.target
+            )
+          ),
+          Stream.takeUntil((state) => state._tag === "Closed")
+        )
+      )
       const inspection = runningHostInspectionFromServices(run, configuration.target)
       const capacity = Option.isSome(bootstrap)
         ? makeRunningHostCapacity(selection.runId, bootstrap.value.operatorControl, readRunControl)
@@ -1419,6 +1438,7 @@ export const withDecodedProductionRepositoryHost = <
         ...(Option.isSome(inspection) ? { inspection: inspection.value } : {}),
         acceptedHistory: source.acceptedHistory,
         current: diagnosticCurrent,
+        watchCurrent: diagnosticWatchCurrent,
         runTermination: source.runTermination,
         selection,
         traceReader,

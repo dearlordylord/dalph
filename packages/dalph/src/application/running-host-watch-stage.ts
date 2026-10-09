@@ -1,13 +1,13 @@
 import { Deferred, Effect, Fiber, Queue, Ref, Stream } from "effect"
 import { type RunningHostError } from "./running-host-contract.js"
 
-/** The pump owns the loss-free upstream scope. A writer never backpressures it.
- * Only initial, latest pending and the consumer's in-flight value are retained
- * here. Upstream scheduler/projection stalls can still retain an unbounded queue. */
+/** Drain before disposable preparation. Raw values borrow shared canonical state;
+ * presentation callers must supply byte admission, not rely on item count. */
 export const makeRunningHostWatchStage = Effect.fn("RunningHostWatch.makeStage")(function* <A>(
   source: Stream.Stream<A, RunningHostError>,
   ends: (value: A) => boolean,
-  failure: (error: RunningHostError) => A
+  failure: (error: RunningHostError) => A,
+  admit: (value: A) => Effect.Effect<unknown, RunningHostError> = () => Effect.void
 ) {
   const initial = yield* Deferred.make<void>()
   const pinned = yield* Ref.make<A | null>(null)
@@ -27,6 +27,7 @@ export const makeRunningHostWatchStage = Effect.fn("RunningHostWatch.makeStage")
       Stream.takeUntil(ends),
       Stream.runForEach((value) =>
         Effect.gen(function* () {
+          yield* admit(value)
           if (ends(value)) {
             terminal = value
             return
@@ -76,7 +77,19 @@ export const makeRunningHostWatchStage = Effect.fn("RunningHostWatch.makeStage")
     poll: Ref.getAndSet(pending, null),
     changed: Queue.take(hints),
     hasPending: Ref.get(pending).pipe(Effect.map((value) => value !== null)),
+    /** Diagnostic inventory; borrowed canonical and owned presentation values
+     * are charged separately by their callers. This does not copy the values. */
+    retained: Effect.all({ initial: Ref.get(pinned), pending: Ref.get(pending) }),
     awaitReleased: Deferred.await(released),
-    stop: Fiber.interrupt(pump).pipe(Effect.asVoid)
+    stop: Fiber.interrupt(pump).pipe(
+      Effect.andThen(Ref.set(pinned, null)),
+      Effect.andThen(Ref.set(pending, null)),
+      Effect.andThen(
+        Effect.sync(() => {
+          terminal = null
+        })
+      ),
+      Effect.asVoid
+    )
   }
 })

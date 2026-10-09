@@ -1169,3 +1169,5 @@ export {
 export { TaskAttemptBaseRetryRequested } from "./workflow/registry/occurrence-projection.js"
 
 export * from "./workflow-journal/completion.js"
+
+export { makeCoalescingCurrentSignal } from "./coordination/run/coalescing-current-signal.js"

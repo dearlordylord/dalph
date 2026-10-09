@@ -1,4 +1,5 @@
-import { Context, Data, Effect, Match, Option, Ref, Stream, SubscriptionRef } from "effect"
+import { makeCoalescingCurrentSignal } from "../run/coalescing-current-signal.js"
+import { Context, Data, Effect, Match, Option, Ref, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { currentSignalFromCurrentFirstStream, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
@@ -323,31 +324,53 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
       DeliveryRuntimeObservationState.NotReady()
     )
     const observer = yield* DeliveryRuntimeObservationObserver
+    const latest = yield* makeCoalescingCurrentSignal<DeliveryRuntimeObservationState>(
+      DeliveryRuntimeObservationState.NotReady()
+    )
+    const publication = yield* Semaphore.make(1)
     const observationOf = (
       evaluation: DeliveryRuntimeEvaluation,
       liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
     ) => DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
     return {
-      close: SubscriptionRef.update(state, (current) =>
-        DeliveryRuntimeObservationState.Closed({
-          final: Match.valueTags(current, {
-            Closed: ({ final }) => final,
-            NotReady: () => null,
-            Ready: (ready) => ready
-          })
-        })
+      close: publication.withPermit(
+        Effect.uninterruptible(
+          SubscriptionRef.update(state, (current) =>
+            DeliveryRuntimeObservationState.Closed({
+              final: Match.valueTags(current, {
+                Closed: ({ final }) => final,
+                NotReady: () => null,
+                Ready: (ready) => ready
+              })
+            })
+          ).pipe(Effect.andThen(SubscriptionRef.get(state)), Effect.flatMap(latest.publish))
+        )
       ),
       updateLatest: (evaluation, liveOwners) =>
         Effect.gen(function* () {
           const observation = observationOf(evaluation, liveOwners)
-          const updated = yield* SubscriptionRef.modify(state, (current) =>
-            current._tag === "Closed" ? [false, current] : [true, observation]
+          const updated = yield* publication.withPermit(
+            Effect.uninterruptible(
+              Effect.gen(function* () {
+                const changed = yield* SubscriptionRef.modify(state, (current) =>
+                  current._tag === "Closed" ? [false, current] : [true, observation]
+                )
+                if (changed) yield* latest.publish(observation)
+                return changed
+              })
+            )
           )
           if (updated) yield* observer.observe(observation)
         }),
-      signal: currentSignalFromCurrentFirstStream(
-        SubscriptionRef.changes(state).pipe(Stream.takeUntil(({ _tag }) => _tag === "Closed"))
-      )
+      signal: {
+        ...currentSignalFromCurrentFirstStream(
+          SubscriptionRef.changes(state).pipe(Stream.takeUntil(({ _tag }) => _tag === "Closed"))
+        ),
+        latest: {
+          ...latest.signal,
+          changes: latest.signal.changes.pipe(Stream.takeUntil(({ _tag }) => _tag === "Closed"))
+        }
+      }
     } satisfies DeliveryRuntimeObservationController
   }
 )

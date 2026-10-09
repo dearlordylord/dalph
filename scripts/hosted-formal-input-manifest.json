@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "d6472a2a71fe41aa58add9bd3eaf2d3644065ad74bd277fd12b124a6f4552a1c",
+  "digest": "2bb8882d00819b144d8e57d4641b764a0d7816573de5fd3a6917b52ce1b2996d",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -211,6 +211,7 @@
     "packages/orchestrator/src/coordination/run/accepted-run-fact-publication.ts",
     "packages/orchestrator/src/coordination/run/activation-graph-baseline.ts",
     "packages/orchestrator/src/coordination/run/base-retry-workflow.ts",
+    "packages/orchestrator/src/coordination/run/coalescing-current-signal.ts",
     "packages/orchestrator/src/coordination/run/controlled-workflow.ts",
     "packages/orchestrator/src/coordination/run/current-delivery-frame.ts",
     "packages/orchestrator/src/coordination/run/fresh-run-identity.ts",

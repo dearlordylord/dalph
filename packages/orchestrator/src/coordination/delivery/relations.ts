@@ -63,6 +63,9 @@ export type {
 
 /** A descriptive latest-value source. Observing it never performs a Dalph action. */
 export interface CurrentSignal<A, E = never> {
+  /** Optional current-first coalescing attachment for disposable observers.
+   * It is never a contiguous workflow/audit publication stream. */
+  readonly latest?: CurrentSignal<A, E>
   /** Opens one loss-free current-first subscription in the caller's scope. */
   readonly attach: Effect.Effect<CurrentSignalAttachment<A, E>, E, Scope.Scope>
   readonly get: Effect.Effect<A, E>

@@ -631,15 +631,16 @@ twice to one URI does not allocate another source lease. Notifications retain
 at most one pending URI hint per watch, plus the message currently being written;
 they must not form another unbounded queue.
 
-The existing upstream CurrentSignal/SubscriptionRef can retain an **unbounded
-queue** while its consumer is delayed. The pump must consume independently from
-transport writes and coalesce at the adapter, but scheduler stalls or projection
-work can still grow upstream retention. These finite adapter counts/bytes do not
-claim bounded total host memory. #372 must instrument upstream subscription
-acquisition/finalization and prove that disconnect releases that exact queue;
-a slow-write test that observes only the sliding slot is insufficient. Shutdown
-must keep writable watches alive to send Closed within the original Exit drain;
-a stalled one fails independently without extending host lifetime.
+Workflow CurrentSignal subscriptions remain loss-free and can retain a backlog.
+Production watches now select a separate current-first coalescing signal:
+canonical runtime state, accepted cursor and inspection values are shared, with
+one sliding void hint per source rather than queued state values. Projection is
+behind the independent raw-reference pump. The [observer retention scenario](bounded-current-state-observers.md)
+owns its separate preparation/presentation admission charges, JSON capacity,
+native profile and scope limits. Observer counts alone are not byte accounting.
+Disconnect releases exact source subscriptions; shutdown keeps writable watches
+alive to send Closed within the original Exit drain. A stalled writer fails
+independently without extending host lifetime.
 
 ### Required limit and failure assertions
 
