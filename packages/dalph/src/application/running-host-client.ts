@@ -1,5 +1,6 @@
 import { compatibleRunningHostResponse } from "./running-host-response-compatibility.js"
 import {
+  TraceCursor,
   ApplyTaskAttemptBaseRetryRequest,
   ApplyResultRecoveryRequest,
   ResultRecoveryRequestId
@@ -168,6 +169,17 @@ const decodeReply = Effect.fn("RunningHostClient.decodeReply")(function* (reques
         phase: "Response",
         reason: "ResponseCorrelationMismatch"
       })
+    if (operation._tag === "ReadOccurrencePage") {
+      const matches =
+        (value._tag === "OccurrencePage" || value._tag === "OccurrenceTooLarge") &&
+        Schema.toEquivalence(TraceCursor)(operation.prefix, value.prefix)
+      if (!matches)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "TransportFailed",
+          phase: "Response",
+          reason: "ResponseCorrelationMismatch"
+        })
+    }
     const recoveryMatches =
       operation._tag === "ApplyResultRecoveryDirection"
         ? value._tag === "ResultRecoveryDirectionRecorded" &&

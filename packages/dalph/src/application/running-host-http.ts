@@ -1,3 +1,4 @@
+import { readRunningHostOccurrences } from "./running-host-occurrences.js"
 import { TraceCursor } from "@dalph/orchestrator"
 import { readRecordedBaseRetryReceipt } from "./running-host-base-retry-receipt.js"
 import { readRunningHostCapacity } from "./running-host-capacity.js"
@@ -26,6 +27,7 @@ import { makeRunningHostCommandOwnership } from "./running-host-command-ownershi
 import { makeRunningHostHttpWatch, type RunningHostWatchWriter } from "./running-host-http-watch.js"
 
 const browserReadOperations: ReadonlySet<string> = new Set([
+  "ReadOccurrencePage",
   "ReadSnapshot",
   "ReadRunControl",
   "ReadResultRecoveryDirection",
@@ -127,6 +129,16 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
         hostInstanceId: descriptor.hostInstanceId,
         cutoff: "AdmissionClosed"
       })
+    if (request.operation._tag === "ReadOccurrencePage") {
+      const read = observation.traceReader.readOccurrencesAt
+      if (read === undefined)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "ReadFailed",
+          causeTag: "HistoryReaderUnavailable",
+          detail: "The historical occurrence reader is unavailable."
+        })
+      return yield* readRunningHostOccurrences({ ...request, operation: request.operation }, read)
+    }
     if (request.operation._tag === "ReadInspectionSnapshot" || request.operation._tag === "RefreshInspection") {
       if (inspection === undefined)
         return yield* Effect.fail<RunningHostError>({

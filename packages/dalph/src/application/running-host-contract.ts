@@ -1,3 +1,9 @@
+import {
+  OccurrenceContinuation,
+  OccurrencePageCapacity,
+  OccurrencePage,
+  OccurrenceTooLarge
+} from "./running-host-occurrences-contract.js"
 import { coherentWire, RunningHostSnapshot, RunningHostInspectionSnapshot } from "./running-host-snapshot.js"
 import { LocalHostAddress } from "./running-host-address.js"
 import { AttemptId, ExecutorGuidanceRequestId, ExecutorGuidanceTransmission, RunId, TaskId } from "@dalph/contracts"
@@ -88,6 +94,11 @@ export const RunningHostCapacityArguments = Schema.Struct({
   expectedRevision: RunPolicyRevision.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER))
 })
 const Operation = Schema.TaggedUnion({
+  ReadOccurrencePage: {
+    prefix: TraceCursor,
+    continuation: Schema.NullOr(OccurrenceContinuation),
+    capacityBytes: OccurrencePageCapacity
+  },
   ReadSnapshot: {},
   ReadInspectionSnapshot: {},
   RefreshInspection: {},
@@ -247,6 +258,8 @@ export const RunningHostRunControl = Schema.TaggedUnion({
 })
 export type RunningHostRunControl = typeof RunningHostRunControl.Type
 const Value = Schema.Union([
+  OccurrencePage,
+  OccurrenceTooLarge,
   Schema.TaggedStruct("CapacityRead", { policy: RunControlPolicy }),
   Schema.TaggedStruct("CapacityApplied", { policy: RunControlPolicy }),
   RunningHostSnapshot,

@@ -1629,6 +1629,30 @@ it.effect(
         { _tag: "HistoryAdvanced", cursor, version: 1 },
         { _tag: "RunDisposition", disposition: "Completed", runId, version: 1 }
       ])
+      const nextInvocation = yield* Ref.make<ReadonlyArray<string>>([])
+      yield* presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination: completedRunTermination(),
+          selection: ProductionRunSelection.cases.Recovered.make({ runId }),
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () =>
+              Effect.sync(() => {
+                reads += 1
+                return snapshot
+              })
+          }
+        },
+        (line) => Ref.update(nextInvocation, (current) => [...current, line])
+      )
+      expect(reads).toBe(1)
+      expect(
+        (yield* Ref.get(nextInvocation))
+          .map((line) => JSON.parse(line))
+          .find((record) => record._tag === "HistoricalSnapshot")
+      ).toMatchObject({ snapshot })
     })
 )
 
