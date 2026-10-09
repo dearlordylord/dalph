@@ -50,6 +50,13 @@ export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(funct
   encoded: EncodedJournalEvent,
   strings?: JournalPayloadStringPool
 ) {
+  if (encoded.version !== workflowJournalEventVersion) {
+    return yield* new JournalEventDecodeIssue({
+      detail: `unsupported journal event version ${encoded.version}; supported event format is ${workflowJournalEventVersion}. Retire obsolete development data separately only after resolving external custody; no automatic deletion or migration is performed`,
+      kind: encoded.kind,
+      version: encoded.version
+    })
+  }
   const storedPayload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version, strings)
   const payload = yield* decodeJournalStoragePayload(encoded.kind, storedPayload).pipe(
     Effect.mapError(
@@ -60,17 +67,7 @@ export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(funct
     encoded.kind === legacyCancelledAttemptImplementationEventKind
       ? cancelledAttemptImplementationAbandonedEventKind
       : encoded.kind
-  const candidate: unknown =
-    encoded.version === workflowJournalEventVersion
-      ? { ...payload, _tag: normalizedKind, version: workflowJournalEventVersion }
-      : undefined
-  if (candidate === undefined) {
-    return yield* new JournalEventDecodeIssue({
-      detail: `unsupported journal event version ${encoded.version}`,
-      kind: encoded.kind,
-      version: encoded.version
-    })
-  }
+  const candidate: unknown = { ...payload, _tag: normalizedKind, version: workflowJournalEventVersion }
   return yield* Schema.decodeUnknownEffect(WorkflowJournalEvent)(candidate).pipe(
     Effect.mapError(
       (cause) => new JournalEventDecodeIssue({ detail: String(cause), kind: encoded.kind, version: encoded.version })

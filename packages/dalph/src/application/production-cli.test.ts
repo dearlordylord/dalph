@@ -1115,6 +1115,17 @@ it("maps every Journal storage failure through one exhaustive redacted public al
   expect(JSON.stringify(records)).not.toContain("/private/alice/journal.sqlite")
 })
 
+it("public startup refusal names the supported format and separate retirement without leaking source details", () => {
+  const failure = knownProductionCliFailure(new StartupRecoveryBlocked({ issues: [] }))
+  expect(failure?.detail).toContain("supported event format")
+  expect(failure?.detail).toContain("external claims, worktrees, sessions and writers")
+  expect(failure?.detail).toContain("no automatic deletion or migration")
+  const storage = knownProductionCliFailure(
+    new JournalSchemaIncompatible({ found: JournalSchemaVersion.make(99), supported: JournalSchemaVersion.make(4) })
+  )
+  expect(storage?.detail).toContain("supported storage format is 4")
+})
+
 it("maps every causal trace failure to the selected Run without retaining causal identities", () => {
   const predecessorOperationId = OperationId.make("private-predecessor-operation")
   const successorOperationId = OperationId.make("private-successor-operation")

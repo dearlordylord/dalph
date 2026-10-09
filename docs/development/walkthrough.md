@@ -250,8 +250,10 @@ absolute because it is derived from the absolute `mktemp` root.
 
 The Codex state directory is the custody root: executor attempts use separate
 stores below it, and the integrator has its own provider. Reusing an older root
-with retained shared-provider attempts refuses startup until custody migration
-is proved; keep its records, worktrees and commits intact. See
+with retained shared-provider attempts refuses startup while custody is unresolved.
+Resolve external writers before separately retiring obsolete development data
+or using a safely isolated fresh dataset. No migration or reset command is
+required; removing local data does not settle claims, dirty worktrees or sessions. See
 [isolated containment and retained-state admission](../scenarios/isolated-codex-containment.md).
 
 
