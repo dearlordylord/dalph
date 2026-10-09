@@ -2,11 +2,12 @@
 import { fileURLToPath } from "node:url"
 import { it } from "@effect/vitest"
 import { RunPolicyRevision, TaskWorkCapacity } from "@dalph/orchestrator"
-import { Clock, Deferred, Effect, Ref } from "effect"
+import { Clock, Deferred, Duration, Effect, Queue, Ref } from "effect"
 import { expect } from "vitest"
 import { makeRunningHostFixture, runningHostFixtureLayer } from "../../test-support/production-running-host-fixture.js"
 import { availableLocalHostAddress } from "../../test-support/running-host-read-probe.js"
 import { withDecodedProductionRepositoryHost } from "./production-host.js"
+import { ProductionRunReactivationInterval } from "./production.js"
 import { callRunningHost } from "./running-host-client.js"
 import { serveRunningHost } from "./running-host-http.js"
 
@@ -180,14 +181,32 @@ it.live(
 )
 
 it.live(
-  "public terminal inspection keeps the exact result after owned expiry while the host remains open",
+  "public terminal inspection keeps the exact result after idle scheduled expiry while the host remains open",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeRunningHostFixture(builtEntry)
         const address = yield* availableLocalHostAddress
+        const clock = yield* Clock.Clock
+        const offset = yield* Ref.make(0)
+        const ticks = yield* Queue.unbounded<void>()
+        const sleeping = yield* Queue.unbounded<void>()
+        const hostClock = {
+          monotonicTimeNanos: clock.monotonicTimeNanos,
+          monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+          currentTimeNanos: clock.currentTimeNanos,
+          currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+          currentTimeMillis: clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) => Ref.get(offset).pipe(Effect.map((delta) => now + delta)))
+          ),
+          currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+          sleep: (duration: Duration.Duration) =>
+            Duration.toMillis(duration) === 60000
+              ? Queue.offer(sleeping, undefined).pipe(Effect.andThen(Queue.take(ticks)), Effect.asVoid)
+              : clock.sleep(duration)
+        }
         yield* withDecodedProductionRepositoryHost(
-          fixture.configuration,
+          { ...fixture.configuration, activationInterval: ProductionRunReactivationInterval.make(Duration.minutes(2)) },
           fixture.graph,
           (observation) =>
             Effect.scoped(
@@ -224,19 +243,10 @@ it.live(
                 if (publication?.event._tag !== "RemotePublicationSucceeded")
                   return yield* Effect.die("terminal fixture requires recorded publication")
                 yield* fixture.retireHistory(runId)
-                const clock = yield* Clock.Clock
-                const future = (yield* Clock.currentTimeMillis) + 30 * 24 * 60 * 60 * 1000
-                yield* fixture.maintainArchive.pipe(
-                  Effect.provideService(Clock.Clock, {
-                    monotonicTimeNanos: clock.monotonicTimeNanos,
-                    monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
-                    currentTimeNanos: clock.currentTimeNanos,
-                    currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
-                    sleep: (duration) => clock.sleep(duration),
-                    currentTimeMillis: Effect.succeed(future),
-                    currentTimeMillisUnsafe: () => future
-                  })
-                )
+                yield* Queue.take(sleeping)
+                yield* Ref.set(offset, 30 * 24 * 60 * 60 * 1000)
+                yield* Queue.offer(ticks, undefined)
+                yield* Queue.take(sleeping).pipe(Effect.timeout("10 seconds"))
                 expect(yield* fixture.readHistory(runId).pipe(Effect.flip)).toMatchObject({
                   _tag: "JournalHistoryDeleted"
                 })
@@ -279,7 +289,7 @@ it.live(
             ),
           "Run",
           "Listening"
-        )
+        ).pipe(Effect.provideService(Clock.Clock, hostClock))
       })
     ).pipe(Effect.provide(runningHostFixtureLayer)),
   60000

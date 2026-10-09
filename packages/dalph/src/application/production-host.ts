@@ -12,6 +12,8 @@ import {
   type RunId
 } from "@dalph/contracts"
 import {
+  defaultJournalMaintenanceObservation,
+  observeArchiveRetention,
   AcceptedJournalReader,
   currentSignalFromCurrentFirstStream,
   projectDeliveryDiagnostics,
@@ -87,6 +89,7 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
+import { makeHostArchiveMaintenance } from "./host-archive-maintenance.js"
 import {
   Context,
   Crypto,
@@ -1320,6 +1323,14 @@ export const withDecodedProductionRepositoryHost = <
       const source = Context.get(run, JournaledRunObservationSource)
       const bootstrap = Context.getOption(run, JournaledRunBootstrap)
       yield* Effect.raceFirst(source.awaitEstablished, Deferred.await(activationFailure))
+      const archiveMaintenance = yield* makeHostArchiveMaintenance(() =>
+        observeArchiveRetention(
+          selection.runId,
+          Context.get(foundation, RunLifecycleJournal),
+          defaultJournalMaintenanceObservation
+        )
+      )
+      yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: archiveMaintenance.stop })
       // An uncertain append retains its boundary until this exact Journal is
       // reconstructed. Client request IDs never authorize replay.
       const attachedUnpauseBoundary = yield* Ref.make<"Open" | "NeedsJournalReconciliation">("Open")

@@ -314,6 +314,7 @@ export {
   WorkflowRunTargetMismatch
 } from "./workflow-journal/store.js"
 export {
+  observeArchiveRetention,
   JournalMaintenanceDiagnostic,
   JournalMaintenanceFailure,
   JournalMaintenanceObservation,

@@ -86,6 +86,7 @@ export const archiveRetentionPass = Effect.fn("JournalStore.maintainArchive")(fu
       break
     }
     deletedRuns.push(selected.runId)
+    yield* Effect.yieldNow
     snapshot = yield* owner.snapshot(now)
   }
   // An ambiguous unit is reconciled by the adapter. Failed facts are not guessed.

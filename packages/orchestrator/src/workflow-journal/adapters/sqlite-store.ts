@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The exclusive SQLite owner composes per-unit storage and per-pass maintenance serialization together. */
 import { makeSqliteRunRecovery } from "./sqlite-run-recovery.js"
 import {
   makeSqliteArchiveRetention,
@@ -361,8 +362,16 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           )
         })
 
-        const retention = makeSqliteArchiveRetention(sql, queries, completions, invalidate, testConfig ?? {})
-        const maintainArchive = () => serialization.withPermit(retention())
+        const retention = makeSqliteArchiveRetention(
+          sql,
+          queries,
+          completions,
+          invalidate,
+          testConfig ?? {},
+          serialization
+        )
+        const retentionSerialization = yield* Semaphore.make(1)
+        const maintainArchive = () => retentionSerialization.withPermit(retention())
         const retireSqlite = makeSqliteTerminalHistoryRetirement(sql, queries, testConfig?.afterRetirementCopy)
         const retireTerminalRun = Effect.fn("JournalStore.Sqlite.retireTerminalRun")(function* (runId: RunId) {
           return yield* serialization.withPermit(

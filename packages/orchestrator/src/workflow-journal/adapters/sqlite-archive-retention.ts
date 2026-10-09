@@ -1,5 +1,5 @@
 import type * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Effect, Schema, type Semaphore } from "effect"
 import { RunId } from "@dalph/contracts"
 import {
   archiveRetentionPass,
@@ -40,7 +40,8 @@ export const makeSqliteArchiveRetention = (
   queries: SqliteJournalQueries,
   completions: ReturnType<typeof makeSqliteCompletions>,
   invalidate: (id: RunId) => Effect.Effect<void>,
-  cuts: SqliteArchiveRetentionCuts
+  cuts: SqliteArchiveRetentionCuts,
+  serialization: Semaphore.Semaphore
 ) => {
   const snapshot = (now: number) =>
     Effect.gen(function* () {
@@ -75,56 +76,62 @@ export const makeSqliteArchiveRetention = (
   return () =>
     archiveRetentionPass({
       now: Clock.currentTimeMillis,
-      snapshot,
+      snapshot: (now) => serialization.withPermit(snapshot(now)),
       remove: (candidate, now) =>
-        Effect.gen(function* () {
-          const deletion = Effect.gen(function* () {
-            const receipt = yield* completions.read(candidate.runId)
-            if (receipt._tag !== "CompletedRun")
-              return yield* new JournalDataCorruption({
-                operation: "JournalStore.maintainArchive",
-                detail: "archive candidate lacks completion"
-              })
-            if (receipt.history === "Deleted") return
-            const records = yield* queries.loadPartitionRecords("Cold", candidate.runId, "JournalStore.maintainArchive")
-            const decision = decideJournalPartitionHistory("Cold", candidate.runId, records)
-            if (decision._tag === "InvalidPartitionHistory")
-              return yield* new JournalHistoryCorruption({
-                operation: "JournalStore.maintainArchive",
-                runId: candidate.runId,
-                partition: "Cold",
-                detail: decision.issue.detail
-              })
-            const current = yield* snapshot(now)
-            const reason = retentionReason(
-              { ...candidate, baseline: retentionBaseline(receipt.completion) },
-              now,
-              current.savedBytes
+        serialization.withPermit(
+          Effect.gen(function* () {
+            const deletion = Effect.gen(function* () {
+              const receipt = yield* completions.read(candidate.runId)
+              if (receipt._tag !== "CompletedRun")
+                return yield* new JournalDataCorruption({
+                  operation: "JournalStore.maintainArchive",
+                  detail: "archive candidate lacks completion"
+                })
+              if (receipt.history === "Deleted") return
+              const records = yield* queries.loadPartitionRecords(
+                "Cold",
+                candidate.runId,
+                "JournalStore.maintainArchive"
+              )
+              const decision = decideJournalPartitionHistory("Cold", candidate.runId, records)
+              if (decision._tag === "InvalidPartitionHistory")
+                return yield* new JournalHistoryCorruption({
+                  operation: "JournalStore.maintainArchive",
+                  runId: candidate.runId,
+                  partition: "Cold",
+                  detail: decision.issue.detail
+                })
+              const current = yield* snapshot(now)
+              const reason = retentionReason(
+                { ...candidate, baseline: retentionBaseline(receipt.completion) },
+                now,
+                current.savedBytes
+              )
+              if (reason === undefined) return
+              yield* cuts.beforeArchiveDelete?.() ?? Effect.void
+              yield* sql`DELETE FROM journal_records_cold WHERE run_id = ${candidate.runId}`
+              yield* completions.markDeleted(candidate.runId, { reason, observedAt: RunCompletionTime.make(now) })
+              yield* sql`DELETE FROM archive_histories WHERE run_id = ${candidate.runId}`
+              yield* cuts.beforeArchiveCommit?.() ?? Effect.void
+            }).pipe(
+              sql.withTransaction,
+              Effect.tap(() => cuts.afterArchiveCommit?.() ?? Effect.void),
+              Effect.ensuring(invalidate(candidate.runId)),
+              Effect.mapError((error) => classifyJournalMethodFailure("JournalStore.maintainArchive", error))
             )
-            if (reason === undefined) return
-            yield* cuts.beforeArchiveDelete?.() ?? Effect.void
-            yield* sql`DELETE FROM journal_records_cold WHERE run_id = ${candidate.runId}`
-            yield* completions.markDeleted(candidate.runId, { reason, observedAt: RunCompletionTime.make(now) })
-            yield* sql`DELETE FROM archive_histories WHERE run_id = ${candidate.runId}`
-            yield* cuts.beforeArchiveCommit?.() ?? Effect.void
-          }).pipe(
-            sql.withTransaction,
-            Effect.tap(() => cuts.afterArchiveCommit?.() ?? Effect.void),
-            Effect.ensuring(invalidate(candidate.runId)),
-            Effect.mapError((error) => classifyJournalMethodFailure("JournalStore.maintainArchive", error))
-          )
-          const result = yield* deletion.pipe(Effect.result)
-          if (result._tag === "Failure") {
-            // Lost acknowledgement is not permission to repeat deletion. Reconcile the exact committed availability.
-            const observed = yield* completions.read(candidate.runId).pipe(Effect.result)
-            if (
-              observed._tag === "Success" &&
-              observed.success._tag === "CompletedRun" &&
-              observed.success.history === "Deleted"
-            )
-              return
-            return yield* result.failure
-          }
-        })
+            const result = yield* deletion.pipe(Effect.result)
+            if (result._tag === "Failure") {
+              // Lost acknowledgement is not permission to repeat deletion. Reconcile the exact committed availability.
+              const observed = yield* completions.read(candidate.runId).pipe(Effect.result)
+              if (
+                observed._tag === "Success" &&
+                observed.success._tag === "CompletedRun" &&
+                observed.success.history === "Deleted"
+              )
+                return
+              return yield* result.failure
+            }
+          })
+        )
     })
 }

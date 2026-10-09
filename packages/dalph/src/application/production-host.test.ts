@@ -2435,6 +2435,8 @@ it.effect(
                   yield* record("journal.append")
                   return yield* journal.append(runId, key, event)
                 }),
+                maintainArchive: () =>
+                  record("journal.maintainArchive").pipe(Effect.andThen(journal.maintainArchive())),
                 retireTerminalRun: Effect.fn("ProductionHostOwnershipTest.retireTerminalRun")(function* (runId) {
                   yield* record("journal.retireTerminalRun")
                   return yield* journal.retireTerminalRun(runId)
@@ -2453,6 +2455,7 @@ it.effect(
                 readRunForRecovery: observedJournal.readRunForRecovery,
                 scanHot: observedJournal.scanHot,
                 auditAll: observedJournal.auditAll,
+                maintainArchive: observedJournal.maintainArchive,
                 retireTerminalRun: observedJournal.retireTerminalRun,
                 terminateRun: observedJournal.terminateRun
               })
@@ -2552,6 +2555,7 @@ it.effect(
           "journal.begin",
           "journal.append",
           "journal.retireTerminalRun",
+          "journal.maintainArchive",
           "journal.terminateRun",
           "evidence.acquire",
           "evidence.put",
