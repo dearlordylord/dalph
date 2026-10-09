@@ -74,7 +74,7 @@ const FixtureEvent = Schema.Union([
   Schema.TaggedStruct("DeleteClaimLabelApplied", { operationId: Schema.NonEmptyString }),
   Schema.TaggedStruct("ReadIssueStarted", {
     issueNodeId: Schema.NonEmptyString,
-    mode: Schema.Literals(["first", "recovered", "terminal", "exit-during-attachment", "cancellation"])
+    mode: Schema.Literals(["first", "recovered", "reconcile-cut", "terminal", "exit-during-attachment", "cancellation"])
   }),
   Schema.TaggedStruct("ReadIssueReturned", {
     issueNodeId: Schema.NonEmptyString,
@@ -128,7 +128,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   cleanupWorktree: string,
   commonDirectory: string,
   gitFixtureDirectory: string,
-  mode: "first" | "recovered" | "terminal" | "exit-during-attachment" | "cancellation",
+  mode: "first" | "recovered" | "reconcile-cut" | "terminal" | "exit-during-attachment" | "cancellation",
   operation: "run" | "cancel" = "run",
   failSuspension = false,
   processEacces = false,
@@ -577,7 +577,7 @@ it.live(
 )
 
 it.live(
-  "unfinished SQLite public restart reports the same recovered Run and no second beginning",
+  "unfinished SQLite public restart repeats a cut claim read in the same Run without another acquisition",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -612,6 +612,29 @@ it.live(
         const firstExit = yield* stopAbruptly(first)
         expect(firstExit._tag).toBe("Failure")
         expect(yield* Ref.get(first.recordLog)).not.toContainEqual(expect.objectContaining({ _tag: "RunDisposition" }))
+
+        const cut = yield* spawnPublicProcess(
+          fixture.config,
+          fixture.claimState,
+          fixture.cleanupObservation,
+          fixture.cleanupRelease,
+          fixture.cleanupWorktree,
+          fixture.commonDirectory,
+          fixture.gitFixtureDirectory,
+          "reconcile-cut"
+        )
+        expect(yield* takeMatching(cut.records, (record) => record._tag === "RunSelected")).toEqual({
+          _tag: "RunSelected",
+          runId: allocated.runId,
+          selection: "Recovered",
+          version: 1
+        })
+        expect(yield* takeMatching(cut.events, (event) => event._tag === "FindClaimLabelStarted")).toEqual({
+          _tag: "FindClaimLabelStarted",
+          labelName: createdClaim.labelName
+        })
+        expect((yield* stopAbruptly(cut))._tag).toBe("Failure")
+        expect((yield* Ref.get(cut.eventLog)).filter(({ _tag }) => _tag === "CreateClaimLabelStarted")).toHaveLength(0)
 
         const second = yield* spawnPublicProcess(
           fixture.config,
@@ -671,6 +694,14 @@ it.live(
         expect(claimIntents[0]?.event).toMatchObject({
           operation: { acquisition: { operationId: createdClaim.operationId } }
         })
+        expect(records.filter(({ event }) => event._tag === "TaskClaimAcquired")).toHaveLength(1)
+        expect(records.find(({ event }) => event._tag === "TaskClaimAcquired")?.event).toMatchObject({
+          claim:
+            claimIntents[0]?.event._tag === "TaskClaimAcquisitionIntended"
+              ? claimIntents[0].event.operation.acquisition
+              : undefined
+        })
+        expect(records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(0)
         expect(createdClaim.description).toContain(createdClaim.operationId)
       }).pipe(Effect.provide(NodeServices.layer))
     ),
