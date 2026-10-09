@@ -222,6 +222,8 @@ export interface ProductionRunningHostObservation<E> extends ProductionHostObser
   readonly inspection?: Effect.Effect<RunningHostInspectionService, never, Scope.Scope>
   readonly target: ProductionRepositoryHostConfiguration["target"]
   readonly readRunControl: Effect.Effect<ProductionPassiveRunControl, ProductionPassiveControlUnavailable>
+  /** Compact terminal fence for commands; optional history is not an admission prerequisite. */
+  readonly readCommandTermination?: Effect.Effect<JournaledRunTermination | null, ProductionPassiveControlUnavailable>
   readonly readAttachedCapacity?: ReturnType<typeof makeRunningHostCapacity>["read"]
   readonly activationFailure: Effect.Effect<Option.Option<E>>
   /** Host-owned failure notification; subscribers do not poll or reactivate work. */
@@ -1334,8 +1336,8 @@ export const withDecodedProductionRepositoryHost = <
       yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: archiveMaintenance.stop })
       // An uncertain append retains its boundary until this exact Journal is
       // reconstructed. Client request IDs never authorize replay.
-      const attachedUnpauseBoundary = yield* Ref.make<"Open" | "NeedsJournalReconciliation">("Open")
-      const attachedUnpauseCommands = yield* Semaphore.make(1)
+      const attachedRunControlBoundary = yield* Ref.make<"Open" | "NeedsJournalReconciliation">("Open")
+      const attachedRunControlCommands = yield* Semaphore.make(1)
       const acceptedReader = Context.getOption(run, AcceptedJournalReader)
       const completionReader = Context.get(foundation, RunLifecycleJournal)
       const readRunControl = Effect.gen(function* () {
@@ -1424,6 +1426,20 @@ export const withDecodedProductionRepositoryHost = <
         applicationExitRequestBoundary: applicationExit.requestBoundary,
         target: configuration.target,
         readRunControl,
+        readCommandTermination: completionReader.readCompletion(selection.runId).pipe(
+          Effect.map((completion) =>
+            completion._tag === "CompletedRun"
+              ? {
+                  disposition: completion.completion.disposition,
+                  terminatedAt: TraceCursor.make({
+                    runId: selection.runId,
+                    position: completion.completion.terminatedAt
+                  })
+                }
+              : null
+          ),
+          Effect.mapError(() => new ProductionPassiveControlUnavailable({}))
+        ),
         activationFailure: Ref.get(retainedFailure),
         awaitActivationFailure: Deferred.await(activationFailure),
         closing: applicationExit.admission.snapshot.pipe(Effect.map((state) => state.cutoffClosed)),
@@ -1606,53 +1622,104 @@ export const withDecodedProductionRepositoryHost = <
             yield* owner.value.hint(RunReactivationHint.OperatorWake())
             return { _tag: "WakeSubmitted" as const }
           }
-          return yield* attachedUnpauseCommands.withPermit(
+          return yield* attachedRunControlCommands.withPermit(
             Effect.gen(function* () {
+              const operation = request.operation._tag
               if (Option.isNone(bootstrap))
                 return yield* Effect.fail<RunningHostError>({
                   _tag: "CommandFailed",
-                  operation: "Unpause",
+                  operation,
                   stage: "BeforeApplication",
                   causeTag: "RunControlUnavailable",
                   detail: "The Run control boundary is unavailable."
                 })
-              if ((yield* Ref.get(attachedUnpauseBoundary)) === "NeedsJournalReconciliation")
+              if ((yield* Ref.get(attachedRunControlBoundary)) === "NeedsJournalReconciliation")
                 return yield* Effect.fail<RunningHostError>({
                   _tag: "CommandFailed",
-                  operation: "Unpause",
+                  operation,
                   stage: "BeforeApplication",
                   causeTag: "UnreconciledRunControl",
                   detail: "The previous Run control application requires Journal reconciliation."
                 })
+              if (operation === "Cancel") {
+                if (Option.isNone(owner))
+                  return yield* Effect.fail<RunningHostError>({
+                    _tag: "CommandFailed",
+                    operation,
+                    stage: "BeforeApplication",
+                    causeTag: "RunOwnerUnavailable",
+                    detail: "The Run cancellation owner is unavailable."
+                  })
+                const applied = yield* bootstrap.value.operatorControl
+                  .applyRunCancellation({ runId: request.runId })
+                  .pipe(
+                    Effect.catch((error) =>
+                      error._tag === "ApplicationExiting" || error._tag === "JournaledRunNotActive"
+                        ? Effect.fail<RunningHostError>({
+                            _tag: "CommandFailed",
+                            operation,
+                            stage: "BeforeApplication",
+                            causeTag: error._tag,
+                            detail: "The Run cancellation boundary is unavailable."
+                          })
+                        : Ref.set(attachedRunControlBoundary, "NeedsJournalReconciliation").pipe(
+                            Effect.andThen(
+                              Effect.fail<RunningHostError>({
+                                _tag: "CommandOutcomeUnknown",
+                                operation,
+                                requestId: request.requestId,
+                                phase: "AdmittedCompletionUnconfirmed",
+                                acceptedAt: null
+                              })
+                            )
+                          )
+                    )
+                  )
+                if (applied._tag === "RunCancellationRunTerminated")
+                  return yield* Effect.fail<RunningHostError>({
+                    _tag: "RunClosed",
+                    runId: request.runId,
+                    disposition: applied.disposition,
+                    terminatedAt: TraceCursor.make({ runId: request.runId, position: applied.terminatedAt })
+                  })
+                const acceptedAt = TraceCursor.make({ runId: request.runId, position: applied.appliedAt })
+                yield* owner.value.hint(RunReactivationHint.CancellationApplied())
+                return { _tag: "CancelApplied" as const, acceptedAt }
+              }
               const applied = yield* bootstrap.value.operatorControl
-                .applyControlDirection({ direction: "Unpause", subject: { _tag: "Run", runId: request.runId } })
+                .applyControlDirection({
+                  direction: operation === "Pause" ? "Pause" : "Unpause",
+                  subject: { _tag: "Run", runId: request.runId }
+                })
                 .pipe(
                   Effect.catchTag("AcceptedRunControlCallbackFailed", (error) =>
                     Effect.fail<RunningHostError>({
-                      _tag: "UnpausePartiallyApplied",
+                      _tag: operation === "Pause" ? "PausePartiallyApplied" : "UnpausePartiallyApplied",
                       ordinal: error.ordinal,
                       acceptedAt: error.acceptedAt,
                       causeTag: error._tag,
-                      detail: "The accepted Unpause owner callback did not complete."
+                      detail: "The accepted Run control owner callback did not complete."
                     })
                   ),
                   Effect.catchTag("ApplicationExiting", () =>
                     Effect.fail<RunningHostError>({
                       _tag: "CommandFailed",
-                      operation: "Unpause",
+                      operation,
                       stage: "BeforeApplication",
                       causeTag: "ApplicationExiting",
                       detail: "The application cutoff prevented control application."
                     })
                   ),
                   Effect.catch((error) =>
-                    error._tag === "UnpausePartiallyApplied" || error._tag === "CommandFailed"
+                    error._tag === "UnpausePartiallyApplied" ||
+                    error._tag === "PausePartiallyApplied" ||
+                    error._tag === "CommandFailed"
                       ? Effect.fail(error)
-                      : Ref.set(attachedUnpauseBoundary, "NeedsJournalReconciliation").pipe(
+                      : Ref.set(attachedRunControlBoundary, "NeedsJournalReconciliation").pipe(
                           Effect.andThen(
                             Effect.fail<RunningHostError>({
                               _tag: "CommandOutcomeUnknown",
-                              operation: "Unpause",
+                              operation,
                               requestId: request.requestId,
                               phase: "AdmittedCompletionUnconfirmed",
                               acceptedAt: null
@@ -1662,9 +1729,9 @@ export const withDecodedProductionRepositoryHost = <
                   )
                 )
               if (applied.event._tag !== "ControlDirectionApplied")
-                return yield* Effect.die("Unpause returned another event")
+                return yield* Effect.die("Run control application returned another event")
               return {
-                _tag: "UnpauseApplied" as const,
+                _tag: operation === "Pause" ? ("PauseApplied" as const) : ("UnpauseApplied" as const),
                 ordinal: applied.event.ordinal,
                 acceptedAt: TraceCursor.make({ runId: applied.runId, position: applied.position })
               }

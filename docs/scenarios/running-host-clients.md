@@ -107,6 +107,8 @@ dalph attach control --host http://127.0.0.1:43127 --run RUN --json
 dalph attach capacity --host http://127.0.0.1:43127 --run RUN --json
 dalph attach set-capacity --host http://127.0.0.1:43127 --run RUN --capacity 2 --expected-revision REV --json
 dalph attach start --host http://127.0.0.1:43127 --run RUN --json
+dalph attach pause --host http://127.0.0.1:43127 --run RUN --json
+dalph attach cancel --host http://127.0.0.1:43127 --run RUN --json
 dalph attach unpause --host http://127.0.0.1:43127 --run RUN --json
 dalph attach refresh --host http://127.0.0.1:43127 --run RUN --whole-graph --json
 dalph attach refresh --host http://127.0.0.1:43127 --run RUN --task TASK_A --task TASK_B --json
@@ -218,8 +220,21 @@ below has `runId` in its common request; only listed additional fields are legal
 | `ReadCapacity` | none | `CapacityRead { policy }` | `RunInactive`, `RunClosed`, `ReadFailed` |
 | `SetCapacity` | `capacity`, `expectedRevision` | `CapacityApplied { policy }` | `RunInactive`, `RunClosed`, `PolicyRevisionConflict`, `CommandFailed`, `CommandOutcomeUnknown` |
 | `StartWork` | none | `WakeSubmitted` | `RunClosed`, `CommandFailed`, `CommandOutcomeUnknown` |
+| `Pause` | none | `PauseApplied { ordinal, acceptedAt }` | `RunClosed`, `CommandFailed`, `PausePartiallyApplied`, `CommandOutcomeUnknown` |
+| `Cancel` | none | `CancelApplied { acceptedAt }` | `RunClosed`, `CommandFailed`, `CommandOutcomeUnknown` |
 | `Unpause` | none | `UnpauseApplied { ordinal, acceptedAt }` | `RunClosed`, `CommandFailed`, `UnpausePartiallyApplied`, `CommandOutcomeUnknown` |
 | `Refresh` | `interest: WholeGraph` or `AdvisoryTasks { taskIds }` | `RefreshSubmitted { interest }` | `RunClosed`, `CommandFailed`, `CommandOutcomeUnknown` |
+
+Attached whole-Run Pause and Cancel follow [their control chronology](attached-run-pause-cancel.md).
+Host command ownership is receipt only. PauseApplied and CancelApplied report
+Journal application, never safe Pause confirmation or completed cancellation.
+The same production owner performs cancellation settlement; offline Cancel
+must not compete for its coordinator. Public MCP names are `dalph_pause` and
+`dalph_cancel`. PausePartiallyApplied carries the same ordinal, acceptedAt,
+causeTag and detail fields as UnpausePartiallyApplied, with an incomplete owner
+callback. An uncertain append fences subsequent attached Run controls until
+Journal reconciliation. Optional history projection is outside command admission;
+a compact completion read still refuses known terminated Runs.
 
 `policy` is the complete existing `RunControlPolicy`, not only capacity;
 `acceptedAt` is `{ runId, position }`. `PolicyRevisionConflict` contains RunId,

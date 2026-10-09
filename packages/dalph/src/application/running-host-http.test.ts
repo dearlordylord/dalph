@@ -135,7 +135,7 @@ it.live("a completed command with a lost HTTP reply is unknown and is never auto
           )
       })
       loseReply = () => listening.server.closeAllConnections()
-      for (const operation of ["StartWork", "Unpause"] as const) {
+      for (const operation of ["StartWork", "Unpause", "Pause", "Cancel"] as const) {
         expect(yield* callRunningHost(address, probe.runId, { _tag: operation })).toMatchObject({
           result: {
             _tag: "Failure",
@@ -143,11 +143,11 @@ it.live("a completed command with a lost HTTP reply is unknown and is never auto
           }
         })
       }
-      expect(yield* Ref.get(calls)).toBe(2)
+      expect(yield* Ref.get(calls)).toBe(4)
       expect(yield* callRunningHost(address, probe.runId, { _tag: "ReadRunControl" })).toMatchObject({
         result: { value: { _tag: "RunUnpaused" } }
       })
-      expect(yield* Ref.get(calls)).toBe(2)
+      expect(yield* Ref.get(calls)).toBe(4)
     })
   )
 )
@@ -200,7 +200,7 @@ it.live("known terminal evidence rejects wake and Unpause before host command ad
         executeAttachedCommand: () =>
           Ref.update(calls, (count) => count + 1).pipe(Effect.as({ _tag: "WakeSubmitted" as const }))
       })
-      for (const operation of ["StartWork", "Unpause"] as const)
+      for (const operation of ["StartWork", "Unpause", "Pause", "Cancel"] as const)
         expect(yield* callRunningHost(address, probe.runId, { _tag: operation })).toMatchObject({
           result: {
             _tag: "Failure",

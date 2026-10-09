@@ -10,7 +10,7 @@ import {
   type ControlledProviderDiagnostics,
   type PausedRunningHostFixture,
   reactivationObserversFor,
-  projectControlledThread,
+  makeControlledExecutorEvidence,
   failControlledGraphRead,
   failControlledIntegrationRead,
   failControlledProviderClose
@@ -42,11 +42,7 @@ import {
 } from "@dalph/orchestrator"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { Context, Deferred, Duration, Effect, FileSystem, Layer, Ref, Stream } from "effect"
-import {
-  CodexAppServer,
-  CodexThreadListSummary,
-  type CodexThreadSnapshot
-} from "../src/application/codex-app-server.js"
+import { CodexAppServer, CodexThreadListSummary } from "../src/application/codex-app-server.js"
 import { createHermeticFixture } from "./production-hermetic-fixture.js"
 import { makeHermeticProviderState } from "./production-hermetic-provider-state.js"
 import { ProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
@@ -79,6 +75,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     readonly onRootGraphRead?: () => Effect.Effect<void>
     readonly onActivationIdle?: () => Effect.Effect<void>
     readonly beforeArchiveCommit?: () => Effect.Effect<void, string>
+    readonly beforeExecutorRead?: () => Effect.Effect<void>
     readonly onActivationFailure?: () => Effect.Effect<void>
   },
   interruptStopsTurn = false,
@@ -132,9 +129,9 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     diagnostics?.rejectResult !== true ? undefined : selectRetainedTaskResult
   )
   // The shutdown fixture acknowledges interrupt, then reconciliation observes an idle interrupted turn.
+  const executorEvidence = yield* makeControlledExecutorEvidence(discovery?.beforeExecutorRead)
   const interrupted = yield* Ref.make(false)
-  const maskThread = (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean, rejected: boolean) =>
-    projectControlledThread(thread, visible, stopped, rejected)
+  const maskThread = executorEvidence.read
   const integrationCensusCalls = yield* Ref.make(0)
   const codex = CodexAppServer.of({
     ...provider.codex,
@@ -179,7 +176,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .pipe(
           Effect.flatMap((thread) =>
             Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted), Ref.get(rejectResult)]).pipe(
-              Effect.map(([visible, stopped, rejected]) => maskThread(thread, visible, stopped, rejected))
+              Effect.flatMap(([visible, stopped, rejected]) => maskThread(thread, visible, stopped, rejected))
             )
           )
         ),
@@ -189,7 +186,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
         .pipe(
           Effect.flatMap((thread) =>
             Effect.all([Ref.get(turnTerminalVisible), Ref.get(interrupted), Ref.get(rejectResult)]).pipe(
-              Effect.map(([visible, stopped, rejected]) => maskThread(thread, visible, stopped, rejected))
+              Effect.flatMap(([visible, stopped, rejected]) => maskThread(thread, visible, stopped, rejected))
             )
           )
         ),
@@ -377,6 +374,7 @@ export const makeRunningHostFixture = Effect.fn("RunningHostFixture.make")(funct
     configuration,
     configurationPath: fixture.configurationPath,
     graph,
+    setExecutorEvidence: executorEvidence.set,
     enableCloseFailure: Ref.set(closeFailureEnabled, true),
     setGraphReadFailure: (failure: GithubGraphqlReadThrottled | GithubGraphqlRequestError | null) =>
       Ref.set(graphReadFailure, failure),

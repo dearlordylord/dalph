@@ -109,7 +109,7 @@ export const makeRunningHostCommands = <E, R>(
         Effect.provide(outputLayer)
       )
   )
-  const attached = (name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume") =>
+  const attached = (name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume" | "pause" | "cancel") =>
     makeRunningHostAttachedCommand(name, outputLayer)
   const guide = makeRunningHostGuidanceCommand(outputLayer)
   const setCapacity = Command.make(
@@ -360,6 +360,8 @@ export const makeRunningHostCommands = <E, R>(
       attached("capacity"),
       attached("start"),
       attached("unpause"),
+      attached("pause"),
+      attached("cancel"),
       attached("resume")
     ])
   )

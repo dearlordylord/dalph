@@ -4060,7 +4060,7 @@ it.effect("applies Alice's Run Pause without a task-membership read", () =>
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("applies inactive Run directions but does not newly authorize cancellation", () =>
+it.effect("applies inactive Run directions and cancellation through the installed Run owner", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-inactive-run-control")
@@ -4088,6 +4088,11 @@ it.effect("applies inactive Run directions but does not newly authorize cancella
           .readRunReactivationControl(FixtureTarget.make("different-reactivation-target"), runId)
           .pipe(Effect.flip)
       ).toMatchObject({ _tag: "WorkflowRunTargetMismatch" })
+      const beforeOwner = yield* storage.read(runId)
+      expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId }).pipe(Effect.flip)).toMatchObject({
+        _tag: "JournaledRunNotActive"
+      })
+      expect(yield* storage.read(runId)).toEqual(beforeOwner)
       const observed = yield* Ref.make<ReadonlyArray<string>>([])
       yield* bootstrap.registerAcceptedRunReactivationObservers({
         control: (direction) => Ref.update(observed, (current) => [...current, direction]),
@@ -4126,10 +4131,15 @@ it.effect("applies inactive Run directions but does not newly authorize cancella
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
       expect(yield* Ref.get(observed)).toEqual(["Pause", "Unpause"])
       const beforeCancellation = yield* storage.read(runId)
-      expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId }).pipe(Effect.flip)).toMatchObject({
-        _tag: "JournaledRunNotActive"
+      expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId })).toMatchObject({
+        _tag: "RunCancellationApplied"
       })
-      expect(yield* storage.read(runId)).toEqual(beforeCancellation)
+      expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId })).toMatchObject({
+        _tag: "RunCancellationAlreadyApplied"
+      })
+      const afterCancellation = yield* storage.read(runId)
+      expect(afterCancellation.slice(0, -1)).toEqual(beforeCancellation)
+      expect(afterCancellation.at(-1)?.event._tag).toBe("RunCancellationApplied")
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

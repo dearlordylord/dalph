@@ -175,6 +175,8 @@ it.effect("MCP exposes reads and explicit wake and Unpause with shared results",
       "dalph_read_snapshot",
       "dalph_read_run_control",
       "dalph_start_work",
+      "dalph_pause",
+      "dalph_cancel",
       "dalph_unpause"
     ])
     expect(replies[1].result.tools[0].outputSchema.type).toBe("object")

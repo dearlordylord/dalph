@@ -24,6 +24,7 @@ const serialResourceSensitiveTestPatterns = [
   publicRecoveryProcessBoundaryTestPattern,
   "packages/dalph/test/scenarios/running-host-death.acceptance.test.ts",
   "packages/dalph/src/application/running-host-command.acceptance.test.ts",
+  "packages/dalph/src/application/running-host-run-control.acceptance.test.ts",
   "packages/dalph/src/application/running-host-client-parity.test.ts",
   "packages/dalph/test/cassettes/distinct-finality.test.ts",
   "scripts/quint-ci-contract.test.ts",

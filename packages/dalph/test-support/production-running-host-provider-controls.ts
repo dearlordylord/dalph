@@ -4,6 +4,7 @@ import {
   type GithubGraphqlRequestError
 } from "@dalph/orchestrator"
 import { Effect, Ref } from "effect"
+import { CodexThreadId } from "../src/application/codex-attempt-store.js"
 import { CodexAppServerFailure, type CodexThreadSnapshot } from "../src/application/codex-app-server.js"
 
 /** Controlled provider observations leave actual host, Git and journal composition intact. */
@@ -86,4 +87,36 @@ export interface PausedRunningHostFixture {
 export const reactivationObserversFor = (paused: PausedRunningHostFixture | undefined) => ({
   ...(paused?.onTimerStateChange === undefined ? {} : { onTimerStateChange: paused.onTimerStateChange }),
   ...(paused?.onAcceptedRunControl === undefined ? {} : { onAcceptedRunControl: paused.onAcceptedRunControl })
+})
+
+/** Executor evidence cuts exercise the production cancellation observation boundary. */
+export const makeControlledExecutorEvidence = Effect.fn("RunningHostFixture.executorEvidence")(function* (
+  beforeRead?: () => Effect.Effect<void>
+) {
+  const evidence = yield* Ref.make<"Ordinary" | "Unavailable" | "Foreign">("Ordinary")
+  return {
+    set: (value: "Ordinary" | "Unavailable" | "Foreign") => Ref.set(evidence, value),
+    read: (thread: CodexThreadSnapshot, visible: boolean, stopped: boolean, rejected: boolean) =>
+      (beforeRead?.() ?? Effect.void).pipe(
+        Effect.andThen(Ref.get(evidence)),
+        Effect.flatMap((value) =>
+          value === "Unavailable"
+            ? Effect.fail(
+                new CodexAppServerFailure({
+                  operation: "thread/read",
+                  kind: "Unavailable",
+                  detail: "controlled unavailable executor"
+                })
+              )
+            : Effect.succeed(
+                projectControlledThread(
+                  value === "Foreign" ? { ...thread, id: CodexThreadId.make("foreign-thread") } : thread,
+                  visible,
+                  stopped,
+                  rejected
+                )
+              )
+        )
+      )
+  }
 })

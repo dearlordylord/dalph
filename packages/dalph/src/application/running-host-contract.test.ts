@@ -50,7 +50,7 @@ it.effect("decodes revision-checked capacity requests and rejects malformed valu
 it.effect("decodes selected-Run reads and explicit wake and Unpause before dispatch", () =>
   Effect.gen(function* () {
     expect(yield* decodeRunningHostRequest(request, descriptor)).toEqual(request)
-    for (const tag of ["StartWork", "Unpause"]) {
+    for (const tag of ["StartWork", "Unpause", "Pause", "Cancel"]) {
       const command = { ...request, operation: { _tag: tag } }
       expect(yield* decodeRunningHostRequest(command, descriptor)).toEqual(command)
     }

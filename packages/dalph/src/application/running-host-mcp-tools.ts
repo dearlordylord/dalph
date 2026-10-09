@@ -122,6 +122,19 @@ export const runningHostMcpTools = [
     outputSchema
   },
   {
+    name: "dalph_pause",
+    description: "Apply whole-Run Pause; application does not confirm safe boundaries. Never automatically replay.",
+    inputSchema,
+    outputSchema
+  },
+  {
+    name: "dalph_cancel",
+    description:
+      "Apply whole-Run cancellation to its owner; application does not confirm settlement. Never automatically replay.",
+    inputSchema,
+    outputSchema
+  },
+  {
     name: "dalph_unpause",
     description: "Explicitly apply Run Unpause and await its owner callback; never automatically replay.",
     inputSchema,

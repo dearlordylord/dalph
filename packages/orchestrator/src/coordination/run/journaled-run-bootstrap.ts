@@ -1173,19 +1173,6 @@ export const journaledRunBootstrapLayer = (
           return AppliedRunCancellation.cases.RunCancellationApplied.make({ appliedAt: applied.position })
         })
 
-      const readInactiveRunCancellationFrom = (journal: Journal["Service"]) =>
-        Effect.gen(function* () {
-          const state = yield* journal.state.get
-          const terminated = lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated")
-          if (terminated?.event._tag === "WorkflowRunTerminated") {
-            return AppliedRunCancellation.cases.RunCancellationRunTerminated.make({
-              disposition: terminated.event.disposition,
-              terminatedAt: terminated.position
-            })
-          }
-          return yield* new JournaledRunNotActive()
-        })
-
       const notifyAcceptedRemotePublicationResume = (admission: RemotePublicationResumeAdmission) =>
         admission._tag === "NewlyRecordedResumeReceipt"
           ? Ref.get(acceptedRunReactivationObservers).pipe(
@@ -1258,7 +1245,20 @@ export const journaledRunBootstrapLayer = (
                 Effect.gen(function* () {
                   const holder = yield* establishStoredJournal()
                   if (Option.isNone(holder)) return yield* new JournaledRunNotActive()
-                  return yield* withJournalControl(readInactiveRunCancellationFrom(holder.value.journal))
+                  const observers = yield* Ref.get(acceptedRunReactivationObservers)
+                  if (Option.isSome(observers))
+                    return yield* withJournalControl(applyRunCancellationTo(holder.value.journal, expectedRunId))
+                  return yield* withJournalControl(
+                    Effect.gen(function* () {
+                      const state = yield* holder.value.journal.state.get
+                      const terminated = lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated")
+                      if (terminated?.event._tag !== "WorkflowRunTerminated") return yield* new JournaledRunNotActive()
+                      return AppliedRunCancellation.cases.RunCancellationRunTerminated.make({
+                        disposition: terminated.event.disposition,
+                        terminatedAt: terminated.position
+                      })
+                    })
+                  )
                 })
               )
             )

@@ -116,6 +116,8 @@ const Operation = Schema.TaggedUnion({
   },
   StartWork: {},
   Unpause: {},
+  Pause: {},
+  Cancel: {},
   Refresh: { interest: RefreshInterest },
   WatchSnapshots: {}
 })
@@ -123,6 +125,8 @@ const CommandOperation = Schema.Literals([
   "SetCapacity",
   "StartWork",
   "Unpause",
+  "Pause",
+  "Cancel",
   "Refresh",
   "ApplyResultRecoveryDirection",
   "RetryTaskAttemptBase",
@@ -139,6 +143,8 @@ export type RunningHostCommandRequest = Omit<RunningHostRequest, "operation"> & 
       readonly _tag:
         | "StartWork"
         | "Unpause"
+        | "Pause"
+        | "Cancel"
         | "Refresh"
         | "ApplyResultRecoveryDirection"
         | "RetryTaskAttemptBase"
@@ -164,6 +170,12 @@ export const RunningHostError = Schema.TaggedUnion({
     causeTag: Schema.NonEmptyString,
     detail: Schema.NonEmptyString,
     stage: Schema.Literals(["PreAdmission", "BeforeApplication"])
+  },
+  PausePartiallyApplied: {
+    ordinal: ControlDirectionApplicationOrdinal,
+    acceptedAt: TraceCursor,
+    causeTag: Schema.NonEmptyString,
+    detail: Schema.NonEmptyString
   },
   UnpausePartiallyApplied: {
     ordinal: ControlDirectionApplicationOrdinal,
@@ -282,6 +294,8 @@ const Value = Schema.Union([
   Schema.TaggedStruct("RefreshSubmitted", { interest: RefreshInterest }),
   Schema.TaggedStruct("WatchOpened", { subscriptionId: SubscriptionId, uri: Schema.NonEmptyString }),
   Schema.TaggedStruct("WatchClosed", { subscriptionId: SubscriptionId }),
+  Schema.TaggedStruct("PauseApplied", { ordinal: ControlDirectionApplicationOrdinal, acceptedAt: TraceCursor }),
+  Schema.TaggedStruct("CancelApplied", { acceptedAt: TraceCursor }),
   Schema.TaggedStruct("UnpauseApplied", { ordinal: ControlDirectionApplicationOrdinal, acceptedAt: TraceCursor })
 ])
 export type RunningHostValue = typeof Value.Type
@@ -291,6 +305,8 @@ export type RunningHostCommandValue = Extract<
     readonly _tag:
       | "WakeSubmitted"
       | "UnpauseApplied"
+      | "PauseApplied"
+      | "CancelApplied"
       | "RefreshSubmitted"
       | "ResultRecoveryDirectionRecorded"
       | "TaskAttemptBaseRetryRecorded"
