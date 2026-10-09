@@ -1,5 +1,6 @@
 import {
   adoptMemoryCompletions,
+  decideMemoryCompletion,
   readMemoryCompletion,
   memoryTerminationTransition,
   type MemoryJournalState
@@ -10,6 +11,7 @@ import { type RemotePublicationTarget, type RunId } from "@dalph/contracts"
 import { Clock, Effect, Layer, Ref, Schema } from "effect"
 import { JournalPosition, type JournalRecordKey } from "../identity.js"
 import {
+  type JournalDataCorruption,
   type AppendableWorkflowJournalEvent,
   type JournalRecord,
   type JournalStoreOperation,
@@ -58,6 +60,7 @@ const sameEvent = (left: WorkflowJournalEvent, right: WorkflowJournalEvent): boo
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
 
 type MemoryAppendError =
+  | JournalDataCorruption
   | JournalStoreContradiction
   | WorkflowRunAlreadyTerminated
   | JournalPartitionContradiction
@@ -102,6 +105,13 @@ const memoryAppendTransition = (
   key: JournalRecordKey,
   event: AppendableWorkflowJournalEvent
 ): MemoryAppendTransition => {
+  const completion = decideMemoryCompletion(current, runId, "JournalStore.append")
+  if (completion._tag === "CompletedRun")
+    return [
+      Effect.fail(new WorkflowRunAlreadyTerminated({ runId, terminatedAt: completion.completion.terminatedAt })),
+      current
+    ]
+  if (completion._tag !== "NoCompletion") return [Effect.fail(completion), current]
   const { cold, hot } = locateRun(current, runId)
   if (cold !== undefined && hot !== undefined) {
     return [Effect.fail(new JournalPartitionContradiction({ runId })), current]
@@ -229,18 +239,23 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         remotePublicationTarget: RemotePublicationTarget,
         attemptBasePolicy?: AttemptBasePolicy
       ) {
-        const receipt = yield* readCompletion(runId)
-        if (receipt._tag === "CompletedRun")
-          return yield* new WorkflowRunAlreadyBegan({ runId, beganAt: JournalPosition.make(1) })
         const update = (
           current: MemoryJournalState
         ): readonly [
           Effect.Effect<
             JournalRecord,
-            WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed | JournalPartitionContradiction
+            | WorkflowRunAlreadyBegan
+            | WorkflowRunIdentityAlreadyUsed
+            | JournalPartitionContradiction
+            | JournalDataCorruption
+            | JournalHistoryCorruption
           >,
           MemoryJournalState
         ] => {
+          const completion = decideMemoryCompletion(current, runId, "JournalStore.beginRun")
+          if (completion._tag === "CompletedRun")
+            return [Effect.fail(new WorkflowRunAlreadyBegan({ runId, beganAt: JournalPosition.make(1) })), current]
+          if (completion._tag !== "NoCompletion") return [Effect.fail(completion), current]
           const { cold, hot } = locateRun(current, runId)
           if (cold !== undefined && hot !== undefined) {
             return [Effect.fail(new JournalPartitionContradiction({ runId })), current]
@@ -270,9 +285,6 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         key: JournalRecordKey,
         event: AppendableWorkflowJournalEvent
       ) {
-        const receipt = yield* readCompletion(runId)
-        if (receipt._tag === "CompletedRun")
-          return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: receipt.completion.terminatedAt })
         const result = yield* Ref.modify(state, (current) => memoryAppendTransition(current, runId, key, event))
         return yield* result
       })
@@ -357,9 +369,6 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         disposition: RunTerminationDisposition,
         evidence: RunFinalityEvidence
       ) {
-        const receipt = yield* readCompletion(runId)
-        if (receipt._tag === "CompletedRun")
-          return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: receipt.completion.terminatedAt })
         const timing = { _tag: "Known" as const, completedAt: RunCompletionTime.make(yield* Clock.currentTimeMillis) }
         const update = (current: MemoryJournalState) =>
           memoryTerminationTransition(current, runId, disposition, evidence, timing)

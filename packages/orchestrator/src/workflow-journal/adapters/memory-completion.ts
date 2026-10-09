@@ -1,6 +1,7 @@
 import { decideWorkflowRunTermination } from "../run-lifecycle.js"
 import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
 import {
+  type RunCompletionInspection,
   type RunCompletionTiming,
   compactRunCompletion,
   sameRunCompletion,
@@ -11,7 +12,7 @@ import type { RunId } from "@dalph/contracts"
 import { Effect } from "effect"
 import { decideJournalPartitionHistory } from "../partition-history.js"
 import {
-  type WorkflowRunAlreadyTerminated,
+  WorkflowRunAlreadyTerminated,
   type WorkflowRunNotBegan,
   type WorkflowRunTerminationEvidenceInvalid,
   JournalDataCorruption,
@@ -46,21 +47,21 @@ export const adoptMemoryCompletions = (
   }, state.completions)
 
 /** Reads bounded metadata only for known completion; invalid legacy candidates remain errors. */
-export const readMemoryCompletion = Effect.fn("RunCompletion.Memory.read")(function* (
+export const decideMemoryCompletion = (
   state: MemoryJournalState,
   runId: RunId,
   operation: JournalStoreOperation
-) {
+): RunCompletionInspection | JournalPartitionContradiction | JournalHistoryCorruption | JournalDataCorruption => {
   const hot = state.hotRecordsByRun.get(runId)
   const cold = state.coldRecordsByRun.get(runId)
-  if (cold !== undefined && hot !== undefined) return yield* new JournalPartitionContradiction({ runId })
+  if (cold !== undefined && hot !== undefined) return new JournalPartitionContradiction({ runId })
   const records = hot ?? cold ?? []
   const receipt = state.completions.get(runId)
   if (receipt === undefined) {
     if (records.at(lastRecordIndex)?.event._tag === "WorkflowRunTerminated") {
       const decision = decideJournalPartitionHistory(cold === undefined ? "Hot" : "Cold", runId, records)
       if (decision._tag === "InvalidPartitionHistory")
-        return yield* new JournalHistoryCorruption({
+        return new JournalHistoryCorruption({
           operation,
           detail: decision.issue.detail,
           partition: cold === undefined ? "Hot" : "Cold",
@@ -76,9 +77,16 @@ export const readMemoryCompletion = Effect.fn("RunCompletion.Memory.read")(funct
   const endpoints = [began, publication, terminal].filter((record): record is JournalRecord => record !== undefined)
   const expected = compactRunCompletion(runId, endpoints, receipt.timing)
   if (expected === undefined || !sameRunCompletion(receipt, expected))
-    return yield* new JournalDataCorruption({ operation, detail: `completion/history contradiction for ${runId}` })
+    return new JournalDataCorruption({ operation, detail: `completion/history contradiction for ${runId}` })
   return { _tag: "CompletedRun" as const, completion: receipt, history: "Available" as const }
-})
+}
+
+export const readMemoryCompletion = (state: MemoryJournalState, runId: RunId, operation: JournalStoreOperation) => {
+  const decision = decideMemoryCompletion(state, runId, operation)
+  return decision._tag === "NoCompletion" || decision._tag === "CompletedRun"
+    ? Effect.succeed(decision)
+    : Effect.fail(decision)
+}
 
 /** The terminal occurrence and independent result become visible through one immutable state transition. */
 export const memoryTerminationTransition = (
@@ -99,6 +107,15 @@ export const memoryTerminationTransition = (
   >,
   MemoryJournalState
 ] => {
+  const completionDecision = decideMemoryCompletion(current, runId, "JournalStore.terminateRun")
+  if (completionDecision._tag === "CompletedRun")
+    return [
+      Effect.fail(
+        new WorkflowRunAlreadyTerminated({ runId, terminatedAt: completionDecision.completion.terminatedAt })
+      ),
+      current
+    ]
+  if (completionDecision._tag !== "NoCompletion") return [Effect.fail(completionDecision), current]
   const cold = current.coldRecordsByRun.get(runId)
   const hot = current.hotRecordsByRun.get(runId)
   if (cold !== undefined && hot !== undefined)
