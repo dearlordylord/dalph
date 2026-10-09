@@ -1,4 +1,8 @@
 import {
+  withRelevantAcceptedEvidence,
+  PublicResponsibilityDiagnostic
+} from "./production-cli-responsibility-diagnostic.js"
+import {
   TargetPromotionSafetyRefusal,
   ResultRecoverySubject,
   DeliveryDiagnostics,
@@ -185,7 +189,7 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
         ]),
         taskId: TaskId
       },
-      ResponsibilityFacts: { responsibilityReference: ObligationReference },
+      ResponsibilityFacts: { responsibilityReference: ObligationReference, diagnostic: PublicResponsibilityDiagnostic },
       IntegrationConfigurationWait: { plannedAttempt: PlannedTaskAttempt },
       TargetPromotionConfigurationWait: { plannedAttempt: PlannedTaskAttempt }
     })
@@ -276,7 +280,11 @@ const entryRelationshipCheck = Match.type<typeof PublicDeliveryStatusEntryShape.
     AcceptedFactPublicationWait: (entry) =>
       (entry.lifecycle === "SettledMaterializedDeliveryAction") === (entry.operationId !== null),
     EvidenceUnavailable: (entry) =>
-      (entry.evidence._tag === "ProposalDerivationIssue") === (entry.obligationReference === null),
+      (entry.evidence._tag === "ProposalDerivationIssue") === (entry.obligationReference === null) &&
+      (entry.evidence._tag !== "ResponsibilityFacts" ||
+        (entry.evidence.responsibilityReference === entry.obligationReference &&
+          (entry.evidence.diagnostic.correlation === null ||
+            entry.evidence.diagnostic.correlation.runId === entry.subject.runId))),
     EvidenceConflict: (entry) => new Set(entry.evidenceIdentities).size === entry.evidenceIdentities.length,
     DependencyWait: (entry) =>
       taskMatchesSubject(entry.taskId, entry.subject) &&
@@ -371,6 +379,24 @@ const publicSnapshotOf = (status: DeliveryStatusSnapshot): PublicSnapshot => {
         ...status,
         entries: status.entries.map((entry) => {
           const projected = publicDeliveryStatusEntryOf(entry)
+          if (
+            projected._tag === "EvidenceUnavailable" &&
+            projected.evidence._tag === "ResponsibilityFacts" &&
+            entry._tag === "EvidenceUnavailable" &&
+            entry.evidence._tag === "ResponsibilityFacts"
+          ) {
+            return {
+              ...projected,
+              evidence: {
+                ...projected.evidence,
+                diagnostic: withRelevantAcceptedEvidence(
+                  entry.evidence.facts,
+                  projected.evidence.diagnostic,
+                  status.diagnostics
+                )
+              }
+            }
+          }
           if (projected._tag !== "ExecutorFailure" || projected.reason._tag !== "Unavailable") return projected
           const diagnostic = status.diagnostics?.tasks.find(
             (task) =>

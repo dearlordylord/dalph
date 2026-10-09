@@ -53,6 +53,11 @@ import {
   GitCommonDirectoryLocator,
   GitCommonDirectoryTarget,
   JournalPosition,
+  JournalRecordKey,
+  type JournalRecord,
+  FixtureTarget,
+  projectDeliveryDiagnostics,
+  workflowJournalEventVersion,
   EvidenceDigest,
   EvidenceReference,
   JournalDataCorruption,
@@ -2231,7 +2236,13 @@ it("preserves current status subjects evidence classifications and structural or
   )
 })
 
-const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
+type ExecutorStatusDisposition = Extract<
+  Extract<TicketDeliveryEvidence, { readonly _tag: "ResponsibilityFacts" }>["facts"],
+  { readonly _tag: "PlannedAttemptExecutorFreshFacts" }
+>["disposition"]
+const projectedStatusFixture = (
+  unavailableDisposition: ExecutorStatusDisposition = ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" })
+): DeliveryRuntimeObservationState => {
   const capacity = TaskWorkCapacity.make(8)
   const taskIds = {
     capacity: TaskId.make("01-capacity"),
@@ -2262,13 +2273,7 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
   const executorFacts = (
     taskId: TaskId,
     suffix: string,
-    disposition: ReturnType<
-      | typeof ResponsibilityDisposition.TaskClaimMissingConstraint
-      | typeof ResponsibilityDisposition.UnreadableFactWait
-      | typeof ResponsibilityDisposition.CancelledAttemptSettled
-      | typeof ResponsibilityDisposition.Relinquished
-      | typeof ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal
-    >
+    disposition: ExecutorStatusDisposition
   ): TicketDeliveryEvidence => ({
     _tag: "ResponsibilityFacts",
     facts: {
@@ -2319,11 +2324,7 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
     trackerEvidence,
     conflictEvidence,
     conflictEvidence,
-    executorFacts(
-      taskIds.unavailable,
-      "unavailable",
-      ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" })
-    ),
+    executorFacts(taskIds.unavailable, "unavailable", unavailableDisposition),
     executorFacts(
       taskIds.settlement,
       "settlement",
@@ -3987,4 +3988,320 @@ it("exports only the canonical production CLI seam and omits the unreleased hist
 
   expect(publicApi).toHaveProperty("productionCliFromStdio")
   expect(publicApi).not.toHaveProperty("makeConfiguredProductionCliApplication")
+})
+
+it.effect("explains exact unresolved responsibility evidence through passive production status", () =>
+  Effect.gen(function* () {
+    const cases = [
+      [
+        ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: "TemporarilyUnavailable" }),
+        "Executor",
+        "TemporarilyUnavailable",
+        "ObserveExactExecutor"
+      ],
+      [
+        ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: "CorrelationContradiction" }),
+        "Executor",
+        "CorrelationContradiction",
+        "ObserveExactExecutor"
+      ],
+      [
+        ResponsibilityDisposition.AttemptStoppageWait({ reason: "ExecutorExecuting" }),
+        "Executor",
+        "ExecutorExecuting",
+        "ObserveExactExecutor"
+      ],
+      [
+        ResponsibilityDisposition.AttemptStoppageWait({ reason: "ExecutorContradictory" }),
+        "Executor",
+        "ExecutorContradictory",
+        "ObserveExactExecutor"
+      ],
+      [
+        ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "ForeignWorktreeRegistration" }),
+        "Git",
+        "ForeignWorktreeRegistration",
+        "ReadExactGitFacts"
+      ],
+      [
+        ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "ContradictoryWorktreeState" }),
+        "Git",
+        "ContradictoryWorktreeState",
+        "ReadExactGitFacts"
+      ],
+      [
+        ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" }),
+        "Git",
+        "ExactBoundaryObservationRequired",
+        "ReadExactGitFacts"
+      ],
+      [
+        ResponsibilityDisposition.StoppedAttemptClaimUnreadableWait({
+          observationOperationId: OperationId.make("exact-claim-read")
+        }),
+        "TaskTracker",
+        "ExactClaimReleaseObservationRequired",
+        "ReconcileExactClaimBeforeRelease"
+      ],
+      [
+        ResponsibilityDisposition.StoppedAttemptClaimPlanningWait({ reason: "FocusedObservationContradiction" }),
+        "TaskTracker",
+        "FocusedObservationContradiction",
+        "ResolveExactConstraint"
+      ]
+    ] as const
+    for (const [disposition, boundary, missingProof, nextPermittedStep] of cases) {
+      const privateMarker = "provider-private token=secret prompt contents"
+      const withPrivateDetail = { ...disposition, detail: privateMarker }
+      const state = projectedStatusFixture(withPrivateDetail)
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      yield* presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf(state),
+          runTermination: completedRunTermination(),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: {
+            snapshotAdmission: () => Effect.succeed({ _tag: "MayFit" as const }),
+            readAt: () => Effect.succeed(snapshot)
+          }
+        },
+        (line) => Ref.update(lines, (current) => [...current, line])
+      )
+      const records = (yield* Ref.get(lines)).map((line) =>
+        Schema.decodeUnknownSync(ProductionCliRecord)(JSON.parse(line))
+      )
+      const record = records.find((record) => record._tag === "CurrentStatus")
+      if (record?._tag !== "CurrentStatus" || record.status._tag !== "DeliveryStatusAvailable")
+        return expect.fail("current status missing")
+      const entry = record.status.entries.find(
+        (entry) =>
+          entry._tag === "EvidenceUnavailable" &&
+          entry.subject._tag === "Task" &&
+          entry.subject.taskId === "12-unavailable"
+      )
+      expect(entry).toMatchObject({
+        subject: { _tag: "Task", runId, taskId: "12-unavailable" },
+        evidence: {
+          _tag: "ResponsibilityFacts",
+          diagnostic: {
+            boundary,
+            missingProof,
+            nextPermittedStep,
+            correlation: { runId, attemptId: "projected-unavailable" },
+            lastAcceptedEvidence: { _tag: "ResponsibilityRecorded", observedAt: 2 }
+          }
+        }
+      })
+      expect(record.status.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ _tag: "LiveDeliveryAction", subject: { _tag: "Task", runId, taskId: "05-live" } })
+        ])
+      )
+      const repeated = deliveryStatusOf({ _tag: "Run", runId }, state)
+      if (repeated instanceof Error) return expect.fail("passive projection failed")
+      expect(publicDeliveryStatusOf(repeated)).toEqual(record.status)
+      expect(JSON.stringify(entry)).not.toContain("executor:projected-status")
+      expect(JSON.stringify(record)).not.toContain(privateMarker)
+    }
+  })
+)
+
+it("joins only accepted evidence for the exact immutable responsibility and required operation", () => {
+  const source = deliveryStatusOf(
+    { _tag: "Run", runId },
+    projectedStatusFixture(
+      ResponsibilityDisposition.StoppedAttemptClaimUnreadableWait({
+        observationOperationId: OperationId.make("required-claim-read")
+      })
+    )
+  )
+  if (source instanceof Error || source._tag !== "DeliveryStatusAvailable") return expect.fail("status unavailable")
+  const entry = source.entries.find(
+    (entry) => entry._tag === "EvidenceUnavailable" && entry.evidence._tag === "ResponsibilityFacts"
+  )
+  if (
+    entry?._tag !== "EvidenceUnavailable" ||
+    entry.evidence._tag !== "ResponsibilityFacts" ||
+    entry.evidence.facts.responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility"
+  )
+    return expect.fail("responsibility missing")
+  const planned = entry.evidence.facts.responsibility.plannedAttempt
+  const task = {
+    taskId: planned.taskId,
+    identity: { _tag: "Unavailable" as const },
+    phase: "Suspended" as const,
+    lastSubstantiveAt: JournalPosition.make(3),
+    retainedAttempt: planned,
+    candidateHead: { _tag: "Unavailable" as const },
+    failure: { _tag: "None" as const },
+    recovery: { _tag: "NotApplicable" as const },
+    executorEvidence: { kind: "ExecutorWorkSafelySuspended" as const, observedAt: JournalPosition.make(3) },
+    authorityEvidence: {
+      gitLineage: null,
+      gitWorktree: null,
+      claim: [
+        {
+          operationId: OperationId.make("required-claim-read"),
+          observedAt: JournalPosition.make(4),
+          kind: "FocusedTaskClaimFactsUnreadable"
+        }
+      ]
+    }
+  }
+  const publicEntry = (candidate = task) => {
+    const status = publicDeliveryStatusOf({
+      ...source,
+      diagnostics: { runId, trackerWait: { _tag: "None" }, tasks: [candidate] }
+    })
+    if (status._tag !== "DeliveryStatusAvailable") return expect.fail("public status missing")
+    return status.entries.find(
+      (entry) => entry._tag === "EvidenceUnavailable" && entry.evidence._tag === "ResponsibilityFacts"
+    )
+  }
+  expect(publicEntry()).toMatchObject({
+    evidence: {
+      diagnostic: {
+        requiredOperation: { _tag: "ObservationRequired", operationId: "required-claim-read" },
+        lastAcceptedEvidence: {
+          _tag: "BoundaryEvidenceAccepted",
+          observedAt: 4,
+          operationId: "required-claim-read",
+          kind: "FocusedTaskClaimFactsUnreadable"
+        }
+      }
+    }
+  })
+  const unchanged = {
+    evidence: { diagnostic: { lastAcceptedEvidence: { _tag: "ResponsibilityRecorded", observedAt: 2 } } }
+  }
+  expect(
+    publicEntry({
+      ...task,
+      taskId: TaskId.make("unrelated-task"),
+      retainedAttempt: { ...planned, taskId: TaskId.make("unrelated-task") }
+    })
+  ).toMatchObject(unchanged)
+  expect(
+    publicEntry({ ...task, retainedAttempt: { ...planned, baseSha: GitCommitSha.make("9".repeat(40)) } })
+  ).toMatchObject(unchanged)
+  expect(
+    publicEntry({
+      ...task,
+      authorityEvidence: {
+        ...task.authorityEvidence,
+        claim: task.authorityEvidence.claim.map((read) => ({
+          ...read,
+          operationId: OperationId.make("unrelated-read")
+        }))
+      }
+    })
+  ).toMatchObject(unchanged)
+})
+
+it("preserves exact cancellation claim evidence when an unrelated later read is accepted", () => {
+  const requiredId = OperationId.make("cancellation-required-read")
+  const source = deliveryStatusOf(
+    { _tag: "Run", runId },
+    projectedStatusFixture(
+      ResponsibilityDisposition.CancelledAttemptClaimUnreadableWait({ observationOperationId: requiredId })
+    )
+  )
+  if (source instanceof Error || source._tag !== "DeliveryStatusAvailable") return expect.fail("status unavailable")
+  const entry = source.entries.find(
+    (entry) => entry._tag === "EvidenceUnavailable" && entry.evidence._tag === "ResponsibilityFacts"
+  )
+  if (
+    entry?._tag !== "EvidenceUnavailable" ||
+    entry.evidence._tag !== "ResponsibilityFacts" ||
+    entry.evidence.facts.responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility"
+  )
+    return expect.fail("responsibility missing")
+  const plannedAttempt = entry.evidence.facts.responsibility.plannedAttempt
+  const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+    runId,
+    position: JournalPosition.make(position),
+    key: JournalRecordKey.make(`claim-chronology-${position}`),
+    event
+  })
+  const target = FixtureTarget.make("claim-chronology")
+  const observed = (position: number, operationId: OperationId) =>
+    record(position, {
+      _tag: "TaskTrackerFactsObserved",
+      version: workflowJournalEventVersion,
+      operationId,
+      observation: {
+        _tag: "FocusedTaskClaimFactsUnreadable",
+        attempts: 3,
+        completeness: "Unreadable",
+        coverage: { _tag: "ExactTaskClaim", taskId: plannedAttempt.taskId },
+        operationId,
+        target
+      }
+    })
+  const history = [
+    record(2, {
+      _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
+      version: workflowJournalEventVersion,
+      plannedAttempt
+    }),
+    observed(4, requiredId)
+  ]
+  const publicEntry = (records: ReadonlyArray<JournalRecord>) => {
+    const status = publicDeliveryStatusOf({
+      ...source,
+      diagnostics: projectDeliveryDiagnostics(runId, records, undefined, target)
+    })
+    if (status._tag !== "DeliveryStatusAvailable") return expect.fail("public status unavailable")
+    return status.entries.find(
+      (entry) => entry._tag === "EvidenceUnavailable" && entry.evidence._tag === "ResponsibilityFacts"
+    )
+  }
+  const before = publicEntry(history)
+  expect(before).toMatchObject({
+    evidence: {
+      diagnostic: {
+        requiredOperation: { _tag: "ObservationRequired", operationId: requiredId },
+        lastAcceptedEvidence: { _tag: "BoundaryEvidenceAccepted", operationId: requiredId, observedAt: 4 }
+      }
+    }
+  })
+  const later = [...history, observed(5, OperationId.make("unrelated-later-claim-read"))]
+  expect(publicEntry(later)).toEqual(before)
+  expect(publicEntry(JSON.parse(JSON.stringify(later)))).toEqual(before)
+  expect(publicEntry([...later, observed(6, requiredId)])).toEqual(before)
+})
+
+it("keeps task-local Base refusal diagnostics out of an independent task status", () => {
+  const state = projectedStatusFixture()
+  if (state._tag !== "Ready") return expect.fail("fixture not ready")
+  const refusal = {
+    taskId: TaskId.make("12-unavailable"),
+    operationId: OperationId.make("exact-base-read"),
+    observedAt: JournalPosition.make(4),
+    boundary: "TargetHead" as const,
+    detail: "Exact attempt Base qualification refused"
+  }
+  const withDiagnostics = {
+    ...state,
+    evaluation: {
+      ...state.evaluation,
+      diagnostics: {
+        runId,
+        trackerWait: { _tag: "None" as const },
+        tasks: [],
+        attemptBaseAdmission: { _tag: "QualificationRefused" as const, refusals: [refusal] }
+      }
+    }
+  }
+  const blocked = deliveryStatusOf({ _tag: "Task", runId, taskId: refusal.taskId }, withDiagnostics)
+  expect(blocked).toMatchObject({
+    _tag: "DeliveryStatusAvailable",
+    diagnostics: { attemptBaseAdmission: { _tag: "QualificationRefused", refusals: [refusal] } }
+  })
+  const independent = deliveryStatusOf({ _tag: "Task", runId, taskId: TaskId.make("05-live") }, withDiagnostics)
+  if (independent instanceof Error || independent._tag !== "DeliveryStatusAvailable")
+    return expect.fail("independent status missing")
+  expect(independent.diagnostics).not.toHaveProperty("attemptBaseAdmission")
+  expect(independent.entries).toEqual(expect.arrayContaining([expect.objectContaining({ _tag: "LiveDeliveryAction" })]))
 })

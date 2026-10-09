@@ -24,6 +24,7 @@ Git history.
 - [Alice inspects the running host's complete task graph](live-task-graph-page.md)
 - [Alice sends information to one exact active implementation turn](operator-guidance-to-active-executor.md)
 - [Keep failures visible with actionable diagnostics](actionable-failure-diagnostics.md)
+- [Read exact unresolved responsibilities](exact-responsibility-diagnostics.md)
 - [Attach to an explicit Docker IPv4 address](running-host-docker-ip.md)
 - [Define control-plane latency and responsiveness budgets](control-plane-latency-and-responsiveness.md)
 - [Keep one position for one admitted planned task attempt](conflicting-capacity-observation.md)
