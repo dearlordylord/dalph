@@ -165,7 +165,7 @@ export type RunDeliveryRuntimePhaseEffect<E> = Effect.Effect<
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
   | DeliveryPlanningCatchUp
-  | RuntimeObservation.DeliveryRuntimeObservationPublication
+  | RuntimeObservation.DeliveryRuntimeObservationUpdates
   | DeliveryRuntimeResources
   | OperationIdAllocator
   | PlannedAttemptProtocolController
@@ -236,7 +236,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
   | DeliveryPlanningCatchUp
-  | RuntimeObservation.DeliveryRuntimeObservationPublication
+  | RuntimeObservation.DeliveryRuntimeObservationUpdates
   | DeliveryRuntimeResources
   | OperationIdAllocator
   | PlannedAttemptProtocolController
@@ -248,7 +248,7 @@ export const runDeliveryRuntimePhase: RunDeliveryRuntimePhase = Effect.fn("Deliv
       const executor = yield* DeliveryActionExecutor
       const planningCatchUp = yield* DeliveryPlanningCatchUp
       const resources = yield* DeliveryRuntimeResources
-      const runtimeObservation = yield* RuntimeObservation.DeliveryRuntimeObservationPublication
+      const runtimeObservation = yield* RuntimeObservation.DeliveryRuntimeObservationUpdates
       const operationAllocator = yield* OperationIdAllocator
       const attemptPlanner = yield* PlannedTaskAttemptPlanner
       const ambient = yield* Effect.context<never>()
@@ -818,7 +818,7 @@ export const runDeliveryRuntime: RunDeliveryRuntime = <E>(expectedRunId: RunId, 
     Effect.ensuring(
       Effect.gen(function* () {
         yield* Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll)
-        yield* Effect.flatMap(RuntimeObservation.DeliveryRuntimeObservationPublication, ({ close }) => close)
+        yield* Effect.flatMap(RuntimeObservation.DeliveryRuntimeObservationUpdates, ({ close }) => close)
       })
     )
   )

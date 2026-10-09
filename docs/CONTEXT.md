@@ -573,13 +573,26 @@ _Avoid_: Relation publication, workflow occurrence
 
 **Delivery runtime evaluation**:
 One coherent derived value of delivery consequences, proposed actions,
-admission premises, and quiescence facts consumed by the runtime.
+admission premises, and quiescence facts consumed by the runtime through an
+in-process Effect current signal. This signal is neither network transport nor
+persistent storage.
 _Avoid_: Workflow event, persisted runtime state, transport message
 
 **Latest runtime observation update**:
 The runtime replaces its process-local latest evaluation and live-owner view
 for passive status readers; it grants no permission to act or append history.
 _Avoid_: Workflow append, accepted-fact publication, lifecycle report
+
+Dalph appends a workflow event, planning catches up through a captured Journal
+position, and planning updates its current graph view and runtime evaluation.
+The runtime consumes that evaluation through the signal, then may update the
+latest sanitized observation for passive readers. Catch-up proves incorporation
+of the captured prefix, not runtime completion.
+
+The code names these concepts `DeliveryPlanningCatchUp.awaitJournalPosition`,
+`DeliveryGraphView`, `DeliveryRelationInputObserver`,
+`DeliveryRuntimeEvaluation`, and
+`DeliveryRuntimeObservationUpdates.updateLatest`, respectively.
 
 **Workflow-journal history**:
 The ordered, decoded Dalph workflow-journal records for one exact `RunId`.

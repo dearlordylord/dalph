@@ -69,7 +69,7 @@ import {
   DeliveryRuntimeResources,
   type DeliveryRuntimeResourceCapabilityPair
 } from "../delivery/delivery-runtime-resources.js"
-import type { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import type { DeliveryRuntimeObservationUpdates } from "../delivery/delivery-runtime-observation.js"
 import type {
   PauseNotApplied,
   PauseObservationRunMismatch,
@@ -101,7 +101,7 @@ export { AcceptedRunFactPublication, AcceptedRunFactPublicationRecordMissing } f
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
   | DeliveryRuntimeResources
-  | DeliveryRuntimeObservationPublication
+  | DeliveryRuntimeObservationUpdates
   | PassivePlannedAttemptObserver
   | PassivePlannedAttemptProjectionPublication
 

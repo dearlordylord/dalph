@@ -47,93 +47,93 @@ export interface DeliveryRelationsLayerInput {
   readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
   readonly reflectionProposals?: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, DeliveryRelationSourceError>
   readonly trackerGraphProposals?: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
-  /** One current-first input bundle carrying the descriptive publication and action inputs together. */
+  /** One current-first input bundle carrying the descriptive view and action inputs together. */
   readonly coherent: CurrentSignal<DeliveryRelationInputBundle, DeliveryRelationSourceError>
 }
 
 /**
- * Identifies the descriptive values that make one graph-stage publication
+ * Identifies the descriptive values that make one graph-stage view
  * observable. Accepted appends can rebuild policy and evidence objects even
  * when the graph itself did not change; those equivalent values must not
- * replay the previous graph publication, while a new graph observation,
- * policy, or exact evidence still publishes.
+ * replay the previous graph view, while a new graph observation,
+ * policy, or exact evidence still emits a signal update.
  */
-const publicationEvidenceKeyByArray = new WeakMap<ReadonlyArray<TicketDeliveryEvidence>, string>()
-const publicationEvidenceKeyByElement = new WeakMap<TicketDeliveryEvidence, string>()
-const publicationSnapshotKeyByObject = new WeakMap<TaskDagSnapshot, string>()
+const graphViewEvidenceKeyByArray = new WeakMap<ReadonlyArray<TicketDeliveryEvidence>, string>()
+const graphViewEvidenceKeyByElement = new WeakMap<TicketDeliveryEvidence, string>()
+const graphViewSnapshotKeyByObject = new WeakMap<TaskDagSnapshot, string>()
 
 /**
  * Keep the exact JSON equality law while avoiding repeated traversal of
- * immutable evidence values that are shared by adjacent publications. The
- * array itself is often rebuilt for each publication, so the element cache is
+ * immutable evidence values that are shared by adjacent views. The
+ * array itself is often rebuilt for each view, so the element cache is
  * the useful layer here. A JSON array of the element JSON strings is
  * injective for the original serialized evidence array, including ordering
  * and duplicate entries.
  */
-const publicationEvidenceKeyOf = (evidence: ReadonlyArray<TicketDeliveryEvidence>): string => {
-  const cached = publicationEvidenceKeyByArray.get(evidence)
+const graphViewEvidenceKeyOf = (evidence: ReadonlyArray<TicketDeliveryEvidence>): string => {
+  const cached = graphViewEvidenceKeyByArray.get(evidence)
   if (cached !== undefined) return cached
 
   const key = JSON.stringify(
     evidence.map((entry) => {
-      const cachedEntry = publicationEvidenceKeyByElement.get(entry)
+      const cachedEntry = graphViewEvidenceKeyByElement.get(entry)
       if (cachedEntry !== undefined) return cachedEntry
       const serializedEntry = JSON.stringify(entry)
-      publicationEvidenceKeyByElement.set(entry, serializedEntry)
+      graphViewEvidenceKeyByElement.set(entry, serializedEntry)
       return serializedEntry
     })
   )
-  publicationEvidenceKeyByArray.set(evidence, key)
+  graphViewEvidenceKeyByArray.set(evidence, key)
   return key
 }
 
-const publicationSnapshotKeyOf = (snapshot: TaskDagSnapshot): string => {
-  const cached = publicationSnapshotKeyByObject.get(snapshot)
+const graphViewSnapshotKeyOf = (snapshot: TaskDagSnapshot): string => {
+  const cached = graphViewSnapshotKeyByObject.get(snapshot)
   if (cached !== undefined) return cached
   const key = snapshot.canonicalJson()
-  publicationSnapshotKeyByObject.set(snapshot, key)
+  graphViewSnapshotKeyByObject.set(snapshot, key)
   return key
 }
 
-/** Encodes one publication-key component without allowing delimiter collisions. */
-const publicationKeyPartOf = (value: string | number): string => {
+/** Encodes one view-key component without allowing delimiter collisions. */
+const graphViewKeyPartOf = (value: string | number): string => {
   const text = String(value)
   return `${typeof value}:${text.length}:${text}`
 }
 
-const deliveryPublicationKeyOf = (publication: DeliveryGraphView): string => {
-  const graph = publication.graph
+const deliveryGraphViewKeyOf = (view: DeliveryGraphView): string => {
+  const graph = view.graph
   const graphKey =
     graph._tag === "GraphNotEstablished"
       ? [graph._tag]
       : [
           graph._tag,
-          publicationSnapshotKeyOf(graph.observation.snapshot),
+          graphViewSnapshotKeyOf(graph.observation.snapshot),
           graph.observation.operationId,
           graph.observation.contentIdentity,
           graph.observation.recordedAt,
           graph.observation.freshness.operationId
         ]
   return [
-    publicationEvidenceKeyOf(publication.exactEvidence),
+    graphViewEvidenceKeyOf(view.exactEvidence),
     ...graphKey,
-    publication.policy.revision,
-    publication.policy.taskExecutionCapacity
+    view.policy.revision,
+    view.policy.taskExecutionCapacity
   ]
-    .map(publicationKeyPartOf)
+    .map(graphViewKeyPartOf)
     .join("|")
 }
 
-const deduplicatedPublicationSignal = (
+const deduplicatedGraphViewSignal = (
   signal: CurrentSignal<DeliveryGraphView, DeliveryRelationSourceError>
 ): CurrentSignal<DeliveryGraphView, DeliveryRelationSourceError> =>
   currentSignalFromCurrentFirstStream(
     signal.changes.pipe(
       Stream.mapAccum<string | undefined, DeliveryGraphView, DeliveryGraphView>(
         () => undefined,
-        (previousKey, publication) => {
-          const nextKey = deliveryPublicationKeyOf(publication)
-          return previousKey === nextKey ? [nextKey, []] : [nextKey, [publication]]
+        (previousKey, view) => {
+          const nextKey = deliveryGraphViewKeyOf(view)
+          return previousKey === nextKey ? [nextKey, []] : [nextKey, [view]]
         }
       )
     )
@@ -210,7 +210,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
   /**
    * Production obtains all four owners from one coherent bundle. Focused
    * deterministic tests may override an owner signal explicitly without
-   * changing the production publication law.
+   * changing the production view law.
    */
   const planningInputs = hasPlanningOverrides
     ? mapCurrentSignal(
@@ -240,10 +240,10 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         )
       )
   const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
-  const publication = deduplicatedPublicationSignal(mapCurrentSignal(input.coherent, ({ graphView }) => graphView))
+  const view = deduplicatedGraphViewSignal(mapCurrentSignal(input.coherent, ({ graphView }) => graphView))
   const trackerGraphService = TrackerGraphRelation.of({
     proposedActions: actionPlanTrackerGraphProposals,
-    signal: publication
+    signal: view
   })
   const trackerGraph = Layer.succeed(TrackerGraphRelation, trackerGraphService)
   const bounded = Layer.succeed(

@@ -73,7 +73,7 @@ import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-deliver
 import { DeliveryPlanningCatchUp } from "../delivery/delivery-planning-catch-up.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { Journal } from "../delivery/journal.js"
-import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import { DeliveryRuntimeObservationUpdates } from "../delivery/delivery-runtime-observation.js"
 import {
   DeliveryRelationInputObserver,
   type DeliveryRelationInputObservation
@@ -3337,7 +3337,7 @@ it.effect("tells Alice that her exact Run Pause is not applied", () =>
           Effect.succeed(initialPolicy),
           runId,
           Effect.gen(function* () {
-            const observation = yield* DeliveryRuntimeObservationPublication
+            const observation = yield* DeliveryRuntimeObservationUpdates
             const journal = yield* Journal
             const acceptedAt = (yield* journal.state.get).position
             yield* observation.updateLatest({ ...(yield* unpausedRuntimeEvaluation(runId)), acceptedAt }, [])

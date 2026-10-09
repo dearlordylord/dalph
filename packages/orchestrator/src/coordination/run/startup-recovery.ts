@@ -36,7 +36,7 @@ import {
   DeliveryRuntimeResources,
   deliveryRuntimeResourceCapabilitiesOf
 } from "../delivery/delivery-runtime-resources.js"
-import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import { DeliveryRuntimeObservationUpdates } from "../delivery/delivery-runtime-observation.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { EvidenceStore, type EvidenceStoreService } from "../../workflow/protocols/evidence-store.js"
 import {
@@ -247,8 +247,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
         yield* ApplicationExitAdmission
       ).pipe(Effect.map((value) => ({ ownedByActivation: true as const, value })))
   const runtimeResources = DeliveryRuntimeResources.of(runtimeCapabilityOwnership.value.resources)
-  const observationPublication = DeliveryRuntimeObservationPublication.of(runtimeCapabilityOwnership.value.observation)
-  if (runtimeCapabilityOwnership.ownedByActivation) yield* Effect.addFinalizer(() => observationPublication.close)
+  const observationUpdates = DeliveryRuntimeObservationUpdates.of(runtimeCapabilityOwnership.value.observation)
+  if (runtimeCapabilityOwnership.ownedByActivation) yield* Effect.addFinalizer(() => observationUpdates.close)
   /* v8 ignore stop -- @preserve */
   const integrationResources = runtimeResources.integrationTargets
   const recovery = yield* makeRunRecoveryProjection(
@@ -289,7 +289,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   )
   const optionalContext = Context.empty().pipe(
     Context.add(DeliveryRuntimeResources, runtimeResources),
-    Context.add(DeliveryRuntimeObservationPublication, observationPublication),
+    Context.add(DeliveryRuntimeObservationUpdates, observationUpdates),
     Context.addOrOmit(Integrator, integrator),
     Context.addOrOmit(IntegratorGit, integratorGit),
     Context.addOrOmit(EvidenceStore, Option.fromUndefinedOr(evidenceStore).pipe(Option.map(EvidenceStore.of))),
