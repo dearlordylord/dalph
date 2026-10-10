@@ -175,7 +175,6 @@ module freshTaskAdmissionTest {
     .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
     .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
     .then(acceptSafeReportFor(TaskA))
-    .then(selectSafeContinuationFor(TaskA).fail())
     .then(projectOrdinarySafeContinuationReadyFor(TaskA))
     .then(reserveReadyResponsibilityFor(TaskA)).then(handoffReadyResponsibilityFor(TaskA))
     .then(crash).then(recover).then(reconcileResumeAsStillSafeFor(TaskA))
@@ -187,6 +186,11 @@ module freshTaskAdmissionTest {
     .then(reserveReadyResponsibilityFor(TaskA))
     .then(readContinuationWitnessFor(TaskA, AuthoredSpecification))
     .expect(occupiedCount(state) == 1)
+
+  run openSafeCannotSelectFirstLifecycleRevalidationTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
+    .then(acceptSafeReportFor(TaskA)).then(selectSafeContinuationFor(TaskA).fail())
 
   run safeProjectionRequiresPriorResumeIntentTest = retainedCWithBD
     .then(reconcileResumeAsStillSafeFor(TaskC).fail())
