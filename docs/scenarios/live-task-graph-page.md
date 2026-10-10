@@ -93,3 +93,36 @@ Tests are controlled boundary evidence, not live GitHub timing. Each browser
 asserts that the supplied inspection capability was never started. The full
 workflow's authority-read and crash-reconciliation tests retain their existing
 scope; this presentation introduces no new mutation or durable fact.
+
+## P5 — Alice sizes the canvas and expands its summary
+
+Accepted user instructions on 2026-10-10: the canvas occupies approximately the
+viewport height; Graph summary starts collapsed and expands below the canvas
+only when clicked. Resizing changes canvas bounds without a fixed empty area.
+Acceptance: `running-host-page.browser.test.ts`: “retains a Closed graph without
+reconnecting and reports malformed responses concisely” checks viewport canvas
+bounds and the initially collapsed summary; Chromium checks expansion below it.
+
+## P6 — Alice observes the host through Effect HTTP without flicker
+
+Accepted user instructions on 2026-10-10: descriptor, snapshot and watch exchange
+use Effect HttpClient and its scoped streaming response, with no direct fetch
+or hand-owned response reader in page code. The browser and host use the same
+published protocol schemas. After a valid Closed snapshot, the page retains its
+final graph and stops reconnecting; ordinary watch termination is not a failure.
+A malformed or unavailable response yields a concise connection message rather
+than serialized schema internals. Actual transient failures reconnect through
+fresh descriptor/read/watch with the existing three-second pacing; no workflow
+command or tracker request is introduced. Scope cancellation on page close owns
+HTTP/watch release. Replacement-host clearing and foreign-origin refusal remain
+P3/P4. Acceptance: live-host browser regression plus Chromium observation of the
+actual terminal host over multiple former reconnect intervals.
+`running-host-page.browser.test.ts`: “retains a Closed graph without reconnecting
+and reports malformed responses concisely” covers Closed retention, request
+counts and malformed envelope messaging; “rejects an incomplete UTF-8 suffix on
+a watch response” covers decoder finalization. The P1 browser test retains
+replacement, multiple-browser updates and scope-disconnect coverage. No mutation retry or durable format changes apply.
+
+The replacement-host fixture keeps its NotReady publication stream open, as a
+live host does. A server-reported SourceEndedBeforeClosed remains a transport
+failure; a partial UTF-8 suffix or incomplete frame also remains visible.

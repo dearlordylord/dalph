@@ -75,7 +75,10 @@ it.live("shows Run graph updates in two browsers without starting inspection or 
       expect(refused).toBe(true)
     })
     yield* Scope.close(firstHostScope, Exit.succeed(undefined))
-    yield* serveRunningHost(address, { ...probe.observation, inspection: observation.inspection })
+    const replacementState = yield* SubscriptionRef.make<DeliveryRuntimeObservationState>({ _tag: "NotReady" })
+    yield* serveRunningHost(address, { ...probe.observation,
+      current: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(replacementState)),
+      inspection: observation.inspection })
     yield* Effect.promise(async () => {
       for (const page of pages) {
         await page.locator("#freshness").filter({ hasText: "The Run has not published an observed task graph." }).waitFor({ timeout: 5000 })
@@ -88,5 +91,66 @@ it.live("shows Run graph updates in two browsers without starting inspection or 
     expect(yield* Ref.get(inspections)).toBe(0)
     expect(yield* Ref.get(commands)).toBe(0)
     expect(yield* Ref.get(probe.reads)).toBe(0)
+  }))
+)
+
+it.live("retains a Closed graph without reconnecting and reports malformed responses concisely", () =>
+  Effect.scoped(Effect.gen(function* () {
+    const probe = yield* makeRunningHostReadProbe()
+    const address = yield* availableLocalHostAddress
+    const normalized = projectTrackerSnapshot({ revision: "closed-browser", rootTaskId: "root", tasks: [
+      { id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }
+    ] })
+    if (normalized._tag !== "Valid") return expect.fail("requires complete graph")
+    const final = yield* runningHostPageObservation(probe.runId, normalized.snapshot)
+    const state = yield* SubscriptionRef.make<DeliveryRuntimeObservationState>({ _tag: "Closed", final })
+    yield* serveRunningHost(address, { ...probe.observation,
+      current: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state)) })
+    const browser = yield* Effect.acquireRelease(Effect.promise(() => chromium.launch()),
+      (owned) => Effect.promise(() => owned.close()))
+    yield* Effect.promise(async () => {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+      await page.clock.install()
+      let requests = 0
+      page.on("request", (request) => { if (request.url().includes("/dalph/v1/")) requests += 1 })
+      await page.goto(address)
+      await page.locator('#connection[data-state="connected"]').waitFor()
+      expect(await page.locator("#connection").innerText()).toContain("Run closed")
+      const widget = page.locator("dalph-delivery-graph")
+      expect(await widget.locator("details").getAttribute("open")).toBeNull()
+      const canvas = await widget.locator("#canvas").boundingBox()
+      expect(canvas?.height).toBeGreaterThan(700)
+      await page.clock.runFor(10000)
+      expect(requests).toBe(2)
+      expect(await page.locator("#connection").innerText()).toContain("Run closed")
+      await widget.locator("summary").click()
+      await widget.locator('button[data-task-id="root"]').waitFor()
+      const malformed = await browser.newPage()
+      await malformed.route("**/dalph/v1/request", (route) => route.fulfill({
+        contentType: "application/json", body: "{}" }))
+      await malformed.goto(address)
+      await malformed.locator('#connection[data-state="failed"]').waitFor()
+      expect(await malformed.locator("#connection").innerText()).toBe("Connection unavailable. Reconnecting…")
+      expect(await malformed.locator("#connection").getAttribute("data-reason")).toBe("ResponseSchemaInvalid")
+      expect(await malformed.locator("body").innerText()).not.toContain("SchemaIssue")
+    })
+  }))
+)
+
+it.live("rejects an incomplete UTF-8 suffix on a watch response", () =>
+  Effect.scoped(Effect.gen(function* () {
+    const probe = yield* makeRunningHostReadProbe()
+    const address = yield* availableLocalHostAddress
+    yield* serveRunningHost(address, probe.observation)
+    const browser = yield* Effect.acquireRelease(Effect.promise(() => chromium.launch()),
+      (owned) => Effect.promise(() => owned.close()))
+    yield* Effect.promise(async () => {
+      const page = await browser.newPage()
+      await page.route("**/dalph/v1/watch", (route) => route.fulfill({
+        contentType: "application/x-ndjson", body: Buffer.from([0xc2]) }))
+      await page.goto(address)
+      await page.locator('#connection[data-state="failed"]').waitFor()
+      expect(await page.locator("#connection").getAttribute("data-reason")).toBe("Utf8Invalid")
+    })
   }))
 )

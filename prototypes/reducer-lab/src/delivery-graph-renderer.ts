@@ -152,7 +152,7 @@ const deliveryGraphLayout = (): cytoscape.LayoutOptions => ({
 const shadowCss = `
   :host {
     display: block;
-    min-height: 430px;
+    min-height: var(--delivery-graph-height, 430px);
     border: 1px solid #8e8578;
     background:
       linear-gradient(rgba(33, 31, 26, .045) 1px, transparent 1px),
@@ -163,12 +163,12 @@ const shadowCss = `
   :host([data-empty]) {
     background: #fbf8f1;
   }
-  #canvas { position: relative; width: 100%; height: 430px; touch-action: none; cursor: grab; }
+  #canvas { position: relative; width: 100%; height: var(--delivery-graph-height, 430px); touch-action: none; cursor: grab; }
   #canvas:active { cursor: grabbing; }
   #empty {
     box-sizing: border-box;
-    height: 430px;
-    min-height: 430px;
+    height: var(--delivery-graph-height, 430px);
+    min-height: var(--delivery-graph-height, 430px);
     display: grid;
     place-items: center;
     color: #726b60;
@@ -203,9 +203,9 @@ const shadowCss = `
   }
   #summary button[aria-current="true"] { color: #295b46; font-weight: 700; }
   @media (max-width: 42rem) {
-    :host { min-height: 340px; }
-    #canvas { height: 340px; }
-    #empty { height: 340px; min-height: 340px; }
+    :host { min-height: var(--delivery-graph-height, 340px); }
+    #canvas { height: var(--delivery-graph-height, 340px); }
+    #empty { height: var(--delivery-graph-height, 340px); min-height: var(--delivery-graph-height, 340px); }
   }
 `
 
