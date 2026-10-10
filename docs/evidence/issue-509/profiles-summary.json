@@ -1,0 +1,199 @@
+[
+  {
+    "candidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+    "node": "v24.20.0",
+    "platform": "linux",
+    "architecture": "arm64",
+    "profile": "Dense",
+    "temperature": "ColdHostReopen",
+    "samples": 20,
+    "exit": 0,
+    "maxSynchronousWallMillis": 3.7380169999996724,
+    "worstPhases": [
+      "WorkflowOccurrence.project",
+      "WorkflowOccurrence.projectRecord",
+      "WorkflowOccurrence.FinalProjectionSchema",
+      "TraceReader.historyFromRecords"
+    ],
+    "maxThreadCpuMicros": 3130,
+    "admissionP95Millis": 0.748794999999518,
+    "maxHeapBytes": 293155952,
+    "maxRssBytes": 702832640,
+    "recordRange": [
+      536,
+      555
+    ],
+    "eventPayloadByteRange": [
+      254783,
+      262174
+    ],
+    "allControlsDuringSemanticPreparation": true,
+    "sourceReadModes": [
+      "AuthoritativeProcessLocalStoreCache"
+    ]
+  },
+  {
+    "candidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+    "node": "v24.20.0",
+    "platform": "linux",
+    "architecture": "arm64",
+    "profile": "Dense",
+    "temperature": "WarmHost",
+    "samples": 20,
+    "exit": 0,
+    "maxSynchronousWallMillis": 8.016952000001766,
+    "worstPhases": [
+      "TraceReader.historyFromRecords",
+      "TraceReader.OccurrenceItemSchema"
+    ],
+    "maxThreadCpuMicros": 7718,
+    "admissionP95Millis": 0.5892529999982798,
+    "maxHeapBytes": 326505904,
+    "maxRssBytes": 702832640,
+    "recordRange": [
+      555,
+      555
+    ],
+    "eventPayloadByteRange": [
+      262174,
+      262174
+    ],
+    "allControlsDuringSemanticPreparation": true,
+    "sourceReadModes": [
+      "AuthoritativeProcessLocalStoreCache"
+    ]
+  },
+  {
+    "candidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+    "node": "v24.20.0",
+    "platform": "linux",
+    "architecture": "arm64",
+    "profile": "DenseOversized8192Utf8Bytes",
+    "temperature": "ColdHostReopen",
+    "samples": 20,
+    "exit": 0,
+    "maxSynchronousWallMillis": 4.929979999997158,
+    "worstPhases": [
+      "WorkflowOccurrence.project",
+      "WorkflowOccurrence.projectRecord",
+      "WorkflowOccurrence.FinalProjectionSchema",
+      "TraceReader.historyFromRecords"
+    ],
+    "maxThreadCpuMicros": 4149,
+    "admissionP95Millis": 1.0213800000019546,
+    "maxHeapBytes": 343130976,
+    "maxRssBytes": 776138752,
+    "recordRange": [
+      537,
+      556
+    ],
+    "eventPayloadByteRange": [
+      263377,
+      270768
+    ],
+    "allControlsDuringSemanticPreparation": true,
+    "sourceReadModes": [
+      "AuthoritativeProcessLocalStoreCache"
+    ]
+  },
+  {
+    "candidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+    "node": "v24.20.0",
+    "platform": "linux",
+    "architecture": "arm64",
+    "profile": "DenseOversized8192Utf8Bytes",
+    "temperature": "WarmHost",
+    "samples": 20,
+    "exit": 0,
+    "maxSynchronousWallMillis": 7.260157000000618,
+    "worstPhases": [
+      "WorkflowOccurrence.project",
+      "WorkflowOccurrence.projectRecord",
+      "WorkflowOccurrence.FinalProjectionSchema",
+      "TraceReader.historyFromRecords"
+    ],
+    "maxThreadCpuMicros": 6719,
+    "admissionP95Millis": 1.1621720000002824,
+    "maxHeapBytes": 375349376,
+    "maxRssBytes": 776138752,
+    "recordRange": [
+      556,
+      556
+    ],
+    "eventPayloadByteRange": [
+      270768,
+      270768
+    ],
+    "allControlsDuringSemanticPreparation": true,
+    "sourceReadModes": [
+      "AuthoritativeProcessLocalStoreCache"
+    ]
+  },
+  {
+    "candidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+    "node": "v24.20.0",
+    "platform": "linux",
+    "architecture": "arm64",
+    "profile": "DenseOversizedUncachedSqlite",
+    "temperature": "ColdHostReopen",
+    "samples": 20,
+    "exit": 0,
+    "maxSynchronousWallMillis": 5.400292000000263,
+    "worstPhases": [
+      "JournalStore.Sqlite.loadPartitionEvidence",
+      "JournalStore.Sqlite.decodeEvent",
+      "WorkflowJournal.decodeGzipPayload",
+      "WorkflowJournal.decodeEvent",
+      "WorkflowJournal.decodeStoragePayload"
+    ],
+    "maxThreadCpuMicros": 4652,
+    "admissionP95Millis": 1.1577170000000478,
+    "maxHeapBytes": 380902616,
+    "maxRssBytes": 760160256,
+    "recordRange": [
+      537,
+      556
+    ],
+    "eventPayloadByteRange": [
+      263377,
+      270768
+    ],
+    "allControlsDuringSemanticPreparation": true,
+    "sourceReadModes": [
+      "FreshNativeSqliteDecodeAfterReadOnlyScan"
+    ]
+  },
+  {
+    "candidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+    "node": "v24.20.0",
+    "platform": "linux",
+    "architecture": "arm64",
+    "profile": "DenseOversizedUncachedSqlite",
+    "temperature": "WarmHost",
+    "samples": 20,
+    "exit": 0,
+    "maxSynchronousWallMillis": 7.864310000000842,
+    "worstPhases": [
+      "WorkflowOccurrence.project",
+      "WorkflowOccurrence.projectRecord",
+      "WorkflowOccurrence.FinalProjectionSchema",
+      "TraceReader.historyFromRecords"
+    ],
+    "maxThreadCpuMicros": 7550,
+    "admissionP95Millis": 1.480052999999316,
+    "maxHeapBytes": 362072728,
+    "maxRssBytes": 760160256,
+    "recordRange": [
+      556,
+      556
+    ],
+    "eventPayloadByteRange": [
+      270768,
+      270768
+    ],
+    "allControlsDuringSemanticPreparation": true,
+    "sourceReadModes": [
+      "FreshNativeSqliteDecodeAfterReadOnlyScan"
+    ]
+  }
+]

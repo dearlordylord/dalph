@@ -1,0 +1,1187 @@
+{
+  "status": "Accepted leaf; combined #501 remains pending",
+  "base": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+  "qualifiedCandidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+  "runtimeCommit": "7a4162f9a8368623e61876ebb84bf5c4f8129a6c",
+  "scope": "Optional ReadOccurrencePage preparation on the declared Linux arm64 Node v24.20.0 profiles. Legacy full Trace and whole-host combined capacity are not qualified.",
+  "implementation": "One ordered resumable validation phase description, per-record exact-source query and operation indexes, prefix validation, cooperative projection, item mapping and complete history schema validation. Shared position predicate; private accumulators publish only after complete success.",
+  "limits": {
+    "synchronousReadFiberTaskMillis": 10,
+    "localAdmissionP95Millis": 100,
+    "heapBytes": 1073741824,
+    "rssBytes": 1610612736
+  },
+  "measurement": "Every scheduled read-fiber task including initial native read is measured by synchronous wall span and main-thread threadCpuUsage. Named phases include prefix selection/envelope, cancellation multiplicity, query indexing, operation indexing, projection final Schema and individual item schema. Heartbeat gaps and total asynchronous preparation are not chunk clocks. Memory includes test-host overhead and excludes children. Provider settlement is reported separately from receipt-to-executeAttachedCommand admission.",
+  "profileSelection": "Each of three executable test cases runs in a separate process to avoid accumulation of retained diagnostic raw spans across cases; each case still has 20 cold reopens and 20 warm samples in one Node process. Cold means host/SQLite scopes, not cold Node binary. Dense remains four tasks/seven graph edges/six causal edges/four obligations/512 initial Pause directions/no watches. Oversized adds an unchanged 8192 UTF8-byte required TaskId. Uncached adds a read-only scan before measurement to invalidate store read snapshots.",
+  "reproduction": [
+    "mkdir -p .scratch",
+    "cp docs/evidence/issue-509/profile-fixture.ts.txt .scratch/combined-profile.test.ts",
+    "cp docs/evidence/issue-509/profile-config.mjs.txt .scratch/combined-profile.config.mjs",
+    "mkdir -p /tmp/issue-509-qualification",
+    "For each profile Dense, DenseOversized8192Utf8Bytes, DenseOversizedUncachedSqlite separately: DALPH_PROFILE_CANDIDATE=$(git rev-parse HEAD) NODE_OPTIONS=--max-old-space-size=1024 timeout --signal=TERM --kill-after=15s 120s mise exec -- pnpm exec vitest run --config .scratch/combined-profile.config.mjs -t \"^<profile> native cold host reopen and warm public admission profile$\"; preserve output before next case; record UTC stop two minutes after start."
+  ],
+  "scenarios": {
+    "V1": {
+      "status": "passed",
+      "exit": 0,
+      "namedChecks": [
+        {
+          "file": "dalph/src/application/running-host-occurrences-interruption.acceptance.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "disconnect interrupts native semantic history preparation without cancelling delivery or caching a partial history",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "dalph/src/application/running-host-occurrences.acceptance.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "pages the canonical fixed prefix across an append with no read mutations and refuses exact oversized occurrences",
+              "status": "passed"
+            },
+            {
+              "name": "reports the SQLite archive owner's historical deletion without mutating authorities or losing compact Run control",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "dalph/src/application/running-host-page-http.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "allows only exact same-origin observation routes, refuses browser controls and serves only fixed packaged assets",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.property.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "matches the synchronous cursor oracle for canonical, gapped, duplicated and malformed-key histories",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "yields during complete validation, admits another fiber, and returns exact canonical history",
+              "status": "passed"
+            },
+            {
+              "name": "discards an interrupted validation and rebuilds before publishing a successful cache",
+              "status": "passed"
+            },
+            {
+              "name": "preserves fixed-prefix parity and error precedence across appended malformed envelopes",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.property.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "lets the maintainer select every prepared cursor with the exact independent cold payload",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "lets the maintainer inspect exact graph, causal evidence and retained cleanup responsibilities at every cursor",
+              "status": "passed"
+            },
+            {
+              "name": "retains exact ordered invalid-prefix issues and storage-order duplicate cursor availability",
+              "status": "passed"
+            },
+            {
+              "name": "reads storage once and retains earlier snapshots without rereading or accumulating selected views",
+              "status": "passed"
+            },
+            {
+              "name": "does not leave an interrupted storage read as a successful or pending prepared snapshot",
+              "status": "passed"
+            },
+            {
+              "name": "bounds source inspection at preparation and never replays source records when selecting N or 2N cursors",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "snapshot admission preserves small complete views and proves excess for dense causal histories",
+              "status": "passed"
+            },
+            {
+              "name": "indexes provider quarantine and successor identities in the public trace",
+              "status": "passed"
+            },
+            {
+              "name": "projects automatic S2 authorization and predecessor preservation as distinct coordinator facts",
+              "status": "passed"
+            },
+            {
+              "name": "indexes completion lookup and candidate ancestry roles in the public trace",
+              "status": "passed"
+            },
+            {
+              "name": "rejects the coordinator's acknowledgement when it names a different completion request",
+              "status": "passed"
+            },
+            {
+              "name": "rejects a tracker read when its operation ID already identifies the completion lookup",
+              "status": "passed"
+            },
+            {
+              "name": "maps projection failures consistently through complete and cursor trace reads",
+              "status": "passed"
+            },
+            {
+              "name": "maps a reachable historical occurrence projection failure through every reader boundary",
+              "status": "passed"
+            },
+            {
+              "name": "keeps the composed trace reader context read-only",
+              "status": "passed"
+            },
+            {
+              "name": "moves Alice through journal positions without reordering history and follows exact causal predecessors",
+              "status": "passed"
+            },
+            {
+              "name": "rejects a causal predecessor absent from the validated Run prefix instead of using the previous record",
+              "status": "passed"
+            },
+            {
+              "name": "reuses the immutable complete-prefix trace result for repeated reads",
+              "status": "passed"
+            },
+            {
+              "name": "matches the prefix projection at every early cursor when a later immutable suffix is malformed",
+              "status": "passed"
+            },
+            {
+              "name": "keeps process-local integration serialization separate from other trace relationships",
+              "status": "passed"
+            },
+            {
+              "name": "rejects duplicate OperationIds as visible causal contradictions",
+              "status": "passed"
+            },
+            {
+              "name": "rejects a predecessor recorded after its successor as a visible causal contradiction",
+              "status": "passed"
+            },
+            {
+              "name": "rejects trace identities and observations outside their committed prefix",
+              "status": "passed"
+            },
+            {
+              "name": "reports empty, mismatched, gapped, and non-beginning committed prefixes",
+              "status": "passed"
+            },
+            {
+              "name": "fails closed when a complete tracker observation addresses another target",
+              "status": "passed"
+            },
+            {
+              "name": "does not reconstruct a graph from a reconfirmation with no earlier full observation",
+              "status": "passed"
+            },
+            {
+              "name": "combines a fixed historical trace with a newer passive current status without rewriting either",
+              "status": "passed"
+            },
+            {
+              "name": "keeps the fixed cursor when the passive current status is explicitly unavailable",
+              "status": "passed"
+            },
+            {
+              "name": "reads actual Cold memory and reopened SQLite history with identical cursors, causality, and evidence",
+              "status": "passed"
+            },
+            {
+              "name": "replays a committed occurrence at its original Run and JournalPosition after output is lost",
+              "status": "passed"
+            },
+            {
+              "name": "reconnects current status while retaining the same historical cursor",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "shares selected startup scan events with the first append checkpoint",
+              "status": "passed"
+            },
+            {
+              "name": "retains only the requested startup Run and does not invent a missing Run",
+              "status": "passed"
+            },
+            {
+              "name": "loads unchanged Hot history once, reuses the array, and invalidates on append and scans",
+              "status": "passed"
+            },
+            {
+              "name": "invalidates a cached array after lost append acknowledgement without duplicating the row",
+              "status": "passed"
+            },
+            {
+              "name": "invalidates on termination and retirement, then loads unchanged Cold history once",
+              "status": "passed"
+            },
+            {
+              "name": "discards the ordinary read snapshot after a failed read boundary",
+              "status": "passed"
+            }
+          ]
+        }
+      ],
+      "profiles": "profiles-summary.json"
+    },
+    "V2": {
+      "status": "passed",
+      "exit": 0,
+      "namedChecks": [
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "CLI public clients apply whole-Run controls while history remains busy",
+              "status": "passed"
+            },
+            {
+              "name": "CLI lost pause replies retain the host command without replay",
+              "status": "passed"
+            },
+            {
+              "name": "CLI lost cancel replies retain the host command without replay",
+              "status": "passed"
+            },
+            {
+              "name": "MCP public clients apply whole-Run controls while history remains busy",
+              "status": "passed"
+            },
+            {
+              "name": "MCP lost pause replies retain the host command without replay",
+              "status": "passed"
+            },
+            {
+              "name": "MCP lost cancel replies retain the host command without replay",
+              "status": "passed"
+            },
+            {
+              "name": "CLI reports an ambiguous pause reply without retransmission",
+              "status": "passed"
+            },
+            {
+              "name": "CLI reports an ambiguous cancel reply without retransmission",
+              "status": "passed"
+            },
+            {
+              "name": "MCP reports an ambiguous pause reply without retransmission",
+              "status": "passed"
+            },
+            {
+              "name": "MCP reports an ambiguous cancel reply without retransmission",
+              "status": "passed"
+            },
+            {
+              "name": "attached cancellation retains Unavailable executor responsibility",
+              "status": "passed"
+            },
+            {
+              "name": "attached cancellation retains Foreign executor responsibility",
+              "status": "passed"
+            },
+            {
+              "name": "native repeated profiles measure local admission separately from provider settlement",
+              "status": "passed"
+            },
+            {
+              "name": "attached cancellation settles an executing attempt through exact stop abandonment and claim release",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "yields during complete validation, admits another fiber, and returns exact canonical history",
+              "status": "passed"
+            },
+            {
+              "name": "discards an interrupted validation and rebuilds before publishing a successful cache",
+              "status": "passed"
+            },
+            {
+              "name": "preserves fixed-prefix parity and error precedence across appended malformed envelopes",
+              "status": "passed"
+            }
+          ]
+        }
+      ],
+      "profiles": "profiles-summary.json"
+    },
+    "V3": {
+      "status": "passed",
+      "exit": 0,
+      "namedChecks": [
+        {
+          "file": "dalph/src/application/running-host-inspection-exit.acceptance.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "Exit drains an in-flight production inspection read and its bounded watcher",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "dalph/src/application/running-host-inspection-watch.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "publishes inspection changes through bounded watch and reconnects to current state",
+              "status": "passed"
+            },
+            {
+              "name": "An oversized required current inspection is refused whole, releases its slot and reconnects to latest state without workflow calls",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "dalph/src/application/running-host-observer-budget.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "JSON admission counts escaping and UTF-8 exactly before allocating encoded output",
+              "status": "passed"
+            },
+            {
+              "name": "Preparation admission charges shared occurrences and native collections without copying them",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "dalph/src/application/running-host-occurrences-interruption.acceptance.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "disconnect interrupts native semantic history preparation without cancelling delivery or caching a partial history",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-shutdown.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "Production Exit delivers exact Closed before EOF within its original lifecycle budget",
+              "status": "passed"
+            },
+            {
+              "name": "Production Exit fails a blocked final write without extending its original lifecycle budget",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "yields during complete validation, admits another fiber, and returns exact canonical history",
+              "status": "passed"
+            },
+            {
+              "name": "discards an interrupted validation and rebuilds before publishing a successful cache",
+              "status": "passed"
+            },
+            {
+              "name": "preserves fixed-prefix parity and error precedence across appended malformed envelopes",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "shares selected startup scan events with the first append checkpoint",
+              "status": "passed"
+            },
+            {
+              "name": "retains only the requested startup Run and does not invent a missing Run",
+              "status": "passed"
+            },
+            {
+              "name": "loads unchanged Hot history once, reuses the array, and invalidates on append and scans",
+              "status": "passed"
+            },
+            {
+              "name": "invalidates a cached array after lost append acknowledgement without duplicating the row",
+              "status": "passed"
+            },
+            {
+              "name": "invalidates on termination and retirement, then loads unchanged Cold history once",
+              "status": "passed"
+            },
+            {
+              "name": "discards the ordinary read snapshot after a failed read boundary",
+              "status": "passed"
+            }
+          ]
+        }
+      ],
+      "profiles": null
+    },
+    "V4": {
+      "status": "passed",
+      "exit": 0,
+      "namedChecks": [
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.property.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "matches the synchronous cursor oracle for canonical, gapped, duplicated and malformed-key histories",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "yields during complete validation, admits another fiber, and returns exact canonical history",
+              "status": "passed"
+            },
+            {
+              "name": "discards an interrupted validation and rebuilds before publishing a successful cache",
+              "status": "passed"
+            },
+            {
+              "name": "preserves fixed-prefix parity and error precedence across appended malformed envelopes",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.property.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "lets the maintainer select every prepared cursor with the exact independent cold payload",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "lets the maintainer inspect exact graph, causal evidence and retained cleanup responsibilities at every cursor",
+              "status": "passed"
+            },
+            {
+              "name": "retains exact ordered invalid-prefix issues and storage-order duplicate cursor availability",
+              "status": "passed"
+            },
+            {
+              "name": "reads storage once and retains earlier snapshots without rereading or accumulating selected views",
+              "status": "passed"
+            },
+            {
+              "name": "does not leave an interrupted storage read as a successful or pending prepared snapshot",
+              "status": "passed"
+            },
+            {
+              "name": "bounds source inspection at preparation and never replays source records when selecting N or 2N cursors",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "snapshot admission preserves small complete views and proves excess for dense causal histories",
+              "status": "passed"
+            },
+            {
+              "name": "indexes provider quarantine and successor identities in the public trace",
+              "status": "passed"
+            },
+            {
+              "name": "projects automatic S2 authorization and predecessor preservation as distinct coordinator facts",
+              "status": "passed"
+            },
+            {
+              "name": "indexes completion lookup and candidate ancestry roles in the public trace",
+              "status": "passed"
+            },
+            {
+              "name": "rejects the coordinator's acknowledgement when it names a different completion request",
+              "status": "passed"
+            },
+            {
+              "name": "rejects a tracker read when its operation ID already identifies the completion lookup",
+              "status": "passed"
+            },
+            {
+              "name": "maps projection failures consistently through complete and cursor trace reads",
+              "status": "passed"
+            },
+            {
+              "name": "maps a reachable historical occurrence projection failure through every reader boundary",
+              "status": "passed"
+            },
+            {
+              "name": "keeps the composed trace reader context read-only",
+              "status": "passed"
+            },
+            {
+              "name": "moves Alice through journal positions without reordering history and follows exact causal predecessors",
+              "status": "passed"
+            },
+            {
+              "name": "rejects a causal predecessor absent from the validated Run prefix instead of using the previous record",
+              "status": "passed"
+            },
+            {
+              "name": "reuses the immutable complete-prefix trace result for repeated reads",
+              "status": "passed"
+            },
+            {
+              "name": "matches the prefix projection at every early cursor when a later immutable suffix is malformed",
+              "status": "passed"
+            },
+            {
+              "name": "keeps process-local integration serialization separate from other trace relationships",
+              "status": "passed"
+            },
+            {
+              "name": "rejects duplicate OperationIds as visible causal contradictions",
+              "status": "passed"
+            },
+            {
+              "name": "rejects a predecessor recorded after its successor as a visible causal contradiction",
+              "status": "passed"
+            },
+            {
+              "name": "rejects trace identities and observations outside their committed prefix",
+              "status": "passed"
+            },
+            {
+              "name": "reports empty, mismatched, gapped, and non-beginning committed prefixes",
+              "status": "passed"
+            },
+            {
+              "name": "fails closed when a complete tracker observation addresses another target",
+              "status": "passed"
+            },
+            {
+              "name": "does not reconstruct a graph from a reconfirmation with no earlier full observation",
+              "status": "passed"
+            },
+            {
+              "name": "combines a fixed historical trace with a newer passive current status without rewriting either",
+              "status": "passed"
+            },
+            {
+              "name": "keeps the fixed cursor when the passive current status is explicitly unavailable",
+              "status": "passed"
+            },
+            {
+              "name": "reads actual Cold memory and reopened SQLite history with identical cursors, causality, and evidence",
+              "status": "passed"
+            },
+            {
+              "name": "replays a committed occurrence at its original Run and JournalPosition after output is lost",
+              "status": "passed"
+            },
+            {
+              "name": "reconnects current status while retaining the same historical cursor",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "shares selected startup scan events with the first append checkpoint",
+              "status": "passed"
+            },
+            {
+              "name": "retains only the requested startup Run and does not invent a missing Run",
+              "status": "passed"
+            },
+            {
+              "name": "loads unchanged Hot history once, reuses the array, and invalidates on append and scans",
+              "status": "passed"
+            },
+            {
+              "name": "invalidates a cached array after lost append acknowledgement without duplicating the row",
+              "status": "passed"
+            },
+            {
+              "name": "invalidates on termination and retirement, then loads unchanged Cold history once",
+              "status": "passed"
+            },
+            {
+              "name": "discards the ordinary read snapshot after a failed read boundary",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-scan-retention.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "retains repeated payload strings once without merging distinct scanned Runs",
+              "status": "passed"
+            },
+            {
+              "name": "releases completed scanHot history while its SQLite store stays open",
+              "status": "passed"
+            },
+            {
+              "name": "releases completed auditAll history while its SQLite store stays open",
+              "status": "passed"
+            },
+            {
+              "name": "releases the first reopened read array while retaining the current SQLite checkpoint",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "memory pins the new Run attempt-base policy and preserves missing-policy history",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite pins the new Run attempt-base policy and preserves missing-policy history",
+              "status": "passed"
+            },
+            {
+              "name": "classifies append ambiguity from typed journal failures without inspecting strings",
+              "status": "passed"
+            },
+            {
+              "name": "keeps native scan preparation failures typed for Hot and Cold",
+              "status": "passed"
+            },
+            {
+              "name": "opens the configured production journal only with coordinator ownership",
+              "status": "passed"
+            },
+            {
+              "name": "maps a controlled malformed memory terminal prefix to journal corruption",
+              "status": "passed"
+            },
+            {
+              "name": "isolates controlled cold corruption from memory startup discovery and reports it to exact reads and audits",
+              "status": "passed"
+            },
+            {
+              "name": "rejects exact reads and recovery of a nonterminal memory Cold history",
+              "status": "passed"
+            },
+            {
+              "name": "rejects termination of a semantically complete but nonterminal memory Cold history",
+              "status": "passed"
+            },
+            {
+              "name": "rejects memory retirement when no Run history exists",
+              "status": "passed"
+            },
+            {
+              "name": "fails every memory operation closed when a Run is in both partitions",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract atomically rejects a second beginning for one Run identity",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects every workflow record after Run termination",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract atomically retires every valid terminal history and keeps reads transparent",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rereads the exact begun target before recovering a Run",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects recovery and termination when no Run beginning exists",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract preserves typed invalid-evidence failures at the storage boundary",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects unsettled historical responsibility without appending",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract accepts termination after a historical claim acquisition was rejected",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects termination while an exact acquired claim remains active",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects incomparable tracker graph observations without appending",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects S10 g10 and predecessor-free changed g11 without terminating",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract accepts a graph read that causally supersedes historical facts",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects recovery and another termination after Run termination",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects promoting an existing synthetic history to a fresh Run",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract returns empty workflow-journal history for an unknown run",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract assigns canonical positions and returns ordered workflow-journal history",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract returns the original record for an identical re-append",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract rejects unequal content under the same record key",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract atomically assigns distinct positions to concurrent appends",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract keeps each run's positions independent",
+              "status": "passed"
+            },
+            {
+              "name": "memory JournalStore contract discovers all journal runs without an age cutoff",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract atomically rejects a second beginning for one Run identity",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects every workflow record after Run termination",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract atomically retires every valid terminal history and keeps reads transparent",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rereads the exact begun target before recovering a Run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects recovery and termination when no Run beginning exists",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract preserves typed invalid-evidence failures at the storage boundary",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects unsettled historical responsibility without appending",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract accepts termination after a historical claim acquisition was rejected",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects termination while an exact acquired claim remains active",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects incomparable tracker graph observations without appending",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects S10 g10 and predecessor-free changed g11 without terminating",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract accepts a graph read that causally supersedes historical facts",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects recovery and another termination after Run termination",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects promoting an existing synthetic history to a fresh Run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract returns empty workflow-journal history for an unknown run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract assigns canonical positions and returns ordered workflow-journal history",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract returns the original record for an identical re-append",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract rejects unequal content under the same record key",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract atomically assigns distinct positions to concurrent appends",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract keeps each run's positions independent",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite JournalStore contract discovers all journal runs without an age cutoff",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract atomically rejects a second beginning for one Run identity",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects every workflow record after Run termination",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract atomically retires every valid terminal history and keeps reads transparent",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rereads the exact begun target before recovering a Run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects recovery and termination when no Run beginning exists",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract preserves typed invalid-evidence failures at the storage boundary",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects unsettled historical responsibility without appending",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract accepts termination after a historical claim acquisition was rejected",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects termination while an exact acquired claim remains active",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects incomparable tracker graph observations without appending",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects S10 g10 and predecessor-free changed g11 without terminating",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract accepts a graph read that causally supersedes historical facts",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects recovery and another termination after Run termination",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects promoting an existing synthetic history to a fresh Run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract returns empty workflow-journal history for an unknown run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract assigns canonical positions and returns ordered workflow-journal history",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract returns the original record for an identical re-append",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract rejects unequal content under the same record key",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract atomically assigns distinct positions to concurrent appends",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract keeps each run's positions independent",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite-qualification JournalStore contract discovers all journal runs without an age cutoff",
+              "status": "passed"
+            },
+            {
+              "name": "does not manufacture accepted history from the raw SQLite test journal",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract migrates the production SQLite journal and enables WAL mode",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract reopens distinct admission keys containing NUL without merging their suffixes",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract upgrades an exact schema-v1 fixture transactionally and preserves hot rows",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract copies SQLite record keys, positions, versions, kinds, and payload bytes exactly",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract keeps an overlapping SQLite TraceReader read on one complete snapshot while retirement commits",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract rolls back a retirement cut after verified copy and preserves Hot history after reopen",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract reopens after a committed retirement response is lost and reports the Run already Cold",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract rejects a verified-copy mismatch and rolls back the SQLite retirement",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract rolls back a failed v1-to-v2 migration without changing the v1 hot journal",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract reopening after a committed v1 migration does not repeat or retire the hot history",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract rejects a second SQLite writer while the owner is live",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract reports SQLite open failures as typed storage failures",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract classifies SQLite recovery categories without parsing error prose",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract rejects a journal schema from a newer Dalph version",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract reports malformed persisted event content as a typed read failure",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract keeps malformed Cold history out of startup while full audit reports its partition and exact Run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract fails SQLite reads, lifecycle, retirement, and full audit closed on contradictory partition membership",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract rejects exact reads and recovery of a nonterminal SQLite Cold history",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract rejects SQLite retirement for a missing Run",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract discovers every run and accumulates independent row and payload decode issues",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract maps corrupted SQLite query rows to exact Run-local history failures after reopen",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract classifies malformed SQLite bytes as journal data corruption",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract classifies an unrecognized raw append failure as unavailable storage",
+              "status": "passed"
+            },
+            {
+              "name": "sqlite durable JournalStore contract types append and read failures from damaged journal storage",
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/adapters/sqlite-event-codec.property.test.ts",
+          "exit": 0,
+          "tests": [
+            {
+              "name": "round-trips full semantic finality events through the production SQLite gzip and compact layers",
+              "status": "passed"
+            },
+            {
+              "name": "attaches the row's kind and semantic version to gzip failures without falling back",
+              "status": "passed"
+            }
+          ]
+        }
+      ],
+      "profiles": null
+    }
+  },
+  "checks": [
+    {
+      "command": "mise exec -- pnpm check:artifacts",
+      "exit": 0
+    },
+    {
+      "command": "DALPH_DIAGNOSTICS_BASE=5e7bfa81e8567c356708b7bc71830ec5bd6aa290 mise exec -- pnpm check:fast",
+      "exit": 0
+    },
+    {
+      "command": "mise exec -- pnpm check:docs",
+      "exit": 0
+    },
+    {
+      "command": "Focused vitest selection listed in focused-final-results.json",
+      "exit": 0
+    }
+  ],
+  "modelGates": "Inapplicable: no workflow algebra, event/model behavior, storage format, ownership, claims or control semantics changed. No new broad gate required for this leaf; #501 retains combined qualification.",
+  "failures": "failed-12ms-profiles.json retains the 12.201889ms oversized cold failure on 04b2798. Its exact inner phase was not recorded. Phase/CPU diagnostic then exposed raw whole-history repeated query scans. failed-query-index-profiles.json retains 12.404765ms cold/14.796909ms warm HistoryQuerySource synchronous construction with main-thread CPU attribution, repaired by per-record index construction. Dirty diagnostics bind phase-candidate.patch and native-decode-candidate.patch, not a clean qualification. native-decode-repair-profiles.json is the focused clean 7a4162 passing boundary before final rerun. Initial profile without initial read-span coverage is not credited.",
+  "earlierEvidence": "/workspace/dalph-dogfood/issue-491-20261009/evidence/501-capacity-repair-retained/manifest.json retains earlier #501 failed readiness and focused evidence unchanged.",
+  "crashRetryApplicability": "Reads introduce no uncertain external mutation: retry repeats reads only. Interrupted optional work is discarded, never persisted or restart authority. Existing current-format SQLite ownership/stopped-writer reconciliation and Pause/Cancel/Exit semantics remain unchanged; no new cleanup permission, retry, deadline extension, checkpoint or migration.",
+  "reviews": [
+    {
+      "round": 1,
+      "candidate": "04b27982b47e500d20aacf8da59a5b61154d9386",
+      "result": "No correctness blockers; capacity blocked by retained 12.201889ms sample, subsequently repaired and qualified"
+    },
+    {
+      "round": 2,
+      "candidate": "8d810ef0a25c06e9aceff0c630a90abdc4d009fd",
+      "result": "No reasonable blocking findings; reviewed Base..candidate correctness, standards, V1-V4 mappings and final manifest hashes/six profile groups. Fresh reviewer with same model and medium reasoning."
+    }
+  ],
+  "evidenceOnlyFinalCommit": "Final delivery adds only these evidence JSON files after the frozen qualified candidate; runtime and fixture bytes remain identical.",
+  "formatting": "dprint fmt JSON selection exited 14 because repository plugins select no JSON files; files were serialized and parsed with Python json. This is not a source gate failure."
+}
