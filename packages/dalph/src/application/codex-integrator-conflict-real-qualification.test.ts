@@ -85,6 +85,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
       let launch: CodexServerLaunchRecord | undefined
       let passed = false
       let documentationChecks: Array<number> = []
+      let runtimeChecks: Array<number> = []
       let targetHead = ""
       let preparedCandidate = ""
       const server = createServer((request, response) => {
@@ -211,7 +212,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           await writeFile(nodePath.join(repository, "behavior.txt"), "target=disabled\naccepted=disabled\n")
           await writeFile(
             nodePath.join(repository, "check.cjs"),
-            "const a=require('node:assert/strict'),f=require('node:fs'); a.equal(f.readFileSync('behavior.txt','utf8'),'target=enabled\\naccepted=disabled\\n'); a.equal(f.readFileSync('accepted.txt','utf8'),'accepted=enabled\\n');\n"
+            `const a=require('node:assert/strict'),f=require('node:fs'); a.equal(f.readFileSync('behavior.txt','utf8'),'target=enabled\\naccepted=disabled\\n'); a.equal(f.readFileSync('accepted.txt','utf8'),'accepted=enabled\\n'); f.appendFileSync(${JSON.stringify(nodePath.join(root, "runtime-checks.jsonl"))},'0\\n');\n`
           )
           await git(repository, "add", ".")
         }
@@ -346,6 +347,14 @@ describe("candidate-local content conflict with the real Codex provider", () => 
         expect(await readFile(nodePath.join(candidatePath, "behavior.txt"), "utf8")).toBe(
           documentation ? "target=enabled\naccepted=disabled\n" : "target=enabled\naccepted=enabled\n"
         )
+        if (documentation) {
+          runtimeChecks = (await readFile(nodePath.join(root, "runtime-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map(Number)
+          expect(runtimeChecks.length).toBeGreaterThan(0)
+          expect(runtimeChecks.every((exit) => exit === 0)).toBe(true)
+        }
         await execFile(nodeProcess.execPath, ["check.cjs"], { cwd: candidatePath })
         if (documentation) {
           expect(await git(repository, "diff", "--name-only", cleanMergeTree, result.candidateText)).toBe(
@@ -392,6 +401,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
                 calls: calls.length,
                 documentation,
                 documentationChecks,
+                runtimeChecks,
                 accepted,
                 targetHead,
                 preparedCandidate,
