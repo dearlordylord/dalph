@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "base": "dd2592781c2e8dd6d324eca61ca91f76a3afa2a2",
+  "firstClosureDocumentationCheck": {
+    "exit": 2,
+    "cause": "Review closure linked the not-yet-created closure receipt; one missing file, zero other link errors",
+    "log": "closure-docs-missing-receipt.log.gz"
+  },
+  "repair": "Create the derived check receipt before checking its incoming link",
+  "documentationCheck": {
+    "command": "mise exec -- pnpm check:docs",
+    "exit": 0,
+    "observedUTC": "2026-10-10T15:11:21.727252+00:00",
+    "log": "closure-docs-final.log.gz",
+    "rawSha256": "580f38837b858564c4bbf4d63ac29aef474deb02fafea4a97fbfe1f46a27327b",
+    "rawBytes": 794,
+    "gzipSha256": "10950768bc77c98f098eaf3c8b565f6931b6d769f2a40e1bfb9207b7bf5fa25e",
+    "errors": 0
+  },
+  "whitespaceCheck": {
+    "command": "git diff --check dd2592781c2e8dd6d324eca61ca91f76a3afa2a2",
+    "exit": 0,
+    "output": "",
+    "observedUTC": "2026-10-10T15:11:21.838954+00:00"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "rawBytes": 794,
+  "rawSha256": "ae141f80cae97e0cd6ff8f7f24fe878e79980d3f7804e5de80131971507be61d",
+  "gzipBytes": 519,
+  "gzipSha256": "561902ecce4a12f5cb28899ca77201aad3edcaf9f379a1cae7e50469c8b8f6be",
+  "rawOutputPreserved": true,
+  "command": "mise exec -- pnpm check:docs",
+  "exit": 0
+}

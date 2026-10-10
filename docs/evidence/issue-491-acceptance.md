@@ -30,8 +30,11 @@ Integrator boundaries use their later evidence below rather than treating
 #501 as a test of new recovery behavior.
 
 Fresh verification matched all 34 #501 final artifacts, 50 #514 final artifacts,
-71 #514 source entries, the applicable page-boundary sources and all 51 reused
-#509 artifacts. The verifier also recomputed the raw sparse/dense profiles.
+71 #514 source entries at integrated Base `dd259278`, the applicable page-boundary
+sources and all 51 reused #509 artifacts. The parent glossary/documentation
+delta is reviewed separately; the 71 entries are not a claim of documentary
+identity after those edits. All 1,727 runtime paths remain unchanged.
+The verifier also recomputed the raw sparse/dense profiles.
 Its [retained source](issue-491/verify-evidence.py.txt) is an observational Python
 artifact, not a new repository gate. Tracker reads observed all 23 native children
 and all five blocking dependencies closed on 2026-10-10; the binding account
@@ -114,8 +117,11 @@ These charges are not complete V8 heap/index retention. CLI historical snapshot
 and invocation quotas remain 1 MiB and 8 MiB at that optional boundary.
 
 Legacy fullTrace, Ready expansion, combined multiple-observer whole-host
-capacity, complete retained-index allocation, the root retained 10k-Run dataset
-and universal graph-descriptor changes remain unqualified. They gain no pass
+capacity, complete retained-index allocation, actual 10k-Run capacity, the root
+retained large dataset and universal graph-descriptor changes remain unqualified.
+The root dataset is one retained Run with about 13,000 occurrences; root observed
+its physical SQLite file at 114 MiB at 15:00 UTC on 2026-10-10. That file-size
+observation supplies no admission or capacity qualification. These exclusions gain no pass
 from these small bounded profiles. Earlier dense quantum/RSS misses and
 interrupted commands stay failed/unproven at their original candidates in
 [#501's historical account](issue-501/historical-account.md). #509's scoped
