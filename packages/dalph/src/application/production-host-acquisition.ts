@@ -46,6 +46,7 @@ export const acquireProductionHost = <A, E, R, ETransport, RTransport>(
       Exit.isFailure(outcome) && Cause.hasInterruptsOnly(outcome.cause)
     yield* shell
       .registerProcessLocalDrain({
+        owner: { name: "HostAcquisition", subject: { _tag: "NoRun" } },
         closeProcessLocalResources: Fiber.await(acquiring).pipe(
           Effect.flatMap((outcome) =>
             Exit.isSuccess(outcome) || isRequestedInterruption(outcome)

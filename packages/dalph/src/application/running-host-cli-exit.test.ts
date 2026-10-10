@@ -137,7 +137,7 @@ for (const blockedChannel of ["stdout", "stderr", undefined, "failed"] as const)
           blockedChannel === "stdout" ? ["stdout"] : ["stdout", "stderr"]
         )
         if (blockedChannel === undefined)
-          expect(JSON.parse(published[1]?.text ?? "null")).toEqual({
+          expect(JSON.parse(published[1]?.text ?? "null")).toMatchObject({
             applicationExit: { _tag: "Succeeded", requestedStatus: 0 }
           })
       })

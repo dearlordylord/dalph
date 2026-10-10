@@ -1,12 +1,13 @@
-/* eslint-disable max-lines -- One public command surface keeps production request and result paths together. */
-import { NodeCrypto, NodeServices } from "@effect/platform-node"
-import type { RunId } from "@dalph/contracts"
 import {
+  publicApplicationExitResult,
   type ApplicationExitRequestBoundaryService,
   fixtureReaderFileLayer,
   TraceOutputError,
   TraceOutput
 } from "@dalph/orchestrator"
+/* eslint-disable max-lines -- One public command surface keeps production request and result paths together. */
+import { NodeCrypto, NodeServices } from "@effect/platform-node"
+import type { RunId } from "@dalph/contracts"
 import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import { executeDryRun } from "./cli.js"
@@ -74,10 +75,7 @@ const mapProductionOutputFailure = <E>(failure: E): E | ProductionCliOutputError
 
 const beforeObservation = (signals: ApplicationExitSignalBoundary) =>
   makeProductionCliStartup(signals, (result) =>
-    writeLifecycleLine(
-      JSON.stringify({ applicationExit: { _tag: result._tag, requestedStatus: result.requestedStatus } }),
-      "stderr"
-    ).pipe(
+    writeLifecycleLine(JSON.stringify({ applicationExit: publicApplicationExitResult(result) }), "stderr").pipe(
       Effect.andThen(
         result._tag === "Succeeded" ? Effect.void : new ProductionHostExitUnsuccessful({ disposition: result._tag })
       ),

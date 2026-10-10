@@ -93,6 +93,8 @@ Git history.
 
 ## Application Exit
 
+- [Identify unresolved Exit owners](exit-owner-diagnostics.md)
+
 - [Gracefully exit the Dalph application](graceful-application-exit.md)
 - [Exit when the CLI receiver stops reading](cli-exit-output-grace.md)
 - [CLI Exit during host acquisition](cli-exit-before-observation.md) maps the existing NoRun and provider-startup Exit contracts before selection.

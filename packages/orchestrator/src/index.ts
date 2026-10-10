@@ -163,6 +163,7 @@ export {
   coordinatorOwnershipObservationInterval
 } from "./coordination/timing/control-plane-budgets.js"
 export * from "./coordination/application-exit/lifecycle-decision.js"
+export * from "./coordination/application-exit/owner-diagnostics.js"
 export * from "./coordination/application-exit/lifecycle.js"
 export * from "./coordination/application-exit/executor-drain.js"
 export * from "./coordination/application-exit/application-shell.js"

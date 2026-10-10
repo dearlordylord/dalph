@@ -230,6 +230,7 @@ it.effect("reports activation failures and stops repeated integration calls afte
         awaitExitRequested: Effect.never,
         awaitExitResult: Effect.never,
         awaitExecutorDrains: Effect.void,
+        readOwners: Effect.succeed({ cutoffClosed: false, owners: [] }),
         registerExecutorDrain: () => Effect.void,
         registerProcessLocalDrain: () => Effect.void,
         requestBoundary: { requestExit: Effect.never }
@@ -337,6 +338,7 @@ it.effect("explicit cancellation stops after an unreadable Suspend projection", 
       awaitExitRequested: Effect.never,
       awaitExitResult: Effect.never,
       awaitExecutorDrains: Effect.void,
+      readOwners: Effect.succeed({ cutoffClosed: false, owners: [] }),
       registerExecutorDrain: () => Effect.void,
       registerProcessLocalDrain: () => Effect.void,
       requestBoundary: { requestExit: Effect.never }
@@ -489,6 +491,7 @@ const runTerminalProductionOwner = Effect.fn("ProductionReactivationTest.runTerm
     awaitExitRequested: Effect.never,
     awaitExitResult: Effect.never,
     awaitExecutorDrains: Effect.void,
+    readOwners: Effect.succeed({ cutoffClosed: false, owners: [] }),
     registerExecutorDrain: () => Effect.void,
     registerProcessLocalDrain: () => Effect.void,
     requestBoundary: { requestExit: Effect.never }
@@ -676,6 +679,7 @@ it.effect("production composition wires current-first tracker notifications and 
         awaitExitRequested: Effect.never,
         awaitExitResult: Effect.never,
         awaitExecutorDrains: Effect.void,
+        readOwners: Effect.succeed({ cutoffClosed: false, owners: [] }),
         registerExecutorDrain: () => Effect.void,
         registerProcessLocalDrain: ({ closeProcessLocalResources }) =>
           Ref.update(registeredDrains, (drains) => [...drains, closeProcessLocalResources]),

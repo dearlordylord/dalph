@@ -4,6 +4,7 @@ import {
   plannedAttemptExecutorCorrelationKey
 } from "@dalph/contracts"
 import { Data, Duration, Match, Schema } from "effect"
+import { ApplicationExitOwners } from "./owner-diagnostics.js"
 import { applicationExitDrainDuration } from "../timing/control-plane-budgets.js"
 
 const initialDrainTickValue = 0
@@ -38,11 +39,16 @@ export type ApplicationExitDiagnostic = typeof ApplicationExitDiagnostic.Type
 export const ApplicationExitResult = Schema.TaggedUnion({
   Failed: {
     diagnostics: Schema.NonEmptyArray(ApplicationExitDiagnostic),
+    owners: Schema.optionalKey(ApplicationExitOwners),
     requestedStatus: Schema.Literal(forcedProcessStatus)
   },
-  Succeeded: { requestedStatus: Schema.Literal(successfulProcessStatus) },
+  Succeeded: {
+    requestedStatus: Schema.Literal(successfulProcessStatus),
+    owners: Schema.optionalKey(ApplicationExitOwners)
+  },
   TimedOut: {
     diagnostics: Schema.Array(ApplicationExitDiagnostic),
+    owners: Schema.optionalKey(ApplicationExitOwners),
     requestedStatus: Schema.Literal(forcedProcessStatus)
   }
 })
@@ -332,3 +338,10 @@ export const freshApplicationExitState = (): {
   readonly result: undefined
   readonly tick: ApplicationExitDrainTick
 } => ({ cutoffClosed: false, result: undefined, tick: initialApplicationExitDrainTick })
+
+/** Public lifecycle output excludes arbitrary error messages and provider-private causes. */
+export const publicApplicationExitResult = (result: ApplicationExitResult) => ({
+  _tag: result._tag,
+  requestedStatus: result.requestedStatus,
+  ...(result.owners === undefined ? {} : { owners: result.owners })
+})

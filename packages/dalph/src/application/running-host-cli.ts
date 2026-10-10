@@ -1,7 +1,7 @@
+import { publicApplicationExitResult, ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 import { makeRunningHostAttachedCommand } from "./running-host-cli-attached.js"
 import { makeRunningHostBaseRetryCommand } from "./running-host-cli-base-retry.js"
 import { makeRunningHostGuidanceCommand } from "./running-host-cli-guidance.js"
-import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This command owns only client stdout/stderr completion. */
 import type { Layer } from "effect"
 import { Effect, FileSystem, Schema, Stream } from "effect"
@@ -72,10 +72,7 @@ export const makeRunningHostCommands = <E, R>(
           fileSystem.readFileString(path)
         )
         const early = yield* makeProductionCliStartup(signals, (result) =>
-          writeLine(
-            JSON.stringify({ applicationExit: { _tag: result._tag, requestedStatus: result.requestedStatus } }),
-            "stderr"
-          ).pipe(
+          writeLine(JSON.stringify({ applicationExit: publicApplicationExitResult(result) }), "stderr").pipe(
             Effect.andThen(
               result._tag === "Succeeded"
                 ? Effect.void
@@ -95,7 +92,7 @@ export const makeRunningHostCommands = <E, R>(
                   Effect.gen(function* () {
                     yield* writeLine(JSON.stringify({ _tag: "HostReady", address, descriptor: listening.descriptor }))
                     const result = yield* exit.awaitResult
-                    yield* writeLine(JSON.stringify({ applicationExit: result }), "stderr")
+                    yield* writeLine(JSON.stringify({ applicationExit: publicApplicationExitResult(result) }), "stderr")
                     if (result._tag !== "Succeeded")
                       return yield* new DalphCommandExit({ status: transportFailureExitStatus })
                   })
@@ -128,7 +125,7 @@ export const makeRunningHostCommands = <E, R>(
         Effect.provide(outputLayer)
       )
   )
-  const attached = (name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume") =>
+  const attached = (name: "owners" | "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume") =>
     makeRunningHostAttachedCommand(name, outputLayer)
   const guide = makeRunningHostGuidanceCommand(outputLayer)
   const setCapacity = Command.make(
@@ -375,6 +372,7 @@ export const makeRunningHostCommands = <E, R>(
       descriptor,
       refresh,
       attached("snapshot"),
+      attached("owners"),
       attached("control"),
       attached("capacity"),
       attached("start"),

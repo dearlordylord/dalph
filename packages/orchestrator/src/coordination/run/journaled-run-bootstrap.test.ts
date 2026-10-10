@@ -1562,6 +1562,7 @@ it.effect("keeps the active Run alive until its exact executor-family Exit drain
       const observedApplicationExit: ApplicationExitShellService = {
         ...applicationExit,
         awaitExecutorDrains: applicationExit.awaitExecutorDrains,
+        readOwners: applicationExit.readOwners,
         registerExecutorDrain: (drain) =>
           applicationExit.registerExecutorDrain({
             suspendExecutingExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
@@ -1828,6 +1829,7 @@ it.effect("one application Exit driver and cutoff are shared by every Run bootst
       const observedApplicationExit: ApplicationExitShellService = {
         ...applicationExit,
         awaitExecutorDrains: applicationExit.awaitExecutorDrains,
+        readOwners: applicationExit.readOwners,
         registerProcessLocalDrain: (drain) =>
           Ref.getAndUpdate(nextDrainId, (id) => id + 1).pipe(
             Effect.flatMap((drainId) =>

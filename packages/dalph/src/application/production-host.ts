@@ -1,17 +1,5 @@
-/* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
-import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
 import {
-  type GitCommitSha,
-  type PlannedAttemptExecutorCorrelation,
-  IntegrationTarget,
-  PlannedAttemptExecutor,
-  PlannedAttemptExecutorLifecycleObservation,
-  PlannedAttemptExecutorWriterCustody,
-  plannedAttemptExecutorCorrelation,
-  plannedAttemptExecutorCorrelationKey,
-  type RunId
-} from "@dalph/contracts"
-import {
+  publicApplicationExitResult,
   defaultJournalMaintenanceObservation,
   observeArchiveRetention,
   AcceptedJournalReader,
@@ -91,6 +79,19 @@ import {
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
+/* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
+import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
+import {
+  type GitCommitSha,
+  type PlannedAttemptExecutorCorrelation,
+  IntegrationTarget,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  PlannedAttemptExecutorWriterCustody,
+  plannedAttemptExecutorCorrelation,
+  plannedAttemptExecutorCorrelationKey,
+  type RunId
+} from "@dalph/contracts"
 import { makeHostArchiveMaintenance } from "./host-archive-maintenance.js"
 import {
   Context,
@@ -188,6 +189,7 @@ export interface ProductionHostObservation {
   /** Read-only projection of an acknowledged cursor; it cannot append or poll an outside authority. */
   readonly traceReader: Pick<TraceReaderService, "readAt" | "snapshotAdmission">
   /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
+  readonly readExitOwners?: ProductionHostApplicationExitShellService["readOwners"]
   readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
   /** Exact Run control, serialized by the established Journal and coordinator owner. */
   readonly resultRecoveryControl?: Pick<
@@ -878,9 +880,12 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
     emit: (event: Parameters<ProductionApplicationExitTraceObserver>[0]) =>
       Effect.gen(function* () {
         if (event._tag === "ExitResultReported" && event.result._tag !== "Succeeded") {
-          yield* Effect.logError(JSON.stringify({ _tag: "DalphApplicationExitDiagnostic", result: event.result })).pipe(
-            Effect.provide(Logger.layer([applicationExitDiagnosticLogger]))
-          )
+          yield* Effect.logError(
+            JSON.stringify({
+              _tag: "DalphApplicationExitDiagnostic",
+              result: publicApplicationExitResult(event.result)
+            })
+          ).pipe(Effect.provide(Logger.layer([applicationExitDiagnosticLogger])))
         }
         yield* options.traceObserver?.(event) ?? Effect.void
       })
@@ -1347,7 +1352,10 @@ export const withDecodedProductionRepositoryHost = <
               defaultJournalMaintenanceObservation
             )
           )
-          yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: archiveMaintenance.stop })
+          yield* applicationExit.registerProcessLocalDrain({
+            owner: { name: "ArchiveMaintenance", subject: { _tag: "Run", runId: selection.runId } },
+            closeProcessLocalResources: archiveMaintenance.stop
+          })
           // An uncertain append retains its boundary until this exact Journal is
           // reconstructed. Client request IDs never authorize replay.
           const attachedUnpauseBoundary = yield* Ref.make<"Open" | "NeedsJournalReconciliation">("Open")
@@ -1446,6 +1454,7 @@ export const withDecodedProductionRepositoryHost = <
             selection,
             traceReader,
             applicationExitRequestBoundary: applicationExit.requestBoundary,
+            readExitOwners: applicationExit.readOwners,
             target: configuration.target,
             readRunControl,
             activationFailure: Ref.get(retainedFailure),

@@ -2,6 +2,7 @@
 import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import {
+  ApplicationExitOwners,
   GitCommand,
   GitCommonDirectoryTarget,
   GitWorktree,
@@ -28,7 +29,11 @@ const LifecycleLine = Schema.Struct({
     Schema.Struct({
       _tag: Schema.optionalKey(Schema.String),
       result: Schema.optionalKey(
-        Schema.Struct({ _tag: Schema.optionalKey(Schema.String), requestedStatus: Schema.optionalKey(Schema.Finite) })
+        Schema.Struct({
+          _tag: Schema.optionalKey(Schema.String),
+          requestedStatus: Schema.optionalKey(Schema.Finite),
+          owners: Schema.optionalKey(ApplicationExitOwners)
+        })
       )
     })
   ),
@@ -264,6 +269,19 @@ it.live(
         expect(cutoff).toBeLessThan(repeatedRequest)
         expect(lifecycle.find(({ repeatedSignalSent }) => repeatedSignalSent === true)).toBeDefined()
         expect(result).toBeDefined()
+        expect(result?.lifecycle?.result?.owners?.owners).toEqual([
+          {
+            ownerId: 0,
+            family: "ForwardOwner",
+            kind: "AtomicBoundary",
+            name: "ForwardProgress",
+            subject: { _tag: "NoRun" },
+            evidence: "Registered",
+            boundary: null,
+            missingEvidence: "OwnerRelease",
+            nextAction: "AwaitOwnerRelease"
+          }
+        ])
         expect(firstRequestedAt).toBeTypeOf("number")
         expect(repeatedAt).toBeTypeOf("number")
         expect(resultAt).toBeTypeOf("number")

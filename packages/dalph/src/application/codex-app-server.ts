@@ -3010,6 +3010,7 @@ const registerApplicationServerDrain = (
   close: Effect.Effect<void, CodexAppServerFailure>
 ) =>
   shell.registerProcessLocalDrain({
+    owner: { name: "CodexProvider", subject: { _tag: "NoRun" } },
     closeProcessLocalResources: applicationServerCloseAfterExecutorDrains(shell.awaitExecutorDrains, close)
   })
 

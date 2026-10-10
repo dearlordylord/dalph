@@ -27,6 +27,7 @@ import { makeRunningHostHttpWatch, type RunningHostWatchWriter } from "./running
 
 const browserReadOperations: ReadonlySet<string> = new Set([
   "ReadSnapshot",
+  "ReadExitOwners",
   "ReadRunControl",
   "ReadResultRecoveryDirection",
   "ReadInspectionSnapshot",
@@ -113,7 +114,12 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       ? undefined
       : yield* Effect.cached(
           observation.inspection.pipe(
-            Effect.tap((owner) => observation.registerObservationDrain({ closeProcessLocalResources: owner.stop })),
+            Effect.tap((owner) =>
+              observation.registerObservationDrain({
+                owner: { name: "Inspection", subject: { _tag: "Run", runId: observation.selection.runId } },
+                closeProcessLocalResources: owner.stop
+              })
+            ),
             Effect.provideService(Scope.Scope, hostScope),
             Effect.uninterruptible
           )
@@ -121,12 +127,21 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
   const watch = yield* makeRunningHostHttpWatch(observation, watchWriter, inspection)
   const dispatch = Effect.fn("RunningHostHttp.dispatch")(function* (input: unknown, response: ServerResponse) {
     const request = yield* decodeRunningHostRequest(input, descriptor)
-    if (yield* observation.closing)
+    if ((yield* observation.closing) && request.operation._tag !== "ReadExitOwners")
       return yield* Effect.fail<RunningHostError>({
         _tag: "HostClosing",
         hostInstanceId: descriptor.hostInstanceId,
         cutoff: "AdmissionClosed"
       })
+    if (request.operation._tag === "ReadExitOwners") {
+      if (observation.readExitOwners === undefined)
+        return yield* Effect.fail<RunningHostError>({
+          _tag: "ReadFailed",
+          causeTag: "ExitOwnersUnavailable",
+          detail: "The host lifecycle owner view is unavailable."
+        })
+      return runningHostSuccessEnvelope(request, { _tag: "ExitOwners", snapshot: yield* observation.readExitOwners })
+    }
     if (request.operation._tag === "ReadInspectionSnapshot" || request.operation._tag === "RefreshInspection") {
       if (inspection === undefined)
         return yield* Effect.fail<RunningHostError>({
@@ -270,7 +285,7 @@ export const serveRunningHost = Effect.fn("RunningHostHttp.serve")(function* <E>
       ) {
         return yield* Effect.fail(invalid("LocalOriginRequired"))
       }
-      if (yield* observation.closing)
+      if ((yield* observation.closing) && request.url !== "/dalph/v1/request" && request.url !== "/dalph/v1/descriptor")
         return yield* Effect.fail<RunningHostError>({
           _tag: "HostClosing",
           hostInstanceId: descriptor.hostInstanceId,

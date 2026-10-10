@@ -1,9 +1,5 @@
-/* eslint-disable import/no-nodejs-modules -- The public CLI owns absolute configuration-path decoding. */
-/* eslint-disable max-lines -- The public CLI keeps one exhaustive versioned wire and failure mapper auditable. */
-
-import nodePath from "node:path"
-import { GitCommitSha, RunId } from "@dalph/contracts"
 import {
+  ApplicationExitOwners,
   type ApplicationExitResult,
   CoordinatorLockHeld,
   CoordinatorLockObservationContradiction,
@@ -60,6 +56,11 @@ import {
   TaskTrackerThrottleTimingEvidence,
   type TrackerTarget
 } from "@dalph/orchestrator"
+/* eslint-disable import/no-nodejs-modules -- The public CLI owns absolute configuration-path decoding. */
+/* eslint-disable max-lines -- The public CLI keeps one exhaustive versioned wire and failure mapper auditable. */
+
+import nodePath from "node:path"
+import { GitCommitSha, RunId } from "@dalph/contracts"
 import {
   Cause,
   Clock,
@@ -376,6 +377,7 @@ const PublicProductionPublicationSubject = Schema.Struct({
 const ProductionCliNonFailureRecord = Schema.TaggedUnion({
   ApplicationExitDisposition: {
     disposition: ProductionCliApplicationExitDisposition,
+    owners: Schema.optionalKey(ApplicationExitOwners),
     runId: RunId,
     version: Schema.Literal(productionCliWireVersion)
   },
@@ -790,6 +792,7 @@ export const applicationExitDispositionRecord = (
   })()
   return {
     _tag: "ApplicationExitDisposition",
+    ...(disposition.owners === undefined ? {} : { owners: disposition.owners }),
     disposition: publicDisposition,
     runId,
     version: productionCliWireVersion

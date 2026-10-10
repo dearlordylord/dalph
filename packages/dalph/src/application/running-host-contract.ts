@@ -2,6 +2,7 @@ import { coherentWire, RunningHostSnapshot, RunningHostInspectionSnapshot } from
 import { LocalHostAddress } from "./running-host-address.js"
 import { AttemptId, ExecutorGuidanceRequestId, ExecutorGuidanceTransmission, RunId, TaskId } from "@dalph/contracts"
 import {
+  ApplicationExitOwners,
   ApplyTaskAttemptBaseRetryRequest,
   ApplyResultRecoveryRequest,
   ResultRecoveryRequestId,
@@ -89,6 +90,7 @@ export const RunningHostCapacityArguments = Schema.Struct({
 })
 const Operation = Schema.TaggedUnion({
   ReadSnapshot: {},
+  ReadExitOwners: {},
   ReadInspectionSnapshot: {},
   RefreshInspection: {},
   WatchInspection: {},
@@ -247,6 +249,7 @@ export const RunningHostRunControl = Schema.TaggedUnion({
 })
 export type RunningHostRunControl = typeof RunningHostRunControl.Type
 const Value = Schema.Union([
+  Schema.TaggedStruct("ExitOwners", { snapshot: ApplicationExitOwners }),
   Schema.TaggedStruct("CapacityRead", { policy: RunControlPolicy }),
   Schema.TaggedStruct("CapacityApplied", { policy: RunControlPolicy }),
   RunningHostSnapshot,

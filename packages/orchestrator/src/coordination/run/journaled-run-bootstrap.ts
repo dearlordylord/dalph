@@ -562,7 +562,10 @@ export const journaledRunBootstrapLayer = (
       const established = yield* Deferred.make<JournaledRunEstablished>()
 
       const acquireControlLease = Effect.fn("JournaledRunBootstrap.acquireControlLease")(function* () {
-        const forwardOwner = yield* admission.acquireForwardOwner("InterruptibleBoundary")
+        const forwardOwner = yield* admission.acquireForwardOwner("InterruptibleBoundary", {
+          _tag: "Run",
+          runId: expectedRunId
+        })
         const controls = yield* Ref.modify(runtimeState, (current) =>
           current._tag === "RuntimeAcceptingControl"
             ? [
@@ -602,7 +605,7 @@ export const journaledRunBootstrapLayer = (
 
       const withJournalControl = <A, E>(control: Effect.Effect<A, E>) =>
         Effect.acquireUseRelease(
-          admission.acquireForwardOwner("InterruptibleBoundary"),
+          admission.acquireForwardOwner("InterruptibleBoundary", { _tag: "Run", runId: expectedRunId }),
           () => control,
           (owner) => owner.release
         )
@@ -795,6 +798,7 @@ export const journaledRunBootstrapLayer = (
               if (!(yield* Ref.get(executorDrainRegistered))) {
                 yield* applicationExit
                   .registerExecutorDrain({
+                    owner: { name: "ExecutorWork", subject: { _tag: "Run", runId } },
                     suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
                       Effect.provide(context)
                     )
@@ -874,7 +878,9 @@ export const journaledRunBootstrapLayer = (
         if (!terminalProofStillMatchesAcceptedGraph(terminalProof, state, runId, target)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
         }
-        const owner = yield* admission.acquireForwardOwner("AuthorizedRunTerminationAppend").pipe(Effect.option)
+        const owner = yield* admission
+          .acquireForwardOwner("AuthorizedRunTerminationAppend", { _tag: "Run", runId })
+          .pipe(Effect.option)
         if (Option.isNone(owner)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
@@ -918,6 +924,7 @@ export const journaledRunBootstrapLayer = (
       })
 
       yield* applicationExit.registerProcessLocalDrain({
+        owner: { name: "RunRuntime", subject: { _tag: "Run", runId: expectedRunId } },
         closeProcessLocalResources: Effect.gen(function* () {
           yield* processRuntimeCapabilities.resources.integrationTargets.releaseAll
           yield* processRuntimeCapabilities.observation.close
@@ -940,7 +947,7 @@ export const journaledRunBootstrapLayer = (
       ) =>
         activation.withPermit(
           Effect.acquireUseRelease(
-            admission.acquireForwardOwner("RunActivation"),
+            admission.acquireForwardOwner("RunActivation", { _tag: "Run", runId }),
             () =>
               Effect.gen(function* () {
                 if (runId !== expectedRunId) {

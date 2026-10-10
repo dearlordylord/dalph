@@ -148,7 +148,7 @@ it.effect("graceful host Exit reports the lifecycle result, then releases the co
     const result = yield* Ref.get(observedResult)
     expect(result).toBeDefined()
     if (result === undefined) return yield* Effect.die("host report was not observed")
-    expect(result).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+    expect(result).toMatchObject(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
     expect(result._tag).toBe("Succeeded")
     expect(yield* Ref.get(events)).toEqual(["result:Succeeded", "run-resources-released", "coordinator-released"])
     const applicationExit = yield* Ref.get(shell)
@@ -314,7 +314,7 @@ it.effect("Exit timeout or conclusive drain failure remains non-graceful and pre
       )
       const secondRecords = yield* journal.read(restartedSelection.runId)
 
-      expect(firstResult).toEqual(
+      expect(firstResult).toMatchObject(
         ApplicationExitResult.cases.Failed.make({
           diagnostics: [ApplicationExitDiagnostic.make("controlled host drain failed")],
           requestedStatus: 1
@@ -419,9 +419,11 @@ it.effect("host Exit timeout preserves recovery and starts a fresh five-second l
       }
       const secondRecords = yield* journal.read(secondSelection.runId)
 
-      expect(firstResult).toEqual(ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 }))
+      expect(firstResult).toMatchObject(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
       expect(firstResult._tag).toBe("TimedOut")
-      expect(secondResult).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(secondResult).toMatchObject(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
       expect(secondSelection).toEqual({ _tag: "Recovered", runId: firstSelection.runId })
       expect(firstRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
       expect(secondRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])

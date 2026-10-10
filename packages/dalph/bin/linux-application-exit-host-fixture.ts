@@ -369,6 +369,7 @@ const application = Effect.scoped(
       })
       const controlled = yield* executingExecutorDrain(input)
       yield* shell.registerExecutorDrain({
+        owner: { name: "ExecutorWork", subject: { _tag: "Run", runId: makeFixturePlannedAttempt(input).runId } },
         suspendExecutingExecutorWork: controlled.drain.pipe(
           Effect.tap(() =>
             Ref.get(controlled.records).pipe(
@@ -393,6 +394,7 @@ const application = Effect.scoped(
       yield* registerStuckDrain
     } else if (input.mode === "failed") {
       yield* shell.registerProcessLocalDrain({
+        owner: { name: "CodexProvider", subject: { _tag: "NoRun" } },
         closeProcessLocalResources: Effect.fail(
           new ApplicationExitDrainFailure({
             diagnostics: [ApplicationExitDiagnostic.make("controlled process-local drain failed")]

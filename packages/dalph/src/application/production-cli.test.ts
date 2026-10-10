@@ -3539,7 +3539,7 @@ it.effect("repeated public signals join one cutoff and one five-second drain", (
     expect(failure).toMatchObject({ _tag: "ProductionCliLifecycleError", code: "lifecycle.exit_timed_out" })
     expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitRequested")).toHaveLength(2)
     expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitResultReported")).toHaveLength(1)
-    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toMatchObject({
       _tag: "ApplicationExitDisposition",
       disposition: { _tag: "TimedOut", requestedStatus: 1 },
       runId,
@@ -3613,7 +3613,7 @@ it.effect("a Run termination during an accepted Exit request cannot replace its 
       _tag: "ProductionCliLifecycleError",
       code: "lifecycle.exit_timed_out"
     })
-    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toMatchObject({
       _tag: "ApplicationExitDisposition",
       disposition: { _tag: "TimedOut", requestedStatus: 1 },
       runId,

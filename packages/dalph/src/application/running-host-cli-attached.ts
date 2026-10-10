@@ -12,7 +12,7 @@ import {
 
 /** Attached reads and explicit wake commands share the existing host protocol. */
 export const makeRunningHostAttachedCommand = (
-  name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume",
+  name: "owners" | "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume",
   outputLayer: Layer.Layer<RunningHostCliOutput>
 ) =>
   Command.make(
@@ -46,15 +46,17 @@ export const makeRunningHostAttachedCommand = (
           })
         const envelope = yield* callRunningHost(decoded.address, decoded.runId, {
           _tag:
-            name === "snapshot"
-              ? "ReadSnapshot"
-              : name === "control"
-                ? "ReadRunControl"
-                : name === "capacity"
-                  ? "ReadCapacity"
-                  : name === "start"
-                    ? "StartWork"
-                    : "Unpause"
+            name === "owners"
+              ? "ReadExitOwners"
+              : name === "snapshot"
+                ? "ReadSnapshot"
+                : name === "control"
+                  ? "ReadRunControl"
+                  : name === "capacity"
+                    ? "ReadCapacity"
+                    : name === "start"
+                      ? "StartWork"
+                      : "Unpause"
         })
         yield* (compact ? presentCompactEnvelope : presentEnvelope)(envelope)
       }).pipe(
