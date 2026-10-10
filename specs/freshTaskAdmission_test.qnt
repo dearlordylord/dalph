@@ -169,6 +169,29 @@ module freshTaskAdmissionTest {
     .then(readContinuationWitnessFor(TaskC, AuthoredSpecification))
     .expect(and { occupiedCount(state) == 3, pendingResumeRevalidationRequiresExactSafeReconciliation })
 
+  // The task stays Open at Safe: only the retained pending Resume and exact
+  // still-Safe reconciliation establish retry-read priority after process loss.
+  run openTaskResumeStillSafeRevalidationTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
+    .then(acceptSafeReportFor(TaskA))
+    .then(projectOrdinarySafeContinuationReadyFor(TaskA))
+    .then(reserveReadyResponsibilityFor(TaskA)).then(handoffReadyResponsibilityFor(TaskA))
+    .then(crash).then(recover).then(reconcileResumeAsStillSafeFor(TaskA))
+    .expect(and {
+      state.safeLifecycleEvidence.get(TaskA) == OpenWithoutClosedSafe,
+      revalidationRequiresLifecycleReopenOrReconciledResume,
+      pendingResumeRevalidationRequiresExactSafeReconciliation,
+    })
+    .then(reserveReadyResponsibilityFor(TaskA))
+    .then(readContinuationWitnessFor(TaskA, AuthoredSpecification))
+    .expect(occupiedCount(state) == 1)
+
+  run openSafeCannotSelectFirstLifecycleRevalidationTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
+    .then(acceptSafeReportFor(TaskA)).then(selectSafeContinuationFor(TaskA).fail())
+
   run safeProjectionRequiresPriorResumeIntentTest = retainedCWithBD
     .then(reconcileResumeAsStillSafeFor(TaskC).fail())
 

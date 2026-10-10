@@ -120,6 +120,7 @@ Git history.
 - [Prove exact causal active-work refresh in the maintained cassette](exact-causal-active-work-cassette.md)
 - [Run the first thirteen delivery-story beats under controlled readiness](controlled-delivery-story.md)
 - [Alice reopens C and resumes its retained attempt](reopen-retained-c.md)
+- [Resume an Open task after owning Pause and Unpause](open-task-resume-redelivery.md)
 - [Alice adds F and G while B, C, and D hold capacity](discover-f-g-at-capacity.md)
 - [B, C, and D release positions while their integration waits](release-exact-task-positions.md)
 - [Alice sees six distinct ordinary deliveries](distinct-ordinary-finality.md)

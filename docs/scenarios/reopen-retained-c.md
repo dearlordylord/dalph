@@ -81,8 +81,9 @@ releases the pre-command reservation and defers C; genuinely constrained
 retained work does not block fresh work. After Resume intent, any ambiguous
 response must be reconciled at the exact executor before retry.
 If that exact pending Resume is reconciled as still Safe, Dalph reconstructs
-the retry's revalidation eligibility from the original closed/Safe/reopened
-history and exact command projection. It again reserves before E and rereads
+the retry's revalidation eligibility from the retained accepted Safe
+history and exact command projection. This retry does not require task closure
+and reopening; see [Open tasks through Pause and Unpause](open-task-resume-redelivery.md). It again reserves before E and rereads
 current facts before retrying that same command ordinal. An ordinary Safe
 checkpoint or a foreign/stale command projection cannot establish this basis.
 Before calling the executor again, Dalph records

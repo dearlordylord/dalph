@@ -391,11 +391,15 @@ export const safeContinuationRevalidationEligibilityFromRecoveryHistory = (
 ): SafeContinuationRevalidationEligibility | undefined => {
   if (opportunity._tag === "ActiveWorkAuthorityRefresh") return undefined
   const { acceptedSafe, basis, lifecycleSafe } = safeEvidenceForRevalidation(records, plannedAttempt)
+  // A reconciled pending Resume already owns continuation responsibility, including
+  // owning Pause/Unpause while Open. Fresh authority still gates its redelivery.
+  // Only first lifecycle-reopen admission requires the closed-to-Open chronology.
   if (
     acceptedSafe?.report._tag !== "ExecutorWorkSafelySuspended" ||
     acceptedSafe.source.ordinal !== acceptedProgress.ordinal ||
     lifecycleSafe === undefined ||
-    !exactTaskWasReopenedAfterAcceptedSafe(records, plannedAttempt, lifecycleSafe)
+    (basis._tag === "LifecycleReopenAfterAcceptedSafe" &&
+      !exactTaskWasReopenedAfterAcceptedSafe(records, plannedAttempt, lifecycleSafe))
   ) {
     return undefined
   }

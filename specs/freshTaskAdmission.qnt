@@ -973,7 +973,6 @@ module freshTaskAdmission {
     state.process == ProcessUp,
     state.resumeIntentPending.get(task),
     state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
-    state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe,
     state.safeContinuationConstraint.get(task) == ContinuationPermitted,
     state' = {
       ...state,
@@ -1046,7 +1045,7 @@ module freshTaskAdmission {
         admission: state.admission.put(task, ExactAttemptHeld(attemptFor(task))),
         safeReportAccepted: state.safeReportAccepted.put(task, false),
         resumeIntentPending: state.resumeIntentPending.put(task,
-          state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe),
+          state.safeReportAccepted.get(task)),
         resumeReconciledSafe: state.resumeReconciledSafe.put(task, false),
         existingResponsibility:
           state.existingResponsibility.put(task, RetainedNotReadyResponsibility(attemptFor(task))),
@@ -1298,9 +1297,12 @@ module freshTaskAdmission {
   val revalidationRequiresAcceptedSafeReport = TASKS.forall(task =>
     state.existingResponsibility.get(task) != SafeContinuationAwaitingRevalidation(attemptFor(task)) or
       state.safeReportAccepted.get(task))
-  val revalidationRequiresLifecycleReopen = TASKS.forall(task =>
+  val revalidationRequiresLifecycleReopenOrReconciledResume = TASKS.forall(task =>
     state.existingResponsibility.get(task) != SafeContinuationAwaitingRevalidation(attemptFor(task)) or
-      state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe)
+      or {
+        state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe,
+        and { state.resumeIntentPending.get(task), state.resumeReconciledSafe.get(task) },
+      })
   val pendingResumeRevalidationRequiresExactSafeReconciliation = TASKS.forall(task =>
     not(and {
       state.resumeIntentPending.get(task),

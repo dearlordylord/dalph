@@ -1,3 +1,9 @@
+import { validSnapshot } from "../../../orchestrator/test/task-dag.js"
+import {
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionAppliedEvent
+} from "../../../orchestrator/src/workflow/protocols/control-direction-application/events.js"
+import { controlDirectionAppliedRecordKey } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import {
   AttemptBasePolicy,
   type CompletionTaskClaim,
@@ -492,6 +498,14 @@ interface PublicRunFixtureOptions {
     ordinal: number
   ) => Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation>
   readonly acceptedResultEvidenceStore?: EvidenceStoreService
+  readonly currentTaskClosed?: boolean
+  readonly currentDependencyBlocked?: boolean
+  readonly currentClaimForeign?: boolean
+  readonly beforeResumeEffect?: Effect.Effect<void>
+  readonly afterResumeEffect?: Effect.Effect<void>
+  readonly resumeSucceeds?: boolean
+  readonly maximumGraphReads?: number
+  readonly maximumSpecificationReads?: number
   readonly beginSucceeds?: boolean
   readonly integratorCandidateProviderAuthority?: IntegratorCandidateProviderAuthorityService
   readonly lifecycleForApplication?: (
@@ -711,6 +725,8 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
     const commandCallsRef = yield* Ref.make<ReadonlyArray<"Begin" | "Resume" | "Suspend">>([])
     const projectionCallsRef = yield* Ref.make(0)
     const specificationReadsRef = yield* Ref.make(0)
+    const graphReadsRef = yield* Ref.make(0)
+    const resumeRequestsRef = yield* Ref.make<ReadonlyArray<PlannedAttemptExecutorRequest>>([])
     const consumeCommand = (command: "Begin" | "Resume" | "Suspend", planned: PlannedTaskAttempt) =>
       Effect.gen(function* () {
         yield* Ref.update(commandCallsRef, (calls) => [...calls, command])
@@ -752,13 +768,34 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
                 return report
               })
             : consumeCommand("Begin", request.plannedAttempt),
-        resume: (request: PlannedAttemptExecutorRequest) => consumeCommand("Resume", request.plannedAttempt)
+        resume: (request: PlannedAttemptExecutorRequest) =>
+          options.resumeSucceeds
+            ? Effect.gen(function* () {
+                if (options.beforeResumeEffect !== undefined) yield* options.beforeResumeEffect
+                yield* Ref.update(commandCallsRef, (calls) => [...calls, "Resume" as const])
+                yield* Ref.update(resumeRequestsRef, (requests) => [...requests, request])
+                const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                  correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt)
+                })
+                yield* Ref.update(begunReports, (current) =>
+                  new Map(current).set(plannedAttemptExecutorCorrelationKey(report.correlation), report)
+                )
+                if (options.afterResumeEffect !== undefined) yield* options.afterResumeEffect
+                return report
+              })
+            : consumeCommand("Resume", request.plannedAttempt)
       })
     const trackerLayer = Layer.succeed(
       TrackerMutation,
       TrackerMutation.of({
         acquireTaskClaim: () => Effect.die("projection fixture must not acquire a successor claim"),
-        readTaskClaim: () => Effect.succeed(ActiveTaskClaim.make(acquisition)),
+        readTaskClaim: () =>
+          Effect.succeed(
+            ActiveTaskClaim.make({
+              ...acquisition,
+              ...(options.currentClaimForeign ? { token: ClaimToken.make("foreign-current-claim") } : {})
+            })
+          ),
         releaseTaskClaim: () => Effect.die("projection fixture must retain the exact claim")
       })
     )
@@ -802,9 +839,50 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
           Layer.succeed(
             TrackerGraphReader,
             TrackerGraphReader.of({
-              read: () => Effect.succeed(projected.snapshot),
+              read: () =>
+                options.maximumGraphReads === undefined
+                  ? Effect.succeed(projected.snapshot)
+                  : Ref.updateAndGet(graphReadsRef, (count) => count + 1).pipe(
+                      Effect.tap((count) =>
+                        options.maximumGraphReads !== undefined && count > options.maximumGraphReads
+                          ? Effect.die("retained Resume exceeded the finite graph-read bound")
+                          : Effect.void
+                      ),
+                      Effect.andThen(
+                        Effect.succeed(
+                          options.currentTaskClosed || options.currentDependencyBlocked
+                            ? validSnapshot({
+                                revision: "current-denied",
+                                tasks: [
+                                  {
+                                    id: taskId,
+                                    lifecycle: { _tag: options.currentTaskClosed ? "TerminalWithoutSuccess" : "Open" },
+                                    parentTaskId: null,
+                                    prerequisiteIds: options.currentDependencyBlocked ? [TaskId.make("blocker")] : []
+                                  },
+                                  ...(options.currentDependencyBlocked
+                                    ? [
+                                        {
+                                          id: TaskId.make("blocker"),
+                                          lifecycle: { _tag: "Open" as const },
+                                          parentTaskId: null,
+                                          prerequisiteIds: []
+                                        }
+                                      ]
+                                    : [])
+                                ]
+                              })
+                            : projected.snapshot
+                        )
+                      )
+                    ),
               readTaskWorkSpecification: () =>
-                Ref.update(specificationReadsRef, (count) => count + 1).pipe(
+                Ref.updateAndGet(specificationReadsRef, (count) => count + 1).pipe(
+                  Effect.tap((count) =>
+                    options.maximumSpecificationReads !== undefined && count > options.maximumSpecificationReads
+                      ? Effect.die("retained Resume exceeded the finite authority-read bound")
+                      : Effect.void
+                  ),
                   Effect.andThen(
                     taskWorkSpecificationRead === undefined ? Effect.succeed(specification) : taskWorkSpecificationRead
                   )
@@ -857,6 +935,8 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
       commandCalls: Ref.get(commandCallsRef),
       projectionCalls: Ref.get(projectionCallsRef),
       specificationReads: Ref.get(specificationReadsRef),
+      graphReads: Ref.get(graphReadsRef),
+      resumeRequests: Ref.get(resumeRequestsRef),
       readRecords,
       journalFilename: filename,
       openProcess,
@@ -1776,6 +1856,295 @@ it.effect("reconciles a lost Begin to executing work without sending another com
   )
 )
 
+/** Records owning Pause/Safe/Unpause and the original uncertain Resume, with the task Open throughout. */
+const appendOpenPausedResumeHistory = Effect.fn("ProductionScenario.appendOpenPausedResumeHistory")(function* (
+  fixture: PublicRunFixture
+) {
+  yield* appendAcceptedExecutingExecutorHistory(fixture)
+  const journal = yield* JournalStore
+  const direction = (value: "Pause" | "Unpause", ordinal: number) => {
+    const brandedOrdinal = ControlDirectionApplicationOrdinal.make(ordinal)
+    return journal.append(
+      fixture.runId,
+      controlDirectionAppliedRecordKey(brandedOrdinal),
+      ControlDirectionAppliedEvent.make({
+        direction: value,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: brandedOrdinal,
+        subject: { _tag: "Run", runId: fixture.runId },
+        version: workflowJournalEventVersion
+      })
+    )
+  }
+  yield* direction("Pause", 1)
+  yield* appendPendingSuspendExecutorCommandIntent(fixture)
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+    correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
+  })
+  yield* journal.append(
+    fixture.runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(
+      fixture.attempt.attemptId,
+      PlannedAttemptExecutorCommandOrdinal.make(2)
+    ),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt: fixture.attempt,
+      report: safe,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    fixture.runId,
+    plannedAttemptExecutorWorkReportedRecordKey(fixture.attempt.attemptId, PlannedAttemptExecutorReportOrdinal.make(2)),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+      report: safe,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* direction("Unpause", 2)
+  yield* journal.append(
+    fixture.runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(
+      fixture.attempt.attemptId,
+      PlannedAttemptExecutorCommandOrdinal.make(3)
+    ),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Resume",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+      plannedAttempt: fixture.attempt,
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
+it.effect("redelivers an Open task's reconciled Resume after owning Pause with bounded fresh authority reads", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makePublicRunFixture(
+        (correlation) => [
+          PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }),
+          PlannedAttemptExecutorProjection.cases.Exact.make({
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+          })
+        ],
+        { resumeSucceeds: true, maximumSpecificationReads: 4, maximumGraphReads: 12 }
+      )
+      yield* appendOpenPausedResumeHistory(fixture).pipe(
+        Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
+      )
+      const before = yield* fixture.readRecords
+      yield* fixture.activate().pipe(Effect.exit)
+      expect(yield* fixture.commandCalls).toEqual([])
+      yield* fixture.activate().pipe(Effect.exit)
+      const records = yield* fixture.readRecords
+      const suffix = records.slice(before.length)
+      expect(yield* fixture.commandCalls).toEqual(["Resume"])
+      expect((yield* fixture.resumeRequests).map(({ plannedAttempt }) => plannedAttempt)).toEqual([fixture.attempt])
+      expect(yield* fixture.specificationReads).toBeLessThanOrEqual(4)
+      expect(yield* fixture.graphReads).toBeLessThanOrEqual(12)
+      const redelivery = suffix.filter(({ event }) => event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
+      expect(redelivery).toHaveLength(1)
+      expect(redelivery[0]?.event).toMatchObject({ commandOrdinal: 3, plannedAttempt: fixture.attempt })
+      const response = suffix.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
+      expect(response?.event).toMatchObject({
+        commandOrdinal: 3,
+        plannedAttempt: fixture.attempt,
+        report: { _tag: "ExecutorWorkExecuting" }
+      })
+      expect(response?.position).toBeGreaterThan(redelivery[0]?.position ?? Infinity)
+      expect(
+        suffix.filter(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandIntended" ||
+            event._tag === "TaskAttemptPlanned" ||
+            event._tag === "TaskClaimAcquisitionIntended"
+        )
+      ).toEqual([])
+      expect(
+        suffix
+          .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+          .map(({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ? event.observation._tag : undefined
+          )
+      ).toEqual(["ExecutorStateUnreadable", "ExactExecutorReport"])
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+for (const cut of ["BeforeIntent", "AfterIntent", "AfterEffect", "AfterResponse"] as const) {
+  it.effect(`recovers Open-task Resume ${cut} without replacing its semantic command`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const reached = yield* Deferred.make<void>()
+        const cutOnce = yield* Ref.make(true)
+        const checkpoint = Ref.getAndSet(cutOnce, false).pipe(
+          Effect.flatMap((first) =>
+            first ? Deferred.succeed(reached, undefined).pipe(Effect.andThen(Effect.never)) : Effect.void
+          )
+        )
+        const fixture = yield* makePublicRunFixture(
+          (correlation) => [
+            PlannedAttemptExecutorProjection.cases.Exact.make({
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+            }),
+            PlannedAttemptExecutorProjection.cases.Exact.make({
+              report:
+                cut === "AfterEffect" || cut === "AfterResponse"
+                  ? PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+                  : PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+            })
+          ],
+          {
+            resumeSucceeds: true,
+            maximumSpecificationReads: 4,
+            maximumGraphReads: 12,
+            ...(cut === "BeforeIntent"
+              ? {
+                  taskWorkSpecificationRead: checkpoint.pipe(
+                    Effect.andThen(
+                      Effect.succeed(
+                        makeTaskWorkSpecification({
+                          body: "Complete A.",
+                          taskId: TaskId.make("A"),
+                          title: "Complete A"
+                        })
+                      )
+                    )
+                  )
+                }
+              : {}),
+            ...(cut === "AfterIntent" ? { beforeResumeEffect: checkpoint } : {}),
+            ...(cut === "AfterEffect" ? { afterResumeEffect: checkpoint } : {})
+          }
+        )
+        yield* appendOpenPausedResumeHistory(fixture).pipe(
+          Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
+        )
+        const before = yield* fixture.readRecords
+        if (cut === "AfterResponse") yield* fixture.activate().pipe(Effect.exit)
+        else {
+          const process = yield* fixture.activate().pipe(Effect.forkChild)
+          yield* Deferred.await(reached)
+          yield* Fiber.interrupt(process)
+        }
+        const prefix = yield* fixture.readRecords
+        const prefixRedelivery = prefix
+          .slice(before.length)
+          .filter(({ event }) => event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
+        expect(prefixRedelivery).toHaveLength(cut === "BeforeIntent" ? 0 : 1)
+        expect(yield* fixture.commandCalls).toEqual(cut === "AfterEffect" || cut === "AfterResponse" ? ["Resume"] : [])
+        yield* fixture.activate().pipe(Effect.exit)
+        const after = yield* fixture.readRecords
+        const suffix = after.slice(prefix.length)
+        expect(yield* fixture.commandCalls).toEqual(["Resume"])
+        expect((yield* fixture.resumeRequests).map(({ plannedAttempt }) => plannedAttempt)).toEqual([fixture.attempt])
+        expect(yield* fixture.specificationReads).toBeLessThanOrEqual(4)
+        expect(yield* fixture.graphReads).toBeLessThanOrEqual(12)
+        expect(
+          suffix.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" ||
+              event._tag === "TaskAttemptPlanned" ||
+              event._tag === "TaskClaimAcquisitionIntended"
+          )
+        ).toEqual([])
+        const retries = suffix.filter(({ event }) => event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
+        expect(retries).toHaveLength(cut === "BeforeIntent" || cut === "AfterIntent" ? 1 : 0)
+        if (cut === "AfterIntent") {
+          expect(retries[0]?.event).toMatchObject({ commandOrdinal: 3, redeliveryOrdinal: 2, projectionOrdinal: 2 })
+        }
+        expect(
+          after.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkExecuting"
+          )
+        ).toBe(true)
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+    )
+  )
+}
+
+for (const denial of [
+  "Closed",
+  "Specification",
+  "Claim",
+  "Dependency",
+  "Worktree",
+  "Lineage",
+  "Unreadable",
+  "Foreign"
+] as const) {
+  it.effect(`denies Open-task Resume redelivery with ${denial} current authority`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makePublicRunFixture(
+          (correlation) => [
+            denial === "Unreadable"
+              ? PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+              : PlannedAttemptExecutorProjection.cases.Exact.make({
+                  report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                    correlation:
+                      denial === "Foreign"
+                        ? { ...correlation, attemptId: AttemptId.make("foreign-attempt") }
+                        : correlation
+                  })
+                })
+          ],
+          {
+            resumeSucceeds: true,
+            maximumSpecificationReads: 4,
+            maximumGraphReads: 12,
+            currentTaskClosed: denial === "Closed",
+            currentClaimForeign: denial === "Claim",
+            currentDependencyBlocked: denial === "Dependency",
+            ...(denial === "Specification"
+              ? {
+                  taskWorkSpecificationRead: Effect.succeed(
+                    makeTaskWorkSpecification({
+                      body: "Changed task instructions.",
+                      taskId: TaskId.make("A"),
+                      title: "Complete A"
+                    })
+                  )
+                }
+              : {})
+          }
+        )
+        yield* appendOpenPausedResumeHistory(fixture).pipe(
+          Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
+        )
+        const before = yield* fixture.readRecords
+        const git = yield* GitCommand
+        if (denial === "Worktree") yield* git.runInWorktree(fixture.attempt.worktree, ["checkout", "--detach"])
+        if (denial === "Lineage") {
+          yield* git.runInWorktree(fixture.repository, ["checkout", "--orphan", "foreign-root"])
+          yield* git.runInWorktree(fixture.repository, ["commit", "--allow-empty", "-m", "foreign root"])
+          yield* git.runInWorktree(fixture.repository, ["branch", "-f", "master", "HEAD"])
+        }
+        yield* fixture.activate().pipe(Effect.exit)
+        const suffix = (yield* fixture.readRecords).slice(before.length)
+        expect(yield* fixture.commandCalls).toEqual([])
+        expect(yield* fixture.specificationReads).toBeLessThanOrEqual(4)
+        expect(yield* fixture.graphReads).toBeLessThanOrEqual(12)
+        expect(
+          suffix.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" ||
+              event._tag === "PlannedAttemptExecutorCommandIntended" ||
+              event._tag === "TaskAttemptPlanned"
+          )
+        ).toEqual([])
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+    )
+  )
+}
+
 it.effect("reconciles a lost Suspend to Safe before ordinary Run entry resumes the same attempt", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -2388,7 +2757,8 @@ it.effect(
           const records = yield* fixture.readRecords
           const newRecords = records.slice(baseline.length)
           expect(fixture.applicationBuilds(), testCase.errorTag).toBe(2)
-          expect(yield* fixture.projectionCalls, testCase.errorTag).toBe(1)
+          // Each fresh activation rereads unresolved substrate authority; neither grants delivery.
+          expect(yield* fixture.projectionCalls, testCase.errorTag).toBe(2)
           expect(yield* fixture.commandCalls, testCase.errorTag).toEqual([])
           expect(yield* fixture.specificationReads, testCase.errorTag).toBe(0)
           expect(
@@ -2402,7 +2772,7 @@ it.effect(
               event._tag === "PlannedAttemptExecutorStateObserved" ? [event.observation._tag] : []
             ),
             testCase.errorTag
-          ).toEqual([testCase.observationTag])
+          ).toEqual([testCase.observationTag, "ExecutorStateNoCurrentReport"])
           expect(
             records.filter(({ event }) => event._tag === "TaskAttemptPlanned"),
             testCase.errorTag
