@@ -128,14 +128,14 @@ it.effect("exits successfully within five seconds after flushing writes and rele
 
       const result = yield* boundary.requestExit
 
-      expect(result).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(result).toMatchObject(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
       expect(yield* Ref.get(chronology)).toEqual([
         "produced-writes-flushed",
         "local-resources-closed",
         "coordinator-lock-released"
       ])
       expect(yield* Ref.get(requestedProcessEnds)).toEqual([{ _tag: "RequestGracefulTermination", status: 0 }])
-      expect(yield* Ref.get(lifecycleCassette)).toEqual(idleApplicationExitAuthoredCassette)
+      expect(yield* Ref.get(lifecycleCassette)).toMatchObject(idleApplicationExitAuthoredCassette)
       // Application lifecycle recording is deliberately projected outside the Run journal.
       expect(yield* Ref.get(runJournal)).toEqual(["WorkflowRunBegan"])
     })
@@ -201,7 +201,7 @@ it.effect("reports the exact host lifecycle result before scope finalization", (
       })
 
       const result = yield* shell.requestBoundary.requestExit
-      expect(result).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(result).toMatchObject(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
       expect(result._tag).toBe("Succeeded")
       expect(yield* Ref.get(releaseCount)).toBe(0)
       expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).not.toContain(
@@ -286,7 +286,9 @@ it.effect("can exit successfully with a recoverable ambiguous tracker outcome", 
         { requestEnd: () => Effect.void }
       )
 
-      expect(yield* boundary.requestExit).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* boundary.requestExit).toMatchObject(
+        ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })
+      )
       expect(yield* Ref.get(releasedAt)).toEqual({ _tag: "RecoverableAmbiguity", intent })
     })
   )
@@ -317,7 +319,9 @@ it.effect("coalesces repeated Exit requests without resetting the fixed five-sec
       const firstResult = yield* Fiber.join(first)
       const repeatedResult = yield* Fiber.join(repeated)
       expect(firstResult).toEqual(repeatedResult)
-      expect(firstResult).toEqual(ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 }))
+      expect(firstResult).toMatchObject(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
       expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
     })
   )
@@ -351,7 +355,7 @@ it.effect("forces process death when either cleanup family is stuck recording an
       yield* Effect.yieldNow
       yield* TestClock.adjust("5 seconds")
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
       )
       expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
@@ -391,7 +395,7 @@ it.effect("uses no fresh drain time when driver start is delayed beyond the orig
       yield* TestClock.adjust("5 seconds")
       yield* Deferred.succeed(allowDriver, undefined)
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
       )
     })
@@ -420,7 +424,7 @@ it.effect("forcefully terminates at five seconds while an atomic integration sec
       yield* Effect.yieldNow
       yield* TestClock.adjust("5 seconds")
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
       )
       expect(yield* lifecycle.admission.snapshot).toMatchObject({ cutoffClosed: true, registeredOwnerCount: 1 })
@@ -451,7 +455,7 @@ it.effect("reports a flush failure only after releasing idle process resources a
         { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
       )
 
-      expect(yield* boundary.requestExit).toEqual(
+      expect(yield* boundary.requestExit).toMatchObject(
         ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
       )
       expect(yield* Ref.get(chronology)).toEqual(["local-resources-closed", "coordinator-lock-released"])
@@ -478,7 +482,7 @@ it.effect("reports a direct executor-family drain failure and still performs eve
         { requestEnd: () => Effect.void }
       )
 
-      expect(yield* boundary.requestExit).toEqual(
+      expect(yield* boundary.requestExit).toMatchObject(
         ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
       )
       expect(yield* Ref.get(chronology)).toEqual([
@@ -530,7 +534,7 @@ it.effect("retains every concurrent family diagnostic in stable application-drai
       yield* Deferred.succeed(finishWrite, undefined)
       yield* Deferred.succeed(finishExecutor, undefined)
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.Failed.make({
           diagnostics: [executorDiagnostic, writeDiagnostic, localDiagnostic, lockDiagnostic],
           requestedStatus: 1
@@ -561,7 +565,9 @@ it.effect("continues every application-owned local drain after one sibling repor
         Effect.flatMap((boundary) => boundary.requestExit),
         Effect.provideService(ApplicationExitRequestBoundary, shell.requestBoundary)
       )
-      expect(result).toEqual(ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 }))
+      expect(result).toMatchObject(
+        ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
+      )
       expect(yield* Ref.get(chronology)).toEqual([
         "first-local-drain",
         "second-local-drain",
@@ -591,7 +597,7 @@ it.effect("retains a settled local-drain failure when its sibling remains stuck 
       yield* Deferred.await(failedDrainSettled)
       yield* TestClock.adjust("5 seconds")
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [diagnostic], requestedStatus: 1 })
       )
       expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
@@ -632,7 +638,7 @@ it.effect("orders settled local-drain timeout diagnostics by registration rather
       yield* Deferred.await(firstSettled)
       yield* TestClock.adjust("5 seconds")
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({
           diagnostics: [firstDiagnostic, secondDiagnostic],
           requestedStatus: 1
@@ -655,7 +661,7 @@ it.effect("reports a registered executor-family drain failure after its admitted
       yield* Effect.yieldNow
       yield* owner.release
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
       )
     })
@@ -696,7 +702,7 @@ it.effect("surfaces a settled executor diagnostic through the final drain await"
         expect(Option.isSome(failure) ? failure.value.diagnostics : undefined).toEqual([diagnostic])
       }
       yield* owner.release
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
       )
     })
@@ -761,8 +767,8 @@ it.effect("reports timeout with an earlier executor failure while an atomic owne
       yield* TestClock.adjust("5 seconds")
 
       const expected = ApplicationExitResult.cases.TimedOut.make({ diagnostics: [diagnostic], requestedStatus: 1 })
-      expect(yield* Fiber.join(first)).toEqual(expected)
-      expect(yield* Fiber.join(joined)).toEqual(expected)
+      expect(yield* Fiber.join(first)).toMatchObject(expected)
+      expect(yield* Fiber.join(joined)).toMatchObject(expected)
       expect(yield* Ref.get(processEnds)).toEqual([{ _tag: "RequestForcedTermination", status: 1 }])
     })
   )
@@ -784,7 +790,7 @@ it.effect("retains a settled executor failure when another executor drain remain
       yield* Deferred.await(failedDrainSettled)
       yield* TestClock.adjust("5 seconds")
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [diagnostic], requestedStatus: 1 })
       )
     })
@@ -828,11 +834,11 @@ it.effect("finishes independent cross-family quick drains before reporting one s
       yield* Deferred.succeed(allowLocalClose, undefined)
 
       const expected = ApplicationExitResult.cases.Failed.make({ diagnostics: [diagnostic], requestedStatus: 1 })
-      expect(yield* Fiber.join(exiting)).toEqual(expected)
-      expect(yield* Fiber.join(joined)).toEqual(expected)
+      expect(yield* Fiber.join(exiting)).toMatchObject(expected)
+      expect(yield* Fiber.join(joined)).toMatchObject(expected)
       const recordedCassette = yield* Ref.get(lifecycleCassette)
       expect(recordedCassette.filter(({ _tag }) => _tag === "ExitRequested")).toHaveLength(2)
-      expect(recordedCassette.filter(({ _tag }, index) => _tag !== "ExitRequested" || index === 0)).toEqual(
+      expect(recordedCassette.filter(({ _tag }, index) => _tag !== "ExitRequested" || index === 0)).toMatchObject(
         crossFamilyFailureApplicationExitAuthoredCassette(diagnostic)
       )
     })
@@ -876,7 +882,9 @@ it.effect("settles the empty executor set before accepting a post-settlement reg
       const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
 
-      expect(yield* Fiber.join(exiting)).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* Fiber.join(exiting)).toMatchObject(
+        ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })
+      )
 
       // The empty activation atomically moved the registry to Settled. A
       // registration arriving after that point cannot become an active drain.
@@ -903,7 +911,9 @@ it.effect("unregisters a serving drain before cutoff so Exit does not start it",
       yield* Scope.close(registrationScope, Exit.void)
       const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
 
-      expect(yield* Fiber.join(exiting)).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* Fiber.join(exiting)).toMatchObject(
+        ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })
+      )
       expect(yield* Deferred.isDone(drainStarted)).toBe(false)
     })
   )
@@ -970,7 +980,7 @@ it.effect("reports timeout with an earlier produced-write diagnostic at the orig
       yield* Effect.yieldNow
       yield* TestClock.adjust("5 seconds")
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [diagnostic], requestedStatus: 1 })
       )
     })

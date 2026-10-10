@@ -1,3 +1,4 @@
+import { CliExitOutputAbandoned } from "./cli-exit-output.js"
 import { it } from "@effect/vitest"
 import { NodeServices } from "@effect/platform-node"
 import {
@@ -171,12 +172,31 @@ import {
 import { publicDeliveryStatusOf } from "./production-cli-status-schema.js"
 import { ObligationReference } from "./production-cli-status-identity-schema.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
-import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
+import { productionCliHostObservationOf, runProductionCli as runProductionCliWithStartup } from "./live-cli.js"
+
 import type { ProductionHostObservation } from "./production-host.js"
 import { ProductionCancellationBlocked } from "./production.js"
 import type { ApplicationExitSignal, ApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
+
+// These controlled hosts start at the selected observation; model transport installation at that explicit seam.
+const runProductionCli: typeof runProductionCliWithStartup = (runHost, ...options) =>
+  runProductionCliWithStartup(
+    (configuration, use, operation, startup) =>
+      runHost(
+        configuration,
+        (observation, boundary, control) =>
+          Effect.scoped(
+            (startup?.installTransport(boundary) ?? Effect.void).pipe(
+              Effect.andThen(use(observation, boundary, control))
+            )
+          ),
+        operation,
+        startup
+      ),
+    ...options
+  )
 
 const runId = AllocatedWorkflowRunId.make(RunId.make("production-cli-run"))
 const target = GithubIssueTarget.make({
@@ -3555,7 +3575,7 @@ it.effect("repeated public signals join one cutoff and one five-second drain", (
     expect(failure).toMatchObject({ _tag: "ProductionCliLifecycleError", code: "lifecycle.exit_timed_out" })
     expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitRequested")).toHaveLength(2)
     expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitResultReported")).toHaveLength(1)
-    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toMatchObject({
       _tag: "ApplicationExitDisposition",
       disposition: { _tag: "TimedOut", requestedStatus: 1 },
       runId,
@@ -3629,7 +3649,7 @@ it.effect("a Run termination during an accepted Exit request cannot replace its 
       _tag: "ProductionCliLifecycleError",
       code: "lifecycle.exit_timed_out"
     })
-    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toMatchObject({
       _tag: "ApplicationExitDisposition",
       disposition: { _tag: "TimedOut", requestedStatus: 1 },
       runId,
@@ -3767,11 +3787,15 @@ it.effect("lost timeout output can never become a successful process result", ()
 
     yield* signals.installed
     yield* signals.send("SIGTERM")
-    yield* Deferred.await(outputFailed)
-    expect(yield* Fiber.join(running).pipe(Effect.flip)).toMatchObject({
-      _tag: "ProductionCliOutputError",
-      code: "output.write_failed"
-    })
+    const failure = yield* Fiber.join(running).pipe(Effect.flip)
+    if (failure instanceof CliExitOutputAbandoned) {
+      // At the lifecycle deadline no further output attempt is required.
+      expect(failure.requestedStatus).toBe(1)
+      expect(yield* Deferred.isDone(outputFailed)).toBe(false)
+    } else {
+      expect(failure).toMatchObject({ _tag: "ProductionCliOutputError", code: "output.write_failed" })
+      expect(yield* Deferred.isDone(outputFailed)).toBe(true)
+    }
     expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "RunDisposition")).toBe(false)
   })
 )

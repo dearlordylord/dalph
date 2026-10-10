@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Ref, Scope } from "effect"
+import { Clock, Deferred, Effect, Exit, Ref, Scope } from "effect"
 import { expect } from "vitest"
+import { TestClock } from "effect/testing"
 import {
   ApplicationExitResult,
   type ApplicationExitRequestBoundaryService,
@@ -56,11 +57,15 @@ it.effect("SIGINT and SIGTERM enter the same scoped application Exit request bou
     expect(signals.listener("SIGINT")).toBeTypeOf("function")
     expect(signals.listener("SIGTERM")).toBeTypeOf("function")
 
+    const firstReceivedAt = yield* Clock.monotonicTimeNanos
     signals.listener("SIGINT")?.()
     yield* joinedResult.awaitRequest
+    expect(yield* joinedResult.awaitRequestTime).toBe(firstReceivedAt)
+    yield* TestClock.adjust("100 millis")
     signals.listener("SIGTERM")?.()
     yield* Effect.yieldNow
     expect(yield* Ref.get(requestCount)).toBe(2)
+    expect(yield* joinedResult.awaitRequestTime).toBe(firstReceivedAt)
 
     yield* Deferred.succeed(mayFinish, undefined)
     expect(yield* joinedResult.awaitResult).toEqual(result)

@@ -91,7 +91,10 @@ it.live("HTTP reads remain passive, reject wrong identities and malformed bytes,
         result: { _tag: "Success", value: { terminationEvidence: { _tag: "Pending" } } }
       })
       yield* Ref.set(closing, true)
-      expect(yield* readRunningHostDescriptor(address).pipe(Effect.flip)).toMatchObject({ _tag: "HostClosing" })
+      expect(yield* readRunningHostDescriptor(address)).toEqual(listening.descriptor)
+      expect(yield* callRunningHost(address, runId, { _tag: "ReadSnapshot" })).toMatchObject({
+        result: { _tag: "Failure", error: { _tag: "HostClosing" } }
+      })
       expect(yield* Ref.get(reads)).toBe(3)
     })
   )

@@ -1,9 +1,5 @@
-/* eslint-disable import/no-nodejs-modules -- The public CLI owns absolute configuration-path decoding. */
-/* eslint-disable max-lines -- The public CLI keeps one exhaustive versioned wire and failure mapper auditable. */
-
-import nodePath from "node:path"
-import { GitCommitSha, RunId } from "@dalph/contracts"
 import {
+  ApplicationExitOwners,
   type ApplicationExitResult,
   CoordinatorLockHeld,
   CoordinatorLockObservationContradiction,
@@ -61,11 +57,17 @@ import {
   TaskTrackerThrottleTimingEvidence,
   type TrackerTarget
 } from "@dalph/orchestrator"
+/* eslint-disable import/no-nodejs-modules -- The public CLI owns absolute configuration-path decoding. */
+/* eslint-disable max-lines -- The public CLI keeps one exhaustive versioned wire and failure mapper auditable. */
+
+import nodePath from "node:path"
+import { GitCommitSha, RunId } from "@dalph/contracts"
 import {
   Cause,
   Clock,
   Config,
   Duration,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -76,9 +78,11 @@ import {
   Ref,
   Schema,
   Semaphore,
+  Scope,
   Stream
 } from "effect"
 import { decodeCliTarget } from "./cli.js"
+import { type CliExitOutputAbandoned, withCliExitOutputGrace } from "./cli-exit-output.js"
 import {
   decodeProductionRepositoryHostConfiguration,
   type ProductionRepositoryHostConfiguration
@@ -374,6 +378,7 @@ const PublicProductionPublicationSubject = Schema.Struct({
 const ProductionCliNonFailureRecord = Schema.TaggedUnion({
   ApplicationExitDisposition: {
     disposition: ProductionCliApplicationExitDisposition,
+    owners: Schema.optionalKey(ApplicationExitOwners),
     runId: RunId,
     version: Schema.Literal(productionCliWireVersion)
   },
@@ -517,6 +522,7 @@ const runCoalescedLatest = <A, E, R, EOutput, ROutput>(
 
 export type ProductionCliApplicationExitObservation<EOutput> = {
   readonly awaitRequest: Effect.Effect<void>
+  readonly awaitRequestTime?: Effect.Effect<bigint>
   readonly awaitResult: Effect.Effect<ApplicationExitResult>
 } & {
   readonly presentResult: (result: ApplicationExitResult) => Effect.Effect<void, EOutput | ProductionCliLifecycleError>
@@ -527,7 +533,7 @@ export type ProductionCliApplicationExitObservation<EOutput> = {
  * current-first, and keeps later status, history, and disposition facts distinct.
  * No current-status or disposition fact is inferred from historical snapshots.
  */
-export const presentSelectedProductionRun = <EOutput, ESelected = never>(
+const presentSelectedProductionRunWithinScope = <EOutput, ESelected = never>(
   observation: ProductionCliHostObservation,
   writeLine: (line: string) => Effect.Effect<void, EOutput>,
   onSelected: Effect.Effect<void, ESelected> = Effect.void,
@@ -549,9 +555,28 @@ export const presentSelectedProductionRun = <EOutput, ESelected = never>(
       const attachedStatus = yield* status.attach.pipe(Effect.mapError(currentStatusProjectionFailure))
       const publishedStatusLine = yield* Ref.make<string | undefined>(undefined)
       const publicationGate = yield* Semaphore.make(1)
+      const publicationScope = yield* Effect.scope
+      const outputFailure = yield* Deferred.make<never, EOutput>()
+      const ownPublication = <A>(write: Effect.Effect<A, EOutput>) =>
+        Effect.gen(function* () {
+          const publication = yield* publicationGate
+            .withPermit(write.pipe(Scope.provide(publicationScope)))
+            .pipe(Effect.forkIn(publicationScope, { startImmediately: true }))
+          // Report only a settled writer. Reporting from inside the writer can
+          // interrupt that same writer through the losing presentation race.
+          yield* Fiber.await(publication).pipe(
+            Effect.flatMap((exit) =>
+              Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+                ? Deferred.failCause(outputFailure, exit.cause)
+                : Effect.void
+            ),
+            Effect.forkIn(publicationScope, { startImmediately: true })
+          )
+          return yield* Fiber.join(publication)
+        })
       const ordinaryPublicationOpen = yield* Ref.make(true)
       const writeStatus = (current: CurrentDeliveryStatus, terminal = false) =>
-        publicationGate.withPermit(
+        ownPublication(
           Effect.gen(function* () {
             if (!terminal && !(yield* Ref.get(ordinaryPublicationOpen))) return false
             const line = encodeProductionCliRecord(currentDeliveryStatusRecord(current))
@@ -574,49 +599,46 @@ export const presentSelectedProductionRun = <EOutput, ESelected = never>(
       const publishedHistoryCursor = yield* Ref.make<TraceCursor | undefined>(undefined)
       const remainingHistorySnapshotBytes = yield* Ref.make(historySnapshotByteBudget)
       const writeHistory = (cursor: TraceCursor, terminal = false) =>
-        publicationGate.withPermit(
-          Effect.gen(function* () {
-            if (!terminal && !(yield* Ref.get(ordinaryPublicationOpen))) return false
-            const published = yield* Ref.get(publishedHistoryCursor)
-            if (published !== undefined && sameTraceCursor(published, cursor)) return false
-            const remaining = yield* Ref.get(remainingHistorySnapshotBytes)
-            if (remaining > 0) {
-              const admission = yield* observation.traceReader.snapshotAdmission(
-                cursor,
-                TraceSnapshotByteBudget.make(Math.min(historySnapshotRecordByteLimit, remaining))
-              )
-              const exceedsBudget = Match.value(admission).pipe(
-                Match.tagsExhaustive({ ExceedsByteBudget: () => true, MayFit: () => false })
-              )
-              if (exceedsBudget) {
-                yield* writeLine(
-                  encodeProductionCliRecord({ _tag: "HistoryAdvanced", cursor, version: productionCliWireVersion })
+        Effect.gen(function* () {
+          if (!terminal && !(yield* Ref.get(ordinaryPublicationOpen))) return false
+          const published = yield* Ref.get(publishedHistoryCursor)
+          if (published !== undefined && sameTraceCursor(published, cursor)) return false
+          const remaining = yield* Ref.get(remainingHistorySnapshotBytes)
+          const snapshotLine = yield* remaining > 0
+            ? Effect.gen(function* () {
+                const admission = yield* observation.traceReader.snapshotAdmission(
+                  cursor,
+                  TraceSnapshotByteBudget.make(Math.min(historySnapshotRecordByteLimit, remaining))
                 )
-                yield* Ref.set(remainingHistorySnapshotBytes, 0)
-                yield* Ref.set(publishedHistoryCursor, cursor)
-                return true
-              }
-              const snapshot = yield* observation.traceReader.readAt(cursor)
-              const line = encodeProductionCliRecord(historicalRecord(snapshot))
-              const bytes = new TextEncoder().encode(line).byteLength
-              if (bytes <= historySnapshotRecordByteLimit && bytes <= remaining) {
-                yield* writeLine(line)
-                yield* Ref.set(remainingHistorySnapshotBytes, remaining - bytes)
+                const exceedsBudget = Match.value(admission).pipe(
+                  Match.tagsExhaustive({ ExceedsByteBudget: () => true, MayFit: () => false })
+                )
+                if (exceedsBudget) return undefined
+                return encodeProductionCliRecord(historicalRecord(yield* observation.traceReader.readAt(cursor)))
+              })
+            : Effect.succeed(undefined)
+          const bytes = snapshotLine === undefined ? 0 : new TextEncoder().encode(snapshotLine).byteLength
+          return yield* ownPublication(
+            Effect.gen(function* () {
+              // Preparation can finish after Exit closed ordinary admission.
+              if (!terminal && !(yield* Ref.get(ordinaryPublicationOpen))) return false
+              const currentPublished = yield* Ref.get(publishedHistoryCursor)
+              if (currentPublished !== undefined && sameTraceCursor(currentPublished, cursor)) return false
+              const currentRemaining = yield* Ref.get(remainingHistorySnapshotBytes)
+              if (snapshotLine !== undefined && bytes <= historySnapshotRecordByteLimit && bytes <= currentRemaining) {
+                yield* writeLine(snapshotLine)
+                yield* Ref.set(remainingHistorySnapshotBytes, currentRemaining - bytes)
               } else {
                 yield* writeLine(
                   encodeProductionCliRecord({ _tag: "HistoryAdvanced", cursor, version: productionCliWireVersion })
                 )
                 yield* Ref.set(remainingHistorySnapshotBytes, 0)
               }
-            } else {
-              yield* writeLine(
-                encodeProductionCliRecord({ _tag: "HistoryAdvanced", cursor, version: productionCliWireVersion })
-              )
-            }
-            yield* Ref.set(publishedHistoryCursor, cursor)
-            return true
-          })
-        )
+              yield* Ref.set(publishedHistoryCursor, cursor)
+              return true
+            })
+          )
+        })
       const presentHistory = runCoalescedLatest(
         observation.acceptedHistory.changes.pipe(
           Stream.takeUntilEffect((cursor) =>
@@ -638,14 +660,21 @@ export const presentSelectedProductionRun = <EOutput, ESelected = never>(
       }).pipe(Effect.forkScoped)
       yield* Effect.yieldNow
       const stopOrdinaryPresenters = Effect.gen(function* () {
-        yield* publicationGate.withPermit(Ref.set(ordinaryPublicationOpen, false))
+        yield* Ref.set(ordinaryPublicationOpen, false)
         yield* Fiber.interrupt(presenters)
         const stopped = yield* Fiber.await(presenters)
         if (Exit.isFailure(stopped) && !Cause.hasInterruptsOnly(stopped.cause)) {
           return yield* Effect.failCause(stopped.cause)
         }
+        // Presenter cancellation stops preparation, but the presentation scope
+        // still owns a record that already crossed output admission.
+        yield* publicationGate.withPermit(Effect.void)
+        yield* Option.getOrElse(yield* Deferred.poll(outputFailure), () => Effect.void)
       })
-      const presenterFailure = Fiber.join(presenters).pipe(Effect.andThen(Effect.never))
+      const presenterFailure = Effect.raceFirst(
+        Fiber.join(presenters).pipe(Effect.andThen(Effect.never)),
+        Deferred.await(outputFailure)
+      )
       const ordinaryCompletion = Effect.raceFirst(
         observation.runTermination.await.pipe(
           Effect.map(({ disposition, terminatedAt }) => ({ _tag: "RunTerminated" as const, disposition, terminatedAt }))
@@ -696,6 +725,43 @@ export const presentSelectedProductionRun = <EOutput, ESelected = never>(
     })
   )
 
+/** Bounds all Exit output, including writes already active before selection completed. */
+export const presentSelectedProductionRun = <EOutput, ESelected = never>(
+  observation: ProductionCliHostObservation,
+  writeLine: (line: string) => Effect.Effect<void, EOutput>,
+  onSelected: Effect.Effect<void, ESelected> = Effect.void,
+  applicationExit?: ProductionCliApplicationExitObservation<EOutput>,
+  historySnapshotByteBudget = historySnapshotTotalByteLimit
+): Effect.Effect<
+  void,
+  | EOutput
+  | ESelected
+  | TraceReaderError
+  | JournalStoreError
+  | ProductionCliLifecycleError
+  | ProductionCliStatusError
+  | CliExitOutputAbandoned
+> => {
+  if (applicationExit === undefined) {
+    return presentSelectedProductionRunWithinScope(
+      observation,
+      writeLine,
+      onSelected,
+      undefined,
+      historySnapshotByteBudget
+    )
+  }
+  return withCliExitOutputGrace(applicationExit, (joined) =>
+    presentSelectedProductionRunWithinScope(
+      observation,
+      writeLine,
+      onSelected,
+      { ...applicationExit, ...joined },
+      historySnapshotByteBudget
+    )
+  )
+}
+
 /** Explicit helper for later lifecycle transport; status closure never creates this record. */
 export const runDispositionRecord = (runId: RunId, disposition: RunTerminationDisposition): ProductionCliRecord => ({
   _tag: "RunDisposition",
@@ -727,6 +793,7 @@ export const applicationExitDispositionRecord = (
   })()
   return {
     _tag: "ApplicationExitDisposition",
+    ...(disposition.owners === undefined ? {} : { owners: disposition.owners }),
     disposition: publicDisposition,
     runId,
     version: productionCliWireVersion

@@ -308,7 +308,10 @@ const runStabilizedDeliveryImplementation: RunStabilizedDelivery = Effect.fn("Ru
             const operationId = operation.operationId
             const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
             const owner = yield* applicationExitAdmission
-              .acquireForwardOwner("InterruptibleBoundary")
+              .acquireForwardOwner(
+                "InterruptibleBoundary",
+                runId === undefined ? { _tag: "NoRun" } : { _tag: "Run", runId }
+              )
               .pipe(Effect.option)
             if (Option.isNone(owner)) return proofOf(target, quiescence)
             if (owner.value.kind !== "InterruptibleBoundary") {

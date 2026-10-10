@@ -76,6 +76,7 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
   const count = yield* Ref.make(0)
   const writers = yield* Ref.make<ReadonlyMap<SubscriptionId, Deferred.Deferred<void>>>(new Map())
   yield* observation.registerObservationDrain({
+    owner: { name: "HostWatch", subject: { _tag: "Run", runId: observation.selection.runId } },
     closeProcessLocalResources: Effect.gen(function* () {
       yield* Deferred.succeed(inspectionClosing, undefined)
       yield* Effect.forEach([...(yield* Ref.get(writers)).values()], Deferred.await, {
@@ -91,7 +92,7 @@ export const makeRunningHostHttpWatch = Effect.fn("RunningHostWatch.makeHttp")(f
       Effect.uninterruptible(
         Effect.gen(function* () {
           const admission = yield* observation.commandAdmission
-            .acquireForwardOwner("InterruptibleBoundary")
+            .acquireForwardOwner("InterruptibleBoundary", { _tag: "Run", runId: request.runId })
             .pipe(
               Effect.mapError(
                 (): RunningHostError => ({

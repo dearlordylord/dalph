@@ -351,3 +351,122 @@ for (const disposition of ["Completed", "Cancelled"] as const)
       expect(observed.stderr).not.toContain("private-provider-payload")
     }).pipe(Effect.provide(NodeServices.layer))
   )
+
+for (const outcome of ["Succeeded", "TimedOut", "FinalizationFailed"] as const) {
+  it.live(
+    `stalled Exit output ends the Node process after finalization with ${outcome} status`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+          const result =
+            outcome !== "TimedOut"
+              ? "ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })"
+              : "ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })"
+          const script = `
+        import { Effect } from "effect";
+        import { ApplicationExitResult, TraceOutput } from "@dalph/orchestrator";
+        import { NodeStdio } from "@effect/platform-node";
+        import { runDalphNodeMain } from "./dist/src/application/node-main.js";
+        import { withCliExitOutputGrace } from "./dist/src/application/cli-exit-output.js";
+        import { traceOutputStdioLayer } from "./dist/src/presentation/stdio-trace-output.js";
+        import { writeSync } from "node:fs";
+        const report = (event) => Effect.sync(() => writeSync(2, JSON.stringify({ event }) + "\\n"));
+        const application = Effect.scoped(Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => report("host-finalized")${outcome === "FinalizationFailed" ? '.pipe(Effect.andThen(Effect.die({ _tag: "ControlledFinalizationDefect" })))' : ""});
+          const output = yield* TraceOutput;
+          yield* withCliExitOutputGrace({ awaitRequest: Effect.void, awaitResult: Effect.succeed(${result}) },
+            () => output.writeLine(JSON.stringify({ payload: "x".repeat(4 * 1024 * 1024) })));
+        })).pipe(Effect.provide(traceOutputStdioLayer), Effect.provide(NodeStdio.layer));
+        runDalphNodeMain(application);
+      `
+          const child = yield* spawner.spawn(
+            ChildProcess.make(nodeProcess.execPath, ["--input-type=module", "--eval", script], {
+              cwd: dalphPackageDirectory
+            })
+          )
+          // Deliberately do not subscribe to stdout before the child has ended.
+          // Setting exitCode alone leaves Node waiting for this pending pipe.
+          const [exitCode, stderr] = yield* Effect.all(
+            [child.exitCode, child.stderr.pipe(Stream.decodeText(), Stream.mkString)],
+            { concurrency: "unbounded" }
+          ).pipe(Effect.timeout("10 seconds"))
+          expect(exitCode).toBe(outcome === "Succeeded" ? 0 : 1)
+          if (outcome === "FinalizationFailed") {
+            const events = stderr
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line))
+            expect(events[0]).toEqual({ event: "host-finalized" })
+            expect(events[1]).toMatchObject({ boundary: "NodeMainExit", outcome: "Failed" })
+          } else expect(stderr).toBe(JSON.stringify({ event: "host-finalized" }) + "\n")
+          const partial = yield* child.stdout.pipe(Stream.decodeText(), Stream.mkString)
+          expect(Buffer.byteLength(partial)).toBeLessThan(4 * 1024 * 1024)
+        })
+      ).pipe(Effect.provide(NodeServices.layer)),
+    15_000
+  )
+}
+
+it.live(
+  "accepted stdout below the high-water mark remains inside Exit output grace",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const script = String.raw`
+      import { Effect, Stdio, Stream } from "effect";
+      import { NodeStdio } from "@effect/platform-node";
+      import { ApplicationExitResult, TraceOutput } from "@dalph/orchestrator";
+      import { writeSync } from "node:fs";
+      import { runDalphNodeMain } from "./dist/src/application/node-main.js";
+      import { withCliExitOutputGrace } from "./dist/src/application/cli-exit-output.js";
+      import { traceOutputStdioLayer } from "./dist/src/presentation/stdio-trace-output.js";
+      const report = (event) => Effect.sync(() => writeSync(2, JSON.stringify({ event,
+        pending: process.stdout.writableLength, needDrain: process.stdout.writableNeedDrain }) + "\n"));
+      const application = Effect.scoped(Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => report("host-finalized"));
+        const stdio = yield* Stdio.Stdio;
+        // Fill the real pipe, using the sink's weaker acceptance semantics.
+        for (let i = 0; i < 4096; i++) {
+          yield* Stream.make("x".repeat(256)).pipe(Stream.run(stdio.stdout()));
+          yield* Effect.promise(() => new Promise(resolve => setImmediate(resolve)));
+          if (process.stdout.writableLength > 0 && !process.stdout.writableNeedDrain) {
+            yield* Effect.sleep("100 millis");
+            if (process.stdout.writableLength > 0 && !process.stdout.writableNeedDrain) break;
+          }
+        }
+        yield* report("accepted-pending");
+        const output = yield* TraceOutput;
+        yield* withCliExitOutputGrace({ awaitRequest: Effect.void,
+          awaitResult: Effect.succeed(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })) },
+          observation => Effect.gen(function* () {
+            yield* observation.awaitResult;
+            yield* output.writeLine("exit");
+            yield* report("delivered");
+          }));
+      })).pipe(Effect.provide(traceOutputStdioLayer), Effect.provide(NodeStdio.layer));
+      runDalphNodeMain(application);
+    `
+        const child = yield* spawner.spawn(
+          ChildProcess.make(nodeProcess.execPath, ["--input-type=module", "--eval", script], {
+            cwd: dalphPackageDirectory
+          })
+        )
+        const [exitCode, stderr] = yield* Effect.all(
+          [child.exitCode, child.stderr.pipe(Stream.decodeText(), Stream.mkString)],
+          { concurrency: "unbounded" }
+        ).pipe(Effect.timeout("10 seconds"))
+        expect(exitCode).toBe(0)
+        const events = stderr
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+        expect(events.map((event) => event.event)).toEqual(["accepted-pending", "host-finalized"])
+        expect(events[0].pending).toBeGreaterThan(0)
+        expect(events[0].needDrain).toBe(false)
+        expect(events[1].pending).toBeGreaterThan(0)
+      })
+    ).pipe(Effect.provide(NodeServices.layer)),
+  15_000
+)

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The public protocol composes owner reads, bounded history and Run controls; named codecs bound declaration emission. */
 import {
   OccurrenceContinuation,
   OccurrencePageCapacity,
@@ -8,6 +9,7 @@ import { coherentWire, RunningHostSnapshot, RunningHostInspectionSnapshot } from
 import { LocalHostAddress } from "./running-host-address.js"
 import { AttemptId, ExecutorGuidanceRequestId, ExecutorGuidanceTransmission, RunId, TaskId } from "@dalph/contracts"
 import {
+  ApplicationExitOwners,
   ApplyTaskAttemptBaseRetryRequest,
   ApplyResultRecoveryRequest,
   ResultRecoveryRequestId,
@@ -101,6 +103,7 @@ const Operation = Schema.TaggedUnion({
     capacityBytes: OccurrencePageCapacity
   },
   ReadSnapshot: {},
+  ReadExitOwners: {},
   ReadInspectionSnapshot: {},
   RefreshInspection: {},
   WatchInspection: {},
@@ -285,6 +288,7 @@ const RunControlValue: Schema.Codec<RunningHostRunControl, typeof RunningHostRun
 const Value = Schema.Union([
   OccurrencePage,
   OccurrenceTooLarge,
+  Schema.TaggedStruct("ExitOwners", { snapshot: ApplicationExitOwners }),
   Schema.TaggedStruct("CapacityRead", { policy: RunControlPolicy }),
   Schema.TaggedStruct("CapacityApplied", { policy: RunControlPolicy }),
   SnapshotValue,

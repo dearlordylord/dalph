@@ -13,6 +13,12 @@ import {
   Schema,
   type Scope
 } from "effect"
+import {
+  ApplicationExitOwnerId,
+  type ApplicationExitOwnerDescription,
+  type ApplicationExitOwnerDiagnostic,
+  type ApplicationExitOwners
+} from "./owner-diagnostics.js"
 import type { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import {
   ApplicationExitDiagnostic,
@@ -147,7 +153,11 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
   readSettledQuickDrainDiagnostics: Effect.Effect<
     ReadonlyMap<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>
   > = Effect.succeed(new Map()),
-  onRequest: (() => Effect.Effect<void>) | undefined
+  onRequest: (() => Effect.Effect<void>) | undefined,
+  readOwners: Effect.Effect<ApplicationExitOwners> = Effect.all([
+    lifecycle.admission.snapshot,
+    lifecycle.readForwardOwners
+  ]).pipe(Effect.map(([snapshot, owners]) => ({ cutoffClosed: snapshot.cutoffClosed, owners })))
 ) {
   const scope = yield* Effect.scope
   const recordedDiagnostics = yield* Ref.make<
@@ -203,9 +213,10 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
       const elapsed = now - cutoffAt
       const remaining = elapsed >= applicationExitDrainLimitNanos ? 0n : applicationExitDrainLimitNanos - elapsed
       const withinLimit = yield* drainApplication.pipe(Effect.timeoutOption(Duration.nanos(remaining)))
-      const result = Option.isSome(withinLimit)
+      const drained = Option.isSome(withinLimit)
         ? withinLimit.value
         : ApplicationExitResult.cases.TimedOut.make({ diagnostics: yield* currentDiagnostics, requestedStatus: 1 })
+      const result: ApplicationExitResultType = { ...drained, owners: yield* readOwners }
       yield* trace.emit({ _tag: "ExitResultReported", result })
       yield* lifecycle.completeExit(result)
       if (policy._tag === "Ordinary") {
@@ -261,11 +272,13 @@ export const makeApplicationExitRequestBoundary = (
   )
 
 export interface ApplicationExitProcessLocalDrain {
+  readonly owner?: ApplicationExitOwnerDescription
   readonly closeProcessLocalResources: Effect.Effect<void, ApplicationExitDrainFailure>
 }
 
 /** One active Run's fast, non-LLM executor-family Exit drain. */
 export interface ApplicationExitExecutorDrain {
+  readonly owner?: ApplicationExitOwnerDescription
   readonly suspendExecutingExecutorWork: Effect.Effect<
     ReadonlyArray<PlannedAttemptExecutorCorrelation>,
     ApplicationExitDrainFailure
@@ -297,6 +310,8 @@ interface ApplicationExitExecutorDrainRegistry {
 /** Application-owned runtime capabilities shared by every Run bootstrap in this process. */
 export interface ApplicationExitShellService {
   readonly admission: ApplicationExitAdmissionService
+  /** Reads existing live registrations only; causes no authority call or workflow effect. */
+  readonly readOwners: Effect.Effect<ApplicationExitOwners>
   readonly awaitExitRequested: Effect.Effect<void>
   readonly awaitExitResult: Effect.Effect<ApplicationExitResultType>
   /** Every admitted executor drain has settled, including registrations that raced the cutoff. */
@@ -348,7 +363,13 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
   })
   const processLocalDrains = yield* Ref.make({
     nextId: 0,
-    registered: new Map<number, ApplicationExitProcessLocalDrain>()
+    registered: new Map<
+      number,
+      {
+        readonly drain: ApplicationExitProcessLocalDrain
+        readonly evidence: "DrainRegistered" | "DrainSucceeded" | "DrainFailed"
+      }
+    >()
   })
   const settledExecutorDiagnostics = yield* Ref.make<ReadonlyMap<number, ReadonlyArray<ApplicationExitDiagnostic>>>(
     new Map()
@@ -481,6 +502,76 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
     }
   })
 
+  const markLocalDrainSettled = (id: number, failed: boolean) =>
+    Ref.update(processLocalDrains, (current) => {
+      const entry = current.registered.get(id)
+      return entry === undefined
+        ? current
+        : {
+            ...current,
+            registered: new Map(current.registered).set(id, {
+              ...entry,
+              evidence: failed ? ("DrainFailed" as const) : ("DrainSucceeded" as const)
+            })
+          }
+    })
+  const readOwners = Effect.gen(function* () {
+    const snapshot = yield* lifecycle.admission.snapshot
+    const forward = yield* lifecycle.readForwardOwners
+    const executor = yield* Ref.get(executorDrains)
+    const executors = yield* Effect.forEach([...executor.registered], ([id, entry]) =>
+      Effect.gen(function* () {
+        // Read completion and its evidence from the same existing receipt.
+        const receipt = yield* Deferred.poll(entry.finished)
+        const settled = Option.isSome(receipt)
+        const failed = Option.isSome(receipt) && (yield* receipt.value).diagnostics.length > 0
+        return {
+          ownerId: ApplicationExitOwnerId.make(id),
+          family: "ExecutorDrain",
+          kind: "ExecutorDrain",
+          name: entry.drain.owner?.name ?? "ExecutorWork",
+          subject: entry.drain.owner?.subject ?? { _tag: "NoRun" },
+          evidence: settled
+            ? failed
+              ? "DrainFailed"
+              : "DrainSucceeded"
+            : entry.started
+              ? "DrainPending"
+              : "DrainRegistered",
+          boundary: null,
+          missingEvidence: settled && !failed ? "None" : "CorrelatedExecutorSettlement",
+          nextAction: settled ? (failed ? "InspectDrainFailure" : "None") : "AwaitCorrelatedExecutorSettlement"
+        } satisfies ApplicationExitOwnerDiagnostic
+      })
+    )
+    const local = yield* Ref.get(processLocalDrains)
+    return {
+      cutoffClosed: snapshot.cutoffClosed,
+      owners: [
+        ...forward,
+        ...executors,
+        ...[...local.registered].map(
+          ([id, entry]): ApplicationExitOwnerDiagnostic => ({
+            ownerId: ApplicationExitOwnerId.make(id),
+            family: "LocalDrain",
+            kind: "LocalDrain",
+            name: entry.drain.owner?.name ?? "LocalResources",
+            subject: entry.drain.owner?.subject ?? { _tag: "NoRun" },
+            evidence: entry.evidence === "DrainRegistered" && snapshot.cutoffClosed ? "DrainPending" : entry.evidence,
+            boundary: null,
+            missingEvidence: entry.evidence === "DrainSucceeded" ? "None" : "LocalCloseAcknowledgement",
+            nextAction:
+              entry.evidence === "DrainFailed"
+                ? "InspectDrainFailure"
+                : entry.evidence === "DrainSucceeded"
+                  ? "None"
+                  : "AwaitLocalClose"
+          })
+        )
+      ]
+    }
+  })
+
   const requestBoundary = yield* makeApplicationExitRequestBoundaryWithPolicy(
     lifecycle,
     {
@@ -490,14 +581,19 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
         const drains = [...(yield* Ref.get(processLocalDrains)).registered.entries()]
         const diagnostics = yield* Effect.forEach(
           drains,
-          ([drainId, { closeProcessLocalResources }]) =>
+          ([
+            drainId,
+            {
+              drain: { closeProcessLocalResources }
+            }
+          ]) =>
             closeProcessLocalResources.pipe(
               Effect.matchEffect({
                 onFailure: ({ diagnostics }) =>
                   Ref.update(settledProcessLocalDiagnostics, (current) =>
                     new Map(current).set(drainId, diagnostics)
-                  ).pipe(Effect.as(diagnostics)),
-                onSuccess: () => Effect.succeed([])
+                  ).pipe(Effect.andThen(markLocalDrainSettled(drainId, true)), Effect.as(diagnostics)),
+                onSuccess: () => markLocalDrainSettled(drainId, false).pipe(Effect.as([]))
               })
             ),
           { concurrency: "unbounded" }
@@ -525,10 +621,12 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
         return byFamily
       })
     ),
-    options.onRequest
+    options.onRequest,
+    readOwners
   )
   return {
     admission: lifecycle.admission,
+    readOwners,
     awaitExitRequested: lifecycle.awaitExitRequested,
     awaitExitResult: lifecycle.awaitExitResult,
     awaitExecutorDrains,
@@ -575,7 +673,10 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
     registerProcessLocalDrain: (drain) =>
       Effect.gen(function* () {
         const drainId = yield* Ref.modify(processLocalDrains, (current) => {
-          const registered = new Map(current.registered).set(current.nextId, drain)
+          const registered = new Map(current.registered).set(current.nextId, {
+            drain,
+            evidence: "DrainRegistered" as const
+          })
           return [current.nextId, { nextId: current.nextId + 1, registered }] as const
         })
         yield* Effect.addFinalizer(() =>

@@ -17,12 +17,18 @@ export const withHermeticQualificationFailureRegistration =
     scope: HermeticRegistrationScopeId,
     host: ProductionCliHostRunner<E, R>
   ): ProductionCliHostRunner<E, R> =>
-  (configuration, use) =>
+  (configuration, use, operation, startup) =>
     Effect.gen(function* () {
       // Retain only the original observation handle. Its own signal preserves Closed.final after host resources close.
       const original = yield* Ref.make(Option.none<ProductionCliHostObservation>())
-      return yield* host(configuration, (observation, exitBoundary) =>
-        Ref.set(original, Option.some(observation)).pipe(Effect.andThen(use(observation, exitBoundary)))
+      return yield* host(
+        configuration,
+        (observation, exitBoundary, publicationControl) =>
+          Ref.set(original, Option.some(observation)).pipe(
+            Effect.andThen(use(observation, exitBoundary, publicationControl))
+          ),
+        operation,
+        startup
       ).pipe(
         Effect.tapError((error) =>
           Ref.get(original).pipe(

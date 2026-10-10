@@ -1,15 +1,16 @@
+import { publicApplicationExitResult, ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 import { makeRunningHostAttachedCommand } from "./running-host-cli-attached.js"
 import { makeRunningHostBaseRetryCommand } from "./running-host-cli-base-retry.js"
 import { makeRunningHostGuidanceCommand } from "./running-host-cli-guidance.js"
-import { ApplyResultRecoveryRequest, ResultRecoveryRequestId } from "@dalph/orchestrator"
 /* eslint-disable import/no-nodejs-modules -- This command owns only client stdout/stderr completion. */
 import type { Layer } from "effect"
 import { Effect, FileSystem, Schema, Stream } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
-import type { ProductionRunningHostObservation } from "./production-host.js"
+import { makeProductionCliStartup, ProductionHostExitUnsuccessful } from "./production-cli-startup.js"
+import type { ProductionHostStartup, ProductionRunningHostObservation } from "./production-host.js"
 import { decodeRunInvocation, loadProductionConfiguration } from "./production-cli.js"
-import { installApplicationExitSignalAdapter, type ApplicationExitSignalBoundary } from "./supervisor-exit.js"
+import { type ApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import {
   RunningHostCapacityArguments,
   LocalHostAddress,
@@ -28,6 +29,7 @@ import { makeRunningHostWatchStage } from "./running-host-watch-stage.js"
 import { callRunningHost, readRunningHostDescriptor } from "./running-host-client.js"
 import { serveRunningHost } from "./running-host-http.js"
 import { runRunningHostMcp } from "./running-host-mcp.js"
+import { withCliExitOutputGrace } from "./cli-exit-output.js"
 import { DalphCommandExit, requestFailureExitStatus, transportFailureExitStatus } from "./command-exit.js"
 
 import {
@@ -38,10 +40,11 @@ import {
   presentEnvelope,
   decodeClient
 } from "./running-host-cli-output.js"
-export type ProductionListeningHostRunner<E, R> = <EUse>(
+export type ProductionListeningHostRunner<E, R> = <EUse, EStartup = never>(
   configuration: ProductionRepositoryHostConfiguration,
-  use: (observation: ProductionRunningHostObservation<E>) => Effect.Effect<void, EUse>
-) => Effect.Effect<void, E | EUse, R>
+  use: (observation: ProductionRunningHostObservation<E>) => Effect.Effect<void, EUse>,
+  startup?: ProductionHostStartup<void, EStartup, never>
+) => Effect.Effect<void, E | EUse | EStartup, R>
 
 export { RunningHostCliOutput, runningHostCliStdioLayer } from "./running-host-cli-output.js"
 
@@ -68,22 +71,35 @@ export const makeRunningHostCommands = <E, R>(
         const configuration = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (path) =>
           fileSystem.readFileString(path)
         )
-        yield* runHost(configuration, (observation) =>
-          Effect.scoped(
-            Effect.gen(function* () {
-              const signalsInstalled = yield* installApplicationExitSignalAdapter(
-                observation.applicationExitRequestBoundary,
-                signals,
-                ["SIGINT", "SIGTERM"]
-              )
-              const listening = yield* serveRunningHost(address, observation)
-              yield* writeLine(JSON.stringify({ _tag: "HostReady", address, descriptor: listening.descriptor }))
-              const result = yield* signalsInstalled.awaitResult
-              yield* writeLine(JSON.stringify({ applicationExit: result }), "stderr")
-              if (result._tag !== "Succeeded")
-                return yield* new DalphCommandExit({ status: transportFailureExitStatus })
-            })
-          ).pipe(Effect.provide(outputLayer))
+        const early = yield* makeProductionCliStartup(signals, (result) =>
+          writeLine(JSON.stringify({ applicationExit: publicApplicationExitResult(result) }), "stderr").pipe(
+            Effect.andThen(
+              result._tag === "Succeeded"
+                ? Effect.void
+                : new ProductionHostExitUnsuccessful({ disposition: result._tag })
+            ),
+            Effect.provide(outputLayer)
+          )
+        )
+        yield* runHost(
+          configuration,
+          (observation) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const signalsInstalled = yield* early.awaitAdapter
+                const listening = yield* serveRunningHost(address, observation)
+                yield* withCliExitOutputGrace(signalsInstalled, (exit) =>
+                  Effect.gen(function* () {
+                    yield* writeLine(JSON.stringify({ _tag: "HostReady", address, descriptor: listening.descriptor }))
+                    const result = yield* exit.awaitResult
+                    yield* writeLine(JSON.stringify({ applicationExit: publicApplicationExitResult(result) }), "stderr")
+                    if (result._tag !== "Succeeded")
+                      return yield* new DalphCommandExit({ status: transportFailureExitStatus })
+                  })
+                )
+              })
+            ).pipe(Effect.provide(outputLayer)),
+          early.startup
         )
       }).pipe(Effect.provide(outputLayer))
   )
@@ -109,8 +125,9 @@ export const makeRunningHostCommands = <E, R>(
         Effect.provide(outputLayer)
       )
   )
-  const attached = (name: "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume" | "pause" | "cancel") =>
-    makeRunningHostAttachedCommand(name, outputLayer)
+  const attached = (
+    name: "owners" | "snapshot" | "control" | "capacity" | "start" | "unpause" | "resume" | "pause" | "cancel"
+  ) => makeRunningHostAttachedCommand(name, outputLayer)
   const guide = makeRunningHostGuidanceCommand(outputLayer)
   const setCapacity = Command.make(
     "set-capacity",
@@ -356,6 +373,7 @@ export const makeRunningHostCommands = <E, R>(
       descriptor,
       refresh,
       attached("snapshot"),
+      attached("owners"),
       attached("control"),
       attached("capacity"),
       attached("start"),

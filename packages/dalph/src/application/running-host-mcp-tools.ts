@@ -104,6 +104,12 @@ export const runningHostMcpTools = [
     outputSchema
   },
   {
+    name: "dalph_read_exit_owners",
+    description: "Read admitted application owners and the exact drain evidence they lack.",
+    inputSchema,
+    outputSchema
+  },
+  {
     name: "dalph_read_snapshot",
     description: "Read one coherent passive publication from the selected Run.",
     inputSchema,

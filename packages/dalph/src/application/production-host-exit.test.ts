@@ -29,6 +29,8 @@ import { expect } from "vitest"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { type ProductionRepositoryHostGraph, withProductionRepositoryHost } from "./production-host.js"
 
+import { CliExitOutputAbandoned, withCliExitOutputGrace } from "./cli-exit-output.js"
+
 const unterminatedRun = { await: Effect.never, poll: Effect.succeed(Option.none()) }
 
 const validRawConfiguration = () => ({
@@ -146,7 +148,7 @@ it.effect("graceful host Exit reports the lifecycle result, then releases the co
     const result = yield* Ref.get(observedResult)
     expect(result).toBeDefined()
     if (result === undefined) return yield* Effect.die("host report was not observed")
-    expect(result).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+    expect(result).toMatchObject(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
     expect(result._tag).toBe("Succeeded")
     expect(yield* Ref.get(events)).toEqual(["result:Succeeded", "run-resources-released", "coordinator-released"])
     const applicationExit = yield* Ref.get(shell)
@@ -312,7 +314,7 @@ it.effect("Exit timeout or conclusive drain failure remains non-graceful and pre
       )
       const secondRecords = yield* journal.read(restartedSelection.runId)
 
-      expect(firstResult).toEqual(
+      expect(firstResult).toMatchObject(
         ApplicationExitResult.cases.Failed.make({
           diagnostics: [ApplicationExitDiagnostic.make("controlled host drain failed")],
           requestedStatus: 1
@@ -417,9 +419,11 @@ it.effect("host Exit timeout preserves recovery and starts a fresh five-second l
       }
       const secondRecords = yield* journal.read(secondSelection.runId)
 
-      expect(firstResult).toEqual(ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 }))
+      expect(firstResult).toMatchObject(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
       expect(firstResult._tag).toBe("TimedOut")
-      expect(secondResult).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(secondResult).toMatchObject(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
       expect(secondSelection).toEqual({ _tag: "Recovered", runId: firstSelection.runId })
       expect(firstRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
       expect(secondRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
@@ -427,4 +431,41 @@ it.effect("host Exit timeout preserves recovery and starts a fresh five-second l
       expect(yield* Ref.get(releases)).toBe(2)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("output grace expiry returns through host finalization before process completion", () =>
+  Effect.gen(function* () {
+    const events = yield* Ref.make<ReadonlyArray<string>>([])
+    const entered = yield* Deferred.make<void>()
+    const foundation = Layer.merge(
+      scopedCoordinatorOwnershipLayer(
+        CoordinatorOwnership.of({
+          release: Ref.update(events, (prior) => [...prior, "coordinator-released"]),
+          runMutation: (mutation) => mutation
+        })
+      ),
+      memoryJournalStoreLayer
+    )
+    const graph = makeHostGraph(foundation, () =>
+      Effect.addFinalizer(() => Ref.update(events, (prior) => [...prior, "run-resources-released"]))
+    )
+    const running = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
+      withCliExitOutputGrace(
+        {
+          awaitRequest: Effect.void,
+          awaitResult: observation.applicationExitRequestBoundary.requestExit.pipe(
+            Effect.tap(() => Ref.update(events, (prior) => [...prior, "lifecycle-result"]))
+          )
+        },
+        (joined) =>
+          joined.awaitResult.pipe(Effect.andThen(Deferred.succeed(entered, undefined)), Effect.andThen(Effect.never))
+      )
+    ).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    yield* TestClock.adjust("500 millis")
+    const failure = yield* Fiber.join(running).pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(CliExitOutputAbandoned)
+    expect(failure).toMatchObject({ requestedStatus: 0 })
+    expect(yield* Ref.get(events)).toEqual(["lifecycle-result", "run-resources-released", "coordinator-released"])
+  }).pipe(Effect.provide(NodeCrypto.layer))
 )

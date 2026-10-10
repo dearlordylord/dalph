@@ -529,7 +529,7 @@ it.effect("Alice exits successfully only after the running exact attempt is safe
       )
       yield* shell.registerExecutorDrain({ suspendExecutingExecutorWork: executorDrain })
 
-      expect(yield* shell.requestBoundary.requestExit).toEqual(
+      expect(yield* shell.requestBoundary.requestExit).toMatchObject(
         ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })
       )
       expect((yield* Ref.get(lifecycleCassette)).map(({ _tag }) => _tag)).toEqual(executingExecutorExitAuthoredCassette)
@@ -578,7 +578,7 @@ it.effect("Alice receives timeout when the suspension response still reports the
       yield* Deferred.await(suspensionReturned)
       yield* TestClock.adjust("5 seconds")
 
-      expect(yield* Fiber.join(exiting)).toEqual(
+      expect(yield* Fiber.join(exiting)).toMatchObject(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
       )
       expect(

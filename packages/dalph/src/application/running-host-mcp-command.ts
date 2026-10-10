@@ -58,6 +58,7 @@ export const makeRunningHostMcpOperation = Effect.fn("RunningHostMcp.operation")
     return { _tag: "Refresh" as const, interest: args.interest }
   }
   const operations: Readonly<Record<string, RunningHostRequest["operation"]>> = {
+    dalph_read_exit_owners: { _tag: "ReadExitOwners" },
     dalph_read_snapshot: { _tag: "ReadSnapshot" },
     dalph_read_run_control: { _tag: "ReadRunControl" },
     dalph_read_capacity: { _tag: "ReadCapacity" },

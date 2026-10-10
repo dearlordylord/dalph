@@ -5,6 +5,12 @@ import type {
   InterruptibleWorkflowBoundaryIntent
 } from "../../workflow/interpretation/interpreter.js"
 import { continuesCompletionClaimCleanup } from "../../workflow/protocols/integration-finality/cleanup-boundary-transition.js"
+import {
+  ApplicationExitOwnerId,
+  type ApplicationExitOwnerDiagnostic,
+  type ApplicationExitBoundaryIdentity,
+  type ApplicationExitOwnerSubject
+} from "./owner-diagnostics.js"
 import { ApplicationExiting, type ApplicationExitResult, type ForwardOwnerKind } from "./lifecycle-decision.js"
 
 type ForwardOwnerId = number
@@ -24,7 +30,7 @@ export type InterruptibleBoundaryOwnerSnapshot = Data.TaggedEnum<{
 
 export const InterruptibleBoundaryOwnerSnapshot = Data.taggedEnum<InterruptibleBoundaryOwnerSnapshot>()
 
-type ForwardOwnerState =
+type ForwardOwnerState = { readonly subject: ApplicationExitOwnerSubject } & (
   | { readonly kind: ForwardOwnerKind; readonly phase: "Preparing" }
   | {
       readonly boundary: InterruptibleBoundaryOwnerSnapshot
@@ -32,6 +38,7 @@ type ForwardOwnerState =
       readonly phase: "Registered"
     }
   | { readonly kind: Exclude<ForwardOwnerKind, "InterruptibleBoundary">; readonly phase: "Registered" }
+)
 
 interface ApplicationExitLifecycleStateFields {
   readonly nextOwnerId: ForwardOwnerId
@@ -104,9 +111,15 @@ export interface ApplicationExitLifecycleSnapshot {
 /** Least authority required to admit and observe process-local forward-progress ownership. */
 export interface ApplicationExitAdmissionService {
   /** Atomically rejects late work or records its preparation before any reservation is acquired. */
-  readonly prepareForwardOwner: (kind: ForwardOwnerKind) => Effect.Effect<ForwardOwnerPreparation, ApplicationExiting>
+  readonly prepareForwardOwner: (
+    kind: ForwardOwnerKind,
+    subject?: ApplicationExitOwnerSubject
+  ) => Effect.Effect<ForwardOwnerPreparation, ApplicationExiting>
   /** Acquires one registered owner without exposing the preparation state to callers that reserve nothing. */
-  readonly acquireForwardOwner: (kind: ForwardOwnerKind) => Effect.Effect<ForwardOwnerLease, ApplicationExiting>
+  readonly acquireForwardOwner: (
+    kind: ForwardOwnerKind,
+    subject?: ApplicationExitOwnerSubject
+  ) => Effect.Effect<ForwardOwnerLease, ApplicationExiting>
   readonly snapshot: Effect.Effect<ApplicationExitLifecycleSnapshot>
 }
 
@@ -118,6 +131,7 @@ export class ApplicationExitAdmission extends Context.Service<
 
 export interface ApplicationExitLifecycleService {
   readonly admission: ApplicationExitAdmissionService
+  readonly readForwardOwners: Effect.Effect<ReadonlyArray<ApplicationExitOwnerDiagnostic>>
   /** Every request closes or joins one cutoff, monotonic deadline, driver, and result. */
   readonly requestExit: Effect.Effect<ApplicationExitRequest>
   readonly completeExit: (result: ApplicationExitResult) => Effect.Effect<boolean>
@@ -232,47 +246,53 @@ const makeApplicationExitLifecycleEffect = Effect.fn("ApplicationExitLifecycle.m
       return (yield* Ref.get(state)).phase === "Exiting" ? yield* Effect.interrupt : result
     })
 
-  const prepareForwardOwner = Effect.fn("ApplicationExitLifecycle.prepareForwardOwner")((kind: ForwardOwnerKind) =>
-    Effect.gen(function* () {
-      const ownerId = yield* Ref.modify(state, (current) => {
-        if (current.phase === "Exiting") return [undefined, current] as const
-        const ownerId = current.nextOwnerId
-        const owners = new Map(current.owners).set(ownerId, { kind, phase: "Preparing" } as const)
-        return [ownerId, { ...current, nextOwnerId: ownerId + 1, owners }] as const
-      })
-      if (ownerId === undefined) return yield* new ApplicationExiting()
-      const cancel = removeOwner(ownerId)
-      const register: Effect.Effect<ForwardOwnerLease, ApplicationExiting> = Effect.gen(function* () {
-        const registered = yield* Ref.modify(state, (registrationState) => {
-          const owner = registrationState.owners.get(ownerId)
-          if (registrationState.phase === "Exiting" || owner?.phase !== "Preparing") {
-            return [false, registrationState] as const
-          }
-          const registered =
-            kind === "InterruptibleBoundary"
-              ? ({ boundary: InterruptibleBoundaryOwnerSnapshot.NoBoundaryCall(), kind, phase: "Registered" } as const)
-              : ({ kind, phase: "Registered" } as const)
-          const registeredOwners = new Map(registrationState.owners).set(ownerId, registered)
-          return [true, { ...registrationState, owners: registeredOwners }] as const
+  const prepareForwardOwner = Effect.fn("ApplicationExitLifecycle.prepareForwardOwner")(
+    (kind: ForwardOwnerKind, subject: ApplicationExitOwnerSubject = { _tag: "NoRun" }) =>
+      Effect.gen(function* () {
+        const ownerId = yield* Ref.modify(state, (current) => {
+          if (current.phase === "Exiting") return [undefined, current] as const
+          const ownerId = current.nextOwnerId
+          const owners = new Map(current.owners).set(ownerId, { kind, subject, phase: "Preparing" } as const)
+          return [ownerId, { ...current, nextOwnerId: ownerId + 1, owners }] as const
         })
-        if (!registered) return yield* new ApplicationExiting()
-        return kind === "InterruptibleBoundary"
-          ? ({
-              kind,
-              release: removeOwner(ownerId),
-              run: (intent, call, recordResult) => runInterruptibleBoundary(ownerId, intent, call, recordResult),
-              snapshot: interruptibleSnapshot(ownerId)
-            } satisfies InterruptibleForwardOwnerLease)
-          : kind === "AtomicBoundary"
+        if (ownerId === undefined) return yield* new ApplicationExiting()
+        const cancel = removeOwner(ownerId)
+        const register: Effect.Effect<ForwardOwnerLease, ApplicationExiting> = Effect.gen(function* () {
+          const registered = yield* Ref.modify(state, (registrationState) => {
+            const owner = registrationState.owners.get(ownerId)
+            if (registrationState.phase === "Exiting" || owner?.phase !== "Preparing") {
+              return [false, registrationState] as const
+            }
+            const registered =
+              kind === "InterruptibleBoundary"
+                ? ({
+                    boundary: InterruptibleBoundaryOwnerSnapshot.NoBoundaryCall(),
+                    kind,
+                    subject,
+                    phase: "Registered"
+                  } as const)
+                : ({ kind, subject, phase: "Registered" } as const)
+            const registeredOwners = new Map(registrationState.owners).set(ownerId, registered)
+            return [true, { ...registrationState, owners: registeredOwners }] as const
+          })
+          if (!registered) return yield* new ApplicationExiting()
+          return kind === "InterruptibleBoundary"
             ? ({
                 kind,
                 release: removeOwner(ownerId),
-                run: (section) => runAtomicBoundary(ownerId, section)
-              } satisfies AtomicForwardOwnerLease)
-            : ({ kind, release: removeOwner(ownerId) } satisfies ForwardOwnerLease)
+                run: (intent, call, recordResult) => runInterruptibleBoundary(ownerId, intent, call, recordResult),
+                snapshot: interruptibleSnapshot(ownerId)
+              } satisfies InterruptibleForwardOwnerLease)
+            : kind === "AtomicBoundary"
+              ? ({
+                  kind,
+                  release: removeOwner(ownerId),
+                  run: (section) => runAtomicBoundary(ownerId, section)
+                } satisfies AtomicForwardOwnerLease)
+              : ({ kind, release: removeOwner(ownerId) } satisfies ForwardOwnerLease)
+        })
+        return { cancel, register } satisfies ForwardOwnerPreparation
       })
-      return { cancel, register } satisfies ForwardOwnerPreparation
-    })
   )
 
   const requestExit = Effect.gen(function* () {
@@ -304,11 +324,74 @@ const makeApplicationExitLifecycleEffect = Effect.fn("ApplicationExitLifecycle.m
     )
   )
 
+  const boundaryIdentity = (intent: InterruptibleBoundaryIntent): ApplicationExitBoundaryIdentity => {
+    switch (intent._tag) {
+      case "AuthorityRequest":
+        return { family: intent.family, operationIds: [intent.operationId], baseline: null }
+      case "RemoteBaseline":
+        return {
+          family: intent.family,
+          operationIds: [],
+          baseline: {
+            runId: intent.correlation.runId,
+            attemptId: intent.correlation.responsibility.plannedAttempt.attemptId,
+            round: intent.correlation._tag === "AutomaticCompetingHead" ? intent.correlation.baselineRound : null
+          }
+        }
+      case "PostPromotionFinalityReads":
+        return {
+          family: intent.family,
+          operationIds: [intent.graphOperationId, intent.specificationOperationId, intent.claimOperationId],
+          baseline: null
+        }
+      case "TaskClaimCleanup":
+        return { family: intent.family, operationIds: [intent.operation.release.operationId], baseline: null }
+      case "CompletionClaimCleanup":
+        return {
+          family: intent.family,
+          operationIds: [intent.request.operationId, intent.replacementOperationId],
+          baseline: null
+        }
+    }
+  }
+  const readForwardOwners = Ref.get(state).pipe(
+    Effect.map((current) =>
+      [...current.owners].map(([id, owner]): ApplicationExitOwnerDiagnostic => {
+        const boundary =
+          owner.phase === "Registered" && owner.kind === "InterruptibleBoundary" ? owner.boundary : undefined
+        const evidence = boundary === undefined || boundary._tag === "NoBoundaryCall" ? owner.phase : boundary._tag
+        return {
+          ownerId: ApplicationExitOwnerId.make(id),
+          family: "ForwardOwner",
+          name: "ForwardProgress",
+          kind: owner.kind,
+          subject: owner.subject,
+          evidence,
+          boundary:
+            boundary !== undefined && boundary._tag !== "NoBoundaryCall" ? boundaryIdentity(boundary.intent) : null,
+          missingEvidence:
+            evidence === "BoundaryResultProduced"
+              ? "JournalAcknowledgement"
+              : evidence === "AwaitingBoundaryResult" || evidence === "RecoverableAmbiguity"
+                ? "BoundaryObservation"
+                : "OwnerRelease",
+          nextAction:
+            evidence === "BoundaryResultProduced"
+              ? "AwaitJournalAcknowledgement"
+              : evidence === "AwaitingBoundaryResult" || evidence === "RecoverableAmbiguity"
+                ? "ReconcileOriginalAuthorityBeforeRetry"
+                : "AwaitOwnerRelease"
+        }
+      })
+    )
+  )
+
   const admission = {
-    acquireForwardOwner: Effect.fn("ApplicationExitLifecycle.acquireForwardOwner")((kind: ForwardOwnerKind) =>
-      prepareForwardOwner(kind).pipe(
-        Effect.flatMap((preparation) => preparation.register.pipe(Effect.onError(() => preparation.cancel)))
-      )
+    acquireForwardOwner: Effect.fn("ApplicationExitLifecycle.acquireForwardOwner")(
+      (kind: ForwardOwnerKind, subject?: ApplicationExitOwnerSubject) =>
+        prepareForwardOwner(kind, subject).pipe(
+          Effect.flatMap((preparation) => preparation.register.pipe(Effect.onError(() => preparation.cancel)))
+        )
     ),
     prepareForwardOwner,
     snapshot
@@ -316,6 +399,7 @@ const makeApplicationExitLifecycleEffect = Effect.fn("ApplicationExitLifecycle.m
 
   return {
     admission,
+    readForwardOwners,
     awaitExitDriverFinished: Deferred.await(exitDriverFinished),
     awaitExitRequested: Deferred.await(exitRequested),
     awaitExitResult: Deferred.await(result),

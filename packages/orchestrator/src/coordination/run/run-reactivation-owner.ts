@@ -156,7 +156,10 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       // A preparing owner closes the race between application Exit's cutoff
       // and this Layer's process-local drain registration. Exit waits for the
       // preparation to disappear before it snapshots and runs local drains.
-      const startupPreparation = yield* applicationExit.admission.prepareForwardOwner("InterruptibleBoundary")
+      const startupPreparation = yield* applicationExit.admission.prepareForwardOwner("InterruptibleBoundary", {
+        _tag: "Run",
+        runId: options.runId
+      })
       yield* Effect.addFinalizer(() => startupPreparation.cancel)
       const messages = yield* Queue.sliding<RunReactivationMessage>(1)
       const commandGate = yield* Semaphore.make(1)
@@ -471,7 +474,10 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           )
         )
 
-      yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: requestStop() })
+      yield* applicationExit.registerProcessLocalDrain({
+        owner: { name: "RunRuntime", subject: { _tag: "Run", runId: options.runId } },
+        closeProcessLocalResources: requestStop()
+      })
       yield* startupPreparation.cancel
       yield* options.installAcceptedRunReactivationObservers({ control: acceptedControl, acceptedFactPublication })
       const control = yield* options.readControl.pipe(Effect.tapError(options.onFailure))

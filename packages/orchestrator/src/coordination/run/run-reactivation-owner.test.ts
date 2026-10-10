@@ -89,6 +89,7 @@ const makeTestExitShell = Effect.gen(function* () {
     awaitExitRequested: Effect.never,
     awaitExitResult: Effect.never,
     awaitExecutorDrains: Effect.void,
+    readOwners: Effect.succeed({ cutoffClosed: false, owners: [] }),
     registerExecutorDrain: () => Effect.void,
     registerProcessLocalDrain: ({ closeProcessLocalResources }) =>
       Ref.update(drains, (current) => [...current, closeProcessLocalResources]),

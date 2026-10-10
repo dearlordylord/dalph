@@ -19,7 +19,7 @@ export const makeRunningHostCommandOwnership = Effect.fn("RunningHostCommand.mak
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const owner = yield* admission
-          .acquireForwardOwner("InterruptibleBoundary")
+          .acquireForwardOwner("InterruptibleBoundary", { _tag: "Run", runId: request.runId })
           .pipe(
             Effect.mapError(
               (): RunningHostError => ({ _tag: "HostClosing", hostInstanceId, cutoff: "AdmissionClosed" })

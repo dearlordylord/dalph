@@ -16,6 +16,7 @@ import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { DeliveryProposalId, DeliveryTaskWorkAdmissionBasis } from "./relations.js"
 import {
+  deliveryProposalOrderTaskId,
   freshContinuationCommitmentRequirementOf,
   type DeliveryActionProposal,
   type FreshContinuationCommitmentRequirement,
@@ -1158,7 +1159,17 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
       Effect.uninterruptible(
         // eslint-disable-next-line complexity -- One transaction reserves and rolls back every declared proposal resource before exact owner registration.
         Effect.gen(function* () {
-          const forwardOwner = yield* applicationExit.prepareForwardOwner(forwardOwnerKindFor(proposal))
+          const runId = (yield* Ref.get(state)).acceptedBasis.runId
+          const taskId = deliveryProposalOrderTaskId(proposal.order)
+          const protocolOwner = proposal.admission.plannedAttemptProtocol
+          const forwardOwner = yield* applicationExit.prepareForwardOwner(
+            forwardOwnerKindFor(proposal),
+            protocolOwner._tag === "PlannedAttemptProtocolRequired"
+              ? { _tag: "ExecutorAttempt", correlation: protocolOwner.correlation }
+              : taskId === null
+                ? { _tag: "Run", runId }
+                : { _tag: "Task", runId, taskId }
+          )
           const protocol = yield* reservePlannedAttemptProtocol(proposal)
           if (protocol._tag === "PlannedAttemptProtocolUnavailable") {
             if (freshTask !== null) yield* restoreFreshTaskReservation(freshTask, proposal.id)
