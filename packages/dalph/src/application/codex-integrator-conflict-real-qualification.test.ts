@@ -60,6 +60,8 @@ import {
   IntegratorPrivateStoreLocator
 } from "./codex-integrator-private-store.js"
 
+import { makeNativeStartedRetryFixture } from "../../test/support/native-started-retry.js"
+
 const execFile = promisify(nodeExecFile)
 const qualificationEnabled = nodeProcess.env["DALPH_RUN_REAL_CODEX_QUALIFICATION"] === "1"
 
@@ -73,7 +75,7 @@ const sse = (value: unknown): string => `data: ${JSON.stringify(value)}\n\n`
 describe("candidate-local content conflict with the real Codex provider", () => {
   it.skipIf(!qualificationEnabled).each([
     {
-      name: "retains an exact merge after NotPrepared and qualifies a native contiguous Retry",
+      name: "reopens an authorized Started Retry through the native protocol with absent and recorded tokens",
       documentation: true,
       retainedRetry: true
     },
@@ -95,6 +97,8 @@ describe("candidate-local content conflict with the real Codex provider", () => 
       const retryEvidence: Array<unknown> = []
       let firstPrivateBytes = ""
       let retryPrivateBytes = ""
+      let uncertainPrivateBytes = ""
+      let protocolFixture: ReturnType<typeof makeNativeStartedRetryFixture> | undefined
       let launch: CodexServerLaunchRecord | undefined
       let passed = false
       let documentationChecks: Array<number> = []
@@ -283,7 +287,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           privateStoreLocator: IntegratorPrivateStoreLocator.make(nodePath.join(root, "private-store.json")),
           repository: GitRepositoryLocator.make(repository)
         })
-        const session = IntegratorSessionCorrelation.make({
+        let session = IntegratorSessionCorrelation.make({
           acceptedResult: AcceptedResult.make({
             commit: GitCommitSha.make(accepted),
             evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
@@ -309,7 +313,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           startedAt: JournalPosition.make(2),
           targetLineageObservedAt: JournalPosition.make(3)
         })
-        const request = IntegratorRequest.make({
+        let request = IntegratorRequest.make({
           correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
         })
         const observedCensus = Layer.effect(
@@ -365,7 +369,26 @@ describe("candidate-local content conflict with the real Codex provider", () => 
               }).pipe(Effect.provide(providerFor()))
             )
           )
-        let result = await prepare(request)
+        if (retainedRetry) {
+          protocolFixture = makeNativeStartedRetryFixture({
+            session,
+            prepare,
+            git: (...args) => git(repository, ...args),
+            afterUncertainResponse: async () => {
+              uncertainPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
+              await writeFile(nodePath.join(root, "run2-uncertain-private.json"), uncertainPrivateBytes)
+              if (launch === undefined) throw new Error("missing uncertain native launch")
+              const stopped = await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))
+              expect(stopped._tag).toBe("Absent")
+              retryEvidence.push({ phase: "uncertain outer response; recorded native token", launch, stopped })
+            }
+          })
+          session = protocolFixture.session
+          request = IntegratorRequest.make({
+            correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+          })
+        }
+        let result = protocolFixture === undefined ? await prepare(request) : await protocolFixture.initial()
         if (retainedRetry) {
           expect(result._tag).toBe("NotPrepared")
           firstPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
@@ -412,17 +435,28 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           await writeFile(nodePath.join(root, "retry-evidence.json"), JSON.stringify(retryEvidence, null, 2))
           expect(stopped._tag).toBe("Absent")
           nativeOrdinal = 2
-          result = await prepare(
-            IntegratorRequest.make({
-              correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session })
-            })
-          )
+          if (protocolFixture === undefined) throw new Error("missing native protocol fixture")
+          await protocolFixture.authorizeStarted()
+          // No run-two token yet: the first native admission allocates it once.
+          expect(await readFile(config.privateStoreLocator, "utf8")).toBe(firstPrivateBytes)
+          const reopened = await protocolFixture.reopen()
+          result = reopened.result
+          retryEvidence.push({ phase: "outer protocol reopen", before: reopened.before, after: reopened.after })
           retryPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
           await writeFile(nodePath.join(root, "run2-private.json"), retryPrivateBytes)
           const second = Schema.decodeUnknownSync(Schema.Array(CodexIntegratorPrivateRecord))(
             JSON.parse(retryPrivateBytes)
           )[0]
           if (second?._tag !== "ThreadWithRuns") throw new Error("missing Retry private record")
+          const uncertain = Schema.decodeUnknownSync(Schema.Array(CodexIntegratorPrivateRecord))(
+            JSON.parse(uncertainPrivateBytes)
+          )[0]
+          if (uncertain?._tag !== "ThreadWithRuns") throw new Error("missing recorded Retry token")
+          expect(second.runs).toEqual(uncertain.runs)
+          expect(second.candidatePath).toBe(uncertain.candidatePath)
+          expect(second.threadId).toBe(uncertain.threadId)
+          expect(second.threadToken).toBe(uncertain.threadToken)
+          expect(second.correlation).toEqual(uncertain.correlation)
           expect(second.candidatePath).toBe(record.candidatePath)
           expect(second.threadId).toBe(record.threadId)
           expect(second.threadToken).toBe(record.threadToken)
@@ -450,7 +484,8 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           retryEvidence.push({ phase: "after Retry", retryDocs, retryRuntime, record: second })
         }
         expect(result._tag).toBe("PreparedCandidate")
-        if (result._tag !== "PreparedCandidate") throw new Error(result.detail)
+        if (result._tag !== "PreparedCandidate")
+          throw new Error(result._tag === "NotPrepared" ? result.detail : "candidate rejected")
         preparedCandidate = result.candidateText
         if (!documentation) {
           expect(calls).toHaveLength(3)
@@ -526,6 +561,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
         }
         passed = true
       } finally {
+        await protocolFixture?.dispose()
         if (launch !== undefined) {
           const stopped = await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))
           await writeFile(
@@ -537,6 +573,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
                 custodyObservations,
                 firstPrivateBytes,
                 retryPrivateBytes,
+                uncertainPrivateBytes,
                 launch,
                 stopped,
                 calls: calls.length,

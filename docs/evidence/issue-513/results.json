@@ -1,0 +1,187 @@
+{
+  "sourceManifest": "sources.json",
+  "results": [
+    {
+      "name": "protocol-first",
+      "exitCode": 1,
+      "log": "docs/evidence/issue-513/protocol-first.log.gz",
+      "sha256": "9bc4d0a8ac6f953d6e33bfaf062bca7a2a5724cc6b37fac5ed63683b7459252d",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "protocol-second",
+      "exitCode": 1,
+      "log": "docs/evidence/issue-513/protocol-second.log.gz",
+      "sha256": "45e59211926201a3763fcbb83336d2c4d0189e8071001959e18efc9b25dc00c6",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "protocol-third",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/protocol-third.log.gz",
+      "sha256": "86ac54674b7ed69bca0425bf1b29303c9451f4b07ada6ee59632e067e3235fc0",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "focused",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/focused.log.gz",
+      "sha256": "15196ab5a2239e8ef452636d6a5231c58d29ed9154a9b8e46ea887d6dfff9a9e",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "focused-final",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/focused-final.log.gz",
+      "sha256": "626cc532b5ef9f30524b1e3787c060f0e0f0db85353265998df83ea525469e33",
+      "disposition": "credited at sources.json boundary",
+      "command": "mise exec -- pnpm exec vitest run packages/dalph/src/application/codex-integrator.test.ts packages/dalph/src/application/codex-integrator-worktree.test.ts packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.test.ts packages/orchestrator/src/workflow/protocols/integration-quarantine/changed-head-retry.test.ts --maxWorkers=1"
+    },
+    {
+      "name": "artifacts",
+      "exitCode": 1,
+      "log": "docs/evidence/issue-513/artifacts.log.gz",
+      "sha256": "d8d86a4e8d259304dd490ba8146d4c4282574cb0ad019a0ff698a75f4395ba4c",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "artifacts-final",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/artifacts-final.log.gz",
+      "sha256": "fc53180271b267d269bf54eb45188f5afea9a16c08687d470b2ee0fa78444845",
+      "disposition": "credited at sources.json boundary",
+      "command": "mise exec -- pnpm check:artifacts"
+    },
+    {
+      "name": "build-repair",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/build-repair.log.gz",
+      "sha256": "18139e42b315ab452726986766b20b6cd74817d4854d00e85a9b595e34170afa",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "model-typecheck",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/model-typecheck.log.gz",
+      "sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec",
+      "disposition": "credited at sources.json boundary",
+      "command": "mise exec -- pnpm exec quint typecheck specs/acceptedResultIntegration.qnt"
+    },
+    {
+      "name": "model-retry",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/model-retry.log.gz",
+      "sha256": "3c63d14193ff0212506b22d2cb7ab5e797b5f24f7d7a77605e342407e1be02a0",
+      "disposition": "credited at sources.json boundary",
+      "command": "mise exec -- pnpm exec quint test specs/acceptedResultIntegration_test.qnt --match '.*[Rr]etry.*Test' --max-samples=10"
+    },
+    {
+      "name": "mbt-final",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/mbt-final.log.gz",
+      "sha256": "502b8f36b75524a02569e5dec3cd359f3ca80c9b77fd991077c510122b3abf4e",
+      "disposition": "credited at sources.json boundary",
+      "command": "mise exec -- pnpm exec vitest run --mode mbt packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts -t 'Retry|losing an Integrator response' --maxWorkers=1"
+    },
+    {
+      "name": "native-second",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/native-second.log.gz",
+      "sha256": "798cb421a691f36b4228998cb87dbfb76f31c5ff284954f4d117e3a64960eccb",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "native-qualified",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/native-qualified.log.gz",
+      "sha256": "7c4980f223a7660cc3cb18fe1ef3f1e7880d19b42c4048fd3c36f0a3e4909d7b",
+      "disposition": "credited at sources.json boundary",
+      "command": "mise exec -- DALPH_RUN_REAL_CODEX_QUALIFICATION=1 DALPH_LINK_REPAIR_CODEX_BIN=/workspace/typescript/dalph-worktrees/issue-491-runtime/node_modules/.bin/codex pnpm exec vitest run packages/dalph/src/application/codex-integrator-conflict-real-qualification.test.ts -t 'reopens an authorized Started Retry' --maxWorkers=1"
+    },
+    {
+      "name": "fast-first",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/fast-first.log.gz",
+      "sha256": "b4f7175cadacc1e812feeb0001ee72066e89184f72fd40f6a7a8b26ba6a8f140",
+      "disposition": "credited at sources.json boundary",
+      "command": "mise exec -- DALPH_DIAGNOSTICS_BASE=3b5e51dd3ce201310b457748e8ddd20a406a15da pnpm check:fast"
+    },
+    {
+      "name": "typecheck-first",
+      "exitCode": 1,
+      "log": "docs/evidence/issue-513/typecheck-first.log.gz",
+      "sha256": "622a697d660b01505b0d6530df640275f61d90f03b72323b88ccd87c56fc76f8",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "typecheck-repair",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/typecheck-repair.log.gz",
+      "sha256": "073211c88123ddf90c1e0ebd11daed7eacd578a1a2218e71c3ee3633b89c2b31",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "typecheck-final",
+      "exitCode": 1,
+      "log": "docs/evidence/issue-513/typecheck-final.log.gz",
+      "sha256": "67436b135928e95199e7d8667e1c5108af98f527234cc06c2b8f1c299a01fed7",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "typecheck-milestone",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/typecheck-milestone.log.gz",
+      "sha256": "c068d58cf46da94dca859201a3e9f788e566bbc4067273e799e1ea003c8f4626",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "lint-first",
+      "exitCode": 1,
+      "log": "docs/evidence/issue-513/lint-first.log.gz",
+      "sha256": "e3fa75e9967b4f617cdd5b7ab96e141e361f3588b824fe694ed07df3204059d1",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "lint-repair",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/lint-repair.log.gz",
+      "sha256": "fe018dd6a18bc1d90f935facf343163a3bee5dc20e813d56a195a7a9bafa0767",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "lint-native-repair",
+      "exitCode": 0,
+      "log": "docs/evidence/issue-513/lint-native-repair.log.gz",
+      "sha256": "9ddb0be10f1093f9ba944425bf9c3228d3d1263ce222a23c8289ce234ac9b376",
+      "disposition": "retained development diagnostic; not final qualification"
+    },
+    {
+      "name": "docs-first",
+      "command": "mise exec -- pnpm check:docs",
+      "exitCode": 0,
+      "disposition": "credited documentation check",
+      "log": "docs/evidence/issue-513/docs-first.log.gz",
+      "sha256": "a190d554955686c737b49a5e727184790c9a3baf9c125cbd8650af757910ceab"
+    }
+  ],
+  "scope": {
+    "broadGate": "not requested; explicitly excluded",
+    "osCrash": "not claimed",
+    "capacity": "not claimed",
+    "original501": "not modified"
+  },
+  "scenarioResults": {
+    "P1": {
+      "protocol": "dense/gapped Started regression and interrupted Retry replay passed in focused-final",
+      "native": "one selected live native reopen passed in 58.51 seconds; two other cases deliberately skipped"
+    },
+    "P2": {
+      "protocol": "named contradiction branches passed in focused-final; original negative controls retained",
+      "native": "all native owner custody, token recovery and worktree tests passed in focused-final"
+    },
+    "P3": {
+      "protocol": "initial admission and repeated Started replay passed separately in focused-final; human ordinals 2..16 unchanged",
+      "formal": "11 model Retry tests and 4 runtime conformance tests passed; 11 unrelated conformance tests skipped"
+    }
+  }
+}

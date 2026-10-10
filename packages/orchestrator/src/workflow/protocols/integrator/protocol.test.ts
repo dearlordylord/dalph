@@ -38,6 +38,7 @@ import { liveJournalTestLayer } from "../../../coordination/delivery/live-journa
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import {
   integrationQuarantineDirectionAppliedRecordKey,
+  integratorRunResultRecordedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
   intentRecordKey,
@@ -71,6 +72,7 @@ import {
 } from "./protocol.js"
 import {
   appendIntegratorSessionIfNeeded,
+  appendIntegratorRunStartedIfNeeded,
   hasMatchingIntegratorTargetLineageObservation,
   integratorCorrelationFor,
   integratorInitialRunCorrelationFor,
@@ -90,6 +92,7 @@ import {
   IntegratorGitObservation,
   IntegratorRunQualifiedCandidate,
   IntegratorRunCorrelation,
+  IntegratorRunResultRecordedEvent,
   IntegratorRunOrdinal,
   nextIntegratorRunOrdinal,
   IntegratorNotPreparedDetail,
@@ -465,6 +468,37 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
     quarantine,
     session
   }
+})
+
+const appendFreshRetryLineage = Effect.fn("IntegratorProtocolTest.appendFreshRetryLineage")(function* (
+  harness: Harness,
+  authorization: { readonly intent: JournalRecord; readonly observation: JournalRecord }
+) {
+  const operationId = OperationId.make(`fresh-retry-${(yield* harness.readRecords).length}`)
+  if (
+    authorization.intent.event._tag !== "GitReadIntentRecorded" ||
+    authorization.observation.event._tag !== "TargetLineageObserved"
+  )
+    return yield* Effect.die("missing lineage pair")
+  const intent = yield* harness.journal.append(
+    runId,
+    intentRecordKey(operationId),
+    GitReadIntentRecordedEvent.make({
+      ...authorization.intent.event,
+      operation: makeTargetLineageObservationOperation({
+        integrationTarget: target,
+        operationId,
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
+    })
+  )
+  const observation = yield* harness.journal.append(
+    runId,
+    outcomeRecordKey(operationId),
+    TargetLineageObservedEvent.make({ ...authorization.observation.event, operationId })
+  )
+  return { intent, observation, input: compatibleInput(targetHead, observation.position) }
 })
 
 describe("outer Integrator protocol", () => {
@@ -945,11 +979,8 @@ describe("outer Integrator protocol", () => {
       const firstRetry = yield* Effect.exit(
         harness.runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
       )
-      const secondRetry = yield* harness.runExact(
-        authorization.input,
-        IntegratorRunOrdinal.make(2),
-        authorization.session
-      )
+      const fresh = yield* appendFreshRetryLineage(harness, authorization)
+      const secondRetry = yield* harness.runExact(fresh.input, IntegratorRunOrdinal.make(2), authorization.session)
       const records = yield* harness.readRecords
 
       expect(firstRetry._tag).toBe("Failure")
@@ -959,6 +990,247 @@ describe("outer Integrator protocol", () => {
       expect(
         records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2)
       ).toHaveLength(1)
+    })
+  )
+
+  it.effect("resumes the same Started Retry with a fresh post-Started lineage in dense and gapped histories", () =>
+    Effect.forEach(
+      [false, true],
+      (gapped) =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness(
+            (request) => Effect.succeed(notPrepared(request)),
+            successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+          )
+          yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+          const authorization = yield* appendRetryAuthorization(harness)
+          const run = integratorRunCorrelationForSession(authorization.session, IntegratorRunOrdinal.make(2))
+          yield* appendIntegratorRunStartedIfNeeded(harness.journal, run, yield* harness.readRecords)
+          const fresh = yield* appendFreshRetryLineage(harness, authorization)
+          const input = fresh.input
+          if (gapped) {
+            const gappedRecords = (yield* harness.readRecords).map((record) =>
+              record.position >= fresh.intent.position
+                ? { ...record, position: JournalPosition.make(Number(record.position) + 100) }
+                : record
+            )
+            expect(
+              integratorRetryAuthorizationIssue(gappedRecords, {
+                preparation: compatibleInput(
+                  targetHead,
+                  JournalPosition.make(Number(fresh.observation.position) + 100)
+                ),
+                run
+              })
+            ).toBeUndefined()
+          }
+          const before = yield* harness.readRecords
+          expect(integratorRetryAuthorizationIssue(before, { preparation: input, run })).toBeUndefined()
+          const result = yield* harness.runExact(input, run.ordinal, run.session)
+          expect(yield* harness.runExact(input, run.ordinal, run.session)).toEqual(result)
+          const after = yield* harness.readRecords
+          expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(2)
+          expect(after.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(2)
+          expect(after.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toHaveLength(1)
+          expect(after.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+          expect(after.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")[0]).toEqual(
+            before.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+          )
+        }),
+      { concurrency: 1 }
+    ).pipe(Effect.asVoid)
+  )
+
+  it.effect("rejects each historical or current Started Retry contradiction before provider admission", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      const authorization = yield* appendRetryAuthorization(harness)
+      const run = integratorRunCorrelationForSession(authorization.session, IntegratorRunOrdinal.make(2))
+      const started = yield* appendIntegratorRunStartedIfNeeded(harness.journal, run, yield* harness.readRecords)
+      const fresh = yield* appendFreshRetryLineage(harness, authorization)
+      const records = yield* harness.readRecords
+      const request = { preparation: fresh.input, run }
+      const reject = (name: string, changed: ReadonlyArray<JournalRecord>, input = request) => {
+        expect(integratorRetryAuthorizationIssue(changed, input), name).toBeDefined()
+      }
+      for (const [name, tag] of [
+        ["missing historical D", "IntegrationQuarantineDirectionApplied"],
+        ["missing historical Q", "IntegrationQuarantined"],
+        ["missing predecessor Started", "IntegratorRunStarted"],
+        ["missing predecessor result", "IntegratorRunResultRecorded"]
+      ] as const) {
+        reject(
+          name,
+          records.filter((record) => record.event._tag !== tag || record.position >= started.position)
+        )
+      }
+      reject("duplicated historical D", [...records, authorization.direction])
+      reject(
+        "foreign historical D",
+        records.map((record) =>
+          record.position === authorization.direction.position
+            ? { ...record, runId: RunId.make("foreign-run") }
+            : record
+        )
+      )
+      reject(
+        "D after Started",
+        records.map((record) =>
+          record.position === authorization.direction.position
+            ? { ...record, position: JournalPosition.make(Number(fresh.observation.position) + 1) }
+            : record
+        )
+      )
+      reject("noncontiguous requested ordinal", records, {
+        ...request,
+        run: { ...run, ordinal: IntegratorRunOrdinal.make(3) }
+      })
+      reject(
+        "missing current L",
+        records.filter((record) => record.position !== fresh.observation.position)
+      )
+      reject(
+        "missing current intent",
+        records.filter((record) => record.position !== fresh.intent.position)
+      )
+      reject(
+        "wrong-keyed current L",
+        records.map((record) =>
+          record.position === fresh.observation.position
+            ? { ...record, key: JournalRecordKey.make("wrong-lineage-key") }
+            : record
+        )
+      )
+      reject(
+        "wrong-keyed current intent",
+        records.map((record) =>
+          record.position === fresh.intent.position
+            ? { ...record, key: JournalRecordKey.make("wrong-intent-key") }
+            : record
+        )
+      )
+      reject(
+        "foreign current L",
+        records.map((record) =>
+          record.position === fresh.observation.position ? { ...record, runId: RunId.make("foreign-run") } : record
+        )
+      )
+      reject("duplicated current L", [...records, fresh.observation])
+      reject("stale pre-Started L", records, { ...request, preparation: authorization.input })
+      reject("nonmatching current request", records, {
+        ...request,
+        preparation: compatibleInput(changedTargetHead, fresh.observation.position)
+      })
+      reject("changed Base", records, {
+        ...request,
+        run: {
+          ...run,
+          session: { ...run.session, plannedAttempt: { ...run.session.plannedAttempt, baseSha: changedTargetHead } }
+        }
+      })
+      reject("changed C", records, {
+        ...request,
+        run: {
+          ...run,
+          session: { ...run.session, acceptedResult: { ...run.session.acceptedResult, commit: changedTargetHead } }
+        }
+      })
+      reject("changed H", records, {
+        ...request,
+        run: { ...run, session: { ...run.session, expectedTargetHead: changedTargetHead } }
+      })
+      reject("duplicated historical Q", [...records, authorization.quarantine])
+      reject(
+        "foreign historical Q",
+        records.map((record) =>
+          record.position === authorization.quarantine.position
+            ? { ...record, runId: RunId.make("foreign-run") }
+            : record
+        )
+      )
+      reject(
+        "Q after Started",
+        records.map((record) =>
+          record.position === authorization.quarantine.position
+            ? { ...record, position: JournalPosition.make(Number(fresh.observation.position) + 1) }
+            : record
+        )
+      )
+      const changedBasis = IntegrationQuarantineBasis.cases.RetryTargetHeadChanged.make({
+        direction: "Retry",
+        directionAppliedAt: authorization.direction.position,
+        priorQuarantineAt: authorization.quarantine.position,
+        observedTargetHead: changedTargetHead,
+        targetLineageObservedAt: fresh.observation.position
+      })
+      const changedQuarantine = {
+        ...authorization.quarantine,
+        key: integrationQuarantinedRecordKey(run.session.sessionId, changedBasis),
+        position: JournalPosition.make(Number(fresh.observation.position) + 1),
+        event: IntegrationQuarantinedEvent.make({
+          basis: changedBasis,
+          correlation: run.session,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      }
+      reject("post-Started changed-head quarantine cannot revive D", [...records, changedQuarantine])
+      const newer = yield* appendFreshRetryLineage(harness, authorization)
+      reject("stale post-Started L", yield* harness.readRecords)
+      expect(
+        integratorRetryAuthorizationIssue(yield* harness.readRecords, { ...request, preparation: newer.input })
+      ).toBeUndefined()
+      const latePosition = JournalPosition.make(Number(fresh.observation.position) + 1)
+      const laterResult = {
+        ...started,
+        key: integratorRunResultRecordedRecordKey(run),
+        position: latePosition,
+        event: IntegratorRunResultRecordedEvent.make({
+          run,
+          result: notPrepared(IntegratorRequest.make({ correlation: run })),
+          version: workflowJournalEventVersion
+        })
+      }
+      expect(integratorRetryAuthorizationIssue([...records, laterResult], request)).toBeUndefined()
+      const laterBasis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: notPreparedDetail }),
+        evidence: { resultRecordedAt: laterResult.position }
+      })
+      const laterQuarantine = {
+        ...authorization.quarantine,
+        position: JournalPosition.make(Number(latePosition) + 1),
+        key: integrationQuarantinedRecordKey(run.session.sessionId, laterBasis),
+        event: IntegrationQuarantinedEvent.make({
+          basis: laterBasis,
+          correlation: run.session,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      }
+      reject("post-Started conclusive Q", [...records, laterResult, laterQuarantine])
+      reject("post-Started superseding or conflicting D", [
+        ...records,
+        { ...authorization.direction, key: JournalRecordKey.make("late-D"), position: latePosition }
+      ])
+      const firstResult = records.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+      if (firstResult === undefined) return yield* Effect.die("missing predecessor result")
+      reject("post-Started later foreign result", [
+        ...records,
+        { ...firstResult, key: JournalRecordKey.make("late-result"), position: latePosition }
+      ])
+      reject("duplicate Started", [...records, started])
+      reject(
+        "wrong-keyed Started",
+        records.map((record) =>
+          record.position === started.position ? { ...record, key: JournalRecordKey.make("foreign-started") } : record
+        )
+      )
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
+      expect(integratorRetryAuthorizationIssue(records, request)).toBeUndefined()
     })
   )
 

@@ -1,0 +1,42 @@
+{
+  "base": "3b5e51dd3ce201310b457748e8ddd20a406a15da",
+  "composition": "31c330d9b5732f8c076edbad6aeccab8a54b8702",
+  "sources": [
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts",
+      "sha256": "d2f061c34308f8a3671de7f11c0348c9b1408b9525b01be153996d75c9c7c949",
+      "unchangedFromComposition": false
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
+      "sha256": "547040ca214f6de2d2ea4349cc4efb10143f583c44c9fab03ec0370e3a7baafc",
+      "unchangedFromComposition": false
+    },
+    {
+      "path": "packages/dalph/test/support/native-started-retry.ts",
+      "sha256": "bfa61a56506a93ee1628d00042bdab29a1ab0fd644a9e8795d8dd9b1028472fd",
+      "unchangedFromComposition": false
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-conflict-real-qualification.test.ts",
+      "sha256": "edb451cc26ab61a1f0d7c4c71cb402e9a33e1ad815224a42cbdc67009acced05",
+      "unchangedFromComposition": false
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator.ts",
+      "sha256": "35e0166bd37632fe7b19b1c18070fcea5cc37819d9fea12c4aad71a8442c0d81",
+      "unchangedFromComposition": true
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-worktree.ts",
+      "sha256": "bcef20e891b529721f2d4e3c0566f326879a81b18963c897005d6811edeb0b00",
+      "unchangedFromComposition": true
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "packages/orchestrator/dist/src/workflow/protocols/integrator/retry-authorization.js",
+      "sha256": "9c25cf71a1d48a64a26009eccac9f30a62a44a312cab87f9f7e9695ece68c410"
+    }
+  ]
+}
