@@ -225,7 +225,7 @@ const providerAbsenceMatchesFailedRun = (
   absence.key === integrationProviderRunActivityAbsentRecordKey(run) &&
   integratorRunCorrelationsEqual(absence.event.run, run)
 
-/** Retry is allowed only from the first quarantine's exact run-one evidence. */
+/** Retry requires the current quarantine's exact failed-run predecessor evidence. */
 const retryIsEligible = (records: JournalHistorySource, quarantine: QuarantineRecord): boolean => {
   const { basis } = quarantine.event
   if (basis._tag === "ConclusiveResult") return conclusiveResultIsFromFailedRun(records, quarantine, basis)

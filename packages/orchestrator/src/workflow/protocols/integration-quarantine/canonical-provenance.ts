@@ -410,7 +410,10 @@ const validateRunOnePredecessors = (
   beforePosition: JournalRecord["position"]
 ): ProviderRunPredecessorValidation => {
   if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0) {
-    return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
+    return {
+      _tag: "Invalid",
+      detail: "provider-run quarantine requires a positive safely representable Integrator run ordinal"
+    }
   }
   const history = records.filter((record) => record.position < beforePosition)
   const fixedSession = fixedSessionForRun(history, run)
@@ -590,7 +593,10 @@ const validateIndexedProviderRunActivityAbsent = (
     return { _tag: "Invalid", detail: "provider-activity absence has a foreign session correlation" }
   }
   if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0) {
-    return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
+    return {
+      _tag: "Invalid",
+      detail: "provider-run quarantine requires a positive safely representable Integrator run ordinal"
+    }
   }
   const predecessors = indexedProviderRunStart(records, run, record.position)
   if (predecessors === undefined) {
@@ -634,7 +640,10 @@ export const validateProviderRunPredecessors = (
 ): ProviderRunPredecessorValidation => {
   if (!isJournalRecordEvidence(records)) return validateRunOnePredecessors(records, run, beforePosition)
   if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0) {
-    return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
+    return {
+      _tag: "Invalid",
+      detail: "provider-run quarantine requires a positive safely representable Integrator run ordinal"
+    }
   }
   const predecessors = indexedProviderRunStart(records, run, beforePosition)
   if (predecessors === undefined) {

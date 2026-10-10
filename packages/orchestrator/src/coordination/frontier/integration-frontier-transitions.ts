@@ -389,7 +389,7 @@ const retryIntegratorProgressFor = (
         integratorRunCorrelationsEqual(record.event.run, runBoundState.run)
     )
   ) {
-    /* v8 ignore next -- @preserve Integrator history rejects ordinals above the single bounded Retry before frontier derivation. */
+    /* v8 ignore next -- @preserve Integrator history requires a positive safe ordinal and exact predecessor authorization before frontier derivation. */
     if (runBoundState.run.ordinal <= 1) return { _tag: "Blocked" }
     if (integratorState._tag === "GitQualifiedPrepared") return { _tag: "NotApplicable" }
     const authorizationIssue = integratorRunTwoAuthorizationIssue(workflowHistorySource(runState), runBoundState.run, {

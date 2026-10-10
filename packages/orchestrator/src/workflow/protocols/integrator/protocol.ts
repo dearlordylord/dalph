@@ -358,7 +358,10 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
   const input = requestInput.preparation
   const runId = input.responsibility.plannedAttempt.runId
   if (!Schema.is(IntegratorRunOrdinal)(requestInput.run.ordinal)) {
-    return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
+    return yield* new IntegratorJournalContradiction({
+      detail: "Integrator run ordinal must be a positive safely representable integer",
+      runId
+    })
   }
   const accepted = yield* AcceptedJournalReader
   const records = yield* accepted.readAccepted(runId)
