@@ -146,17 +146,47 @@ const reconcileExistingCandidateWorktree = Effect.fn("CodexIntegrator.reconcileE
   record: CodexIntegratorPrivateRecord,
   candidatePath: IntegratorCandidateWorktreePath,
   fileSystem: FileSystem.FileSystem,
-  store: CodexIntegratorPrivateStoreService
+  store: CodexIntegratorPrivateStoreService,
+  commands: GitCommandService,
+  config: CodexIntegratorConfiguration,
+  reconcileRetainedRetry: Effect.Effect<void, CodexIntegratorProviderFailure> | undefined
 ) {
   const exists = yield* boundary(fileSystem.exists(candidatePath))
-  if (
-    exact.head !== record.correlation.expectedTargetHead ||
-    exact.branch !== undefined ||
-    !exact.detached ||
-    exact.prunable ||
-    !exists
-  ) {
+  if (exact.branch !== undefined || !exact.detached || exact.prunable || !exists) {
     return yield* Effect.fail(providerFailure("candidate worktree registration is foreign or at the wrong head"))
+  }
+  if (exact.head !== record.correlation.expectedTargetHead) {
+    // Initial materialization remains strict H, including an ambiguous worktree/add.
+    if (record._tag !== "ThreadWithRuns" || reconcileRetainedRetry === undefined) {
+      return yield* Effect.fail(providerFailure("candidate worktree registration is foreign or at the wrong head"))
+    }
+    yield* reconcileRetainedRetry
+    const parents = yield* boundary(
+      commands.runInWorktree(WorktreeLocator.make(candidatePath), ["rev-list", "--parents", "-n", "1", "HEAD"])
+    )
+    const target = yield* boundary(
+      commands.run(config.commonDirectory, ["rev-parse", "--verify", record.correlation.integrationTarget.ref])
+    )
+    const accepted = yield* boundary(
+      commands.run(config.commonDirectory, [
+        "rev-parse",
+        "--verify",
+        `${record.correlation.acceptedResult.commit}^{commit}`
+      ])
+    )
+    if (
+      parents.exitCode !== 0 ||
+      parents.stdout.trim() !==
+        `${exact.head} ${record.correlation.expectedTargetHead} ${record.correlation.acceptedResult.commit}` ||
+      target.exitCode !== 0 ||
+      target.stdout.trim() !== record.correlation.expectedTargetHead ||
+      accepted.exitCode !== 0 ||
+      accepted.stdout.trim() !== record.correlation.acceptedResult.commit
+    ) {
+      return yield* Effect.fail(
+        providerFailure("retained candidate is not the exact ordered merge of unchanged H and C")
+      )
+    }
   }
   if (intended._tag !== "CandidateUnmaterialized" && intended._tag !== "WorktreeMaterializationIntentRecorded") {
     return intended
@@ -235,7 +265,8 @@ export const ensureCandidateWorktree = Effect.fn("CodexIntegrator.ensureCandidat
   config: CodexIntegratorConfiguration,
   record: CodexIntegratorPrivateRecord,
   store: CodexIntegratorPrivateStoreService,
-  ownership: CoordinatorMutationGuard
+  ownership: CoordinatorMutationGuard,
+  reconcileRetainedRetry?: Effect.Effect<void, CodexIntegratorProviderFailure>
 ) {
   const candidatePath = record.candidatePath
   const intended =
@@ -246,7 +277,17 @@ export const ensureCandidateWorktree = Effect.fn("CodexIntegrator.ensureCandidat
   const records = yield* readWorktrees(commands, config)
   const exact = records.find((item) => item.worktree === WorktreeLocator.make(candidatePath))
   if (exact !== undefined) {
-    return yield* reconcileExistingCandidateWorktree(exact, intended, record, candidatePath, fileSystem, store)
+    return yield* reconcileExistingCandidateWorktree(
+      exact,
+      intended,
+      record,
+      candidatePath,
+      fileSystem,
+      store,
+      commands,
+      config,
+      reconcileRetainedRetry
+    )
   }
   return yield* materializeCandidateWorktree(
     commands,

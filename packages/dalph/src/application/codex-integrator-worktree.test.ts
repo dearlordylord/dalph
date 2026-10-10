@@ -17,6 +17,8 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import {
+  IntegratorResult,
+  IntegratorNotPreparedDetail,
   GitCommonDirectoryLocator,
   CoordinatorOwnershipLost,
   GitCommandInvocationFailure,
@@ -37,9 +39,18 @@ import {
   IntegratorCandidateWorktreePath,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator,
-  revision
+  nextPrivateRecordFields,
+  revision,
+  CodexIntegratorPrivateRun
 } from "./codex-integrator-private-store.js"
-import { CodexServerIncarnation, CodexThreadOwnershipToken } from "./codex-attempt-store.js"
+import {
+  CodexOwnedTurnToken,
+  CodexTurnId,
+  CodexThreadId,
+  CodexServerIncarnation,
+  CodexThreadOwnershipToken
+} from "./codex-attempt-store.js"
+import { providerFailure } from "./codex-integrator-runtime.js"
 import { ensureCandidateWorktree as ensureWorktree, readWorktrees } from "./codex-integrator-worktree.js"
 
 const config = CodexIntegratorConfiguration.make({
@@ -117,6 +128,12 @@ type EnsureOptions = {
   readonly existsBefore?: boolean
   readonly createOnAdd?: boolean
   readonly ownershipFailure?: boolean
+  readonly retainedRetry?: boolean
+  readonly parents?: string
+  readonly target?: string
+  readonly accepted?: string
+  readonly custodyFailure?: boolean
+  readonly headReadFailure?: boolean
   readonly worktreeReady?: boolean
 }
 
@@ -149,9 +166,20 @@ const ensure = (options: EnsureOptions) =>
                   ? { exitCode: 0, stderr: "", stdout: "" }
                   : { ...options.addResult, stdout: options.addResult.stdout ?? "" }
               }
-              return { exitCode: 0, stderr: "", stdout: "" }
+              return {
+                exitCode: 0,
+                stderr: "",
+                stdout: args.at(-1)?.endsWith("^{commit}")
+                  ? (options.accepted ?? "b".repeat(40))
+                  : (options.target ?? expectedHead)
+              }
             }),
-          runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+          runInWorktree: () =>
+            Effect.succeed({
+              exitCode: options.headReadFailure ? 1 : 0,
+              stderr: "",
+              stdout: options.parents ?? `${"c".repeat(40)} ${expectedHead} ${"b".repeat(40)}`
+            }),
           runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
         }
         const ownership = {
@@ -160,14 +188,38 @@ const ensure = (options: EnsureOptions) =>
               ? Effect.fail(new CoordinatorOwnershipLost({ gitCommonDirectory: config.commonDirectory }))
               : mutation
         }
+        const initial = privateRecordFor(candidatePath, options.worktreeReady)
+        const firstRun = initial.initialRun
+        const record = options.retainedRetry
+          ? CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+              ...nextPrivateRecordFields(initial),
+              runs: [
+                CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+                  correlation: firstRun,
+                  token: CodexOwnedTurnToken.make("retained-token"),
+                  turnId: CodexTurnId.make("retained-turn"),
+                  result: IntegratorResult.cases.NotPrepared.make({
+                    correlation: firstRun,
+                    detail: IntegratorNotPreparedDetail.make("diagnostic failed")
+                  })
+                })
+              ],
+              threadId: CodexThreadId.make("retained-thread")
+            })
+          : initial
         const result = yield* Effect.exit(
           ensureWorktree(
             commands,
             fileSystem,
             config,
-            privateRecordFor(candidatePath, options.worktreeReady),
+            record,
             privateStoreFor(writes),
-            ownership
+            ownership,
+            options.retainedRetry
+              ? options.custodyFailure
+                ? Effect.fail(providerFailure("custody unreadable"))
+                : Effect.void
+              : undefined
           )
         )
         return { result, writes }
@@ -329,5 +381,38 @@ describe("Codex Integrator worktree parser", () => {
 
     const ownershipFailure = await ensure({ list: [""], ownershipFailure: true })
     expect(Exit.isFailure(ownershipFailure.result)).toBe(true)
+  })
+})
+
+describe("retained candidate merge ownership", () => {
+  it("accepts only an exact retained ordered merge after stopped Retry reconciliation", async () => {
+    const result = await ensure({
+      list: [porcelain("/tmp/ignored", "c".repeat(40))],
+      existsBefore: true,
+      retainedRetry: true
+    })
+    expect(Exit.isSuccess(result.result)).toBe(true)
+    expect(result.writes).toHaveLength(0)
+  })
+  it.each([
+    { name: "initial creation", retainedRetry: false },
+    { name: "reversed parents", parents: `${"c".repeat(40)} ${"b".repeat(40)} ${expectedHead}` },
+    { name: "one parent", parents: `${"c".repeat(40)} ${expectedHead}` },
+    { name: "extra parent", parents: `${"c".repeat(40)} ${expectedHead} ${"b".repeat(40)} ${expectedHead}` },
+    { name: "arbitrary descendant", parents: `${"c".repeat(40)} ${"d".repeat(40)} ${"b".repeat(40)}` },
+    { name: "malformed parents", parents: "bad git output" },
+    { name: "unreadable Git", headReadFailure: true },
+    { name: "changed target", target: "d".repeat(40) },
+    { name: "changed accepted", accepted: "d".repeat(40) },
+    { name: "uncertain custody", custodyFailure: true }
+  ])("refuses $name and preserves retained history", async (options) => {
+    const result = await ensure({
+      list: [porcelain("/tmp/ignored", "c".repeat(40))],
+      existsBefore: true,
+      retainedRetry: true,
+      ...options
+    })
+    expect(Exit.isFailure(result.result)).toBe(true)
+    expect(result.writes).toHaveLength(options.retainedRetry === false ? 1 : 0)
   })
 })

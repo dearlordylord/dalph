@@ -22,6 +22,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Layer,
@@ -205,6 +206,8 @@ type FixtureOptions = {
   readonly activity?: CodexOwnedActivityCensusProjection
   readonly activitySequence?: ReadonlyArray<CodexOwnedActivityCensusProjection>
   readonly activityFailureAt?: number
+  readonly retainedHead?: { value: boolean }
+  readonly retainedParents?: string
   readonly envelopes?: ReadonlyArray<string>
   readonly duplicateThreads?: boolean
   readonly duplicateTurnToken?: boolean
@@ -680,7 +683,7 @@ const fixtureLayer = (
                   : {
                       exitCode: 0,
                       stderr: "",
-                      stdout: `worktree ${fixtureWorktreePath}\0HEAD ${targetHead}\0detached\0${
+                      stdout: `worktree ${fixtureWorktreePath}\0HEAD ${options.retainedHead?.value ? sha("d") : targetHead}\0detached\0${
                         options.prunableWorktree === true ? "prunable stale\0" : ""
                       }\0`
                     }
@@ -721,9 +724,18 @@ const fixtureLayer = (
                 }
               }
             }
-            return { exitCode: 0, stderr: "", stdout: "" }
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: args.at(-1)?.endsWith("^{commit}") ? session.acceptedResult.commit : targetHead
+            }
           }),
-        runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+        runInWorktree: () =>
+          Effect.succeed({
+            exitCode: 0,
+            stderr: "",
+            stdout: options.retainedParents ?? `${sha("d")} ${targetHead} ${session.acceptedResult.commit}`
+          }),
         runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
       }
       yield* Effect.addFinalizer(() =>
@@ -910,13 +922,17 @@ describe("Codex Integrator", () => {
       "intended existing target is unambiguous",
       "Preserve link labels",
       "manifest-bound document is immutable",
+      "Invoking an optional diagnostic does not make it a mandatory gate",
+      "including a required whitespace check",
+      "Retain and report the actual failed diagnostic",
+      "no numeric Retry cap, no automatic retry, and no S3",
       "Do not edit hashed evidence",
       "focused check:docs",
       "obtain exit0",
       "accepted C is unchanged",
       "ambiguous or absent",
       "prose/acceptance/evidence-content changes",
-      "a non-documentation check fails",
+      "an applicable required non-documentation check fails",
       "preservation is uncertain",
       "other required-check failures still require NotPrepared",
       "retain the exact candidate and native custody",
@@ -1587,7 +1603,9 @@ describe("Codex Integrator", () => {
     "ambiguous or absent intended local target",
     "repair requires prose/acceptance/evidence-content changes",
     "non-documentation check failed",
-    "manifest-bound document is immutable; preservation uncertain"
+    "manifest-bound document is immutable; preservation uncertain",
+    "applicable required whitespace check failed",
+    "applicable required runtime check failed"
   ])("replays a sealed NotPrepared boundary (%s) without starting another turn", async (detail) => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -1809,6 +1827,79 @@ describe("Codex Integrator", () => {
     >()
   })
 
+  it.each([
+    { name: "exact merge", failure: false },
+    { name: "wrong parents", failure: true, parents: "foreign parents" },
+    {
+      name: "live custody",
+      failure: true,
+      activity: {
+        _tag: "ExactLive" as const,
+        activities: [{ _tag: "ActiveTurn" as const, turnId: CodexTurnId.make("writer") }]
+      }
+    },
+    {
+      name: "unreadable custody",
+      failure: true,
+      activity: { _tag: "Unreadable" as const, detail: "census unavailable" }
+    },
+    { name: "foreign predecessor turn", failure: true, resumeThreadState: "foreign" as const },
+    { name: "Prepared predecessor", failure: true, prepared: true }
+  ])(
+    "reconciles retained Retry $name before any new provider turn",
+    async ({ activity, failure, parents, prepared, resumeThreadState }) => {
+      const config = CodexIntegratorConfiguration.make({
+        candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+        commonDirectory,
+        privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/retained-retry.json"),
+        repository
+      })
+      const retainedHead = { value: false }
+      const turnStarts = { value: 0 },
+        worktreeAdds = { value: 0 },
+        threadStarts = { value: 0 }
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const integrator = yield* Integrator
+          const first = yield* integrator.prepare(requestFor(1))
+          const store = yield* CodexIntegratorPrivateStore
+          const before = yield* store.read(session.sessionId)
+          retainedHead.value = true
+          const second = yield* Effect.exit(integrator.prepare(requestFor(2)))
+          return { first, second, before, after: yield* store.read(session.sessionId) }
+        }).pipe(
+          Effect.provide(
+            providerLayer(config, {
+              retainedHead,
+              ...(parents === undefined ? {} : { retainedParents: parents }),
+              turnStarts,
+              worktreeAdds,
+              threadStarts,
+              envelopes: [
+                JSON.stringify(
+                  prepared
+                    ? { version: 1, outcome: "PreparedCandidate", candidate: "M" }
+                    : { version: 1, outcome: "NotPrepared", detail: "optional diagnostic failed; retained merge" }
+                ),
+                '{"version":1,"outcome":"PreparedCandidate","candidate":"M"}'
+              ],
+              activitySequence: [{ _tag: "Absent" }, { _tag: "Absent" }, activity ?? { _tag: "Absent" }],
+              resumeThreadStateSequence: ["exact", "exact", resumeThreadState ?? "exact"]
+            })
+          )
+        )
+      )
+      expect(Exit.isFailure(result.second)).toBe(failure)
+      expect(turnStarts.value).toBe(failure ? 1 : 2)
+      expect(worktreeAdds.value).toBe(1)
+      expect(threadStarts.value).toBe(1)
+      if (Option.isSome(result.before) && Option.isSome(result.after)) {
+        expect(privateRuns(result.after.value)[0]).toEqual(privateRuns(result.before.value)[0])
+        expect(result.after.value.candidatePath).toBe(result.before.value.candidatePath)
+      }
+    }
+  )
+
   it("starts exactly one fresh run-two turn on the retained session resources", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -1986,19 +2077,24 @@ describe("Codex Integrator", () => {
     expect(turnStarts.value).toBe(2)
   })
 
-  it("restarts an unfinished run two with its same durable token", async () => {
+  it.each([
+    { name: "restarts an unfinished run two with its same durable token", retained: false },
+    { name: "restarts an unfinished retained-merge run two with its same durable token", retained: true }
+  ])("$name", async ({ retained }) => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
       commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/retry-recovery-store.json"),
       repository
     })
+    const retainedHead = { value: false }
     const turnStarts = { value: 0 }
     const turnTokens: Array<CodexOwnedTurnToken> = []
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const integrator = yield* Integrator
         const first = yield* integrator.prepare(requestFor(1))
+        retainedHead.value = retained
         const lost = yield* Effect.flip(integrator.prepare(requestFor(2)))
         const recovered = yield* integrator.prepare(requestFor(2))
         const store = yield* CodexIntegratorPrivateStore
@@ -2009,9 +2105,24 @@ describe("Codex Integrator", () => {
         )
         if (runTwo === undefined) return yield* Effect.fail("run-two private token was lost")
         return { first, lost, recovered, runTwoToken: runTwo.token }
-      }).pipe(Effect.provide(providerLayer(config, { turnStarts, turnTokens, failAfterRecordingSecondTurn: true })))
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            retainedHead,
+            envelopes: [
+              retained
+                ? '{"version":1,"outcome":"NotPrepared","detail":"retained diagnostic"}'
+                : '{"version":1,"outcome":"PreparedCandidate","candidate":"M"}',
+              '{"version":1,"outcome":"PreparedCandidate","candidate":"M"}'
+            ],
+            turnStarts,
+            turnTokens,
+            failAfterRecordingSecondTurn: true
+          })
+        )
+      )
     )
-    expect(result.first._tag).toBe("PreparedCandidate")
+    expect(result.first._tag).toBe(retained ? "NotPrepared" : "PreparedCandidate")
     expect(result.lost._tag).toBe("IntegratorCallFailure")
     expect(result.recovered._tag).toBe("PreparedCandidate")
     expect(result.recovered.correlation.ordinal).toBe(2)

@@ -69,7 +69,7 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     `Accepted commit C: ${run.session.acceptedResult.commit}`,
     `Candidate worktree: ${candidatePath}`,
     `Exact integration run: ${run.session.sessionId}/${run.ordinal}`,
-    "The candidate worktree starts at unchanged target head H.",
+    "Initial materialization starts at unchanged target head H. On an authorized Retry the exact owned candidate may retain its merge with ordered parents [H, C]; inspect it, preserve history, and rerun applicable required checks before reporting PreparedCandidate.",
     `Prepare the candidate as the exact integration merge of H and accepted commit C (${run.session.acceptedResult.commit}); the candidate commit must have exact ordered direct parents [H, C]. Do not rebase, cherry-pick, change accepted C, recreate the task change, or update/push the target ref.`,
     "Work only inside the exact candidate worktree for this session/run. Do not update or push the target ref, edit the accepted task worktree, or create another leaf attempt or claim.",
     "You own content-conflict resolution inside this candidate. Read H and C, their changes from the planned Base, repository instructions, and accepted task scenarios/source authorities before resolving.",
@@ -77,8 +77,11 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     "Attempt the merge and resolve content conflicts in this candidate while preserving both accepted task behavior and existing target behavior. A content conflict alone is not a reason to return NotPrepared. Do not blindly select one whole side.",
     "After a clean merge, a required documentation check may reveal broken relative local Markdown links after relocation. Read the exact diagnostic and existing intended local targets. Only when the intended existing target is unambiguous may you repair lexical path/fragment destinations in Markdown documentation inside this exact candidate.",
     "Preserve link labels, narrative, acceptance content, runtime, tests, fixtures, raw evidence, and manifest-bound bytes. A manifest-bound document is immutable; only its owner may produce an explicitly accepted new evidence artifact. Do not edit hashed evidence.",
+    "Select applicable required integration checks from the accepted task/scenarios and the repository documented route. Invoking an optional diagnostic does not make it a mandatory gate. The hosted docs-only git diff --check route does not apply to a mixed application-test/evidence candidate.",
+    "A failed applicable required check, including a required whitespace check, remains blocking and requires NotPrepared. Optional diagnostics may fail without blocking Prepared only after all applicable required checks exit0 and preservation is certain. Retain and report the actual failed diagnostic and its limit truthfully; never claim its exit passed or exempt arbitrary files. Preserve raw evidence and manifest-bound byte identities exactly.",
+    "An explicit human Retry after conclusive NotPrepared may continue on the same S2/H/C/resource under existing authorization: no numeric Retry cap, no automatic retry, and no S3. Reconcile uncertain outcomes and writers before new effects.",
     "After permitted link repair, run focused check:docs and applicable already-required checks and obtain exit0 before creating the final merge with ordered direct parents [H, C]. Verify accepted C is unchanged as well as the target still H. Never bypass checks, drop evidence, weaken assertions, or perform arbitrary candidate repair or a broad rerun.",
-    "If the intended target is ambiguous or absent, repair requires prose/acceptance/evidence-content changes, a non-documentation check fails, or preservation is uncertain, return conclusive NotPrepared naming the exact boundary. A documentation-check failure permits only the bounded lexical repair above; other required-check failures still require NotPrepared.",
+    "If the intended target is ambiguous or absent, repair requires prose/acceptance/evidence-content changes, an applicable required non-documentation check fails, or preservation is uncertain, return conclusive NotPrepared naming the exact boundary. A documentation-check failure permits only the bounded lexical repair above; other required-check failures still require NotPrepared.",
     "If preparation stops before successful checks/result, retain the exact candidate and native custody. Retry/FullRerun requires explicit fresh Operator authorization under existing H/C/session/Q/run/resource rules; reconcile uncertain outcomes and stopped writers before effects. Reuse no missing/failed qualification and never infer Prepared from a process exit.",
     "Run focused checks for the affected behavior after resolution. Verify the reported merge commit has exact ordered direct parents [H, C] and the target ref still names H before returning PreparedCandidate.",
     "If requirements cannot both be preserved, resolution is unsafe, a required scoped check fails, or authorities contradict, return conclusive NotPrepared with the concrete unresolved requirement, failed check, or authority contradiction. Never fabricate success.",
@@ -478,6 +481,41 @@ const checkConfigAndRecord = Effect.fn("CodexIntegrator.checkConfigAndRecord")(f
   if (Option.isSome(found)) return yield* reconcilePrivateRecord(found.value, run, candidatePath, app, store)
   return yield* createPrivateRecord(run, candidatePath, app, store, crypto)
 })
+/** A retained merge is reusable only after rereading the exact sealed NotPrepared predecessor and stopped writers. */
+const reconcileRetainedMergeRetry = Effect.fn("CodexIntegrator.reconcileRetainedMergeRetry")(function* (
+  record: CodexIntegratorPrivateRecord,
+  run: IntegratorRunCorrelation,
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  store: CodexIntegratorPrivateStoreService
+) {
+  const predecessor = privateRuns(record).find((item) => item.correlation.ordinal === run.ordinal - 1)
+  if (!isRetryProviderRun(run) || !isSealedPrivateRun(predecessor) || predecessor.result._tag !== "NotPrepared") {
+    return yield* Effect.fail(providerFailure("retained merge Retry requires a sealed NotPrepared predecessor"))
+  }
+  const threaded = yield* ensureThread(app, record, store)
+  const fresh = yield* observedThread(app, threaded.thread.id, record.candidatePath)
+  if (fresh.ownedThreadToken !== record.threadToken) {
+    return yield* Effect.fail(providerFailure("retained Retry thread ownership changed"))
+  }
+  const matching = fresh.turns.filter((turn) => turn.ownedTurnToken === predecessor.token)
+  const terminalStatus = predecessor._tag === "FailedTurnSealed" ? "failed" : "completed"
+  if (matching.length !== 1 || matching[0]?.id !== predecessor.turnId || matching[0].status !== terminalStatus) {
+    return yield* Effect.fail(providerFailure("retained Retry predecessor terminal evidence changed"))
+  }
+  for (const turn of fresh.turns) {
+    const known = privateRuns(record).find((item) => item.token === turn.ownedTurnToken)
+    if (
+      known === undefined ||
+      matchingProviderTurnError(known, turn) !== undefined ||
+      (!isSealedPrivateRun(known) && !runCorrelationEquals(known.correlation, run)) ||
+      (isSealedPrivateRun(known) && turn.status !== (known._tag === "FailedTurnSealed" ? "failed" : "completed"))
+    ) {
+      return yield* Effect.fail(providerFailure("retained Retry contains foreign or contradictory provider history"))
+    }
+  }
+  yield* observeQuiescence(app, census, fresh)
+})
 const integratorServiceFor = (
   config: CodexIntegratorConfiguration,
   app: CodexAppServer["Service"],
@@ -503,7 +541,8 @@ const integratorServiceFor = (
                 config,
                 initial,
                 store,
-                ownership
+                ownership,
+                reconcileRetainedMergeRetry(initial, run, app, census, store)
               )
               const existingRun = runFor(materialized, run)
               const existingThreadId =

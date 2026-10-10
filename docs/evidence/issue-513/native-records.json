@@ -1,0 +1,96 @@
+{
+  "boundary": "actual Codex 0.162.1 outer protocol reopen; disposable repository",
+  "externalRawArtifacts": [
+    {
+      "path": "/tmp/513-native-qualified-records.json",
+      "sha256": "12f3e55d2f2396fc1797c93e1c99d38bca9d83560696beffbe88bf9ec39c9964",
+      "byteLength": 149664
+    },
+    {
+      "path": "/tmp/513-native-final-records.json",
+      "sha256": "b30908c35db43c9d464045d5ac407de523bb85c8c028368c19a9cd1ecd42fa8f",
+      "byteLength": 136858
+    },
+    {
+      "path": "/tmp/513-native-final.log",
+      "sha256": "1ee601d05592648f35d1e3e56ee82c724af847b027370e576fe3fd8cf860ef4d",
+      "byteLength": 24756
+    },
+    {
+      "path": "/tmp/513-native-first.log",
+      "sha256": "d530b0161f644fd81b5b27e871449ec410b321a9a97d4b6bf226def04e183693",
+      "byteLength": 3630
+    },
+    {
+      "path": "/tmp/513-failed-build-generated-files.json",
+      "sha256": "708e8a650a289631ef38a69d0f44c318757ea96a9c3686e1c417d5e2619c0af5",
+      "byteLength": 93106
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/run1-private.json",
+      "sha256": "5a78257d5157ae9f02bcba9b62e4efd9a5b5fb3551f68e3ce9a43fc7b9cbbde7",
+      "byteLength": 5959
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/run2-private.json",
+      "sha256": "bab42891eae64a24134da97940e1a81676fdbeead36a45de5784a5e1843efafd",
+      "byteLength": 8868
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/run2-uncertain-private.json",
+      "sha256": "2ec956cc41b5647e69978adaa82d3078cdf6ee73738ab15f8bf14e15aa4fe740",
+      "byteLength": 8868
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/retry-evidence.json",
+      "sha256": "15556eebb8f4fd3bf1a94f61e15134a301c896120b00f351da9635c16c5d55b0",
+      "byteLength": 8616
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/docs-checks.jsonl",
+      "sha256": "3c10f2e6ec88c8cca5a96ef6aa1c49ae98622ab41d10b9ef1ccea7dbc55875b6",
+      "byteLength": 205
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/runtime-checks.jsonl",
+      "sha256": "f456c1ffc6a33cd5dae1ca90cf499aadeabb167b9e687175a8fc62476833374c",
+      "byteLength": 6
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/whitespace-diagnostic.log",
+      "sha256": "0ea532839a6b7d0bc0d2d7a9667999b830acef90b4a4b766416623e0988e970d",
+      "byteLength": 63
+    },
+    {
+      "path": "/tmp/dalph-conflict-provider-3Q3jc4/whitespace-exit.txt",
+      "sha256": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+      "byteLength": 2
+    },
+    {
+      "path": "/workspace/dalph-dogfood/issue-491-20261009/evidence/501-retry-resume-lineage-boundary.json",
+      "sha256": "19f7cef2b2493eedd07c89dea35cae77454b125043165239f6a730deba8381eb",
+      "byteLength": 1358
+    },
+    {
+      "path": "/workspace/dalph-dogfood/issue-491-20261009/evidence/501-started-retry-lineage-reproducer.json",
+      "sha256": "6f8e636164786608b5398e2ef178ac5a4dbee397d027bfd6935e2eaa4118a9df",
+      "byteLength": 459
+    }
+  ],
+  "observations": {
+    "stopped": "Absent",
+    "documentationChecks": [
+      2,
+      0,
+      0
+    ],
+    "runtimeChecks": [
+      0,
+      0
+    ],
+    "preparedCandidate": "cd9c180162535b51fa509272f56f1734e2f9c321",
+    "targetHead": "3fca3ff7e413d4f9a0076bc4057c0f474d0e1afd",
+    "accepted": "6ada77b38ded2a6283e139465327e0ad460a8f69",
+    "candidatePath": "/tmp/dalph-conflict-provider-3Q3jc4/candidates/dalph-integrator-4cb357c7e7f6f57a66c306fb9aa60fdcf6d8e87d3659f647b51d0da6f331f0c1"
+  }
+}

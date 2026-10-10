@@ -4,13 +4,14 @@
 /* eslint-disable no-restricted-globals -- the explicit opt-in is read before the real-process test is registered. */
 
 import { NodeFileSystem, NodeServices } from "@effect/platform-node"
+import { createHash } from "node:crypto"
 import { execFile as nodeExecFile } from "node:child_process"
 import { createServer } from "node:http"
 import { copyFile, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import { promisify } from "node:util"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   AcceptedResult,
@@ -45,6 +46,7 @@ import {
 } from "@dalph/orchestrator"
 import {
   CodexAppServer,
+  CodexOwnedActivityCensus,
   codexAppServerNodeLayer,
   makeNodeCodexProcessGroupCensusService,
   nodeCodexOwnedActivityCensusLayer
@@ -53,9 +55,12 @@ import { CodexServerLaunchRecord, memoryCodexAttemptStoreLayer } from "./codex-a
 import { nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
+  CodexIntegratorPrivateRecord,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator
 } from "./codex-integrator-private-store.js"
+
+import { makeNativeStartedRetryFixture } from "../../test/support/native-started-retry.js"
 
 const execFile = promisify(nodeExecFile)
 const qualificationEnabled = nodeProcess.env["DALPH_RUN_REAL_CODEX_QUALIFICATION"] === "1"
@@ -69,11 +74,16 @@ const sse = (value: unknown): string => `data: ${JSON.stringify(value)}\n\n`
 
 describe("candidate-local content conflict with the real Codex provider", () => {
   it.skipIf(!qualificationEnabled).each([
+    {
+      name: "reopens an authorized Started Retry through the native protocol with absent and recorded tokens",
+      documentation: true,
+      retainedRetry: true
+    },
     { name: "resolves one physical conflict preserving H and C without promoting the target", documentation: false },
     { name: "repairs one moved historical link after a clean merge with the live model", documentation: true }
   ])(
     "$name",
-    async ({ documentation }) => {
+    async ({ documentation, retainedRetry }) => {
       const root = await realpath(await mkdtemp(nodePath.join("/tmp", "dalph-conflict-provider-")))
       const repository = nodePath.join(root, "repository")
       const candidateRoot = nodePath.join(root, "candidates")
@@ -82,10 +92,18 @@ describe("candidate-local content conflict with the real Codex provider", () => 
       let candidatePath = ""
       let accepted = ""
       let mergeConflictObserved = false
+      let nativeOrdinal = 1
+      const custodyObservations: Array<unknown> = []
+      const retryEvidence: Array<unknown> = []
+      let firstPrivateBytes = ""
+      let retryPrivateBytes = ""
+      let uncertainPrivateBytes = ""
+      let protocolFixture: ReturnType<typeof makeNativeStartedRetryFixture> | undefined
       let launch: CodexServerLaunchRecord | undefined
       let passed = false
       let documentationChecks: Array<number> = []
       let runtimeChecks: Array<number> = []
+      let whitespaceDiagnostic = ""
       let targetHead = ""
       let preparedCandidate = ""
       const server = createServer((request, response) => {
@@ -175,7 +193,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
             nodePath.join(repository, "docs", "evidence", "historical.md"),
             "Historical account: [existing target](../target.md#existing-target).\n"
           )
-          await writeFile(nodePath.join(repository, "raw-evidence.txt"), "immutable evidence\n")
+          await writeFile(nodePath.join(repository, "raw-evidence.txt"), "immutable evidence  \n")
           await writeFile(nodePath.join(repository, "docs/evidence/sealed.md"), "Sealed evidence.\n")
           await writeFile(
             nodePath.join(repository, "manifest.json"),
@@ -183,7 +201,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
               artifact: "raw-evidence.txt",
               document: "docs/evidence/sealed.md",
               documentSha256: "76285d3ba3078d4de2f05afde9bf9669f85983dc7cfbf25424d67dadb825bda1",
-              sha256: "aeff868b6d4b87b297f28da65e4b3e5d838646ca2149123e17fc794d6a023fb5"
+              sha256: createHash("sha256").update("immutable evidence  \n").digest("hex")
             })
           )
           await writeFile(
@@ -196,15 +214,24 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           )
           await writeFile(
             nodePath.join(repository, "AGENTS.md"),
-            "Required checks: pnpm check:docs and pnpm check:runtime. Preserve both enabled behaviors. Historical document moved one directory deeper in C; intended target is docs/target.md. Only lexical link destination repair is accepted. raw-evidence.txt, docs/evidence/sealed.md and manifest.json are immutable. Do not edit checks.\n"
+            `Required checks: pnpm check:docs and pnpm check:runtime. Preserve both enabled behaviors. Historical document moved one directory deeper in C; intended target is docs/target.md. Only lexical link destination repair is accepted. raw-evidence.txt, docs/evidence/sealed.md and manifest.json are immutable. Do not edit checks. This mixed runtime/evidence route does not require a whitespace gate. Before committing, run the optional diagnostic git diff --cached --check, retain stdout/stderr in ${nodePath.join(root, "whitespace-diagnostic.log")} and its actual exit in ${nodePath.join(root, "whitespace-exit.txt")}. A diagnostic failure does not waive required checks. Do not repair evidence or claim the diagnostic passed.\n`
           )
         }
+        if (retainedRetry) {
+          await writeFile(
+            nodePath.join(repository, "AGENTS.md"),
+            (await readFile(nodePath.join(repository, "AGENTS.md"), "utf8")) +
+              "\nNative retained-Retry qualification: on exact integration run qualification-session/1, perform the permitted link repair, run required checks successfully, retain the optional failed whitespace diagnostic and commit the exact ordered merge, then intentionally return NotPrepared with detail 'qualification diagnostic retained; explicit Retry required'. On qualification-session/2, preserve that exact merge and all prior evidence; rerun both required checks and verify ordered parents and unchanged target/C before PreparedCandidate. Do not recreate or reset the merge or overwrite earlier diagnostic bytes.\n"
+          )
+        }
+        if (documentation) await rm(nodePath.join(repository, "raw-evidence.txt"))
         await git(repository, "add", ".")
         await git(repository, "commit", "-qm", "base")
         const base = GitCommitSha.make(await git(repository, "rev-parse", "HEAD"))
         await git(repository, "checkout", "-qb", "accepted")
         await writeFile(nodePath.join(repository, "behavior.txt"), "target=disabled\naccepted=enabled\n")
         if (documentation) {
+          await writeFile(nodePath.join(repository, "raw-evidence.txt"), "immutable evidence  \n")
           await mkdir(nodePath.join(repository, "docs", "evidence", "moved"))
           await git(repository, "mv", "docs/evidence/historical.md", "docs/evidence/moved/historical.md")
           // Separate files make this a clean merge; the runtime check still proves both sides.
@@ -260,7 +287,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           privateStoreLocator: IntegratorPrivateStoreLocator.make(nodePath.join(root, "private-store.json")),
           repository: GitRepositoryLocator.make(repository)
         })
-        const session = IntegratorSessionCorrelation.make({
+        let session = IntegratorSessionCorrelation.make({
           acceptedResult: AcceptedResult.make({
             commit: GitCommitSha.make(accepted),
             evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
@@ -286,9 +313,26 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           startedAt: JournalPosition.make(2),
           targetLineageObservedAt: JournalPosition.make(3)
         })
-        const request = IntegratorRequest.make({
+        let request = IntegratorRequest.make({
           correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
         })
+        const observedCensus = Layer.effect(
+          CodexOwnedActivityCensus,
+          Effect.gen(function* () {
+            const census = yield* CodexOwnedActivityCensus
+            return CodexOwnedActivityCensus.of({
+              ...census,
+              observe: (...args) =>
+                census.observe(...args).pipe(
+                  Effect.tap((projection) =>
+                    Effect.sync(() => {
+                      custodyObservations.push({ ordinal: nativeOrdinal, threadId: args[0].id, projection })
+                    })
+                  )
+                )
+            })
+          })
+        ).pipe(Layer.provide(nodeCodexOwnedActivityCensusLayer))
         const providerFor = () => {
           const app = codexAppServerNodeLayer({ executable, environment: { CODEX_HOME: codexHome } }).pipe(
             Layer.provide(memoryCodexAttemptStoreLayer()),
@@ -298,34 +342,150 @@ describe("candidate-local content conflict with the real Codex provider", () => 
             Layer.provide(NodeFileSystem.layer)
           )
           const integrator = nodeCodexIntegratorLayer(config)
-            .pipe(Layer.provide(nodeCodexOwnedActivityCensusLayer))
+            .pipe(Layer.provide(observedCensus))
             .pipe(Layer.provideMerge(app))
             .pipe(Layer.provide(NodeFileSystem.layer))
             .pipe(Layer.provide(nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))))
             .pipe(Layer.provide(ownership))
           return integrator
         }
-        const result = await Effect.runPromise(
-          Effect.scoped(
-            Effect.gen(function* () {
-              const integrator = yield* Integrator
-              const app = yield* CodexAppServer
-              try {
-                return yield* integrator.prepare(request)
-              } finally {
-                if (app.serverPid !== undefined)
-                  launch = CodexServerLaunchRecord.make({
-                    command: [executable, "app-server"],
-                    incarnation: app.incarnation,
-                    pid: app.serverPid,
-                    phase: "Live"
-                  })
-              }
-            }).pipe(Effect.provide(providerFor()))
+        const prepare = async (currentRequest: IntegratorRequest) =>
+          Effect.runPromise(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const integrator = yield* Integrator
+                const app = yield* CodexAppServer
+                try {
+                  return yield* integrator.prepare(currentRequest)
+                } finally {
+                  if (app.serverPid !== undefined)
+                    launch = CodexServerLaunchRecord.make({
+                      command: [executable, "app-server"],
+                      incarnation: app.incarnation,
+                      pid: app.serverPid,
+                      phase: "Live"
+                    })
+                }
+              }).pipe(Effect.provide(providerFor()))
+            )
           )
-        )
+        if (retainedRetry) {
+          protocolFixture = makeNativeStartedRetryFixture({
+            session,
+            prepare,
+            git: (...args) => git(repository, ...args),
+            afterUncertainResponse: async () => {
+              uncertainPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
+              await writeFile(nodePath.join(root, "run2-uncertain-private.json"), uncertainPrivateBytes)
+              if (launch === undefined) throw new Error("missing uncertain native launch")
+              const stopped = await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))
+              expect(stopped._tag).toBe("Absent")
+              retryEvidence.push({ phase: "uncertain outer response; recorded native token", launch, stopped })
+            }
+          })
+          session = protocolFixture.session
+          request = IntegratorRequest.make({
+            correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+          })
+        }
+        let result = protocolFixture === undefined ? await prepare(request) : await protocolFixture.initial()
+        if (retainedRetry) {
+          expect(result._tag).toBe("NotPrepared")
+          firstPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
+          await writeFile(nodePath.join(root, "run1-private.json"), firstPrivateBytes)
+          const record = Schema.decodeUnknownSync(Schema.Array(CodexIntegratorPrivateRecord))(
+            JSON.parse(firstPrivateBytes)
+          )[0]
+          if (record?._tag !== "ThreadWithRuns") throw new Error("missing sealed native private record")
+          candidatePath = record.candidatePath
+          const firstDocs = (await readFile(nodePath.join(root, "docs-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => Schema.decodeUnknownSync(Schema.Struct({ exit: Schema.Number }))(JSON.parse(line)).exit)
+          const firstRuntime = (await readFile(nodePath.join(root, "runtime-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map(Number)
+          const firstDiagnostic = await readFile(nodePath.join(root, "whitespace-diagnostic.log"), "utf8")
+          const firstDiagnosticExit = await readFile(nodePath.join(root, "whitespace-exit.txt"), "utf8")
+          expect(firstDocs.at(-1)).toBe(0)
+          expect(firstRuntime.length).toBeGreaterThan(0)
+          expect(firstRuntime.every((exit) => exit === 0)).toBe(true)
+          expect(Number(firstDiagnosticExit)).toBe(2)
+          const retainedMerge = await git(candidatePath, "rev-parse", "HEAD")
+          expect(await git(candidatePath, "rev-list", "--parents", "-n", "1", "HEAD")).toBe(
+            `${retainedMerge} ${head} ${accepted}`
+          )
+          if (record.runs[0]._tag !== "CompletedTurnSealed")
+            throw new Error("first native run was not completed and sealed")
+          expect(record.runs[0].result._tag).toBe("NotPrepared")
+          if (launch === undefined) throw new Error("missing first native launch")
+          const stopped = await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))
+          retryEvidence.push({
+            phase: "before Retry",
+            launch,
+            stopped,
+            retainedMerge,
+            record,
+            firstDocs,
+            firstRuntime,
+            firstDiagnostic,
+            firstDiagnosticExit
+          })
+          await writeFile(nodePath.join(root, "retry-evidence.json"), JSON.stringify(retryEvidence, null, 2))
+          expect(stopped._tag).toBe("Absent")
+          nativeOrdinal = 2
+          if (protocolFixture === undefined) throw new Error("missing native protocol fixture")
+          await protocolFixture.authorizeStarted()
+          // No run-two token yet: the first native admission allocates it once.
+          expect(await readFile(config.privateStoreLocator, "utf8")).toBe(firstPrivateBytes)
+          const reopened = await protocolFixture.reopen()
+          result = reopened.result
+          retryEvidence.push({ phase: "outer protocol reopen", before: reopened.before, after: reopened.after })
+          retryPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
+          await writeFile(nodePath.join(root, "run2-private.json"), retryPrivateBytes)
+          const second = Schema.decodeUnknownSync(Schema.Array(CodexIntegratorPrivateRecord))(
+            JSON.parse(retryPrivateBytes)
+          )[0]
+          if (second?._tag !== "ThreadWithRuns") throw new Error("missing Retry private record")
+          const uncertain = Schema.decodeUnknownSync(Schema.Array(CodexIntegratorPrivateRecord))(
+            JSON.parse(uncertainPrivateBytes)
+          )[0]
+          if (uncertain?._tag !== "ThreadWithRuns") throw new Error("missing recorded Retry token")
+          expect(second.runs).toEqual(uncertain.runs)
+          expect(second.candidatePath).toBe(uncertain.candidatePath)
+          expect(second.threadId).toBe(uncertain.threadId)
+          expect(second.threadToken).toBe(uncertain.threadToken)
+          expect(second.correlation).toEqual(uncertain.correlation)
+          expect(second.candidatePath).toBe(record.candidatePath)
+          expect(second.threadId).toBe(record.threadId)
+          expect(second.threadToken).toBe(record.threadToken)
+          expect(second.correlation).toEqual(record.correlation)
+          expect(second.runs[0]).toEqual(record.runs[0])
+          expect(second.runs).toHaveLength(2)
+          expect(second.runs[1]?.correlation.ordinal).toBe(2)
+          expect(await git(candidatePath, "rev-parse", "HEAD")).toBe(retainedMerge)
+          const retryDocs = (await readFile(nodePath.join(root, "docs-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => Schema.decodeUnknownSync(Schema.Struct({ exit: Schema.Number }))(JSON.parse(line)).exit)
+            .slice(firstDocs.length)
+          const retryRuntime = (await readFile(nodePath.join(root, "runtime-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map(Number)
+            .slice(firstRuntime.length)
+          expect(retryDocs.length).toBeGreaterThan(0)
+          expect(retryDocs.every((exit) => exit === 0)).toBe(true)
+          expect(retryRuntime.length).toBeGreaterThan(0)
+          expect(retryRuntime.every((exit) => exit === 0)).toBe(true)
+          expect(await readFile(nodePath.join(root, "whitespace-diagnostic.log"), "utf8")).toBe(firstDiagnostic)
+          expect(await readFile(nodePath.join(root, "whitespace-exit.txt"), "utf8")).toBe(firstDiagnosticExit)
+          retryEvidence.push({ phase: "after Retry", retryDocs, retryRuntime, record: second })
+        }
         expect(result._tag).toBe("PreparedCandidate")
-        if (result._tag !== "PreparedCandidate") throw new Error(result.detail)
+        if (result._tag !== "PreparedCandidate")
+          throw new Error(result._tag === "NotPrepared" ? result.detail : "candidate rejected")
         preparedCandidate = result.candidateText
         if (!documentation) {
           expect(calls).toHaveLength(3)
@@ -348,11 +508,23 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           documentation ? "target=enabled\naccepted=disabled\n" : "target=enabled\naccepted=enabled\n"
         )
         if (documentation) {
+          whitespaceDiagnostic = await readFile(nodePath.join(root, "whitespace-diagnostic.log"), "utf8")
+          expect(whitespaceDiagnostic).toContain("raw-evidence.txt")
+          expect(whitespaceDiagnostic).toContain("trailing whitespace")
+          expect(Number(await readFile(nodePath.join(root, "whitespace-exit.txt"), "utf8"))).toBe(2)
+          const manifest = JSON.parse(await readFile(nodePath.join(candidatePath, "manifest.json"), "utf8")) as {
+            sha256: string
+          }
+          expect(
+            createHash("sha256")
+              .update(await readFile(nodePath.join(candidatePath, "raw-evidence.txt")))
+              .digest("hex")
+          ).toBe(manifest.sha256)
           runtimeChecks = (await readFile(nodePath.join(root, "runtime-checks.jsonl"), "utf8"))
             .trim()
             .split("\n")
             .map(Number)
-          expect(runtimeChecks.length).toBeGreaterThan(0)
+          expect(runtimeChecks.length).toBeGreaterThan(retainedRetry ? 1 : 0)
           expect(runtimeChecks.every((exit) => exit === 0)).toBe(true)
         }
         await execFile(nodeProcess.execPath, ["check.cjs"], { cwd: candidatePath })
@@ -389,6 +561,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
         }
         passed = true
       } finally {
+        await protocolFixture?.dispose()
         if (launch !== undefined) {
           const stopped = await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))
           await writeFile(
@@ -396,12 +569,18 @@ describe("candidate-local content conflict with the real Codex provider", () => 
             JSON.stringify(
               {
                 root,
+                retryEvidence,
+                custodyObservations,
+                firstPrivateBytes,
+                retryPrivateBytes,
+                uncertainPrivateBytes,
                 launch,
                 stopped,
                 calls: calls.length,
                 documentation,
                 documentationChecks,
                 runtimeChecks,
+                whitespaceDiagnostic,
                 accepted,
                 targetHead,
                 preparedCandidate,
@@ -416,7 +595,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           expect(stopped._tag).toBe("Absent")
         }
         await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-        if (passed) await rm(root, { recursive: true, force: true })
+        if (passed && !retainedRetry) await rm(root, { recursive: true, force: true })
       }
     },
     240000

@@ -34,7 +34,7 @@ Dalph separately qualifies and promotes; Codex never pushes or publishes.
 ## P2: retain a conclusive boundary failure
 
 If the target is absent or ambiguous, prose/acceptance/evidence content must
-change, a non-documentation check fails, or preservation is uncertain, Codex
+change, an applicable required non-documentation check fails, or preservation is uncertain, Codex
 returns conclusive NotPrepared naming the exact boundary. A manifest-bound
 document is immutable; only its owner may produce an explicitly accepted new
 evidence artifact. No arbitrary repair, bypass, broad rerun, dropped evidence,
@@ -131,3 +131,34 @@ control without changing its accepted outcomes.
 Repository `mise exec -- pnpm check:docs` passed exit0 on the scenario/evidence
 and mapping edits (`/tmp/link-repair-docs-reviewed.log`); this is the pinned
 Lychee repository scan, separate from the live fixture-local validator.
+
+## Applicable required checks and optional diagnostics (#511)
+
+The provider selects required checks from the accepted task/scenarios and the
+repository documented route. An invoked optional diagnostic does not acquire
+mandatory status. For a mixed application-test/evidence candidate, the hosted
+docs-only whitespace route is inapplicable. A required whitespace gate, required
+runtime/docs failure, or uncertain byte preservation still blocks Prepared.
+
+P1 starts with exact H/C/Base and manifest-bound raw evidence containing trailing
+whitespace. After a clean merge and the bounded lexical repair above, the
+provider runs required docs/runtime checks before Prepared. The extra staged
+whitespace diagnostic fails; its actual exit and output are retained without
+editing evidence. The live fixture maps P1 to the existing live link-repair case:
+whole-tree comparison except the lexical path, raw SHA256, ordered parents,
+unchanged H/C and exact stopped-writer census remain asserted.
+
+P2 maps to the actual prompt contract and sealed NotPrepared replay cases for
+required whitespace/runtime failures and uncertain preservation. Controlled
+results prove instructions and replay, not arbitrary live refusal judgment.
+The live case proves one small applicable route, not #501 capacity profiles.
+No production check or arbitrary file exemption changes.
+
+P3 permits existing explicit human Retry on the same S2/H/C/resource after
+conclusive NotPrepared, without a numeric Retry cap, automatic retry or S3.
+Existing custody/replay mappings above remain applicable. Uncertain writers and
+outcomes must be reconciled before effects. This changes prompt/check-selection
+instructions only: workflow operations, events, journal formats and control
+algebra are unchanged, so no new model action or crash fixture is applicable.
+The parent owns preview mounting, original #501 Retry and later native
+publication; the leaf does not publish or edit the original task/target.

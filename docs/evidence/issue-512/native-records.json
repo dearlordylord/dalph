@@ -1,0 +1,25 @@
+{
+  "reason": "Raw native private ownership tokens trigger generic-api-key scanning; raw bytes remain unchanged in the durable external packet. No credential or secret exemption was added.",
+  "records": [
+    {
+      "path": "/workspace/dalph-dogfood/issue-512-20261010/evidence/leaf-review/native-first.json",
+      "bytes": 20057,
+      "sha256": "59a71ea13d825b61f09e81a6a211afb7458f378c09871c6dd118e598250d27cc"
+    },
+    {
+      "path": "/workspace/dalph-dogfood/issue-512-20261010/evidence/leaf-review/native-final.json",
+      "bytes": 30208,
+      "sha256": "31da65bd3a2d0d969c49945fdae8d1479f0275b24af7cd0a2568bbc6667b54ae"
+    },
+    {
+      "path": "/workspace/dalph-dogfood/issue-512-20261010/evidence/leaf-review/run1-private.json",
+      "bytes": 4135,
+      "sha256": "db0e51eedb866e118aeb5cf2bf4f71edf25d590b38065fe4e399b516a66653a4"
+    },
+    {
+      "path": "/workspace/dalph-dogfood/issue-512-20261010/evidence/leaf-review/run2-private.json",
+      "bytes": 6132,
+      "sha256": "5e8e89d3f1c867a6437383756832ec38aba24489f7ff66a32f02e0fca802c212"
+    }
+  ]
+}
