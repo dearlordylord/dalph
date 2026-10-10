@@ -832,13 +832,42 @@ describe("outer Integrator protocol", () => {
         Effect.provideService(InRunJournal, harness.journal),
         Effect.provideService(AcceptedJournalReader, harness.accepted)
       )
-      yield* harness
-        .runExact(
-          compatibleInput(targetHead, changed.observation.position),
-          IntegratorRunOrdinal.make(17),
-          changed.session
-        )
+      const restoredOperationId = OperationId.make("integrator-retry-restored-target-head")
+      const restoredOperation = makeTargetLineageObservationOperation({
+        integrationTarget: changed.session.integrationTarget,
+        operationId: restoredOperationId,
+        plannedAttempt: changed.session.plannedAttempt,
+        predecessorOperationIds: []
+      })
+      yield* harness.journal.append(
+        runId,
+        intentRecordKey(restoredOperationId),
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: restoredOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      const restored = yield* harness.journal.append(
+        runId,
+        outcomeRecordKey(restoredOperationId),
+        TargetLineageObservedEvent.make({
+          observation: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: changed.session.plannedAttempt.baseSha,
+            targetHeadSha: targetHead
+          },
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: restoredOperationId,
+          plannedAttempt: changed.session.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const noRevival = yield* harness
+        .runExact(compatibleInput(targetHead, restored.position), IntegratorRunOrdinal.make(17), changed.session)
         .pipe(Effect.flip)
+      expect(noRevival).toMatchObject({ detail: expect.stringContaining("terminated by a changed-head quarantine") })
       expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(16)
       const records = yield* harness.readRecords
       expect(
