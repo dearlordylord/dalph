@@ -1,0 +1,7 @@
+{
+  "exit": 0,
+  "executedTest": "settles seven tasks, refreshes Gfinal after a crash, and recovers lost termination acknowledgement",
+  "file": "packages/dalph/test/cassettes/normal-termination.test.ts",
+  "otherRequestedFile": "authored-runner-process-lifecycle.test.ts was not selected by current manifest; no credit claimed",
+  "parentOldCustody": "user reports all 12 prior launch records proved stopped before continuation-3"
+}

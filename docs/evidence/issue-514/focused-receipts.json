@@ -1,0 +1,80 @@
+{
+  "checks": [
+    {
+      "receipt": "provenance-final.log.gz",
+      "exit": 0,
+      "scope": [
+        "packages/dalph/src/application/codex-integrator.test.ts",
+        "packages/dalph/src/application/codex-integrator-cleanup.test.ts"
+      ],
+      "sourceRelation": "final source after per-run owner and fresh Retry history repair",
+      "chronologies": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6"
+      ]
+    },
+    {
+      "receipt": "owner-final.log.gz",
+      "exit": 0,
+      "scope": [
+        "codex-integrator.test.ts",
+        "codex-integrator-private-store.test.ts",
+        "codex-integrator-cleanup.test.ts",
+        "codex-app-server-public.test.ts"
+      ],
+      "sourceRelation": "before final strengthened Retry admission; decoder/public-provider source unchanged thereafter",
+      "chronologies": [
+        "R6 private-format compatibility",
+        "current provider consumer"
+      ]
+    },
+    {
+      "receipt": "focused-final.log.gz",
+      "exit": 0,
+      "scope": [
+        "codex-integrator.test.ts",
+        "codex-integrator-private-store.test.ts",
+        "codex-integrator-cleanup.test.ts",
+        "codex-integrator.property.test.ts",
+        "integrator/protocol.test.ts",
+        "integration-quarantine/provider-failure.test.ts",
+        "integrator/successor-session.test.ts"
+      ],
+      "sourceRelation": "focused combined consumers before final provenance-only repair; unchanged generic workflow algebra",
+      "chronologies": [
+        "R1 existing NotPrepared/quarantine",
+        "R6 Retry and FullRerun guards"
+      ]
+    },
+    {
+      "receipt": "native-final.log.gz",
+      "exit": 0,
+      "scope": [
+        "R1/R4 native exact interrupted process-reopen seals without replayed notification or another provider turn"
+      ],
+      "sourceRelation": "two separate real controller processes; later source edits were cosmetic fixture lint and stricter explicit Retry admission, outside native initial recovery path"
+    },
+    {
+      "receipt": "artifacts.log.gz",
+      "exit": 0
+    },
+    {
+      "receipt": "fast-repair.log.gz",
+      "exit": 0
+    },
+    {
+      "receipt": "lint-repair.log.gz",
+      "exit": 0
+    },
+    {
+      "receipt": "docs.log.gz",
+      "exit": 0
+    }
+  ],
+  "exitObservation": "actual executor tool completion, not totals",
+  "submission": "final exact clean source is separately qualified by required ordinary check:submit"
+}

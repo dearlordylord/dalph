@@ -1,0 +1,37 @@
+{
+  "candidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "observedUTC": "2026-10-10T14:00:27Z",
+  "stages": [
+    {
+      "stage": "check:artifacts",
+      "exit": 0,
+      "logStartLine": 6,
+      "proof": "next shell && stage test:formal:controls launched"
+    },
+    {
+      "stage": "test:formal:controls",
+      "exit": 0,
+      "logStartLine": 10,
+      "proof": "next shell && stage check:fast launched"
+    },
+    {
+      "stage": "check:fast",
+      "exit": 0,
+      "logStartLine": 32,
+      "proof": "next shell && stage lint:code launched"
+    },
+    {
+      "stage": "lint:code --census",
+      "exit": 0,
+      "logStartLine": 170,
+      "proof": "next shell && stage test:cassettes:memory launched"
+    },
+    {
+      "stage": "test:cassettes:memory",
+      "exit": 0,
+      "logStartLine": 174,
+      "proof": "actual successful top-level exit after final shell && child"
+    }
+  ],
+  "proofBoundary": "Ordinary command manifest uses sequential shell &&; each subsequent launch proves prior exact zero exit; final actual zero exit proves last stage."
+}

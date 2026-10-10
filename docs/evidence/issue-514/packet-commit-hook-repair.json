@@ -1,0 +1,25 @@
+{
+  "initialCommit": "failed pre-commit, exit1",
+  "failedStage": "gitleaks staged",
+  "findings": [
+    {
+      "file": "native.json",
+      "rule": "generic-api-key",
+      "lines": [
+        106,
+        252
+      ]
+    },
+    {
+      "file": "native-first.json",
+      "rule": "generic-api-key",
+      "lines": [
+        120
+      ]
+    }
+  ],
+  "repair": "retain both raw receipts externally unchanged with exact hashes/size; no scanner bypass or rewriting",
+  "focusedStagedScannerExit": 0,
+  "currentDocsExit": 0,
+  "bothScopedReviewAxes": "no reasonable blockers"
+}

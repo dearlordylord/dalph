@@ -1,0 +1,17 @@
+{
+  "diagnostics": [
+    {
+      "path": "/workspace/dalph-dogfood/issue-514-20261010/evidence/stopped-submit-command-budget-metadata.json",
+      "bytes": 4653,
+      "sha256": "17f08fb5c8b34c2410682a6dddcf6bbfb83ee3f4fb3a242b999a8ef20ab73766",
+      "boundary": "parent readonly diagnostic summary after stopped-writer proof; not substituted for native acceptance fixture"
+    },
+    {
+      "path": "/workspace/dalph-dogfood/issue-514-20261010/evidence/stopped-retained-tool-policy.json",
+      "bytes": 861,
+      "sha256": "42d95d3496e87d7ba9ccb3cda2a8ab7e66460bf7c498bc3dec00c3bd6a84064a",
+      "boundary": "parent readonly diagnostic summary after stopped-writer proof; not substituted for native acceptance fixture"
+    }
+  ],
+  "source": "parent guidance confirms immutable firstwrapper600000ms Elapsed and retained direct command900000ms"
+}

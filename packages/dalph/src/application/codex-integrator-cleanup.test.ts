@@ -196,6 +196,8 @@ type CleanupCase = {
   readonly projection?: CodexOwnedActivityCensusProjection
   readonly projectionSequence?: ReadonlyArray<CodexOwnedActivityCensusProjection>
   readonly threadTokenMode?: "exact" | "tokenless" | "foreign"
+  readonly terminalTurns?: ReadonlyArray<CodexTurnSnapshot>
+  readonly stoppedCustodyCalls?: Array<CodexServerIncarnation>
   readonly terminalTurnMode?:
     | "exact"
     | "tokenless"
@@ -304,7 +306,7 @@ const runCase = <A, E>(
           id: CodexThreadId.make("cleanup-thread"),
           cwd: CodexThreadWorkingDirectory.make(candidatePath),
           status: terminalTurnMode === "active" ? ("active" as const) : ("idle" as const),
-          turns,
+          turns: options.terminalTurns ?? turns,
           ...(options.threadTokenMode === "tokenless"
             ? {}
             : {
@@ -317,6 +319,8 @@ const runCase = <A, E>(
         const failure = (operation: "thread/resume" | "thread/backgroundTerminals/list") =>
           new CodexAppServerFailure({ operation, kind: "Unavailable", detail: "cleanup boundary unavailable" })
         const app: CodexAppServerService = CodexAppServer.of({
+          verifyStoppedIncarnation: (incarnation) =>
+            Effect.sync(() => options.stoppedCustodyCalls?.push(incarnation)).pipe(Effect.asVoid),
           attachOwnedActivityHints: Effect.succeed(Stream.empty),
           attachTurnCompletedHints: Effect.succeed(Stream.empty),
           incarnation: CodexServerIncarnation.make("cleanup-incarnation"),
@@ -430,7 +434,7 @@ const recordFor = (
     threadStartIntent: boolean
     worktreeMaterializationIntent: boolean
     worktreeReady: boolean
-    terminalStatus: "completed" | "failed"
+    terminalStatus: "completed" | "failed" | "interrupted"
     unsealed: boolean
   }> = {}
 ) => {
@@ -442,19 +446,27 @@ const recordFor = (
     detail: IntegratorNotPreparedDetail.make("cleanup test terminal result")
   })
   const sealedRun =
-    overrides.terminalStatus === "failed"
-      ? CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({
+    overrides.terminalStatus === "interrupted"
+      ? CodexIntegratorPrivateRun.cases.InterruptedTurnSealed.make({
+          providerIncarnation: CodexServerIncarnation.make("original-interrupted-owner"),
           correlation: run,
           result,
           token: CodexOwnedTurnToken.make("cleanup-turn-token"),
           turnId: CodexTurnId.make("cleanup-turn")
         })
-      : CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
-          correlation: run,
-          result,
-          token: CodexOwnedTurnToken.make("cleanup-turn-token"),
-          turnId: CodexTurnId.make("cleanup-turn")
-        })
+      : overrides.terminalStatus === "failed"
+        ? CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({
+            correlation: run,
+            result,
+            token: CodexOwnedTurnToken.make("cleanup-turn-token"),
+            turnId: CodexTurnId.make("cleanup-turn")
+          })
+        : CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+            correlation: run,
+            result,
+            token: CodexOwnedTurnToken.make("cleanup-turn-token"),
+            turnId: CodexTurnId.make("cleanup-turn")
+          })
   const common = {
     appServerIncarnation: CodexServerIncarnation.make("cleanup-incarnation"),
     candidatePath: IntegratorCandidateWorktreePath.make(candidatePath),
@@ -490,6 +502,66 @@ const recordFor = (
 }
 
 describe("Codex Integrator cleanup boundary", () => {
+  it("R6 typed cleanup proves both original interrupted owners after Retry changes record ownership", async () => {
+    const initial = recordFor("/tmp/unused", { terminalStatus: "interrupted" })
+    if (initial._tag !== "ThreadWithRuns") throw new Error("missing threaded fixture")
+    const first = initial.runs[0]
+    if (first._tag !== "InterruptedTurnSealed") throw new Error("missing interrupted fixture")
+    const secondCorrelation = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(2),
+      session: predecessor
+    })
+    const second = CodexIntegratorPrivateRun.cases.InterruptedTurnSealed.make({
+      correlation: secondCorrelation,
+      providerIncarnation: CodexServerIncarnation.make("Retry-interrupted-owner"),
+      token: CodexOwnedTurnToken.make("Retry-cleanup-token"),
+      turnId: CodexTurnId.make("Retry-cleanup-turn"),
+      result: IntegratorResult.cases.NotPrepared.make({
+        correlation: secondCorrelation,
+        detail: IntegratorNotPreparedDetail.make("interrupted Retry")
+      })
+    })
+    const record = CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+      ...initial,
+      appServerIncarnation: second.providerIncarnation,
+      runs: [first, second]
+    })
+    const stoppedCustodyCalls: Array<CodexServerIncarnation> = []
+    const result = await runCase(
+      {
+        record,
+        registration: "exact",
+        pathExists: true,
+        applyRemoval: true,
+        stoppedCustodyCalls,
+        terminalTurns: [first, second].map((run) => ({
+          id: run.turnId,
+          status: "interrupted" as const,
+          items: [],
+          ownedTurnToken: run.token
+        }))
+      },
+      (_authority, authorization, boundary) => boundary.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(result._tag).toBe("Removed")
+    expect(stoppedCustodyCalls).toContain(first.providerIncarnation)
+    expect(stoppedCustodyCalls).toContain(second.providerIncarnation)
+  })
+
+  it("R6 removes an interrupted sealed predecessor only through typed cleanup with fresh absent evidence", async () => {
+    const result = await runCase(
+      {
+        record: recordFor("/tmp/unused", { terminalStatus: "interrupted" }),
+        terminalTurnMode: "interrupted",
+        registration: "exact",
+        pathExists: true,
+        applyRemoval: true
+      },
+      (_authority, authorization, boundary) => boundary.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(result._tag).toBe("Removed")
+  })
+
   it("keeps an automatically superseded candidate until Codex proves the writer stopped", async () => {
     const authorization = automaticSuccessorAuthorization()
     expect(authorization.disposition._tag).toBe("AutomaticSuccessorSuperseded")

@@ -891,6 +891,8 @@ export const integratorRetryAuthorizationIssue = (
   records: JournalHistorySource,
   request: IntegratorRunPreparationInput
 ): string | undefined => {
+  const currentHistoryIssue = retryPreflightIssue(records, request.run, request.run.session)
+  if (currentHistoryIssue !== undefined) return currentHistoryIssue
   const existingRunStarts = matchingOfKind<RunStartedRecord>(
     records,
     "IntegratorRunStarted",
@@ -899,17 +901,95 @@ export const integratorRetryAuthorizationIssue = (
       record.event.run.ordinal === request.run.ordinal &&
       integratorCorrelationsEqual(record.event.run.session, request.run.session)
   )
-  const beforePosition = existingRunStarts.count === 1 ? existingRunStarts.first?.position : undefined
-  const options: IntegratorRetryAuthorizationOptions =
-    beforePosition === undefined
-      ? { requiredTargetLineageObservedAt: request.preparation.targetLineageObservedAt }
-      : { beforePosition, requiredTargetLineageObservedAt: request.preparation.targetLineageObservedAt }
-  const result = evaluateIntegratorRetryAuthorization(records, request.run, options)
+  if (existingRunStarts.count > 1) return "Retry requires one exact Started record"
+  const started = existingRunStarts.first
+  if (started !== undefined) {
+    if (
+      started.runId !== runIdFor(request.run) ||
+      started.key !== integratorRunStartedRecordKey(request.run) ||
+      !integratorRunCorrelationsEqual(started.event.run, request.run)
+    )
+      return "Retry requires one canonical Started record for the requested run"
+    // Started was authorized by the original prefix, not by today's Git read.
+    const historicalIssue = integratorRunTwoAuthorizationIssue(records, request.run, {
+      beforePosition: started.position
+    })
+    if (historicalIssue !== undefined) return historicalIssue
+    const invalidationIssue = startedRetryInvalidationIssue(records, request.run, started)
+    if (invalidationIssue !== undefined) return invalidationIssue
+  }
+  // Inspect the full accepted history, binding L to this request independently
+  // of the historical prefix. This also retains all canonical-history guards.
+  const result = evaluateIntegratorRetryAuthorization(records, request.run, {
+    requiredTargetLineageObservedAt: request.preparation.targetLineageObservedAt
+  })
   if (result._tag === "Rejected") return result.detail
+  if (started !== undefined) {
+    const latest = freshLineage(records, request.run, result.authorization.direction, {})
+    if (latest?.observation.position !== result.authorization.lineage.observation.position)
+      return "Started Retry requires the current target-lineage observation"
+  }
+  if (
+    started !== undefined &&
+    !hasRecordedResult(records, request.run) &&
+    result.authorization.lineage.intent.position <= started.position
+  ) {
+    return "Started Retry requires a fresh post-Started target-lineage read"
+  }
   return targetLineageObservationEquivalence(
     result.authorization.lineage.observation.event.observation,
     request.preparation.targetLineage
   )
     ? undefined
     : "Retry target-lineage input does not match its exact Journal observation"
+}
+
+const hasRecordedResult = (records: JournalHistorySource, run: IntegratorRunCorrelation): boolean =>
+  someOfKind(
+    records,
+    "IntegratorRunResultRecorded",
+    (record) => isRunResultRecord(record) && integratorRunCorrelationsEqual(record.event.run, run)
+  )
+
+/** Historical authority cannot revive a session invalidated after Started. */
+const startedRetryInvalidationIssue = (
+  records: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  started: RunStartedRecord
+): string | undefined => {
+  const invalidated =
+    someOfKind(
+      records,
+      "IntegrationQuarantined",
+      (record) =>
+        isQuarantineRecord(record) &&
+        record.position > started.position &&
+        record.event.correlation.sessionId === run.session.sessionId
+    ) ||
+    someOfKind(
+      records,
+      "IntegrationQuarantineDirectionApplied",
+      (record) =>
+        isDirectionRecord(record) &&
+        record.position > started.position &&
+        record.event.fingerprint.sessionId === run.session.sessionId
+    ) ||
+    someOfKind(
+      records,
+      "IntegratorRunStarted",
+      (record) =>
+        isRunStartedRecord(record) &&
+        record.position > started.position &&
+        record.event.run.session.sessionId === run.session.sessionId
+    ) ||
+    someOfKind(
+      records,
+      "IntegratorRunResultRecorded",
+      (record) =>
+        isRunResultRecord(record) &&
+        record.position > started.position &&
+        record.event.run.session.sessionId === run.session.sessionId &&
+        !integratorRunCorrelationsEqual(record.event.run, run)
+    )
+  return invalidated ? "Started Retry authority was invalidated by later session history" : undefined
 }

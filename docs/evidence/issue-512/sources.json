@@ -1,0 +1,38 @@
+{
+  "base": "3b5e51dd3ce201310b457748e8ddd20a406a15da",
+  "composition": "7c7d0bc133e6b430a604c773d437318384e8771d",
+  "sources": [
+    {
+      "path": "packages/dalph/src/application/codex-integrator.ts",
+      "sha256": "35e0166bd37632fe7b19b1c18070fcea5cc37819d9fea12c4aad71a8442c0d81"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-worktree.ts",
+      "sha256": "bcef20e891b529721f2d4e3c0566f326879a81b18963c897005d6811edeb0b00"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator.test.ts",
+      "sha256": "268905dc60453497aa66ff35839ced7bf216f3ed50690a937d84cacd61684db0"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-worktree.test.ts",
+      "sha256": "b890e1d42d601f30a114e7b6ee328ef54d16f2d8b620634e57cd14b6f0c0374f"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-conflict-real-qualification.test.ts",
+      "sha256": "87f97c9c628bae43b20feba61d5a67981d81664cc0db64624e7d832e0fe02971"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-private-store.ts",
+      "sha256": "334c73e243eaf6e1c92e8a133f704ab96f9540138e1640bce406e63b12756b4b"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-private-preparation.ts",
+      "sha256": "97c4e73c58e50b711abbffa4a73cfe2e78d020f5a32fa7bc374c0545948a4dc5"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-private-lifecycle.ts",
+      "sha256": "6dc0404cf299c2793f03b66fc97ac80a9bfd37663f1d91d9275f9579c12c33c2"
+    }
+  ]
+}

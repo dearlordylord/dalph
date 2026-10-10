@@ -34,7 +34,8 @@ import {
   isRetryProviderRun,
   isSealedPrivateRun,
   newPrivateRecordRunError,
-  providerRunAdmissionError
+  providerRunAdmissionError,
+  sealedProviderTurnStatus
 } from "./codex-integrator-private-lifecycle.js"
 import { providerPreparationError } from "./codex-integrator-private-preparation.js"
 import {
@@ -69,7 +70,7 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     `Accepted commit C: ${run.session.acceptedResult.commit}`,
     `Candidate worktree: ${candidatePath}`,
     `Exact integration run: ${run.session.sessionId}/${run.ordinal}`,
-    "The candidate worktree starts at unchanged target head H.",
+    "Initial materialization starts at unchanged target head H. On an authorized Retry the exact owned candidate may retain its merge with ordered parents [H, C]; inspect it, preserve history, and rerun applicable required checks before reporting PreparedCandidate.",
     `Prepare the candidate as the exact integration merge of H and accepted commit C (${run.session.acceptedResult.commit}); the candidate commit must have exact ordered direct parents [H, C]. Do not rebase, cherry-pick, change accepted C, recreate the task change, or update/push the target ref.`,
     "Work only inside the exact candidate worktree for this session/run. Do not update or push the target ref, edit the accepted task worktree, or create another leaf attempt or claim.",
     "You own content-conflict resolution inside this candidate. Read H and C, their changes from the planned Base, repository instructions, and accepted task scenarios/source authorities before resolving.",
@@ -77,8 +78,11 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     "Attempt the merge and resolve content conflicts in this candidate while preserving both accepted task behavior and existing target behavior. A content conflict alone is not a reason to return NotPrepared. Do not blindly select one whole side.",
     "After a clean merge, a required documentation check may reveal broken relative local Markdown links after relocation. Read the exact diagnostic and existing intended local targets. Only when the intended existing target is unambiguous may you repair lexical path/fragment destinations in Markdown documentation inside this exact candidate.",
     "Preserve link labels, narrative, acceptance content, runtime, tests, fixtures, raw evidence, and manifest-bound bytes. A manifest-bound document is immutable; only its owner may produce an explicitly accepted new evidence artifact. Do not edit hashed evidence.",
+    "Select applicable required integration checks from the accepted task/scenarios and the repository documented route. Invoking an optional diagnostic does not make it a mandatory gate. The hosted docs-only git diff --check route does not apply to a mixed application-test/evidence candidate.",
+    "A failed applicable required check, including a required whitespace check, remains blocking and requires NotPrepared. Optional diagnostics may fail without blocking Prepared only after all applicable required checks exit0 and preservation is certain. Retain and report the actual failed diagnostic and its limit truthfully; never claim its exit passed or exempt arbitrary files. Preserve raw evidence and manifest-bound byte identities exactly.",
+    "An explicit human Retry after conclusive NotPrepared may continue on the same S2/H/C/resource under existing authorization: no numeric Retry cap, no automatic retry, and no S3. Reconcile uncertain outcomes and writers before new effects.",
     "After permitted link repair, run focused check:docs and applicable already-required checks and obtain exit0 before creating the final merge with ordered direct parents [H, C]. Verify accepted C is unchanged as well as the target still H. Never bypass checks, drop evidence, weaken assertions, or perform arbitrary candidate repair or a broad rerun.",
-    "If the intended target is ambiguous or absent, repair requires prose/acceptance/evidence-content changes, a non-documentation check fails, or preservation is uncertain, return conclusive NotPrepared naming the exact boundary. A documentation-check failure permits only the bounded lexical repair above; other required-check failures still require NotPrepared.",
+    "If the intended target is ambiguous or absent, repair requires prose/acceptance/evidence-content changes, an applicable required non-documentation check fails, or preservation is uncertain, return conclusive NotPrepared naming the exact boundary. A documentation-check failure permits only the bounded lexical repair above; other required-check failures still require NotPrepared.",
     "If preparation stops before successful checks/result, retain the exact candidate and native custody. Retry/FullRerun requires explicit fresh Operator authorization under existing H/C/session/Q/run/resource rules; reconcile uncertain outcomes and stopped writers before effects. Reuse no missing/failed qualification and never infer Prepared from a process exit.",
     "Run focused checks for the affected behavior after resolution. Verify the reported merge commit has exact ordered direct parents [H, C] and the target ref still names H before returning PreparedCandidate.",
     "If requirements cannot both be preserved, resolution is unsafe, a required scoped check fails, or authorities contradict, return conclusive NotPrepared with the concrete unresolved requirement, failed check, or authority contradiction. Never fabricate success.",
@@ -296,6 +300,37 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
   return yield* startObservedTurn(app, store, currentRecord, currentRun, thread, completionSubscription)
 })
 
+/** Every persisted observed/sealed turn must occur exactly once with its native status preserved. */
+const interruptedHistoryError = (
+  record: CodexIntegratorPrivateRecord,
+  thread: CodexThreadSnapshot
+): string | undefined => {
+  if (thread.turns.some((turn) => !privateRuns(record).some((known) => known.token === turn.ownedTurnToken)))
+    return "interrupted recovery history contains a foreign or tokenless turn"
+  for (const known of privateRuns(record)) {
+    if (known._tag !== "TurnObserved" && !isSealedPrivateRun(known)) continue
+    const matches = thread.turns.filter((turn) => turn.ownedTurnToken === known.token)
+    if (
+      matches.length !== 1 ||
+      matches[0]?.id !== known.turnId ||
+      matchingProviderTurnError(known, matches[0]) !== undefined
+    )
+      return "interrupted recovery history is incomplete or duplicated"
+    if (isSealedPrivateRun(known) && matches[0].status !== sealedProviderTurnStatus(known))
+      return "interrupted recovery history contradicts a sealed predecessor"
+  }
+  return undefined
+}
+
+/** A recovery read cannot convert process disappearance into a result: exact old custody must be stopped. */
+const verifyInterruptedCustody = (
+  app: CodexAppServer["Service"],
+  incarnation: CodexIntegratorPrivateRecord["appServerIncarnation"]
+) =>
+  app.verifyStoppedIncarnation === undefined || incarnation === app.incarnation
+    ? Effect.fail(providerFailure("interrupted recovery requires exact stopped prior incarnation custody"))
+    : boundary(app.verifyStoppedIncarnation(incarnation))
+
 const replaySealedRun = Effect.fn("CodexIntegrator.replaySealedRun")(function* (
   app: CodexAppServer["Service"],
   census: CodexOwnedActivityCensus["Service"],
@@ -309,14 +344,19 @@ const replaySealedRun = Effect.fn("CodexIntegrator.replaySealedRun")(function* (
   if (!runCorrelationEquals(result.correlation, run.correlation)) {
     return yield* Effect.fail(providerFailure("private result has a foreign run correlation"))
   }
+  if (run._tag === "InterruptedTurnSealed") yield* verifyInterruptedCustody(app, run.providerIncarnation)
   const freshThread = yield* observedThread(app, thread.id, record.candidatePath)
   if (freshThread.ownedThreadToken !== record.threadToken) {
     return yield* Effect.fail(providerFailure("sealed result thread ownership changed before replay"))
   }
+  if (run._tag === "InterruptedTurnSealed") {
+    const historyError = interruptedHistoryError(record, freshThread)
+    if (historyError !== undefined) return yield* Effect.fail(providerFailure(historyError))
+  }
   const recovered = yield* readOrRecoverTurn(app, census, store, record, run, freshThread)
-  if (!isTerminalTurn(recovered.turn))
+  if (!isTerminalTurn(recovered.turn) && recovered.turn.status !== "interrupted")
     return yield* Effect.fail(providerFailure("sealed provider turn is still active"))
-  const terminalStatus = run._tag === "FailedTurnSealed" ? "failed" : "completed"
+  const terminalStatus = isSealedPrivateRun(run) ? sealedProviderTurnStatus(run) : "completed"
   if (recovered.turn.status !== terminalStatus) {
     return yield* Effect.fail(providerFailure("fresh terminal turn status contradicts the sealed private result"))
   }
@@ -331,22 +371,17 @@ const sealObservedRun = Effect.fn("CodexIntegrator.sealObservedRun")(function* (
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot,
-  completionSubscription: CodexTurnCompletedSubscription | undefined,
-  deliveredCompletionHint: CodexTurnCompletedHint | undefined
+  completionSubscription: CodexTurnCompletedSubscription | undefined
 ) {
   const subscription =
     completionSubscription ??
     (yield* attachTurnCompletionHints(app, thread.id, run._tag === "TurnObserved" ? run.turnId : undefined))
   let currentThread = thread
   let current = yield* readOrRecoverTurn(app, census, store, record, run, thread, subscription)
-  if (requiresExactCompletionHint(app) && current.run._tag === "TurnObserved") {
+  const interruptedRecovery = run._tag === "TurnObserved" && current.turn.status === "interrupted"
+  if (requiresExactCompletionHint(app) && current.run._tag === "TurnObserved" && !interruptedRecovery) {
     const observedTurnId = current.run.turnId
-    // Reopen reconciliation has already consumed this exact hint and supplied
-    // the fresh thread snapshot. Reuse its exact T observation instead of
-    // resuming the same thread a second time; the terminal path below still
-    // requires the complete absent-activity census before sealing. If this
-    // snapshot is active, wait for a later matching hint before rereading.
-    let terminalRereadObserved = deliveredCompletionHint !== undefined && isTerminalTurn(current.turn)
+    let terminalRereadObserved = false
     while (!terminalRereadObserved) {
       const hint =
         subscription === undefined
@@ -368,18 +403,34 @@ const sealObservedRun = Effect.fn("CodexIntegrator.sealObservedRun")(function* (
   if (turn.ownedTurnToken !== currentRun.token || turn.correlation !== undefined) {
     return yield* Effect.fail(providerFailure("terminal turn does not carry the exact owned token and correlation"))
   }
-  if (!isTerminalTurn(turn)) return yield* Effect.fail(providerFailure("exact provider turn remains active"))
+  if (!isTerminalTurn(turn) && !interruptedRecovery)
+    return yield* Effect.fail(providerFailure("exact provider turn remains active"))
+  if (interruptedRecovery) {
+    const historyError = interruptedHistoryError(currentRecord, currentThread)
+    if (historyError !== undefined) return yield* Effect.fail(providerFailure(historyError))
+    yield* verifyInterruptedCustody(app, currentRecord.appServerIncarnation)
+  }
   yield* observeQuiescence(app, census, currentThread)
   const sealedIdentity = { correlation: currentRun.correlation, token: currentRun.token, turnId: turn.id }
-  if (turn.status === "failed") {
+  if (turn.status === "failed" || interruptedRecovery) {
     const result = IntegratorResult.cases.NotPrepared.make({
       correlation: currentRun.correlation,
-      detail: IntegratorNotPreparedDetail.make("Codex provider turn failed before producing a candidate")
+      detail: IntegratorNotPreparedDetail.make(
+        interruptedRecovery
+          ? "Codex provider turn interrupted before producing a candidate"
+          : "Codex provider turn failed before producing a candidate"
+      )
     })
     const sealed = updateRun(
       currentRecord,
       currentRun,
-      CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({ ...sealedIdentity, result })
+      interruptedRecovery
+        ? CodexIntegratorPrivateRun.cases.InterruptedTurnSealed.make({
+            ...sealedIdentity,
+            result,
+            providerIncarnation: currentRecord.appServerIncarnation
+          })
+        : CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({ ...sealedIdentity, result })
     )
     yield* boundary(store.write(sealed))
     return result
@@ -398,22 +449,12 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot,
-  completionSubscription: CodexTurnCompletedSubscription | undefined,
-  deliveredCompletionHint: CodexTurnCompletedHint | undefined
+  completionSubscription: CodexTurnCompletedSubscription | undefined
 ) {
   if (isSealedPrivateRun(run)) {
     return yield* replaySealedRun(app, census, store, record, run, thread, run.result)
   }
-  return yield* sealObservedRun(
-    app,
-    census,
-    store,
-    record,
-    run,
-    thread,
-    completionSubscription,
-    deliveredCompletionHint
-  )
+  return yield* sealObservedRun(app, census, store, record, run, thread, completionSubscription)
 })
 const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord")(function* (
   found: CodexIntegratorPrivateRecord,
@@ -427,6 +468,11 @@ const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord
   }
   const preparationError = providerPreparationError(found, run)
   if (preparationError !== undefined) return yield* Effect.fail(providerFailure(preparationError))
+  if (
+    runFor(found, run)?._tag === "TurnObserved" ||
+    privateRuns(found).some((item) => item._tag === "InterruptedTurnSealed")
+  )
+    return found
   const current =
     found.appServerIncarnation === app.incarnation ? found : bump(found, { appServerIncarnation: app.incarnation })
   if (current !== found) yield* boundary(store.write(current))
@@ -478,6 +524,43 @@ const checkConfigAndRecord = Effect.fn("CodexIntegrator.checkConfigAndRecord")(f
   if (Option.isSome(found)) return yield* reconcilePrivateRecord(found.value, run, candidatePath, app, store)
   return yield* createPrivateRecord(run, candidatePath, app, store, crypto)
 })
+/** A retained merge is reusable only after rereading the exact sealed NotPrepared predecessor and stopped writers. */
+const reconcileRetainedMergeRetry = Effect.fn("CodexIntegrator.reconcileRetainedMergeRetry")(function* (
+  record: CodexIntegratorPrivateRecord,
+  run: IntegratorRunCorrelation,
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  store: CodexIntegratorPrivateStoreService
+) {
+  const predecessor = privateRuns(record).find((item) => item.correlation.ordinal === run.ordinal - 1)
+  if (!isRetryProviderRun(run) || !isSealedPrivateRun(predecessor) || predecessor.result._tag !== "NotPrepared") {
+    return yield* Effect.fail(providerFailure("retained merge Retry requires a sealed NotPrepared predecessor"))
+  }
+  if (predecessor._tag === "InterruptedTurnSealed")
+    yield* verifyInterruptedCustody(app, predecessor.providerIncarnation)
+  const threaded = yield* ensureThread(app, record, store)
+  const fresh = yield* observedThread(app, threaded.thread.id, record.candidatePath)
+  if (fresh.ownedThreadToken !== record.threadToken) {
+    return yield* Effect.fail(providerFailure("retained Retry thread ownership changed"))
+  }
+  const matching = fresh.turns.filter((turn) => turn.ownedTurnToken === predecessor.token)
+  const terminalStatus = sealedProviderTurnStatus(predecessor)
+  if (matching.length !== 1 || matching[0]?.id !== predecessor.turnId || matching[0].status !== terminalStatus) {
+    return yield* Effect.fail(providerFailure("retained Retry predecessor terminal evidence changed"))
+  }
+  for (const turn of fresh.turns) {
+    const known = privateRuns(record).find((item) => item.token === turn.ownedTurnToken)
+    if (
+      known === undefined ||
+      matchingProviderTurnError(known, turn) !== undefined ||
+      (!isSealedPrivateRun(known) && !runCorrelationEquals(known.correlation, run)) ||
+      (isSealedPrivateRun(known) && turn.status !== sealedProviderTurnStatus(known))
+    ) {
+      return yield* Effect.fail(providerFailure("retained Retry contains foreign or contradictory provider history"))
+    }
+  }
+  yield* observeQuiescence(app, census, fresh)
+})
 const integratorServiceFor = (
   config: CodexIntegratorConfiguration,
   app: CodexAppServer["Service"],
@@ -503,7 +586,8 @@ const integratorServiceFor = (
                 config,
                 initial,
                 store,
-                ownership
+                ownership,
+                reconcileRetainedMergeRetry(initial, run, app, census, store)
               )
               const existingRun = runFor(materialized, run)
               const existingThreadId =
@@ -519,23 +603,23 @@ const integratorServiceFor = (
                       existingRun._tag === "TurnObserved" ? existingRun.turnId : undefined
                     )
                   : undefined
-              let deliveredCompletionHint: CodexTurnCompletedHint | undefined
-              if (existingRun?._tag === "TurnObserved" && requiresExactCompletionHint(app)) {
-                if (existingThreadId === undefined) {
-                  return yield* providerFailure("private Integrator thread identity is unavailable")
+              if (existingRun?._tag === "TurnObserved" && materialized.appServerIncarnation !== app.incarnation) {
+                yield* verifyInterruptedCustody(app, materialized.appServerIncarnation)
+              }
+              const admittingRetry = isRetryProviderRun(run) && existingRun === undefined
+              if (admittingRetry) {
+                for (const predecessor of privateRuns(materialized)) {
+                  if (predecessor._tag === "InterruptedTurnSealed")
+                    yield* verifyInterruptedCustody(app, predecessor.providerIncarnation)
                 }
-                if (completionSubscription === undefined) {
-                  return yield* providerFailure("exact provider completion hints are unavailable")
-                }
-                deliveredCompletionHint = yield* awaitExactTurnCompletionHint(
-                  completionSubscription,
-                  existingThreadId,
-                  existingRun.turnId
-                )
               }
               const threaded = yield* ensureThread(app, materialized, store)
               // A new Retry may record its run-two token only after the retained thread is freshly writer-free.
-              if (isRetryProviderRun(run) && runFor(threaded.record, run) === undefined) {
+              if (admittingRetry) {
+                if (privateRuns(threaded.record).some((predecessor) => predecessor._tag === "InterruptedTurnSealed")) {
+                  const historyError = interruptedHistoryError(threaded.record, threaded.thread)
+                  if (historyError !== undefined) return yield* Effect.fail(providerFailure(historyError))
+                }
                 yield* observeQuiescence(app, census, threaded.thread)
               }
               // The thread id is durable before the first exact provider-run token is recorded.
@@ -547,8 +631,7 @@ const integratorServiceFor = (
                 ensured.record,
                 ensured.run,
                 threaded.thread,
-                completionSubscription,
-                deliveredCompletionHint
+                completionSubscription
               )
             })
           )

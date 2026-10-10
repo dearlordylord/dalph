@@ -776,10 +776,23 @@ pre-association completion event.
 The app-server protocol does not guarantee notification replay after a client
 disconnect. Therefore, if T completes while Dalph is disconnected and no
 matching X/T notification arrives after reopen, the Integrator run remains
-pending indefinitely. A fresh terminal read and absent activity cannot seal
+pending indefinitely. A fresh completed read and absent activity cannot seal
 the private run without the matching hint. The user accepted this no-replay
 outcome. Dalph adds no timeout, polling, synthetic replay, duplicate
 turn/start, candidate, or replacement session to escape it.
+
+The accepted interrupted recovery exception permits one native recovery read
+of the durably associated X/T/K after exact old provider custody is proved
+stopped, with the exact subscription already attached. Only actual interrupted
+status, complete nonforeign token/history proof and a fresh full `Absent`
+activity/terminal/process census seal distinct private `InterruptedTurnSealed`
+with `NotPrepared`. The existing negative result quarantines the same session;
+it neither prepares a candidate nor starts another turn. Replay after a private
+seal repeats fresh interrupted history and absent-custody proof. Contradiction
+fails closed; late hints create no second result. Completed without a hint
+retains the pending outcome above. See the
+[interrupted recovery chronology](interrupted-integrator-negative-recovery.md).
+
 
 Before the initial `turn/start` response supplies T, the adapter retains at most
 64 completion notifications in arrival order, including repeated IDs. It

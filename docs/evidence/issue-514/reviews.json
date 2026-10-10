@@ -1,0 +1,28 @@
+{
+  "candidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "base": "a57cd6ec018ec109978aec386e52b6c7dd91d8df",
+  "round": 1,
+  "freshAgents": true,
+  "reasoning": "medium",
+  "standards": {
+    "agent": "standards_review_1",
+    "blockingFindings": [],
+    "scope": "Base..candidate, issue, repository instructions and linked specifications; read-only"
+  },
+  "spec": {
+    "agent": "spec_review_1",
+    "blockingFindings": [],
+    "scope": "Base..candidate; exact stopped custody, full history, Absent, seal and replay; per-run Retry ownership and typed cleanup; R1-R6 and native fixture; pending submission check not credited"
+  },
+  "evidenceClosure": {
+    "standards": "No gaps beyond pending submission exit/log and final manifest. Exact source/native/R1-R6 verified.",
+    "spec": "No additional blockers. All 71 source and 28 then-current artifact hashes match; native identities and per-run provenance verified. Submission explicitly uncredited pending successful exit.",
+    "finalCondition": "Attach observed exit 0, completed submission log and regenerated manifest before acceptance."
+  },
+  "submissionClosure": {
+    "exit": 0,
+    "sourceUnchanged": true,
+    "observedUTC": "2026-10-10T14:00:27Z",
+    "pendingConditions": "satisfied: actual submit exit/log and final manifest attached"
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "candidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "exit": 0,
+  "observedUTC": "2026-10-10T14:00:27Z",
+  "session": 76746,
+  "chunks": [
+    {
+      "bytes": 1526,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 1207,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 40089,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 2388,
+      "originalTokenCount": 601,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 22248,
+      "originalTokenCount": 5637,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 16872,
+      "originalTokenCount": 4271,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 10499,
+      "originalTokenCount": 2658,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 14634,
+      "originalTokenCount": 3699,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 8615,
+      "originalTokenCount": 2180,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 12120,
+      "originalTokenCount": 3060,
+      "exit": null,
+      "session": 76746
+    },
+    {
+      "bytes": 1836,
+      "originalTokenCount": 464,
+      "exit": 0,
+      "session": null
+    }
+  ],
+  "logBoundary": "captured tool-return output; one formal/fast chunk has explicit upstream truncation marker; no reconstruction",
+  "stoppedProcessGroup": true,
+  "stoppedGroupProof": [
+    {
+      "launch": {
+        "pid": 2470960,
+        "ppid": 2465940,
+        "pgid": 2470960,
+        "startTicks": "37814095",
+        "args": [
+          "node",
+          "/usr/local/share/npm-global/bin/pnpm",
+          "check:submit"
+        ]
+      },
+      "projection": "Absent"
+    }
+  ],
+  "censusUTC": "2026-10-10T14:00:46.202354+00:00"
+}

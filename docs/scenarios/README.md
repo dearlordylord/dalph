@@ -88,6 +88,8 @@ Git history.
 - [Codex resolves candidate-local content conflicts](candidate-local-content-conflicts.md)
 - [Codex repairs relocated candidate-local documentation links](candidate-local-documentation-links.md)
 - [Production Codex Integrator recovery and cleanup](production-codex-integrator.md)
+- [Resume an exact retained integration merge during authorized Retry](retained-integrator-merge-retry.md)
+- [Resume an already Started integration Retry](started-integrator-retry-lineage.md)
 - [Release a rewritten target without an ownership loop](non-descendant-started-integration.md)
 - [Queue accepted results and cross the integration cutoff](queue-accepted-integration.md)
 - [Recover or quarantine one integration session](recover-or-quarantine-integration-session.md)
@@ -194,3 +196,5 @@ banners in the retained files describe their individual limits.
 - [Qualify production evidence storage and sealed evidence history](production-evidence-store.md)
 
 - [Recover an interrupted tool item before continuing its attempt](recover-interrupted-tool-item.md): exact item retirement and fresh stopped custody before same-attempt continuation.
+
+- [Recover exact interrupted Integrator turns](interrupted-integrator-negative-recovery.md)

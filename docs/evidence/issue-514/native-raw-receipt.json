@@ -1,0 +1,6 @@
+{
+  "preSealRawSha256": "278e9ecd4c348aec01d36540f35b30434d3f6cefa8528ef6b685aa1fa27bff0b",
+  "preSealRawBytes": 3047,
+  "method": "canonical private-store encoder projection matches hash captured before seal; original disposable raw state was subsequently written only by native owner",
+  "originalProductionSnapshots": "untouched"
+}

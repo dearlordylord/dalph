@@ -55,6 +55,10 @@ import {
   IntegrationQuarantinedEvent,
   integrationQuarantineDirectionSubject
 } from "../integration-quarantine/events.js"
+import { Integrator, IntegratorGit, IntegratorCallFailure, prepareIntegrationCandidateRun } from "./protocol.js"
+import { integratorRetryAuthorizationIssue } from "./retry-authorization.js"
+import { appendInitialConclusiveIntegrationQuarantine } from "../integration-quarantine/initial-conclusive.js"
+import { makeIntegrationQuarantineDirectionControl } from "../integration-quarantine/control.js"
 import { IntegratorJournalContradiction } from "./errors.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -692,6 +696,190 @@ describe("Integrator FullRerun successor session", () => {
       })
     }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
   })
+
+  it.effect(
+    "resumes Started S2 run two after canonical FullRerun with fresh lineage and rejects foreign session relations",
+    () => {
+      const fixture = acceptedSuccessorFixture()
+      return Effect.gen(function* () {
+        const journal = yield* InRunJournal
+        const reader = yield* AcceptedJournalReader
+        const fixed = yield* appendIntegratorSuccessorSessionIfNeeded(journal, fixture.input, fixture.records)
+        const session = fixed.event.successor
+        const responsibility = acceptedResponsibilityFor(fixture.input.predecessor)
+        const one = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+        const two = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
+        const calls = yield* Ref.make(0)
+        const provider = Integrator.of({
+          prepare: (request) =>
+            Ref.update(calls, (n) => n + 1).pipe(
+              Effect.as(
+                IntegratorResult.cases.NotPrepared.make({
+                  correlation: request.correlation,
+                  detail: IntegratorNotPreparedDetail.make("S2 conclusive result")
+                })
+              )
+            )
+        })
+        const git = IntegratorGit.of({ readCandidate: () => Effect.die("NotPrepared must not read candidate Git") })
+        const first = yield* prepareIntegrationCandidateRun({
+          preparation: {
+            responsibility,
+            targetLineage: fixture.input.targetLineage,
+            targetLineageObservedAt: fixture.input.targetLineageObservedAt
+          },
+          run: one
+        }).pipe(Effect.provideService(Integrator, provider), Effect.provideService(IntegratorGit, git))
+        if (first._tag !== "NotPrepared") return yield* Effect.die("S2 run one must be conclusive")
+        const quarantine = yield* appendInitialConclusiveIntegrationQuarantine(first)
+        const control = yield* makeIntegrationQuarantineDirectionControl(journal)
+        yield* control.apply({
+          fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+            direction: "Retry",
+            quarantineAt: quarantine.position,
+            sessionId: session.sessionId
+          }),
+          requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "S2-human-Retry", runId })
+        })
+        const lineage = (name: string) =>
+          Effect.gen(function* () {
+            const operationId = OperationId.make(name)
+            yield* journal.append(
+              runId,
+              intentRecordKey(operationId),
+              GitReadIntentRecordedEvent.make({
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                operation: makeTargetLineageObservationOperation({
+                  integrationTarget: session.integrationTarget,
+                  operationId,
+                  plannedAttempt: session.plannedAttempt,
+                  predecessorOperationIds: []
+                }),
+                version: workflowJournalEventVersion
+              })
+            )
+            const observation = yield* journal.append(
+              runId,
+              outcomeRecordKey(operationId),
+              TargetLineageObservedEvent.make({
+                observation: fixture.input.targetLineage,
+                operationId,
+                plannedAttempt: session.plannedAttempt,
+                occurrenceClassification: "NonActionOccurrence",
+                version: workflowJournalEventVersion
+              })
+            )
+            return {
+              responsibility,
+              targetLineage: fixture.input.targetLineage,
+              targetLineageObservedAt: observation.position
+            }
+          })
+        const original = yield* lineage("S2-original-Retry-L")
+        const unadmitted = Integrator.of({
+          prepare: () =>
+            Effect.fail(
+              new IntegratorCallFailure({ correlation: two, detail: "stopped before S2 run-two native admission" })
+            )
+        })
+        expect(
+          (yield* prepareIntegrationCandidateRun({ preparation: original, run: two }).pipe(
+            Effect.provideService(Integrator, unadmitted),
+            Effect.provideService(IntegratorGit, git),
+            Effect.exit
+          ))._tag
+        ).toBe("Failure")
+        const fresh = yield* lineage("S2-post-Started-Retry-L")
+        const request = { preparation: fresh, run: two }
+        const before = yield* journal.read(runId)
+        expect(integratorRetryAuthorizationIssue(before, request)).toBeUndefined()
+        const reject = (name: string, records: ReadonlyArray<JournalRecord>, run = two) =>
+          expect(integratorRetryAuthorizationIssue(records, { ...request, run }), name).toBeDefined()
+        reject(
+          "missing canonical FullRerun S2",
+          before.filter(({ event }) => event._tag !== "IntegratorSuccessorSessionFixed")
+        )
+        reject(
+          "wrong FullRerun predecessor",
+          before.map((record) =>
+            record.event._tag === "IntegratorSuccessorSessionFixed"
+              ? {
+                  ...record,
+                  event: {
+                    ...record.event,
+                    predecessor: { ...record.event.predecessor, sessionId: IntegratorSessionId.make("foreign-S1") }
+                  }
+                }
+              : record
+          )
+        )
+        reject(
+          "wrong FullRerun successor",
+          before.map((record) =>
+            record.event._tag === "IntegratorSuccessorSessionFixed"
+              ? {
+                  ...record,
+                  event: {
+                    ...record.event,
+                    successor: { ...record.event.successor, sessionId: IntegratorSessionId.make("foreign-S2") }
+                  }
+                }
+              : record
+          )
+        )
+        reject(
+          "wrong requested S1 session",
+          before,
+          integratorRunCorrelationForSession(fixture.input.predecessor, two.ordinal)
+        )
+        reject("foreign requested S2 session", before, {
+          ...two,
+          session: { ...session, sessionId: IntegratorSessionId.make("foreign-request-S2") }
+        })
+        reject(
+          "wrong S2 predecessor result",
+          before.map((record) =>
+            record.event._tag === "IntegratorRunResultRecorded" &&
+            record.event.run.session.sessionId === session.sessionId
+              ? {
+                  ...record,
+                  event: { ...record.event, run: { ...record.event.run, session: fixture.input.predecessor } }
+                }
+              : record
+          )
+        )
+        expect(integratorRetryAuthorizationIssue(before, { preparation: original, run: two })).toBeDefined()
+        expect(yield* Ref.get(calls)).toBe(1)
+        const result = yield* prepareIntegrationCandidateRun(request).pipe(
+          Effect.provideService(Integrator, provider),
+          Effect.provideService(IntegratorGit, git)
+        )
+        expect(result._tag).toBe("NotPrepared")
+        expect(
+          yield* prepareIntegrationCandidateRun(request).pipe(
+            Effect.provideService(Integrator, provider),
+            Effect.provideService(IntegratorGit, git)
+          )
+        ).toEqual(result)
+        expect(yield* Ref.get(calls)).toBe(2)
+        const after = yield* journal.read(runId)
+        expect(after.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toHaveLength(1)
+        expect(after.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+        expect(
+          after.filter(
+            ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+          )
+        ).toHaveLength(2)
+        expect(after.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toHaveLength(2)
+        expect(after.find(({ event }) => event._tag === "IntegratorRunResultRecorded")).toEqual(
+          before.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+        )
+        const current = yield* reader.readAccepted(runId)
+        expect(Option.isSome(yield* readActiveIntegratorSession(current, responsibility))).toBe(true)
+      }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
+    }
+  )
 
   it.effect("recovers a recorded full rerun without creating a second successor", () => {
     const fixture = acceptedSuccessorFixture()
