@@ -127,6 +127,28 @@ const threadRecordInput = (runs: ReadonlyArray<unknown>) => ({
 })
 
 describe("Codex Integrator private store", () => {
+  it("R6 decodes interrupted negative seals and legacy completed/failed records through restart and typed cleanup", () => {
+    for (const tag of ["InterruptedTurnSealed", "FailedTurnSealed", "CompletedTurnSealed"] as const) {
+      const run = {
+        ...validRun(),
+        _tag: tag,
+        result: terminalResult(),
+        turnId: CodexTurnId.make("terminal"),
+        ...(tag === "InterruptedTurnSealed"
+          ? { providerIncarnation: CodexServerIncarnation.make("original-owner") }
+          : {})
+      }
+      const record = Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)(threadRecordInput([run]))
+      expect(
+        Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)(
+          Schema.encodeUnknownSync(CodexIntegratorPrivateRecord)(record)
+        )
+      ).toEqual(record)
+      const sealed = sealedPrivateRunHistoryFrom([Schema.decodeUnknownSync(CodexIntegratorPrivateRun)(run)])
+      expect(sealed?.[0]?._tag).toBe(tag)
+    }
+  })
+
   it("rejects every noncanonical provider-run history transition before persistence", () => {
     const sealedRun = CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
       correlation: runCorrelation(1),
@@ -324,6 +346,12 @@ describe("Codex Integrator private store", () => {
 
     const invalidRuns: ReadonlyArray<unknown> = [
       { ...validRun(), _tag: "Unknown" },
+      {
+        ...validRun(),
+        _tag: "InterruptedTurnSealed",
+        result: preparedResult(),
+        turnId: CodexTurnId.make("interrupted-prepared")
+      },
       { ...validRun(), _tag: "TurnObserved" },
       { ...validRun(), _tag: "CompletedTurnSealed", turnId: CodexTurnId.make("sealed") },
       { ...validRun(), _tag: "CompletedTurnSealed", result: terminalResult() },

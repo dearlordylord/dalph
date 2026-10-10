@@ -34,7 +34,8 @@ import {
   isRetryProviderRun,
   isSealedPrivateRun,
   newPrivateRecordRunError,
-  providerRunAdmissionError
+  providerRunAdmissionError,
+  sealedProviderTurnStatus
 } from "./codex-integrator-private-lifecycle.js"
 import { providerPreparationError } from "./codex-integrator-private-preparation.js"
 import {
@@ -299,6 +300,37 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
   return yield* startObservedTurn(app, store, currentRecord, currentRun, thread, completionSubscription)
 })
 
+/** Every persisted observed/sealed turn must occur exactly once with its native status preserved. */
+const interruptedHistoryError = (
+  record: CodexIntegratorPrivateRecord,
+  thread: CodexThreadSnapshot
+): string | undefined => {
+  if (thread.turns.some((turn) => !privateRuns(record).some((known) => known.token === turn.ownedTurnToken)))
+    return "interrupted recovery history contains a foreign or tokenless turn"
+  for (const known of privateRuns(record)) {
+    if (known._tag !== "TurnObserved" && !isSealedPrivateRun(known)) continue
+    const matches = thread.turns.filter((turn) => turn.ownedTurnToken === known.token)
+    if (
+      matches.length !== 1 ||
+      matches[0]?.id !== known.turnId ||
+      matchingProviderTurnError(known, matches[0]) !== undefined
+    )
+      return "interrupted recovery history is incomplete or duplicated"
+    if (isSealedPrivateRun(known) && matches[0].status !== sealedProviderTurnStatus(known))
+      return "interrupted recovery history contradicts a sealed predecessor"
+  }
+  return undefined
+}
+
+/** A recovery read cannot convert process disappearance into a result: exact old custody must be stopped. */
+const verifyInterruptedCustody = (
+  app: CodexAppServer["Service"],
+  incarnation: CodexIntegratorPrivateRecord["appServerIncarnation"]
+) =>
+  app.verifyStoppedIncarnation === undefined || incarnation === app.incarnation
+    ? Effect.fail(providerFailure("interrupted recovery requires exact stopped prior incarnation custody"))
+    : boundary(app.verifyStoppedIncarnation(incarnation))
+
 const replaySealedRun = Effect.fn("CodexIntegrator.replaySealedRun")(function* (
   app: CodexAppServer["Service"],
   census: CodexOwnedActivityCensus["Service"],
@@ -312,14 +344,19 @@ const replaySealedRun = Effect.fn("CodexIntegrator.replaySealedRun")(function* (
   if (!runCorrelationEquals(result.correlation, run.correlation)) {
     return yield* Effect.fail(providerFailure("private result has a foreign run correlation"))
   }
+  if (run._tag === "InterruptedTurnSealed") yield* verifyInterruptedCustody(app, run.providerIncarnation)
   const freshThread = yield* observedThread(app, thread.id, record.candidatePath)
   if (freshThread.ownedThreadToken !== record.threadToken) {
     return yield* Effect.fail(providerFailure("sealed result thread ownership changed before replay"))
   }
+  if (run._tag === "InterruptedTurnSealed") {
+    const historyError = interruptedHistoryError(record, freshThread)
+    if (historyError !== undefined) return yield* Effect.fail(providerFailure(historyError))
+  }
   const recovered = yield* readOrRecoverTurn(app, census, store, record, run, freshThread)
-  if (!isTerminalTurn(recovered.turn))
+  if (!isTerminalTurn(recovered.turn) && recovered.turn.status !== "interrupted")
     return yield* Effect.fail(providerFailure("sealed provider turn is still active"))
-  const terminalStatus = run._tag === "FailedTurnSealed" ? "failed" : "completed"
+  const terminalStatus = isSealedPrivateRun(run) ? sealedProviderTurnStatus(run) : "completed"
   if (recovered.turn.status !== terminalStatus) {
     return yield* Effect.fail(providerFailure("fresh terminal turn status contradicts the sealed private result"))
   }
@@ -334,22 +371,17 @@ const sealObservedRun = Effect.fn("CodexIntegrator.sealObservedRun")(function* (
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot,
-  completionSubscription: CodexTurnCompletedSubscription | undefined,
-  deliveredCompletionHint: CodexTurnCompletedHint | undefined
+  completionSubscription: CodexTurnCompletedSubscription | undefined
 ) {
   const subscription =
     completionSubscription ??
     (yield* attachTurnCompletionHints(app, thread.id, run._tag === "TurnObserved" ? run.turnId : undefined))
   let currentThread = thread
   let current = yield* readOrRecoverTurn(app, census, store, record, run, thread, subscription)
-  if (requiresExactCompletionHint(app) && current.run._tag === "TurnObserved") {
+  const interruptedRecovery = run._tag === "TurnObserved" && current.turn.status === "interrupted"
+  if (requiresExactCompletionHint(app) && current.run._tag === "TurnObserved" && !interruptedRecovery) {
     const observedTurnId = current.run.turnId
-    // Reopen reconciliation has already consumed this exact hint and supplied
-    // the fresh thread snapshot. Reuse its exact T observation instead of
-    // resuming the same thread a second time; the terminal path below still
-    // requires the complete absent-activity census before sealing. If this
-    // snapshot is active, wait for a later matching hint before rereading.
-    let terminalRereadObserved = deliveredCompletionHint !== undefined && isTerminalTurn(current.turn)
+    let terminalRereadObserved = false
     while (!terminalRereadObserved) {
       const hint =
         subscription === undefined
@@ -371,18 +403,34 @@ const sealObservedRun = Effect.fn("CodexIntegrator.sealObservedRun")(function* (
   if (turn.ownedTurnToken !== currentRun.token || turn.correlation !== undefined) {
     return yield* Effect.fail(providerFailure("terminal turn does not carry the exact owned token and correlation"))
   }
-  if (!isTerminalTurn(turn)) return yield* Effect.fail(providerFailure("exact provider turn remains active"))
+  if (!isTerminalTurn(turn) && !interruptedRecovery)
+    return yield* Effect.fail(providerFailure("exact provider turn remains active"))
+  if (interruptedRecovery) {
+    const historyError = interruptedHistoryError(currentRecord, currentThread)
+    if (historyError !== undefined) return yield* Effect.fail(providerFailure(historyError))
+    yield* verifyInterruptedCustody(app, currentRecord.appServerIncarnation)
+  }
   yield* observeQuiescence(app, census, currentThread)
   const sealedIdentity = { correlation: currentRun.correlation, token: currentRun.token, turnId: turn.id }
-  if (turn.status === "failed") {
+  if (turn.status === "failed" || interruptedRecovery) {
     const result = IntegratorResult.cases.NotPrepared.make({
       correlation: currentRun.correlation,
-      detail: IntegratorNotPreparedDetail.make("Codex provider turn failed before producing a candidate")
+      detail: IntegratorNotPreparedDetail.make(
+        interruptedRecovery
+          ? "Codex provider turn interrupted before producing a candidate"
+          : "Codex provider turn failed before producing a candidate"
+      )
     })
     const sealed = updateRun(
       currentRecord,
       currentRun,
-      CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({ ...sealedIdentity, result })
+      interruptedRecovery
+        ? CodexIntegratorPrivateRun.cases.InterruptedTurnSealed.make({
+            ...sealedIdentity,
+            result,
+            providerIncarnation: currentRecord.appServerIncarnation
+          })
+        : CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({ ...sealedIdentity, result })
     )
     yield* boundary(store.write(sealed))
     return result
@@ -401,22 +449,12 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot,
-  completionSubscription: CodexTurnCompletedSubscription | undefined,
-  deliveredCompletionHint: CodexTurnCompletedHint | undefined
+  completionSubscription: CodexTurnCompletedSubscription | undefined
 ) {
   if (isSealedPrivateRun(run)) {
     return yield* replaySealedRun(app, census, store, record, run, thread, run.result)
   }
-  return yield* sealObservedRun(
-    app,
-    census,
-    store,
-    record,
-    run,
-    thread,
-    completionSubscription,
-    deliveredCompletionHint
-  )
+  return yield* sealObservedRun(app, census, store, record, run, thread, completionSubscription)
 })
 const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord")(function* (
   found: CodexIntegratorPrivateRecord,
@@ -430,6 +468,11 @@ const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord
   }
   const preparationError = providerPreparationError(found, run)
   if (preparationError !== undefined) return yield* Effect.fail(providerFailure(preparationError))
+  if (
+    runFor(found, run)?._tag === "TurnObserved" ||
+    privateRuns(found).some((item) => item._tag === "InterruptedTurnSealed")
+  )
+    return found
   const current =
     found.appServerIncarnation === app.incarnation ? found : bump(found, { appServerIncarnation: app.incarnation })
   if (current !== found) yield* boundary(store.write(current))
@@ -493,13 +536,15 @@ const reconcileRetainedMergeRetry = Effect.fn("CodexIntegrator.reconcileRetained
   if (!isRetryProviderRun(run) || !isSealedPrivateRun(predecessor) || predecessor.result._tag !== "NotPrepared") {
     return yield* Effect.fail(providerFailure("retained merge Retry requires a sealed NotPrepared predecessor"))
   }
+  if (predecessor._tag === "InterruptedTurnSealed")
+    yield* verifyInterruptedCustody(app, predecessor.providerIncarnation)
   const threaded = yield* ensureThread(app, record, store)
   const fresh = yield* observedThread(app, threaded.thread.id, record.candidatePath)
   if (fresh.ownedThreadToken !== record.threadToken) {
     return yield* Effect.fail(providerFailure("retained Retry thread ownership changed"))
   }
   const matching = fresh.turns.filter((turn) => turn.ownedTurnToken === predecessor.token)
-  const terminalStatus = predecessor._tag === "FailedTurnSealed" ? "failed" : "completed"
+  const terminalStatus = sealedProviderTurnStatus(predecessor)
   if (matching.length !== 1 || matching[0]?.id !== predecessor.turnId || matching[0].status !== terminalStatus) {
     return yield* Effect.fail(providerFailure("retained Retry predecessor terminal evidence changed"))
   }
@@ -509,7 +554,7 @@ const reconcileRetainedMergeRetry = Effect.fn("CodexIntegrator.reconcileRetained
       known === undefined ||
       matchingProviderTurnError(known, turn) !== undefined ||
       (!isSealedPrivateRun(known) && !runCorrelationEquals(known.correlation, run)) ||
-      (isSealedPrivateRun(known) && turn.status !== (known._tag === "FailedTurnSealed" ? "failed" : "completed"))
+      (isSealedPrivateRun(known) && turn.status !== sealedProviderTurnStatus(known))
     ) {
       return yield* Effect.fail(providerFailure("retained Retry contains foreign or contradictory provider history"))
     }
@@ -558,23 +603,23 @@ const integratorServiceFor = (
                       existingRun._tag === "TurnObserved" ? existingRun.turnId : undefined
                     )
                   : undefined
-              let deliveredCompletionHint: CodexTurnCompletedHint | undefined
-              if (existingRun?._tag === "TurnObserved" && requiresExactCompletionHint(app)) {
-                if (existingThreadId === undefined) {
-                  return yield* providerFailure("private Integrator thread identity is unavailable")
+              if (existingRun?._tag === "TurnObserved" && materialized.appServerIncarnation !== app.incarnation) {
+                yield* verifyInterruptedCustody(app, materialized.appServerIncarnation)
+              }
+              const admittingRetry = isRetryProviderRun(run) && existingRun === undefined
+              if (admittingRetry) {
+                for (const predecessor of privateRuns(materialized)) {
+                  if (predecessor._tag === "InterruptedTurnSealed")
+                    yield* verifyInterruptedCustody(app, predecessor.providerIncarnation)
                 }
-                if (completionSubscription === undefined) {
-                  return yield* providerFailure("exact provider completion hints are unavailable")
-                }
-                deliveredCompletionHint = yield* awaitExactTurnCompletionHint(
-                  completionSubscription,
-                  existingThreadId,
-                  existingRun.turnId
-                )
               }
               const threaded = yield* ensureThread(app, materialized, store)
               // A new Retry may record its run-two token only after the retained thread is freshly writer-free.
-              if (isRetryProviderRun(run) && runFor(threaded.record, run) === undefined) {
+              if (admittingRetry) {
+                if (privateRuns(threaded.record).some((predecessor) => predecessor._tag === "InterruptedTurnSealed")) {
+                  const historyError = interruptedHistoryError(threaded.record, threaded.thread)
+                  if (historyError !== undefined) return yield* Effect.fail(providerFailure(historyError))
+                }
                 yield* observeQuiescence(app, census, threaded.thread)
               }
               // The thread id is durable before the first exact provider-run token is recorded.
@@ -586,8 +631,7 @@ const integratorServiceFor = (
                 ensured.record,
                 ensured.run,
                 threaded.thread,
-                completionSubscription,
-                deliveredCompletionHint
+                completionSubscription
               )
             })
           )

@@ -1261,13 +1261,12 @@ application shutdown is not this result.
 _Avoid_: Dalph crash, app-server disconnect, ambiguous response, automatic retry
 
 **Integration shutdown recovery**:
-Automatic restoration of an unfinished integration session after Dalph
-deliberately interrupted its implementation activity for recoverable
-application shutdown. On the next startup, ordinary delivery gives the same
-session back to the integrator. A provider turn marked interrupted by that
-shutdown is not a conclusive integration-agent run failure and does not
-quarantine the session.
-_Avoid_: Operator Retry, new integration-agent run, quarantine, Full rerun
+The Run owner's restoration of the same unfinished integration session after
+stopped provider custody. Process disappearance or shutdown alone is no result;
+an exact interrupted provider turn with complete current absent activity is a
+conclusive negative disposition, while completed without its exact completion
+notification remains pending.
+_Avoid_: Executor Resume, process-exit failure, automatic Retry, inferred candidate
 
 **Target promotion request**:
 The deterministic request that offers one exact Git-qualified prepared candidate M to one

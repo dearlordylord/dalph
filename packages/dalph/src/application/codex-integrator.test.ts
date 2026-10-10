@@ -39,6 +39,7 @@ import {
   CodexIntegratorPrivateRecord,
   CodexIntegratorPrivateRun,
   CodexIntegratorPrivateStore,
+  CodexIntegratorStoreFailure,
   IntegratorCandidateWorktreePath,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator,
@@ -201,6 +202,7 @@ type FixtureResumeThreadState =
   | "wrongId"
   | "completed"
   | "failed"
+  | "interrupted"
 
 type FixtureOptions = {
   readonly activity?: CodexOwnedActivityCensusProjection
@@ -239,6 +241,14 @@ type FixtureOptions = {
   readonly persistedTurnCorrelation?: boolean
   readonly hideTurnsOnRead?: boolean
   readonly activeTurn?: boolean
+  readonly sealCut?: "BeforeWrite" | "AfterWrite"
+  readonly resumeThreadUnavailable?: boolean
+  readonly stoppedCustodyCalls?: Array<CodexServerIncarnation>
+  readonly resumeTurnStatuses?: {
+    value: ReadonlyMap<CodexTurnId, "completed" | "failed" | "interrupted" | "inProgress">
+  }
+  readonly stoppedCustodyUnavailable?: boolean
+  readonly stoppedCustodyLive?: boolean
   readonly failedTerminalTurn?: boolean
   readonly precedingItems?: ReadonlyArray<unknown>
   readonly gitCalls?: Array<ReadonlyArray<string>>
@@ -253,7 +263,7 @@ type FixtureOptions = {
   readonly initialRecords?: ReadonlyArray<CodexIntegratorPrivateRecord>
   readonly initialProviderTurns?: ReadonlyArray<{
     readonly id: CodexTurnId
-    readonly status: "completed" | "failed" | "inProgress"
+    readonly status: "completed" | "failed" | "interrupted" | "inProgress"
     readonly items: ReadonlyArray<unknown>
     readonly ownedTurnToken?: CodexOwnedTurnToken
   }>
@@ -303,7 +313,7 @@ const fixtureLayer = (
       const turns = yield* Ref.make<
         ReadonlyArray<{
           readonly id: CodexTurnId
-          readonly status: "completed" | "failed" | "inProgress"
+          readonly status: "completed" | "failed" | "interrupted" | "inProgress"
           readonly items: ReadonlyArray<unknown>
           readonly ownedTurnToken?: CodexOwnedTurnToken
         }>
@@ -415,6 +425,24 @@ const fixtureLayer = (
                 )
             }
           }),
+        ...(options.stoppedCustodyUnavailable === true
+          ? {}
+          : {
+              verifyStoppedIncarnation: (incarnation) =>
+                Effect.sync(() => options.stoppedCustodyCalls?.push(incarnation)).pipe(
+                  Effect.andThen(
+                    options.stoppedCustodyLive === true
+                      ? Effect.fail(
+                          CodexAppServerFailure.make({
+                            operation: "close",
+                            kind: "Ownership",
+                            detail: "retained launch writers are live or unproved"
+                          })
+                        )
+                      : Effect.void
+                  )
+                )
+            }),
         get incarnation() {
           return options.appIncarnation?.value ?? fixtureIncarnation
         },
@@ -491,6 +519,12 @@ const fixtureLayer = (
           }),
         resumeThread: (_threadId, cwd) =>
           Effect.gen(function* () {
+            if (options.resumeThreadUnavailable === true)
+              return yield* CodexAppServerFailure.make({
+                operation: "thread/resume",
+                kind: "Unavailable",
+                detail: "native recovery RPC unavailable"
+              })
             if (options.resumeThreadCalls !== undefined) options.resumeThreadCalls.value += 1
             options.boundaryEvents?.push("codex:resume-thread")
             const resumeOrdinal = yield* Ref.getAndUpdate(resumeThreadCalls, (value) => value + 1)
@@ -529,13 +563,15 @@ const fixtureLayer = (
                     : current.map((turn) =>
                         resumeThreadState === "completed"
                           ? { ...turn, status: "completed" as const }
-                          : resumeThreadState === "failed"
-                            ? { ...turn, status: "failed" as const }
-                            : resumeThreadState === "active"
-                              ? { ...turn, status: "inProgress" as const }
-                              : resumeThreadState === "wrongId"
-                                ? { ...turn, id: CodexTurnId.make("foreign-replay-turn-id") }
-                                : turn
+                          : resumeThreadState === "interrupted"
+                            ? { ...turn, status: "interrupted" as const }
+                            : resumeThreadState === "failed"
+                              ? { ...turn, status: "failed" as const }
+                              : resumeThreadState === "active"
+                                ? { ...turn, status: "inProgress" as const }
+                                : resumeThreadState === "wrongId"
+                                  ? { ...turn, id: CodexTurnId.make("foreign-replay-turn-id") }
+                                  : turn
                       )
             const visibleTurns =
               options.hideTurnsOnRead === true
@@ -558,7 +594,10 @@ const fixtureLayer = (
               id: CodexThreadId.make("fixture-thread"),
               cwd: CodexThreadWorkingDirectory.make(cwd),
               status: resumeThreadState === "active" ? ("active" as const) : ("idle" as const),
-              turns: visibleTurns,
+              turns: visibleTurns.map((turn) => ({
+                ...turn,
+                status: options.resumeTurnStatuses?.value.get(turn.id) ?? turn.status
+              })),
               ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
             }
           }),
@@ -758,19 +797,42 @@ const fixtureLayerWithoutOwnership = (): Layer.Layer<CodexAppServer | GitCommand
     })
   )
 
+const privateStoreLayerFor = (options: FixtureOptions) => {
+  const memory = memoryCodexIntegratorPrivateStoreLayer(options.initialRecords, (record) => {
+    options.privateWrites?.push(record)
+    options.boundaryEvents?.push(`store:${record._tag}`)
+    if (record._tag === "ThreadWithRuns" && privateRuns(record).some((run) => run._tag === "TurnObserved"))
+      options.boundaryEvents?.push("store:IntegratorTurnObserved")
+  })
+  if (options.sealCut === undefined) return memory
+  return Layer.effect(
+    CodexIntegratorPrivateStore,
+    Effect.gen(function* () {
+      const store = yield* CodexIntegratorPrivateStore
+      let cut = false
+      return CodexIntegratorPrivateStore.of({
+        ...store,
+        write: (record) =>
+          Effect.gen(function* () {
+            const shouldCut = !cut && privateRuns(record).some((run) => run._tag === "InterruptedTurnSealed")
+            if (shouldCut) cut = true
+            const failure = new CodexIntegratorStoreFailure({ detail: "controlled interrupted seal response loss" })
+            if (shouldCut && options.sealCut === "BeforeWrite") return yield* failure
+            yield* store.write(record)
+            if (shouldCut && options.sealCut === "AfterWrite") return yield* failure
+          })
+      })
+    })
+  ).pipe(Layer.provide(memory))
+}
+
 const providerLayer = (config: CodexIntegratorConfiguration, options: FixtureOptions = {}) =>
   codexIntegratorLayer(config).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         NodeCrypto.layer,
         NodeFileSystem.layer,
-        memoryCodexIntegratorPrivateStoreLayer(options.initialRecords, (record) => {
-          options.privateWrites?.push(record)
-          options.boundaryEvents?.push(`store:${record._tag}`)
-          if (record._tag === "ThreadWithRuns" && privateRuns(record).some((run) => run._tag === "TurnObserved")) {
-            options.boundaryEvents?.push("store:IntegratorTurnObserved")
-          }
-        }),
+        privateStoreLayerFor(options),
         fixtureLayer(options).pipe(Layer.provide(NodeFileSystem.layer)),
         options.activitySequence === undefined
           ? controlledCodexOwnedActivityCensusLayer({
@@ -855,6 +917,42 @@ integratorContract({
   name: "node",
   request: nodeContractRequest
 })
+
+const interruptedRecoveryFixture = (options: FixtureOptions = {}) => {
+  const token = CodexOwnedTurnToken.make("retained-interrupted-token")
+  const turnId = CodexTurnId.make("retained-interrupted-turn")
+  const retained = observedPrivateRun(token, turnId)
+  const config = CodexIntegratorConfiguration.make({
+    candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+    commonDirectory,
+    privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/interrupted-store.json"),
+    repository
+  })
+  const turnStarts = { value: 0 }
+  const threadStarts = { value: 0 }
+  const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+  return {
+    token,
+    turnId,
+    retained,
+    turnStarts,
+    threadStarts,
+    privateWrites,
+    layer: providerLayer(config, {
+      initialRecords: [retained],
+      initialProviderTurns: [{ id: turnId, status: "interrupted", items: [], ownedTurnToken: token }],
+      preexistingThread: true,
+      preexistingThreadToken: retained.threadToken,
+      preRegisteredWorktree: true,
+      preRegisteredWorktreePathExists: true,
+      suppressCompletionHint: true,
+      turnStarts,
+      threadStarts,
+      privateWrites,
+      ...options
+    })
+  }
+}
 
 describe("Codex Integrator", () => {
   it("composes the node-backed private store behind the integrator boundary", () => {
@@ -1262,7 +1360,7 @@ describe("Codex Integrator", () => {
           if (Option.isNone(stored)) return yield* Effect.fail("reopened private Integrator record disappeared")
           expect(privateRuns(stored.value)[0]?._tag).toBe("TurnObserved")
           expect(settled.value).toBe(false)
-          expect(resumeThreadCalls.value).toBe(0)
+          expect(resumeThreadCalls.value).toBe(1)
           expect(turnStarts.value).toBe(0)
           expect(activityReads.value).toBe(0)
           expect(
@@ -1355,7 +1453,7 @@ describe("Codex Integrator", () => {
     expect(result.prepared._tag).toBe("PreparedCandidate")
     expect(threadStarts.value).toBe(0)
     expect(turnStarts.value).toBe(0)
-    expect(resumeThreadCalls.value).toBe(1)
+    expect(resumeThreadCalls.value).toBe(2)
     expect(privateRuns(result.record)[0]?._tag).toBe("CompletedTurnSealed")
     const sealed = privateRuns(result.record)[0]
     expect(sealed?.token).toBe(token)
@@ -2371,6 +2469,226 @@ describe("Codex Integrator", () => {
       expect(turnStarts.value).toBe(1)
     }
   )
+
+  it("R1/R4 seals exact interrupted recovery as NotPrepared and replays response loss without another turn", async () => {
+    const fixture = interruptedRecoveryFixture()
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        const replay = yield* integrator.prepare(requestFor(1))
+        const store = yield* CodexIntegratorPrivateStore
+        return { first, replay, stored: yield* store.read(session.sessionId) }
+      }).pipe(Effect.provide(fixture.layer))
+    )
+    expect(result.first._tag).toBe("NotPrepared")
+    expect(result.replay).toEqual(result.first)
+    expect(Option.isSome(result.stored)).toBe(true)
+    if (Option.isSome(result.stored)) {
+      const sealed = privateRuns(result.stored.value)[0]
+      expect(sealed?._tag).toBe("InterruptedTurnSealed")
+      expect(sealed?.token).toBe(fixture.token)
+      expect(sealed?.correlation).toEqual(requestFor(1).correlation)
+      expect(sealed?._tag === "InterruptedTurnSealed" ? sealed.turnId : undefined).toBe(fixture.turnId)
+      expect(result.stored.value.appServerIncarnation).toBe(fixture.retained.appServerIncarnation)
+    }
+    expect(fixture.privateWrites).toHaveLength(1)
+    expect(fixture.turnStarts.value).toBe(0)
+    expect(fixture.threadStarts.value).toBe(0)
+  })
+
+  it.each(["BeforeWrite", "AfterWrite"] as const)(
+    "R4 reconciles %s interrupted seal cut before replaying one negative result",
+    async (sealCut) => {
+      const fixture = interruptedRecoveryFixture({ sealCut })
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const integrator = yield* Integrator
+          const lost = yield* Effect.flip(integrator.prepare(requestFor(1)))
+          const store = yield* CodexIntegratorPrivateStore
+          const atCut = yield* store.read(session.sessionId)
+          if (Option.isNone(atCut)) return yield* Effect.fail("cut record absent")
+          expect(privateRuns(atCut.value)[0]?._tag).toBe(
+            sealCut === "BeforeWrite" ? "TurnObserved" : "InterruptedTurnSealed"
+          )
+          const recovered = yield* integrator.prepare(requestFor(1))
+          expect(yield* integrator.prepare(requestFor(1))).toEqual(recovered)
+          return { lost, recovered }
+        }).pipe(Effect.provide(fixture.layer))
+      )
+      expect(result.lost._tag).toBe("IntegratorCallFailure")
+      expect(result.recovered._tag).toBe("NotPrepared")
+      expect(fixture.privateWrites).toHaveLength(1)
+      expect(fixture.turnStarts.value).toBe(0)
+    }
+  )
+
+  it("R5 ignores a late exact hint after interrupted seal without publishing a second result", async () => {
+    const publisher: NonNullable<FixtureOptions["completionNotificationPublisher"]> = {}
+    const fixture = interruptedRecoveryFixture({ completionNotificationPublisher: publisher })
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const integrator = yield* Integrator
+          const first = yield* integrator.prepare(requestFor(1))
+          if (publisher.value === undefined) return yield* Effect.fail("hint subscription absent")
+          yield* publisher.value({ threadId: CodexThreadId.make("fixture-thread"), turnId: fixture.turnId })
+          expect(yield* integrator.prepare(requestFor(1))).toEqual(first)
+        })
+      ).pipe(Effect.provide(fixture.layer))
+    )
+    expect(fixture.privateWrites).toHaveLength(1)
+    expect(fixture.turnStarts.value).toBe(0)
+  })
+
+  it("R3 keeps an inProgress recovery pending with no seal or replacement turn", async () => {
+    const attached = await Effect.runPromise(Deferred.make<void>())
+    const fixture = interruptedRecoveryFixture({ resumeThreadState: "active", completionHintAttached: attached })
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const pending = yield* Effect.forkChild((yield* Integrator).prepare(requestFor(1)))
+          yield* Deferred.await(attached)
+          yield* Effect.yieldNow
+          expect(fixture.privateWrites).toHaveLength(0)
+          yield* Fiber.interrupt(pending)
+        })
+      ).pipe(Effect.provide(fixture.layer))
+    )
+    expect(fixture.turnStarts.value).toBe(0)
+  })
+
+  it.each([
+    { name: "unavailable RPC", options: { resumeThreadUnavailable: true } },
+    {
+      name: "duplicate exact turn",
+      options: {
+        initialProviderTurns: [1, 2].map(() => ({
+          id: CodexTurnId.make("retained-interrupted-turn"),
+          status: "interrupted" as const,
+          items: [],
+          ownedTurnToken: CodexOwnedTurnToken.make("retained-interrupted-token")
+        }))
+      }
+    },
+    {
+      name: "contradictory census",
+      options: { activity: { _tag: "Contradictory", detail: "foreign process observation" } }
+    },
+    { name: "foreign turn", options: { resumeThreadState: "foreign" } },
+    { name: "tokenless turn", options: { resumeThreadState: "tokenless" } },
+    { name: "missing turn", options: { resumeThreadState: "missing" } },
+    { name: "wrong turn id", options: { resumeThreadState: "wrongId" } },
+    { name: "foreign thread token", options: { resumeThreadTokenMode: "foreign" } },
+    { name: "missing thread token", options: { resumeThreadTokenMode: "tokenless" } },
+    { name: "foreign correlation", options: { persistedTurnCorrelation: true } },
+    { name: "unavailable old custody", options: { stoppedCustodyUnavailable: true } },
+    { name: "live old custody", options: { stoppedCustodyLive: true } },
+    { name: "current live activity", options: { activity: { _tag: "ExactLive", activities: [] } } },
+    { name: "incomplete census", options: { activity: { _tag: "Unreadable", detail: "incomplete process census" } } }
+  ] satisfies ReadonlyArray<{ name: string; options: FixtureOptions }>)(
+    "R3 refuses interrupted recovery with $name and retains TurnObserved",
+    async ({ options }) => {
+      const fixture = interruptedRecoveryFixture(options)
+      const failure = await Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* Effect.flip((yield* Integrator).prepare(requestFor(1)))
+        }).pipe(Effect.provide(fixture.layer))
+      )
+      expect(failure._tag).toBe("IntegratorCallFailure")
+      expect(fixture.privateWrites).toHaveLength(0)
+      expect(fixture.turnStarts.value).toBe(0)
+      expect(fixture.threadStarts.value).toBe(0)
+    }
+  )
+
+  it.each(["completed", "failed", "wrongId", "foreign", "tokenless"] as const)(
+    "R5 rejects contradictory %s history after interrupted seal without mutation",
+    async (state) => {
+      const fixture = interruptedRecoveryFixture({
+        resumeThreadStateSequence: ["interrupted", state, state],
+        completionHintOnAttach: true
+      })
+      const results = await Effect.runPromise(
+        Effect.gen(function* () {
+          const integrator = yield* Integrator
+          const first = yield* integrator.prepare(requestFor(1))
+          const next = yield* Effect.flip(integrator.prepare(requestFor(1)))
+          return { first, next }
+        }).pipe(Effect.provide(fixture.layer))
+      )
+      expect(results.first._tag).toBe("NotPrepared")
+      expect(results.next._tag).toBe("IntegratorCallFailure")
+      expect(fixture.privateWrites).toHaveLength(1)
+      expect(fixture.turnStarts.value).toBe(0)
+    }
+  )
+
+  it("R6 retains each interrupted run owner across Retry, interrupted run2 and old-seal replay", async () => {
+    const incarnation = { value: CodexServerIncarnation.make("Retry-provider-owner") }
+    const stoppedCustodyCalls: Array<CodexServerIncarnation> = []
+    const completionHintBound = await Effect.runPromise(Deferred.make<void>())
+    const statuses = { value: new Map<CodexTurnId, "interrupted">() }
+    const fixture = interruptedRecoveryFixture({
+      appIncarnation: incarnation,
+      completionHintBound,
+      stoppedCustodyCalls,
+      resumeTurnStatuses: statuses
+    })
+    const results = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const integrator = yield* Integrator
+          const first = yield* integrator.prepare(requestFor(1))
+          const pending = yield* Effect.forkChild(integrator.prepare(requestFor(2)))
+          yield* Deferred.await(completionHintBound)
+          yield* Fiber.interrupt(pending)
+          const store = yield* CodexIntegratorPrivateStore
+          const recorded = yield* store.read(session.sessionId)
+          if (Option.isNone(recorded)) return yield* Effect.fail("Retry record absent")
+          const second = privateRuns(recorded.value)[1]
+          if (second?._tag !== "TurnObserved") return yield* Effect.fail("Retry turn not observed")
+          expect(recorded.value.appServerIncarnation).toBe(incarnation.value)
+          statuses.value = new Map([[second.turnId, "interrupted"]])
+          incarnation.value = CodexServerIncarnation.make("reopened-Retry-provider-owner")
+          const secondResult = yield* integrator.prepare(requestFor(2))
+          expect(yield* integrator.prepare(requestFor(1))).toEqual(first)
+          const sealed = yield* store.read(session.sessionId)
+          return { first, secondResult, sealed }
+        })
+      ).pipe(Effect.provide(fixture.layer))
+    )
+    expect(results.secondResult._tag).toBe("NotPrepared")
+    if (Option.isSome(results.sealed)) {
+      const runs = privateRuns(results.sealed.value)
+      expect(runs.map((run) => run._tag)).toEqual(["InterruptedTurnSealed", "InterruptedTurnSealed"])
+      expect(runs.map((run) => (run._tag === "InterruptedTurnSealed" ? run.providerIncarnation : undefined))).toEqual([
+        fixture.retained.appServerIncarnation,
+        CodexServerIncarnation.make("Retry-provider-owner")
+      ])
+    }
+    expect(stoppedCustodyCalls).toContain(fixture.retained.appServerIncarnation)
+    expect(stoppedCustodyCalls).toContain(CodexServerIncarnation.make("Retry-provider-owner"))
+    expect(stoppedCustodyCalls).not.toContain(incarnation.value)
+    expect(fixture.turnStarts.value).toBe(1)
+  })
+
+  it("R6 admits one explicit Retry after interrupted NotPrepared on the same owned candidate", async () => {
+    const fixture = interruptedRecoveryFixture({ suppressCompletionHint: false })
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        const retry = yield* integrator.prepare(requestFor(2))
+        return { first, retry }
+      }).pipe(Effect.provide(fixture.layer))
+    )
+    expect(result.first._tag).toBe("NotPrepared")
+    expect(result.retry._tag).toBe("PreparedCandidate")
+    expect(result.retry.correlation.ordinal).toBe(2)
+    expect(fixture.turnStarts.value).toBe(1)
+    expect(fixture.threadStarts.value).toBe(0)
+  })
 
   it("seals a failed provider turn only as sanitized NotPrepared", async () => {
     const config = CodexIntegratorConfiguration.make({

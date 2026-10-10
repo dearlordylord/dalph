@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { CodexOwnedTurnToken, CodexTurnId } from "./codex-attempt-store.js"
+import { CodexOwnedTurnToken, CodexTurnId, CodexServerIncarnation } from "./codex-attempt-store.js"
 import { IntegratorResult, IntegratorRunCorrelation } from "@dalph/orchestrator"
 
 const ordinalOf = (run: IntegratorRunCorrelation): number => Number(run.ordinal)
@@ -21,14 +21,22 @@ export const CodexIntegratorPrivateRun = Schema.TaggedUnion({
   TurnBoundaryCrossing: privateRunIdentityFields,
   TurnObserved: { ...privateRunIdentityFields, turnId: CodexTurnId },
   CompletedTurnSealed: { ...privateRunIdentityFields, result: IntegratorResult, turnId: CodexTurnId },
-  FailedTurnSealed: { ...privateRunIdentityFields, result: IntegratorResult.cases.NotPrepared, turnId: CodexTurnId }
+  FailedTurnSealed: { ...privateRunIdentityFields, result: IntegratorResult.cases.NotPrepared, turnId: CodexTurnId },
+  /** Exact interrupted native history and stopped prior/current writers establish only a negative result. */
+  InterruptedTurnSealed: {
+    ...privateRunIdentityFields,
+    result: IntegratorResult.cases.NotPrepared,
+    turnId: CodexTurnId,
+    providerIncarnation: CodexServerIncarnation
+  }
 })
 export type CodexIntegratorPrivateRun = typeof CodexIntegratorPrivateRun.Type
 
-/** Durable terminal provider evidence: the exact turn and its completed or failed Integrator result. */
+/** Durable terminal provider evidence: the exact turn and its completed, failed or interrupted Integrator result. */
 export const CodexIntegratorSealedPrivateRun = Schema.Union([
   CodexIntegratorPrivateRun.cases.CompletedTurnSealed,
-  CodexIntegratorPrivateRun.cases.FailedTurnSealed
+  CodexIntegratorPrivateRun.cases.FailedTurnSealed,
+  CodexIntegratorPrivateRun.cases.InterruptedTurnSealed
 ])
 export type CodexIntegratorSealedPrivateRun = typeof CodexIntegratorSealedPrivateRun.Type
 
@@ -83,3 +91,9 @@ export const newPrivateRecordRunError = (run: IntegratorRunCorrelation): string 
     ? "Retry has no sealed predecessor result"
     : admissionError
 }
+
+/** Preserve native terminal status when replaying, retrying or cleaning a sealed private run. */
+export const sealedProviderTurnStatus = (
+  run: CodexIntegratorSealedPrivateRun
+): "completed" | "failed" | "interrupted" =>
+  run._tag === "InterruptedTurnSealed" ? "interrupted" : run._tag === "FailedTurnSealed" ? "failed" : "completed"

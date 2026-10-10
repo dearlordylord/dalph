@@ -21,7 +21,11 @@ import {
   removedRecordFor,
   sameSession
 } from "./codex-integrator-private-store.js"
-import { type CodexIntegratorSealedPrivateRun, isSealedPrivateRun } from "./codex-integrator-private-lifecycle.js"
+import {
+  type CodexIntegratorSealedPrivateRun,
+  isSealedPrivateRun,
+  sealedProviderTurnStatus
+} from "./codex-integrator-private-lifecycle.js"
 import { boundary, errorDetail, observedThread, providerFailure } from "./codex-integrator-runtime.js"
 import { type GitWorktreeRecord, readWorktrees } from "./codex-integrator-worktree.js"
 import {
@@ -101,10 +105,9 @@ const terminalTurnIdMismatch = (
 ): boolean => exact.id !== expected.turnId
 
 const isConclusiveTerminalStatus = (status: CodexThreadSnapshot["turns"][number]["status"]): boolean =>
-  status === "completed" || status === "failed"
+  status === "completed" || status === "failed" || status === "interrupted"
 
-const providerTerminalStatusFor = (run: CodexIntegratorSealedPrivateRun): "completed" | "failed" =>
-  run._tag === "FailedTurnSealed" ? "failed" : "completed"
+const providerTerminalStatusFor = sealedProviderTurnStatus
 
 const terminalTurnObservation = (
   authorization: IntegratorCandidateCleanupAuthorization,
@@ -162,6 +165,11 @@ const terminalTurnEvidence = (
   const knownTokens = new Set(privateRuns(record).map((run) => run.token))
   const tokenObservation = terminalThreadTokenObservation(authorization, predecessor, thread, knownTokens)
   if (tokenObservation !== undefined) return tokenObservation
+  for (const run of privateRuns(record)) {
+    if (!isSealedPrivateRun(run)) return cleanupUnreadable(authorization, "candidate history is not fully sealed")
+    const observation = terminalTurnObservation(authorization, predecessor, thread, run)
+    if (observation !== undefined) return observation
+  }
   return terminalTurnObservation(authorization, predecessor, thread, expected)
 }
 
@@ -179,6 +187,19 @@ const removalProjectionObservation = (
     : undefined
 }
 
+/** Cleanup retains each interrupted run's original owner even after a later Retry owns the record. */
+const verifyInterruptedHistoryCustody = (app: CodexAppServer["Service"], record: CodexIntegratorPrivateRecord) =>
+  Effect.forEach(
+    privateRuns(record),
+    (run) =>
+      run._tag !== "InterruptedTurnSealed"
+        ? Effect.void
+        : app.verifyStoppedIncarnation === undefined || run.providerIncarnation === app.incarnation
+          ? Effect.fail(providerFailure("interrupted cleanup requires exact stopped prior incarnation custody"))
+          : boundary(app.verifyStoppedIncarnation(run.providerIncarnation)),
+    { discard: true }
+  )
+
 const cleanupRemovalIntent = Effect.fn("CodexIntegrator.cleanupRemovalIntent")(function* (
   authorization: IntegratorCandidateCleanupAuthorization,
   predecessor: IntegratorSessionCorrelation,
@@ -189,6 +210,7 @@ const cleanupRemovalIntent = Effect.fn("CodexIntegrator.cleanupRemovalIntent")(f
   census: CodexOwnedActivityCensus["Service"],
   revision: IntegratorCandidateCleanupEvidenceRevision
 ) {
+  yield* verifyInterruptedHistoryCustody(app, record)
   const thread = yield* observedThread(app, threadId, record.candidatePath)
   if (thread.ownedThreadToken !== record.threadToken) {
     return cleanupForeign(authorization, predecessor.sessionId, "OtherSession", revision)
@@ -343,6 +365,7 @@ const cleanupRegistered = Effect.fn("CodexIntegrator.cleanupRegistered")(functio
   if (threadId === undefined) {
     return cleanupUnreadable(authorization, "candidate has no settled provider thread")
   }
+  yield* verifyInterruptedHistoryCustody(app, record)
   const thread = yield* observedThread(app, threadId, candidatePath)
   if (thread.ownedThreadToken !== record.threadToken) {
     return cleanupForeign(authorization, predecessor.sessionId, "OtherSession", revision)
