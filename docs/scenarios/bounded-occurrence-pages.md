@@ -41,3 +41,50 @@ The physical production fixture uses SQLite and the actual HTTP host/client with
 controlled authority adapters. Controlled blocked preparation proves independent
 status access, not a p95 resource or latency claim for a large workload. Combined
 measurements remain owned by parent #491.
+
+## Yield while validating complete current format history
+
+The Operator requests a fixed-prefix page while the same unfinished Run retains
+its executing responsibilities and exact claims. The accepted repair in
+[issue #509](https://github.com/dearlordylord/dalph/issues/509) blocks combined
+acceptance in #501. The reader still obtains the complete authoritative source;
+native storage corruption outside the selected cursor still fails at that source
+boundary. It checks the selected prefix's complete canonical history in the same
+phase order before returning any occurrences.
+
+The occurrence reader yields between envelope checks, exact-source query-index
+construction, semantic validation records, operation indexing, projection records,
+item mapping and history-item schema checks. Both synchronous and cooperative
+readers interpret the same ordered semantic phases and strict-position predicate.
+Canonical unique records may use the existing exact-source query index; malformed
+keys and duplicate keys retain raw-array diagnostics. Every history field and
+item is schema-checked, with the cross-item order checked over the complete result.
+A private partial accumulator never becomes a successful occurrence-history cache
+entry. Interruption discards it; restart reads the same complete current-format
+source into new process-local state. No checkpoint, history omission, format
+migration, new cleanup authority or external write is introduced.
+
+| Accepted chronology | Executable evidence |
+| --- | --- |
+| V1 complete canonical parity, bounded page/refusal, unchanged authorities, oversized indivisible value | Existing paging acceptance test above; `trace-reader.cooperative.test.ts`: `yields during complete validation, admits another fiber, and returns exact canonical history`; retained profile fixture's Dense, DenseOversized8192Utf8Bytes and DenseOversizedUncachedSqlite tests |
+| V2 Pause arrives after envelope validation while semantic preparation is unfinished | Retained profile fixture asserts source-inspection progress at HTTP control entry and measures correlated receipt to entry; existing `running-host-run-control.acceptance.test.ts` preserves Pause/Cancel exact settlement |
+| V3 disconnect discards unfinished preparation, cache retry rebuilds, delivery remains unchanged | `running-host-occurrences-interruption.acceptance.test.ts`: `disconnect interrupts native semantic history preparation without cancelling delivery or caching a partial history`; `trace-reader.cooperative.test.ts`: `discards an interrupted validation and rebuilds before publishing a successful cache`; existing inspection Exit and watch shutdown tests retain original drain deadlines and exact subscription lifecycle |
+| V4 gapped, duplicated, malformed, contradictory or incompatible history, fixed cursor across append and restart | `trace-reader.cooperative.property.test.ts`: `matches the synchronous cursor oracle for canonical, gapped, duplicated and malformed-key histories`; existing trace-reader, prepared/property, paging, SQLite store/cache and codec tests |
+
+The retained executable fixture is
+[profile-fixture.ts.txt](../evidence/issue-509/profile-fixture.ts.txt), with
+[portable configuration](../evidence/issue-509/profile-config.mjs.txt).
+Each declared profile measures twenty cold host reopens and twenty warm reads.
+The oversized profiles retain one 8,192-byte UTF-8 task identity. The uncached
+profile runs a read-only native scan before each request, invalidating only
+process-local store caches, so the measured optional read includes actual SQLite
+decoding. Scheduler-task wall spans and main-thread CPU cover prefix selection,
+individual records, cancellation multiplicity, operation indexing, final
+projection schema and history construction. The fixture asserts 10 ms per measured
+task, 100 ms admission p95, 1 GiB heap and 1.5 GiB RSS, excluding children.
+These are declared `ReadOccurrencePage` profiles, not a universal real-time
+promise or qualification of legacy full traces, startup or whole-host capacity.
+
+The workflow algebra, durable events, journal format, ownership and cleanup
+protocols do not change, so this presentation-scheduling repair has no new model
+or conformance obligation. Parent #501 still owns frozen combined qualification.
