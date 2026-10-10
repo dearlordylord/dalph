@@ -2477,7 +2477,7 @@ it("retains an owed Run Pause suspension after Unpause until the exact executor 
   })
 })
 
-it("mints pre-read capacity eligibility only when an exact Safe task is reopened", () => {
+it("mints pre-read capacity eligibility from lifecycle reopening or exact reconciled Resume", () => {
   const graphOperation = (suffix: string) =>
     makeTrackerGraphObservationOperation(
       { _tag: "AttemptContinuation" },
@@ -2706,7 +2706,9 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
       ? candidate.safeContinuationRevalidationEligibility
       : undefined
   }
-  expect(noEligibility([...ordinarySafeRecords, command(9, "Resume"), projection(10, safe)])).toBeUndefined()
+  expect(noEligibility([...ordinarySafeRecords, command(9, "Resume"), projection(10, safe)])).toMatchObject({
+    basis: { _tag: "ReconciledResumeStillSafe", observedAt: 10, projectionOrdinal: 1, resumeCommandOrdinal: 3 }
+  })
   expect(noEligibility([...reopenedRecords, command(11, "Begin"), projection(12, safe)])).toBeUndefined()
   const attemptForOtherRun = PlannedTaskAttempt.make({
     ...coverageAttempt,
