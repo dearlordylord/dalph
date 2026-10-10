@@ -1,0 +1,17 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+stderr | .scratch/combined-profile.test.ts > Sparse native cold host reopen and warm public admission profile
+{"_tag":"CodexExecutorCompletionTrace","appServerIncarnation":"hermetic-provider-incarnation","attemptId":"attempt:run-386-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a526d4f53316859324d314c5463784e47597459546b335a6930325a6a6b335a6a4933596d4d794d574d694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f645731695a5849694f6a4573496d3933626d5679496a6f69614756796257563061574d694c434a795a58427663326c3062334a35496a6f695a6d6c34644856795a534a396651-task-114-74312e57794a6f5a584a745a585270597931795a58427663326c3062334a3549697769614756796257563061574d7461584e7a645755695851-attempt-0","initial":true,"lifecycleReadOrdinal":1,"phase":"LifecycleRereadResult","projection":"Exact","report":"ExecutorWorkExecuting","runId":"r1.eyJmcmVzaG5lc3MiOiIwMWExMjRmOS1hY2M1LTcxNGYtYTk3Zi02Zjk3ZjI3YmMyMWMiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiaGVybWV0aWMiLCJyZXBvc2l0b3J5IjoiZml4dHVyZSJ9fQ","threadId":"hermetic-thread:0","turnId":"hermetic-turn:hermetic-thread:0:0"}
+
+ ✓ .scratch/combined-profile.test.ts > Sparse native cold host reopen and warm public admission profile 4723ms
+ ↓ .scratch/combined-profile.test.ts > Dense native cold host reopen and warm public admission profile
+ ↓ .scratch/combined-profile.test.ts > DenseOversized8192Utf8Bytes native cold host reopen and warm public admission profile
+ ↓ .scratch/combined-profile.test.ts > DenseOversizedUncachedSqlite native cold host reopen and warm public admission profile
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 3 skipped (4)
+   Start at  04:41:37
+   Duration  11.57s (transform 5.32s, setup 0ms, import 6.75s, tests 4.72s, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/final/current-profile-tests.json

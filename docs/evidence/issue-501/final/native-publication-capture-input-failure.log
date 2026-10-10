@@ -1,0 +1,27 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  .scratch/native-publication-capture.test.ts [ .scratch/native-publication-capture.test.ts ]
+Error: Cannot find package '@effect/platform-node' imported from /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts
+ ❯ .scratch/native-publication-capture.test.ts:27:1
+     25|   WorktreeLocator
+     26| } from "@dalph/contracts"
+     27| import { NodeServices } from "@effect/platform-node"
+       | ^
+     28| import { it } from "@effect/vitest"
+     29| import {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { code: 'ERR_MODULE_NOT_FOUND' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  no tests
+   Start at  04:40:13
+   Duration  381ms (transform 125ms, setup 0ms, import 0ms, tests 0ms, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/final/native-publication-capture-tests.json

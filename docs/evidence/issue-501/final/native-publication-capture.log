@@ -1,0 +1,19 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+ ↓ .scratch/native-publication-capture.test.ts > runs one task through real local production boundaries and tears down only its owned resources
+ ↓ .scratch/native-publication-capture.test.ts > restarts after Git promotes A without returning and does not repeat A integration or promotion
+ ↓ .scratch/native-publication-capture.test.ts > recovers a competing remote head found before publication discovery through the automatic S2 full suffix
+ ↓ .scratch/native-publication-capture.test.ts > recovers a competing remote head advanced between publication discovery and update through the automatic S2 full suffix
+ ↓ .scratch/native-publication-capture.test.ts > recovers a competing remote head advanced after a lost publication response through the automatic S2 full suffix
+ ↓ .scratch/native-publication-capture.test.ts > retains the exact third competing head without an ungranted fourth automatic session or push
+ ↓ .scratch/native-publication-capture.test.ts > fixes a same-commit fourth successor only after the exact third-session exhaustion grant
+ ↓ .scratch/native-publication-capture.test.ts > continues one exhausted publication responsibility through exactly one granted batch while an unrelated target progresses
+ ✓ .scratch/native-publication-capture.test.ts > restarts the same Run after native Git publishes M without acknowledgement and reconciles stopped custody before promotion 2484ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 8 skipped (9)
+   Start at  04:40:47
+   Duration  7.20s (transform 3.66s, setup 0ms, import 4.62s, tests 2.48s, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/final/native-publication-capture-tests.json

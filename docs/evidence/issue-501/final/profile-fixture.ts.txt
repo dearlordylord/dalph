@@ -1,0 +1,174 @@
+import process from 'node:process'
+import { writeFileSync } from 'node:fs'
+import { performance } from 'node:perf_hooks'
+import { it, expect } from 'vitest'
+import { Context, Deferred, Effect, Fiber, Layer, Scheduler } from 'effect'
+import { ControlDirectionAppliedEvent, ControlDirectionApplicationOrdinal, JournalStore, TraceCursor, makeTraceReader, JournalPosition } from '@dalph/orchestrator'
+import { makeRunningHostFixture, runningHostFixtureLayer } from '../packages/dalph/test-support/production-running-host-fixture.js'
+import { availableLocalHostAddress } from '../packages/dalph/test-support/running-host-read-probe.js'
+import { withDecodedProductionRepositoryHost } from '../packages/dalph/src/application/production-host.js'
+import { serveRunningHost } from '../packages/dalph/src/application/running-host-http.js'
+import { callRunningHost } from '../packages/dalph/src/application/running-host-client.js'
+import { observerStructuralBytes } from '../packages/dalph/src/application/running-host-observer-budget.js'
+import { TaskId } from '@dalph/contracts'
+import { controlDirectionAppliedRecordKey } from '../packages/orchestrator/src/workflow-journal/record-key.js'
+import { workflowJournalEventVersion } from '../packages/orchestrator/src/workflow/kernel/event.js'
+import { OccurrencePageCapacity } from '../packages/dalph/src/application/running-host-occurrences-contract.js'
+
+const output = '/tmp/issue-501-qualification/final/current-profile.json'
+const results: unknown[] = []
+const bytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v))
+const p95 = (v: number[]) => v.toSorted((a,b) => a-b)[Math.ceil(v.length * .95)-1]
+const memory = () => ({ ...process.memoryUsage(), peakRssBytes: process.resourceUsage().maxRSS * 1024 })
+for (const [name, controls, dense] of [['Sparse',32,false],['Dense',512,true],['DenseOversized8192Utf8Bytes',512,true],['DenseOversizedUncachedSqlite',512,true]] as const) {
+ it(name + ' native cold host reopen and warm public admission profile', async () => {
+  await Effect.runPromise(Effect.scoped(Effect.gen(function*() {
+   const fixture = yield* makeRunningHostFixture(process.cwd() + '/packages/dalph/dist/bin/dalph.js', dense, undefined, {startupIncludesE:dense})
+   let store: JournalStore['Service'] | undefined
+   const graph = {...fixture.graph, foundation:(...args: Parameters<typeof fixture.graph.foundation>) => fixture.graph.foundation(...args).pipe(Layer.tap(c => Effect.sync(() => {store = Context.get(c,JournalStore)})))}
+   let runId: any
+   yield* withDecodedProductionRepositoryHost(fixture.configuration,graph,observation => Effect.scoped(Effect.gen(function*(){
+    runId = observation.selection.runId
+    yield* Deferred.await(fixture.turnEntered).pipe(Effect.timeout('15 seconds'))
+    yield* Deferred.await(fixture.activationFinalizing).pipe(Effect.timeout('15 seconds'))
+    yield* fixture.releaseObservationCut
+    const bootstrap = yield* fixture.bootstrap
+    for(let i=0;i<controls;i++) yield* bootstrap.operatorControl.applyControlDirection({direction:'Pause',subject:{_tag:'Run',runId}})
+    if(name.startsWith('DenseOversized')) {
+     const prior=yield* store!.read(runId)
+     const ordinal=ControlDirectionApplicationOrdinal.make(Math.max(...prior.filter(record=>record.event._tag==='ControlDirectionApplied').map(record=>(record.event as any).ordinal))+1)
+     yield* store!.append(runId,controlDirectionAppliedRecordKey(ordinal),ControlDirectionAppliedEvent.make({
+      direction:'Pause',initiatedBy:{_tag:'Operator'},occurrenceClassification:'InitiatedAction',ordinal,
+      subject:{_tag:'Task',taskId:TaskId.make('🦮'.repeat(2048)),runId},version:workflowJournalEventVersion
+     }))
+    }
+   })), 'Run','Listening')
+   const cold: any[] = [], warm: any[] = []
+   for(let repeat=0;repeat<20;repeat++) {
+    const beforeCpu = process.cpuUsage(), start = performance.now()
+    yield* withDecodedProductionRepositoryHost(fixture.configuration,graph,observation => Effect.scoped(Effect.gen(function*(){
+     const startupMillis = performance.now()-start
+     const startupCpu = process.cpuUsage(beforeCpu)
+     if(store === undefined) throw new Error('missing current SQLite store')
+     const records = yield* store.read(runId)
+     const last = records.at(-1)
+     if(last === undefined) throw new Error('full current history required')
+     const cursor = TraceCursor.make({runId,position:last.position})
+     const address = yield* availableLocalHostAddress
+     const received = new Map<string,number>()
+     let admissionMillis: number | undefined
+     let preparingHistory=false, applyingControl=false
+     let validationStarted: Deferred.Deferred<void>
+     const synchronousTasks: any[] = []
+     let preparedHistory: unknown
+     let preparationMetrics: unknown
+     const phaseEvents: unknown[] = []
+     ;(globalThis as any).__qualificationSpan = (phase: string, f:()=>unknown) => { const start=performance.now(),cpu=process.cpuUsage(); const value=f(); phaseEvents.push({phase,start,end:performance.now(),wallMillis:performance.now()-start,cpuMicros:process.cpuUsage(cpu)});return value }
+     let eventReads = 0
+     let prefixReads = 0
+     const diagnosticPrefix = records.map((record, index) => ({...record,
+      position: JournalPosition.make(index === records.length-1 ? records.length+1 : index+1),
+      get event(){prefixReads++;return record.event}
+     }))
+     const malformed = yield* Effect.result(makeTraceReader({read:()=>Effect.succeed(diagnosticPrefix)}).readOccurrencesAt(TraceCursor.make({runId,position:JournalPosition.make(records.length+1)})))
+     expect(malformed._tag).toBe('Failure')
+     const wrapped = new WeakMap<any,any>()
+     const measuredReader = makeTraceReader({read:id=>store!.read(id).pipe(Effect.map(source=>{
+      const cached=wrapped.get(source);if(cached)return cached
+      const observed=source.map(record=>({...record,get event(){eventReads++;return record.event}}))
+      wrapped.set(source,observed);return observed
+     }))})
+     const readOccurrences = measuredReader.readOccurrencesAt
+     if(readOccurrences === undefined) throw new Error('production occurrence reader required')
+     const listener = yield* serveRunningHost(address,{...observation,
+      traceReader:{...observation.traceReader,readOccurrencesAt:(...args:Parameters<typeof readOccurrences>) => Effect.gen(function*(){
+       preparingHistory=true; const began=performance.now(),cpu=process.cpuUsage()
+       phaseEvents.push({phase:'NativeCurrentFormatOccurrencePreparationStart',atMillis:began})
+       const base = new Scheduler.MixedScheduler()
+       const taskPhases=new Set<string>()
+       const scheduler: Scheduler.Scheduler = {
+        executionMode: 'async', shouldYield: fiber => { if(fiber.currentSpan?.name)taskPhases.add(fiber.currentSpan.name); if(fiber.currentStackFrame?.name)taskPhases.add(fiber.currentStackFrame.name);return base.shouldYield(fiber) },
+        makeDispatcher: () => {
+         const dispatcher = base.makeDispatcher()
+         return {flush:()=>dispatcher.flush(),scheduleTask:(task,priority)=>dispatcher.scheduleTask(()=>{
+          taskPhases.clear(); const eventReadsBefore=eventReads;const cpu=process.threadCpuUsage();const began=performance.now(); task(); const end=performance.now(); const threadCpuMicros=process.threadCpuUsage(cpu);
+          if(eventReads>prefixReads && preparingHistory) Effect.runSync(Deferred.succeed(validationStarted,undefined))
+          synchronousTasks.push({start:began,end,wallMillis:end-began,threadCpuMicros,phases:[...taskPhases],eventReadsBefore,eventReadsAfter:eventReads})
+         },priority)}
+        }
+       }
+       const history=yield* Effect.yieldNow.pipe(Effect.andThen(readOccurrences(...args)),Effect.provideService(Scheduler.Scheduler,scheduler))
+       preparationMetrics={wallMillis:performance.now()-began,cpuMicros:process.cpuUsage(cpu)}
+       preparedHistory=history;preparingHistory=false
+       phaseEvents.push({phase:'NativeCurrentFormatOccurrencePreparationEnd',atMillis:performance.now()})
+       return history
+      })},executeAttachedCommand:request => Effect.sync(() => {
+      const timestamp = received.get(request.requestId)
+      if(timestamp === undefined) throw new Error('missing correlated receipt')
+      expect(preparingHistory).toBe(true)
+      expect(eventReads).toBeGreaterThan(prefixReads)
+      phaseEvents.push({phase:'ControlAdmissionDuringSemanticPreparation',eventReads,prefixReads,atMillis:performance.now()})
+      admissionMillis = performance.now()-timestamp
+      applyingControl=true
+      phaseEvents.push({phase:'LocalHostControlEntry',atMillis:performance.now()})
+     }).pipe(Effect.andThen(observation.executeAttachedCommand(request)),Effect.tap(()=>Effect.sync(()=>{applyingControl=false;phaseEvents.push({phase:'ControlApplicationEnd',atMillis:performance.now()})})))})
+     listener.server.prependListener('request', incoming => {
+      const at=performance.now(); if(incoming.method !== 'POST') return
+      let raw=''; incoming.on('data', chunk => {raw+=chunk.toString('utf8')}); incoming.on('end',()=> {const request=JSON.parse(raw);received.set(request.requestId,at)})
+     })
+     const snapshot = yield* callRunningHost(address,runId,{_tag:'ReadSnapshot'})
+     const measure = (temperature: string) => Effect.gen(function*(){
+      const measuredSourceBefore = yield* store!.read(runId)
+      if(name.includes('Uncached')) yield* store!.scanHot()
+      validationStarted = yield* Deferred.make<void>()
+      synchronousTasks.length=0
+      eventReads=0
+      let running = true, lastTick=performance.now(), maxEventLoopGapMillis=0
+      let lastCpu=process.cpuUsage()
+      const schedulingGaps: unknown[]=[]
+      const beforeMemory=memory()
+      phaseEvents.length=0
+      const tick = () => {if(!running) return;const now=performance.now(),gap=now-lastTick,cpu=process.cpuUsage(lastCpu);maxEventLoopGapMillis=Math.max(maxEventLoopGapMillis,gap);if(gap>10)schedulingGaps.push({gapMillis:gap,cpuMicros:cpu,preparingHistory,applyingControl,atMillis:now});lastTick=now;lastCpu=process.cpuUsage();setImmediate(tick)}
+      setImmediate(tick)
+      const cpu=process.cpuUsage(), began=performance.now()
+      const history = yield* callRunningHost(address,runId,{_tag:'ReadOccurrencePage',prefix:cursor,continuation:null,capacityBytes:OccurrencePageCapacity.make(8192)}).pipe(Effect.forkScoped)
+      yield* Deferred.await(validationStarted)
+      expect(preparingHistory).toBe(true)
+      expect(eventReads).toBeGreaterThan(prefixReads)
+      const control = yield* callRunningHost(address,runId,{_tag:'Pause'})
+      expect(control).toMatchObject({result:{value:{_tag:'PauseApplied'}}})
+      const page = yield* Fiber.join(history)
+      running=false
+      const usage=process.cpuUsage(cpu)
+      const optionalHistoryEncodedBytes=bytes(preparedHistory)
+      const optionalHistoryStructuralCharge=yield* observerStructuralBytes(preparedHistory,1024*1024*1024,'Preparation')
+      const measuredSourceAfter = yield* store!.read(runId)
+      return {temperature,wholeSourceRecordsBefore:measuredSourceBefore.length,wholeSourceRecordsAfter:measuredSourceAfter.length,wholeSourceEventPayloadBytesBefore:measuredSourceBefore.reduce((sum,r)=>sum+bytes(r.event),0),wholeSourceEventPayloadBytesAfter:measuredSourceAfter.reduce((sum,r)=>sum+bytes(r.event),0),sourceReadMode:name.includes('Uncached')?'FreshNativeSqliteDecodeAfterReadOnlyScan':'AuthoritativeProcessLocalStoreCache', validationEventReadsAtControl: eventReads, prefixEnvelopeReads: prefixReads, synchronousTasks:[...synchronousTasks], admissionMillis, wallMillis:performance.now()-began,cpuUserMicros:usage.user,cpuSystemMicros:usage.system,maxEventLoopGapMillis,schedulingGaps,phaseEvents:[...phaseEvents],preparationMetrics,optionalHistoryEncodedBytes,optionalHistoryStructuralCharge,beforeMemory,memory:memory(),pageBytes:bytes(page),statusBytes:bytes(snapshot),controlBytes:bytes(control),records:records.length,decodedRecordBytes:bytes(records),eventPayloadBytes:records.reduce((sum,r)=>sum+bytes(r.event),0),unfinishedObligations:snapshot.result._tag==='Success' && snapshot.result.value._tag==='Ready' ? snapshot.result.value.retained.length : null,observerCount:1,watchSubscriptions:0,activeHistoryReaders:1,concurrentControlClients:1,pageCapacityBytes:8192,optionalRetainedBytes:'measured occurrence-cache logical structure and encoding; complete trace indexes and canonical retention excluded and unmeasured',startupMillis,startupCpu}
+     })
+     const coldSample = yield* measure('ColdHostReopen')
+     const trace = yield* observation.traceReader.readAt(cursor)
+     const census = {taskCount:trace.graph?.snapshot.tasks.length ?? 0,graphEdges:trace.graph?.edges.length ?? 0,causalEdges:trace.relationships.workflowCausalEdges.length,unfinishedObligations:trace.facets.recovery.retainedResponsibilities.length}
+     cold.push({...coldSample,...census})
+     if(repeat===19) for(let sample=0;sample<20;sample++) warm.push({...yield* measure('WarmHost'),...census})
+    })), 'Run','Listening')
+    writeFileSync(output, JSON.stringify({candidate:process.env['DALPH_PROFILE_CANDIDATE'],node:process.version,platform:process.platform,architecture:process.arch,profiles:results,progress:{name,cold,warm}},null,2))
+   }
+   for(const [temperature,samples] of [['ColdHostReopen',cold],['WarmHost',warm]] as const) {
+    const admission=samples.map(sample=>sample.admissionMillis)
+    results.push({name,temperature,sampleCount:samples.length,admissionP95Millis:p95(admission),admissionTargetMet:(p95(admission)??Infinity)<=100,workQuantumTargetMillis:10,workQuantumDisposition:'all synchronous read-fiber scheduler tasks measured directly; prefix-envelope completion precedes control injection',samples})
+   }
+  })).pipe(Effect.provide(runningHostFixtureLayer)))
+  writeFileSync(output,JSON.stringify({candidate:process.env['DALPH_PROFILE_CANDIDATE'],node:process.version,platform:process.platform,architecture:process.arch,profiles:results},null,2))
+  for(const profile of results as any[]) {
+   expect(profile.sampleCount).toBe(20)
+   expect(profile.admissionP95Millis).toBeLessThanOrEqual(100)
+   for(const sample of profile.samples) {
+    expect(sample.synchronousTasks.length).toBeGreaterThan(0)
+    expect(Math.max(...sample.synchronousTasks.map((task:any)=>task.wallMillis))).toBeLessThanOrEqual(10)
+    expect(sample.memory.heapUsed).toBeLessThanOrEqual(1024*1024*1024)
+    expect(sample.memory.rss).toBeLessThanOrEqual(1536*1024*1024)
+    expect(sample.memory.peakRssBytes).toBeLessThanOrEqual(1536*1024*1024)
+   }
+  }
+ },300000)
+}

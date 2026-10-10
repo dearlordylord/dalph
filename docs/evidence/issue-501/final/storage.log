@@ -1,0 +1,126 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory pins the new Run attempt-base policy and preserves missing-policy history 8ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite pins the new Run attempt-base policy and preserves missing-policy history 22ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > classifies append ambiguity from typed journal failures without inspecting strings 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > keeps native scan preparation failures typed for Hot and Cold 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > opens the configured production journal only with coordinator ownership 36ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > maps a controlled malformed memory terminal prefix to journal corruption 22ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > isolates controlled cold corruption from memory startup discovery and reports it to exact reads and audits 12ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > rejects exact reads and recovery of a nonterminal memory Cold history 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > rejects termination of a semantically complete but nonterminal memory Cold history 8ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > rejects memory retirement when no Run history exists 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > fails every memory operation closed when a Run is in both partitions 5ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > atomically rejects a second beginning for one Run identity 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects every workflow record after Run termination 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > atomically retires every valid terminal history and keeps reads transparent 7ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories 11ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts 13ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence 10ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rereads the exact begun target before recovering a Run 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects recovery and termination when no Run beginning exists 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > preserves typed invalid-evidence failures at the storage boundary 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects unsettled historical responsibility without appending 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > accepts termination after a historical claim acquisition was rejected 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects termination while an exact acquired claim remains active 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects incomparable tracker graph observations without appending 8ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects S10 g10 and predecessor-free changed g11 without terminating 18ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > accepts a graph read that causally supersedes historical facts 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects recovery and another termination after Run termination 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects promoting an existing synthetic history to a fresh Run 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > returns empty workflow-journal history for an unknown run 0ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > assigns canonical positions and returns ordered workflow-journal history 0ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > returns the original record for an identical re-append 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > rejects unequal content under the same record key 0ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > atomically assigns distinct positions to concurrent appends 0ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > keeps each run's positions independent 0ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > memory JournalStore contract > discovers all journal runs without an age cutoff 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > atomically rejects a second beginning for one Run identity 5ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects every workflow record after Run termination 13ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > atomically retires every valid terminal history and keeps reads transparent 23ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories 38ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts 36ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence 45ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rereads the exact begun target before recovering a Run 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects recovery and termination when no Run beginning exists 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > preserves typed invalid-evidence failures at the storage boundary 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects unsettled historical responsibility without appending 7ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > accepts termination after a historical claim acquisition was rejected 9ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects termination while an exact acquired claim remains active 7ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects incomparable tracker graph observations without appending 15ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects S10 g10 and predecessor-free changed g11 without terminating 48ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > accepts a graph read that causally supersedes historical facts 13ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects recovery and another termination after Run termination 9ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects promoting an existing synthetic history to a fresh Run 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > returns empty workflow-journal history for an unknown run 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > assigns canonical positions and returns ordered workflow-journal history 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > returns the original record for an identical re-append 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > rejects unequal content under the same record key 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > atomically assigns distinct positions to concurrent appends 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > keeps each run's positions independent 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite JournalStore contract > discovers all journal runs without an age cutoff 5ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > atomically rejects a second beginning for one Run identity 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects every workflow record after Run termination 8ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > atomically retires every valid terminal history and keeps reads transparent 16ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories 30ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts 34ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence 38ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rereads the exact begun target before recovering a Run 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects recovery and termination when no Run beginning exists 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > preserves typed invalid-evidence failures at the storage boundary 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects unsettled historical responsibility without appending 9ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > accepts termination after a historical claim acquisition was rejected 10ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects termination while an exact acquired claim remains active 9ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects incomparable tracker graph observations without appending 9ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects S10 g10 and predecessor-free changed g11 without terminating 33ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > accepts a graph read that causally supersedes historical facts 13ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects recovery and another termination after Run termination 7ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects promoting an existing synthetic history to a fresh Run 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > returns empty workflow-journal history for an unknown run 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > assigns canonical positions and returns ordered workflow-journal history 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > returns the original record for an identical re-append 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > rejects unequal content under the same record key 3ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > atomically assigns distinct positions to concurrent appends 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > keeps each run's positions independent 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite-qualification JournalStore contract > discovers all journal runs without an age cutoff 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > does not manufacture accepted history from the raw SQLite test journal 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > migrates the production SQLite journal and enables WAL mode 19ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > reopens distinct admission keys containing NUL without merging their suffixes 27ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > upgrades an exact schema-v1 fixture transactionally and preserves hot rows 34ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > copies SQLite record keys, positions, versions, kinds, and payload bytes exactly 44ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > keeps an overlapping SQLite TraceReader read on one complete snapshot while retirement commits 57ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > rolls back a retirement cut after verified copy and preserves Hot history after reopen 41ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > reopens after a committed retirement response is lost and reports the Run already Cold 56ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > rejects a verified-copy mismatch and rolls back the SQLite retirement 52ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > rolls back a failed v1-to-v2 migration without changing the v1 hot journal 31ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > reopening after a committed v1 migration does not repeat or retire the hot history 40ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > rejects a second SQLite writer while the owner is live 24ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > reports SQLite open failures as typed storage failures 1ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > classifies SQLite recovery categories without parsing error prose 5ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > rejects a journal schema from a newer Dalph version 18ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > reports malformed persisted event content as a typed read failure 31ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > keeps malformed Cold history out of startup while full audit reports its partition and exact Run 58ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > fails SQLite reads, lifecycle, retirement, and full audit closed on contradictory partition membership 53ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > rejects exact reads and recovery of a nonterminal SQLite Cold history 50ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > rejects SQLite retirement for a missing Run 17ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > discovers every run and accumulates independent row and payload decode issues 47ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > maps corrupted SQLite query rows to exact Run-local history failures after reopen 78ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > classifies malformed SQLite bytes as journal data corruption 2ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > classifies an unrecognized raw append failure as unavailable storage 27ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/store.test.ts > sqlite durable JournalStore contract > types append and read failures from damaged journal storage 28ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/sqlite-read-cache.test.ts > shares selected startup scan events with the first append checkpoint 27ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/sqlite-read-cache.test.ts > retains only the requested startup Run and does not invent a missing Run 14ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/sqlite-read-cache.test.ts > loads unchanged Hot history once, reuses the array, and invalidates on append and scans 22ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/sqlite-read-cache.test.ts > invalidates a cached array after lost append acknowledgement without duplicating the row 8ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/sqlite-read-cache.test.ts > invalidates on termination and retirement, then loads unchanged Cold history once 60ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/sqlite-read-cache.test.ts > discards the ordinary read snapshot after a failed read boundary 8ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/adapters/sqlite-event-codec.property.test.ts > round-trips full semantic finality events through the production SQLite gzip and compact layers 212ms
+ ✓ |ordinary| packages/orchestrator/src/workflow-journal/adapters/sqlite-event-codec.property.test.ts > attaches the row's kind and semantic version to gzip failures without falling back 5ms
+
+ Test Files  3 passed (3)
+      Tests  116 passed (116)
+   Start at  04:46:18
+   Duration  4.87s (transform 623ms, setup 0ms, import 2.58s, tests 1.95s, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/final/storage-results.json
