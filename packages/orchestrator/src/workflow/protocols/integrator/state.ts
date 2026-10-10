@@ -17,8 +17,7 @@ import {
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
   type IntegratorRunState,
-  type IntegratorSessionCorrelation,
-  integratorRetryRunOrdinal
+  type IntegratorSessionCorrelation
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
@@ -102,7 +101,7 @@ const runStartOrdinalIssue = (
   run: IntegratorRunCorrelation,
   ordinals: HashSet.HashSet<number>
 ): string | undefined => {
-  if (run.ordinal > integratorRetryRunOrdinal || record.key !== integratorRunStartedRecordKey(run))
+  if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0 || record.key !== integratorRunStartedRecordKey(run))
     return "Integrator run start has a foreign key or exceeds the Retry bound"
   return HashSet.has(ordinals, run.ordinal) ? "Integrator run start repeats one exact session ordinal" : undefined
 }
@@ -286,9 +285,6 @@ const currentSuccessorRunAuthorizationIssue = (
     startedRun.run.ordinal === IntegratorRunOrdinal.make(1)
   ) {
     return undefined
-  }
-  if (successor.relation !== "Automatic" || startedRun.run.ordinal !== integratorRetryRunOrdinal) {
-    return "FullRerun successor permits only its initial Integrator run"
   }
   return integratorRunTwoAuthorizationIssue(records, startedRun.run, { beforePosition: startedRun.position })
 }

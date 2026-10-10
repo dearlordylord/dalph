@@ -3,6 +3,9 @@
 // and sampled/collected source; this projection owns the exhaustive proof of
 // its issue #68 quarantine, recovery, Retry, and FullRerun chronology.
 module acceptedResultIntegrationQuarantineProof {
+  // Verification bound only, never a runtime retry budget.
+  pure val RETRY_PROJECTION_LIMIT = 4
+
   type Phase =
     | Ready
     | IntegratorInFlight
@@ -71,6 +74,11 @@ module acceptedResultIntegrationQuarantineProof {
     successorResource: int,
     successorRunOrdinal: int,
     successorInvocationCount: int,
+    successorQuarantineCount: int,
+    successorDirectionCount: int,
+    successorDirectionSelected: bool,
+    successorRunInFlight: bool,
+    successorResultPending: bool,
     predecessorPreserved: bool,
   }
 
@@ -101,7 +109,7 @@ module acceptedResultIntegrationQuarantineProof {
     state.phase != RetryNotPreparedObserved or and {
       state.targetHeld,
       state.quarantineRecorded,
-      state.quarantineOccurrenceCount == 1,
+      state.quarantineOccurrenceCount == state.retryRunCount,
     },
   }
 
@@ -109,7 +117,7 @@ module acceptedResultIntegrationQuarantineProof {
     not(quarantinePhase(state.phase)) or and {
       state.quarantineRecorded,
       state.quarantineOccurrenceCount > 0,
-      state.quarantineOccurrenceCount <= 2,
+      state.quarantineOccurrenceCount <= 1 + RETRY_PROJECTION_LIMIT,
       state.quarantinePosition > 0,
       state.integratorOutcomeRecorded,
     }
@@ -149,10 +157,9 @@ module acceptedResultIntegrationQuarantineProof {
   val retryRequiresSameSessionAndChoice: bool =
     state.retryRunCount == 0 or and {
       state.integratorRunSession == state.fixedSession,
-      state.integratorInvocationCount == 2,
-      state.integratorRunOrdinal == 2,
-      state.quarantineOccurrenceCount == 1 implies and {
-        state.phase == RetryInFlight or state.phase == RetryNotPreparedObserved,
+      state.integratorInvocationCount == 1 + state.retryRunCount,
+      state.integratorRunOrdinal == 1 + state.retryRunCount,
+      state.phase == RetryInFlight or state.phase == RetryNotPreparedObserved implies and {
         state.quarantineDirection == RetryDirection,
         state.quarantineDirectionSession == state.fixedSession,
         state.quarantineDirectionPosition == state.quarantinePosition,
@@ -160,45 +167,32 @@ module acceptedResultIntegrationQuarantineProof {
         state.targetFactsCurrent,
         state.targetHeadProof == state.fixedTargetHead,
       },
-      state.quarantineOccurrenceCount == 2 implies and {
-        state.quarantineRecorded,
-        state.quarantinePosition == 2,
-      },
     }
 
   val retryConclusiveRunRequiresFreshQ2: bool =
     state.integratorOutcomeCount < 2 or and {
-      state.retryRunCount == 1,
-      state.integratorInvocationCount == 2,
-      state.integratorRunOrdinal == 2,
+      state.retryRunCount > 0,
+      state.integratorRunOrdinal == state.integratorInvocationCount,
       state.integratorRunSession == state.fixedSession,
-      state.phase == RetryNotPreparedObserved
-        or state.phase == Quarantined
-        or state.phase == FullRerunSelected
-        or state.phase == FreshHeadObserved
-        or state.phase == SuccessorSessionFixed,
-      state.phase == RetryNotPreparedObserved implies state.targetHeld,
-      state.phase != RetryNotPreparedObserved implies and {
-        state.quarantineRecorded,
-        state.quarantineOccurrenceCount == 2,
-        state.quarantinePosition == 2,
-      },
+      state.quarantinePosition == state.quarantineOccurrenceCount,
+      state.quarantineOccurrenceCount == state.integratorOutcomeCount
+        or (state.phase == RetryNotPreparedObserved and state.quarantineOccurrenceCount == state.integratorOutcomeCount - 1),
     }
 
   val retryOrdinalAdvancesOnce: bool = and {
     state.integratorInvocationCount >= 0,
-    state.integratorInvocationCount <= 2,
+    state.integratorInvocationCount <= 1 + RETRY_PROJECTION_LIMIT,
     state.integratorRunOrdinal >= 0,
-    state.integratorRunOrdinal <= 2,
+    state.integratorRunOrdinal <= 1 + RETRY_PROJECTION_LIMIT,
     state.retryRunCount >= 0,
-    state.retryRunCount <= 1,
+    state.retryRunCount <= RETRY_PROJECTION_LIMIT,
     state.retryRunCount == 0 implies and {
       state.integratorInvocationCount <= 1,
       state.integratorRunOrdinal <= 1,
     },
-    state.retryRunCount == 1 implies and {
-      state.integratorInvocationCount == 2,
-      state.integratorRunOrdinal == 2,
+    state.retryRunCount > 0 implies and {
+      state.integratorInvocationCount == 1 + state.retryRunCount,
+      state.integratorRunOrdinal == 1 + state.retryRunCount,
     },
   }
 
@@ -229,8 +223,15 @@ module acceptedResultIntegrationQuarantineProof {
       state.predecessorPreserved,
       state.successorHeadFreshlyObserved,
       state.successorHeadObservationCount == 1,
-      state.successorRunOrdinal == 1,
-      state.successorInvocationCount == 1,
+      state.successorRunOrdinal == state.successorInvocationCount,
+      state.successorInvocationCount == 1 + state.successorDirectionCount - (if (state.successorDirectionSelected) 1 else 0),
+      state.successorDirectionCount <= state.successorQuarantineCount,
+      state.successorDirectionSelected implies and {
+        not(state.targetHeld),
+        not(state.successorRunInFlight),
+      },
+      state.successorRunInFlight implies state.targetHeld,
+      state.successorQuarantineCount <= state.successorRunOrdinal,
       state.successorResource == INITIAL_RESOURCE + 1000,
       state.successorTargetHead == state.targetHeadProof,
     }
@@ -247,7 +248,7 @@ module acceptedResultIntegrationQuarantineProof {
     state.fixedResource == 0 or state.fixedResource == INITIAL_RESOURCE,
     state.fixedTargetHead == 0 or state.fixedTargetHead == FIXED_TARGET_HEAD,
     state.quarantineOccurrenceCount >= 0,
-    state.quarantineOccurrenceCount <= 2,
+    state.quarantineOccurrenceCount <= 1 + RETRY_PROJECTION_LIMIT,
     state.quarantineRedeliveryCount >= 0,
     state.quarantineRedeliveryCount <= 1,
     state.quarantineConflictCount >= 0,
@@ -256,7 +257,7 @@ module acceptedResultIntegrationQuarantineProof {
     state.successorHeadObservationCount <= 1,
     state.successorSession == 0 or state.successorSession == INITIAL_SESSION + 1,
     state.successorInvocationCount >= 0,
-    state.successorInvocationCount <= 1,
+    state.successorInvocationCount <= 1 + RETRY_PROJECTION_LIMIT,
   }
 
   val quarantinePendingReached: bool = state.lastEvent == NotPreparedRecorded
@@ -308,6 +309,11 @@ module acceptedResultIntegrationQuarantineProof {
       successorResource: 0,
       successorRunOrdinal: 0,
       successorInvocationCount: 0,
+      successorQuarantineCount: 0,
+      successorDirectionCount: 0,
+      successorDirectionSelected: false,
+      successorRunInFlight: false,
+      successorResultPending: false,
       predecessorPreserved: false,
     },
   }
@@ -415,9 +421,9 @@ module acceptedResultIntegrationQuarantineProof {
 
   action observeRetryNotPrepared: bool = all {
     state.phase == RetryInFlight,
-    state.retryRunCount == 1,
-    state.integratorInvocationCount == 2,
-    state.integratorRunOrdinal == 2,
+    state.retryRunCount > 0,
+    state.integratorInvocationCount == 1 + state.retryRunCount,
+    state.integratorRunOrdinal == 1 + state.retryRunCount,
     state.targetHeld,
     state' = {
       ...state,
@@ -425,23 +431,23 @@ module acceptedResultIntegrationQuarantineProof {
       lastEvent: RetryNotPreparedRecorded,
       targetHeld: true,
       integratorOutcomeRecorded: true,
-      integratorOutcomeCount: 2,
+      integratorOutcomeCount: state.integratorRunOrdinal,
     },
   }
 
   action recordRetryQuarantine: bool = all {
     state.phase == RetryNotPreparedObserved,
     state.targetHeld,
-    state.integratorOutcomeCount == 2,
-    state.quarantineOccurrenceCount == 1,
+    state.integratorOutcomeCount == state.integratorRunOrdinal,
+    state.quarantineOccurrenceCount == state.integratorOutcomeCount - 1,
     state' = {
       ...state,
       phase: Quarantined,
       lastEvent: RetryQuarantineRecorded,
       targetHeld: false,
       quarantineRecorded: true,
-      quarantineOccurrenceCount: 2,
-      quarantinePosition: 2,
+      quarantineOccurrenceCount: state.quarantineOccurrenceCount + 1,
+      quarantinePosition: state.quarantineOccurrenceCount + 1,
       quarantineDirection: NoDirection,
       quarantineDirectionSession: 0,
       quarantineDirectionPosition: 0,
@@ -454,7 +460,7 @@ module acceptedResultIntegrationQuarantineProof {
     state.phase == Quarantined,
     state.quarantineRecorded,
     state.quarantineDirection == NoDirection,
-    state.retryRunCount == 0,
+    state.retryRunCount < RETRY_PROJECTION_LIMIT,
     state' = {
       ...state,
       phase: RetrySelected,
@@ -524,7 +530,7 @@ module acceptedResultIntegrationQuarantineProof {
     state.quarantineDirection == RetryDirection,
     state.quarantineDirectionSession == state.fixedSession,
     state.quarantineDirectionPosition == state.quarantinePosition,
-    state.retryRunCount == 0,
+    state.retryRunCount < RETRY_PROJECTION_LIMIT,
     state.targetFactsCurrent,
     state.targetHeadProof == state.fixedTargetHead,
     state' = {
@@ -532,9 +538,9 @@ module acceptedResultIntegrationQuarantineProof {
       phase: RetryInFlight,
       lastEvent: RetryStarted,
       targetHeld: true,
-      retryRunCount: 1,
-      integratorInvocationCount: 2,
-      integratorRunOrdinal: 2,
+      retryRunCount: state.retryRunCount + 1,
+      integratorInvocationCount: state.integratorInvocationCount + 1,
+      integratorRunOrdinal: state.integratorRunOrdinal + 1,
       integratorRunSession: state.fixedSession,
       lastRecoveryRunSession: 0,
       lastRecoveryRunOrdinal: 0,
@@ -578,8 +584,45 @@ module acceptedResultIntegrationQuarantineProof {
       successorResource: INITIAL_RESOURCE + 1000,
       successorRunOrdinal: 1,
       successorInvocationCount: 1,
+      successorRunInFlight: true,
       predecessorPreserved: true,
     },
+  }
+
+  // S2 keeps its exact fixed head/resource; a fresh human choice alone advances its run.
+  action observeSuccessorNotPrepared: bool = all {
+    state.phase == SuccessorSessionFixed,
+    state.successorRunInFlight,
+    state' = { ...state, successorRunInFlight: false, successorResultPending: true },
+  }
+
+  action recordSuccessorQuarantine: bool = all {
+    state.phase == SuccessorSessionFixed,
+    state.successorResultPending,
+    state' = { ...state, successorResultPending: false, targetHeld: false,
+      successorQuarantineCount: state.successorQuarantineCount + 1 },
+  }
+
+  action chooseSuccessorRetry: bool = all {
+    state.phase == SuccessorSessionFixed,
+    state.successorQuarantineCount == state.successorRunOrdinal,
+    not(state.successorDirectionSelected),
+    state.successorDirectionCount < state.successorQuarantineCount,
+    state.successorDirectionCount < RETRY_PROJECTION_LIMIT,
+    state' = { ...state, successorDirectionSelected: true,
+      successorDirectionCount: state.successorDirectionCount + 1 },
+  }
+
+  action startSuccessorRetry: bool = all {
+    state.phase == SuccessorSessionFixed,
+    state.successorDirectionSelected,
+    state.targetFactsCurrent,
+    state.targetHeadProof == state.successorTargetHead,
+    not(state.successorRunInFlight),
+    not(state.successorResultPending),
+    state' = { ...state, successorDirectionSelected: false, successorRunInFlight: true,
+      targetHeld: true, successorRunOrdinal: state.successorRunOrdinal + 1,
+      successorInvocationCount: state.successorInvocationCount + 1 },
   }
 
   action step: bool = any {
@@ -600,5 +643,9 @@ module acceptedResultIntegrationQuarantineProof {
     observeFreshHead(FIXED_TARGET_HEAD),
     observeFreshHead(FIXED_TARGET_HEAD + 1),
     startSuccessor,
+    observeSuccessorNotPrepared,
+    recordSuccessorQuarantine,
+    chooseSuccessorRetry,
+    startSuccessorRetry,
   }
 }

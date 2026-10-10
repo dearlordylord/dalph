@@ -97,19 +97,58 @@ client submits Retry more than once with the same typed fingerprint
    conflicting Full rerun request returns a conflict and starts nothing.
 5. If the exact retry run ends without a usable candidate, the conclusive-run
    scenario applies again: Dalph records a new quarantine occurrence Q2 and
-   does not start an unapproved third run. Q2 permits Full rerun only because
-   the one allowed Retry for S has already been used.
+   waits for another human direction. One fresh `(S, Q2, Retry)` direction admits
+   run three; the same chronology applies to run four and every safely
+   representable later ordinal. No failure starts an automatic outer retry.
 
 If Git now reports a target head other than H, Dalph starts no Integrator run.
 It records a fresh quarantine occurrence explaining that Retry is no longer
 applicable; the operator may choose Full rerun for that new occurrence.
 
-The operator sees one retry, not one per network delivery. Dalph must not make
+The operator sees one new run per accepted direction. Dalph must not make
 the Integrator retry its private steps, create a new session for Retry, or run
 against a target head different from S's fixed H.
 
+Retry applies in original, automatic-successor, and FullRerun-successor sessions.
+It keeps the accepted leaf, fixed target head, resource, attempt, Base, claim,
+responsibility and queue position. A FullRerun successor may receive repeated
+Retry directions but cannot receive another FullRerun: no S3 is created by that
+operation. The opaque Integrator may merge, resolve conflicts, check and review.
+Its merged candidate is not promised immutable across runs.
+
+The existing v15 event fields already carry exact `(session, ordinal)` identity.
+No record rewrite, migration, journal reset or event-version bump is required.
+A rejected historical request does not become an applied direction; a human
+must send a fresh request. Legacy histories and contradictory evidence remain
+refused. Positive ordinals use Effect's safe-integer schema; exhaustion refuses
+new admission before effects and is not a product retry budget.
+
 ### Scenario-to-test mapping
 
+- `human directions admit runs two through sixteen once each in the same exact session`
+  in [the production protocol/control fixture](../../packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts).
+- `projects, folds, and non-trivially renames the current FullRerun successor with repeated native Operator Retry cycles`
+  in [the recorded cassette fixture](../../packages/dalph/test/cassettes/recorded-integrator-laws.test.ts)
+  proves S2 runs 1–8, native direction deduplication, no second FullRerun,
+  current-format canonical folding and inverse renaming.
+- `replays repeated human Retry cycles through run five and preserves crash admission ordinals`
+  in [the production MBT adapter](../../packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts).
+- `humanRetriesRunsTwoThreeFourFiveTest` and
+  `fullRerunSuccessorRetainsSessionAcrossRepeatedHumanRetriesTest` in
+  [the finite proof tests](../../specs/acceptedResultIntegration_proof_test.qnt).
+  The four-Retry projection bounds verification only.
+- `starts and replays eight contiguous provider runs on one exact retained resource`
+  in [the provider fixture](../../packages/dalph/src/application/codex-integrator.test.ts)
+  retains eight sealed identities, one thread and one resource.
+- `delivers repeated human Retry runs through eight and blocks after each conclusive quarantine`
+  in [the delivery frontier fixture](../../packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts).
+- `human retries invalid candidates repeatedly through run four` and
+  `human retries exact provider-absence quarantines repeatedly through run four`
+  in the protocol/control fixture above.
+- `refuses a third run while an old writer is still live and preserves both sealed runs`
+  in the provider fixture above.
+- `decodes only positive safely representable run ordinals without rounding or rollover`
+  in the protocol fixture above.
 - `deduplicates repeated Retry requests by session quarantine and direction`
 - `applies a recorded Retry after restart without another user request`
 - `rejects a conflicting direction after the first choice`

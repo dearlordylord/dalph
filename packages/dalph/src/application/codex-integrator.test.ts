@@ -1826,6 +1826,50 @@ describe("Codex Integrator", () => {
     expect(turnTokens[1]).not.toBe(turnTokens[0])
   })
 
+  it("starts and replays eight contiguous provider runs on one exact retained resource", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/repeated-retry-store.json"),
+      repository
+    })
+    const threadStarts = { value: 0 },
+      turnStarts = { value: 0 },
+      worktreeAdds = { value: 0 }
+    const turnTokens: Array<CodexOwnedTurnToken> = []
+    const retained = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        for (let ordinal = 1; ordinal <= 8; ordinal += 1) {
+          const request = requestFor(ordinal)
+          const result = yield* integrator.prepare(request)
+          expect(result.correlation).toEqual(request.correlation)
+          expect(yield* integrator.prepare(request)).toEqual(result)
+        }
+        return yield* (yield* CodexIntegratorPrivateStore).read(session.sessionId)
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            envelopes: Array.from({ length: 8 }, (_, index) =>
+              JSON.stringify({ version: 1, outcome: "PreparedCandidate", candidate: `M${index + 1}` })
+            ),
+            threadStarts,
+            turnStarts,
+            turnTokens,
+            worktreeAdds
+          })
+        )
+      )
+    )
+    expect(turnStarts.value).toBe(8)
+    expect(threadStarts.value).toBe(1)
+    expect(worktreeAdds.value).toBe(1)
+    expect(new Set(turnTokens).size).toBe(8)
+    expect(Option.isSome(retained) ? privateRuns(retained.value).map((run) => run.correlation.ordinal) : []).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8
+    ])
+  })
+
   it("checks retained thread activity before recording a fresh run-two token", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -1867,6 +1911,52 @@ describe("Codex Integrator", () => {
     expect(privateWrites).toHaveLength(result.writesAfterRunOne)
     expect(Option.isSome(result.stored) ? privateRuns(result.stored.value) : []).toHaveLength(1)
     expect(turnStarts.value).toBe(1)
+  })
+  it("refuses a third run while an old writer is still live and preserves both sealed runs", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/retry-live-writer-store.json"
+      ),
+      repository
+    })
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const turnStarts = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        yield* integrator.prepare(requestFor(2))
+        const writesAfterRunOne = privateWrites.length
+        const retryFailure = yield* Effect.flip(integrator.prepare(requestFor(3)))
+        const store = yield* CodexIntegratorPrivateStore
+        return { first, retryFailure, stored: yield* store.read(session.sessionId), writesAfterRunOne }
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            activitySequence: [
+              { _tag: "Absent" },
+              { _tag: "Absent" },
+              { _tag: "Absent" },
+              { _tag: "Absent" },
+              { _tag: "Absent" },
+              {
+                _tag: "ExactLive",
+                activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("foreign-retry-writer") }]
+              }
+            ],
+            privateWrites,
+            turnStarts
+          })
+        )
+      )
+    )
+    expect(result.first._tag).toBe("PreparedCandidate")
+    expect(result.retryFailure.detail).toContain("still live")
+    expect(privateWrites).toHaveLength(result.writesAfterRunOne)
+    expect(Option.isSome(result.stored) ? privateRuns(result.stored.value) : []).toHaveLength(2)
+    expect(turnStarts.value).toBe(2)
   })
 
   it("restarts an unfinished run two with its same durable token", async () => {
@@ -2760,7 +2850,7 @@ describe("Codex Integrator", () => {
     expect(unavailableTurnStarts.value).toBe(0)
   })
 
-  it("rejects retry ordinals without a sealed predecessor and above the retry limit", async () => {
+  it("rejects later retry ordinals without a sealed predecessor", async () => {
     const retryConfig = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
       commonDirectory,
@@ -2775,8 +2865,8 @@ describe("Codex Integrator", () => {
         return { runThree, runTwo }
       }).pipe(Effect.provide(providerLayer(retryConfig)))
     )
-    expect(failure.runTwo.detail).toContain("sealed run-one")
-    expect(failure.runThree.detail).toContain("exceeds Retry")
+    expect(failure.runTwo.detail).toContain("sealed predecessor")
+    expect(failure.runThree.detail).toContain("sealed predecessor")
   })
 
   it("rejects foreign resumed-thread tokens and correlated turns while an active turn remains pending", async () => {

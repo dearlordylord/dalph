@@ -22,9 +22,12 @@ const sealedInitialRunAllowsRetry = (
   requestedRun: IntegratorRunCorrelation
 ): boolean => {
   if (!isRetryProviderRun(requestedRun)) return false
-  const first = privateRuns(record)[0]
+  const first = privateRuns(record).find((run) => run.correlation.ordinal === requestedRun.ordinal - 1)
   const hasSealedInitialRun = isSealedPrivateRun(first)
-  return providerRunAdmissionError(requestedRun, hasSealedInitialRun) === undefined
+  return (
+    requestedRun.ordinal === privateRuns(record).length + 1 &&
+    providerRunAdmissionError(requestedRun, hasSealedInitialRun) === undefined
+  )
 }
 
 /** Rejects preparation that would rewind cleanup or cross into a different, unauthorized provider run. */

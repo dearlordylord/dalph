@@ -2,29 +2,16 @@ import { Schema } from "effect"
 import { CodexOwnedTurnToken, CodexTurnId } from "./codex-attempt-store.js"
 import { IntegratorResult, IntegratorRunCorrelation } from "@dalph/orchestrator"
 
-/** The provider run ordinal accepted for initial Integrator work. */
-const initialProviderRunOrdinal = 1
-
-/** The only provider run ordinal accepted for an Operator-authorized Retry. */
-const retryProviderRunOrdinal = 2
-
-/** The complete ordered provider-run lifecycle: initial work, then one Operator-authorized Retry. */
-export const codexIntegratorProviderRunOrdinals = [initialProviderRunOrdinal, retryProviderRunOrdinal] as const
-type CodexIntegratorProviderRunOrdinal = (typeof codexIntegratorProviderRunOrdinals)[number]
-
 const ordinalOf = (run: IntegratorRunCorrelation): number => Number(run.ordinal)
 
-export const isInitialProviderRun = (run: IntegratorRunCorrelation): boolean =>
-  ordinalOf(run) === codexIntegratorProviderRunOrdinals[0]
-
-export const isRetryProviderRun = (run: IntegratorRunCorrelation): boolean =>
-  ordinalOf(run) === codexIntegratorProviderRunOrdinals[1]
-
+export const isInitialProviderRun = (run: IntegratorRunCorrelation): boolean => ordinalOf(run) === 1
+export const isRetryProviderRun = (run: IntegratorRunCorrelation): boolean => ordinalOf(run) > 1
 export const isSupportedProviderRun = (run: IntegratorRunCorrelation): boolean =>
-  codexIntegratorProviderRunOrdinals.some((ordinal) => ordinal === ordinalOf(run))
+  Number.isSafeInteger(ordinalOf(run)) && ordinalOf(run) > 0
 
-export const expectedProviderRunOrdinalAt = (index: number): CodexIntegratorProviderRunOrdinal | undefined =>
-  codexIntegratorProviderRunOrdinals[index]
+/** The next contiguous ordinal, failing closed at representational exhaustion. */
+export const expectedProviderRunOrdinalAt = (index: number): number | undefined =>
+  Number.isSafeInteger(index) && index >= 0 && index < Number.MAX_SAFE_INTEGER ? index + 1 : undefined
 
 const privateRunIdentityFields = { correlation: IntegratorRunCorrelation, token: CodexOwnedTurnToken }
 
@@ -49,45 +36,29 @@ export const isSealedPrivateRun = (
   run: CodexIntegratorPrivateRun | undefined
 ): run is CodexIntegratorSealedPrivateRun => run !== undefined && Schema.is(CodexIntegratorSealedPrivateRun)(run)
 
-type ProviderRunHistory<
-  Item,
-  Ordinals extends ReadonlyArray<number> = typeof codexIntegratorProviderRunOrdinals,
-  Prefix extends ReadonlyArray<Item> = readonly []
-> = Ordinals extends readonly [number, ...infer Remaining extends ReadonlyArray<number>]
-  ? readonly [...Prefix, Item] | ProviderRunHistory<Item, Remaining, readonly [...Prefix, Item]>
-  : never
-
-const boundedProviderRunHistory = <S extends Schema.Constraint>(item: S) =>
-  Schema.NonEmptyArray(item).pipe(
-    Schema.refine(
-      (runs): runs is ProviderRunHistory<S["Type"]> => runs.length <= codexIntegratorProviderRunOrdinals.length,
-      { message: "private record contains more than the initial and retry provider runs" }
-    )
-  )
-
-/** Non-empty provider history bounded by the complete canonical run policy. */
-export const CodexIntegratorPrivateRunHistory = boundedProviderRunHistory(CodexIntegratorPrivateRun)
+/** Non-empty exact provider history; record validation checks contiguous ordinals and sealed predecessors. */
+export const CodexIntegratorPrivateRunHistory = Schema.NonEmptyArray(CodexIntegratorPrivateRun)
 export type CodexIntegratorPrivateRunHistory = typeof CodexIntegratorPrivateRunHistory.Type
 
-/** Non-empty cleanup history containing only sealed terminal evidence and bounded by the run policy. */
-export const CodexIntegratorSealedPrivateRunHistory = boundedProviderRunHistory(CodexIntegratorSealedPrivateRun)
+/** Non-empty cleanup history containing only sealed terminal evidence. */
+export const CodexIntegratorSealedPrivateRunHistory = Schema.NonEmptyArray(CodexIntegratorSealedPrivateRun)
 export type CodexIntegratorSealedPrivateRunHistory = typeof CodexIntegratorSealedPrivateRunHistory.Type
 
 export const providerRunAdmissionError = (
   run: IntegratorRunCorrelation,
-  hasSealedInitialRun: boolean
+  hasSealedPredecessor: boolean
 ): string | undefined => {
-  if (!isSupportedProviderRun(run)) return "provider run ordinal exceeds Retry"
-  return isRetryProviderRun(run) && !hasSealedInitialRun ? "Retry run two has no sealed run-one result" : undefined
+  if (!isSupportedProviderRun(run)) return "provider run ordinal is not a positive safely representable integer"
+  return isRetryProviderRun(run) && !hasSealedPredecessor ? "Retry has no sealed predecessor result" : undefined
 }
 
-/** Adds only the next canonical run, requiring sealed run-one evidence before the Retry transition. */
+/** Adds only the next canonical run, requiring sealed predecessor evidence before the Retry transition. */
 export const appendPrivateRunHistory = (
   history: ReadonlyArray<CodexIntegratorPrivateRun>,
   run: CodexIntegratorPrivateRun
 ): CodexIntegratorPrivateRunHistory | undefined => {
   if (ordinalOf(run.correlation) !== expectedProviderRunOrdinalAt(history.length)) return undefined
-  if (providerRunAdmissionError(run.correlation, isSealedPrivateRun(history[0])) !== undefined) return undefined
+  if (providerRunAdmissionError(run.correlation, history.every(isSealedPrivateRun)) !== undefined) return undefined
   const first = history[0]
   return CodexIntegratorPrivateRunHistory.make(first === undefined ? [run] : [first, ...history.slice(1), run])
 }
@@ -97,7 +68,7 @@ export const sealedPrivateRunHistoryFrom = (
   history: ReadonlyArray<CodexIntegratorPrivateRun>
 ): CodexIntegratorSealedPrivateRunHistory | undefined => {
   const first = history[0]
-  if (!isSealedPrivateRun(first) || history.length > codexIntegratorProviderRunOrdinals.length) return undefined
+  if (!isSealedPrivateRun(first)) return undefined
   const remaining = history.slice(1)
   return remaining.every(isSealedPrivateRun)
     ? CodexIntegratorSealedPrivateRunHistory.make([first, ...remaining])
@@ -107,8 +78,8 @@ export const sealedPrivateRunHistoryFrom = (
 /** A new candidate may bind only run one; Retry needs a sealed predecessor record. */
 export const newPrivateRecordRunError = (run: IntegratorRunCorrelation): string | undefined => {
   const admissionError = providerRunAdmissionError(run, false)
-  /* v8 ignore next -- @preserve the only supported non-initial run is Retry run two, and providerRunAdmissionError already rejects it when no sealed initial run exists. */
+  /* v8 ignore next -- @preserve every supported non-initial run is an explicit Retry, and providerRunAdmissionError already rejects it when no sealed initial run exists. */
   return admissionError === undefined && !isInitialProviderRun(run)
-    ? "Retry run two has no sealed run-one result"
+    ? "Retry has no sealed predecessor result"
     : admissionError
 }

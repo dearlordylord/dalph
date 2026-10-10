@@ -19,6 +19,7 @@ import {
   isJournalRecordEvidence,
   journalRecordByPosition,
   journalRecordsOfKind,
+  journalEvidenceBefore,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
 import {
@@ -29,12 +30,11 @@ import {
 } from "../integration-quarantine/events.js"
 import type { IntegratorRunPreparationInput } from "./session.js"
 import {
+  type IntegratorRunCorrelation,
   IntegratorGitObservation,
   type IntegratorCandidateText,
   IntegratorRunOrdinal,
-  integratorRetryRunOrdinal,
-  integratorRunCorrelationsEqual,
-  IntegratorRunCorrelation
+  integratorRunCorrelationsEqual
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./session-correlation.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
@@ -76,8 +76,8 @@ type GitReadIntentRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "GitReadIntentRecorded" }>
 }
 
-/** The exact ordinal-one result chronology that permits an operator Retry. */
-type IntegratorRetryOrdinalOneEvidence =
+/** The exact failed-run result chronology that permits an operator Retry. */
+type IntegratorRetryPredecessorEvidence =
   | {
       readonly _tag: "ConclusiveResult"
       readonly run: RunStartedRecord
@@ -96,18 +96,18 @@ type IntegratorRetryOrdinalOneEvidence =
 /** The fresh Git read pair that proves the target lineage after Retry. */
 type IntegratorRetryLineage = { readonly intent: GitReadIntentRecord; readonly observation: TargetLineageRecord }
 
-/** One exact `(S, E, Q, D, L)` Retry relation reconstructed from Journal records. */
+/** One exact `(S, failed run, Q, D, L)` Retry relation reconstructed from Journal records. */
 export type IntegratorRetryAuthorization = {
   readonly session: IntegratorRunCorrelation["session"]
   readonly sessionRecord: CanonicalSessionRecord
-  readonly ordinalOneEvidence: IntegratorRetryOrdinalOneEvidence
+  readonly predecessorEvidence: IntegratorRetryPredecessorEvidence
   readonly quarantine: QuarantineRecord
   readonly direction: DirectionRecord
   readonly lineage: IntegratorRetryLineage
   readonly run: IntegratorRunCorrelation
 }
 
-/** Result of checking one requested ordinal-two run against the exact Retry relation. */
+/** Result of checking one requested successor run against the exact Retry relation. */
 type IntegratorRetryAuthorizationResult =
   | { readonly _tag: "Authorized"; readonly authorization: IntegratorRetryAuthorization }
   | { readonly _tag: "Rejected"; readonly detail: string }
@@ -251,8 +251,16 @@ const exactSessionRecord = (
       integratorCorrelationsEqual(record.event.successor, session) &&
       validateAutomaticSuccessorSessionFixedRecord(records, record, record.event.predecessor)._tag === "Valid"
   )
-  const count = matches.count + automatic.count
-  return count === 1 ? (matches.first ?? automatic.first) : undefined
+  const fullRerun = matchingOfKind<SuccessorSessionRecord>(
+    records,
+    "IntegratorSuccessorSessionFixed",
+    (record): record is SuccessorSessionRecord =>
+      record.event._tag === "IntegratorSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(record.event.successor, session) &&
+      evaluateIntegratorFullRerunSuccessor(records, record, record.event.predecessor)._tag === "Valid"
+  )
+  const count = matches.count + automatic.count + fullRerun.count
+  return count === 1 ? (matches.first ?? automatic.first ?? fullRerun.first) : undefined
 }
 
 const exactRunStart = (
@@ -337,7 +345,7 @@ const conclusiveResultEvidence = (
   run: IntegratorRunCorrelation,
   start: RunStartedRecord,
   quarantine: QuarantineRecord
-): IntegratorRetryOrdinalOneEvidence | undefined => {
+): IntegratorRetryPredecessorEvidence | undefined => {
   if (quarantine.event.basis._tag !== "ConclusiveResult") return undefined
   const { cause, evidence } = quarantine.event.basis
   const result = exactRunResult(records, run, start, evidence.resultRecordedAt, quarantine.position)
@@ -359,7 +367,7 @@ const notPreparedEvidence = (
   detail: string,
   result: RunResultRecord,
   start: RunStartedRecord
-): IntegratorRetryOrdinalOneEvidence | undefined =>
+): IntegratorRetryPredecessorEvidence | undefined =>
   result.event.result._tag === "NotPrepared" && result.event.result.detail === detail
     ? { _tag: "ConclusiveResult", run: start, result }
     : undefined
@@ -374,7 +382,7 @@ const preparedCandidateEvidence = (
   },
   observationAt: JournalPosition | undefined,
   beforePosition: JournalPosition
-): IntegratorRetryOrdinalOneEvidence | undefined => {
+): IntegratorRetryPredecessorEvidence | undefined => {
   if (result.event.result._tag !== "PreparedCandidate" || result.event.result.candidateText !== cause.candidateText) {
     return undefined
   }
@@ -400,7 +408,7 @@ const providerFailureEvidence = (
   run: IntegratorRunCorrelation,
   start: RunStartedRecord,
   quarantine: QuarantineRecord
-): IntegratorRetryOrdinalOneEvidence | undefined => {
+): IntegratorRetryPredecessorEvidence | undefined => {
   if (quarantine.event.basis._tag !== "ProviderRunFailure") return undefined
   const record = oneRecordAt(records, quarantine.event.basis.ownedActivityProvenAbsentAt)
   return record !== undefined && providerAbsenceMatches(record, run, start, quarantine)
@@ -419,7 +427,7 @@ const promotionStaleEvidence = (
   run: IntegratorRunCorrelation,
   start: RunStartedRecord,
   quarantine: QuarantineRecord
-): IntegratorRetryOrdinalOneEvidence | undefined => {
+): IntegratorRetryPredecessorEvidence | undefined => {
   if (quarantine.event.basis._tag !== "PromotionStale") return undefined
   const validation = validatePromotionStaleQuarantineEvidence(records, quarantine)
   if (validation._tag === "Invalid") return undefined
@@ -499,19 +507,42 @@ const providerAbsenceMatches = (
   providerAbsenceIdentityMatches(record, run, quarantine) &&
   providerAbsenceChronologyMatches(record, run, start, quarantine)
 
-const ordinalOneEvidence = (
+/** Exact failed run named by a quarantine's typed evidence, independent of its diagnostic text. */
+export const quarantinedIntegratorRun = (
+  records: JournalHistorySource,
+  basis: IntegrationQuarantineBasis
+): IntegratorRunCorrelation | undefined => {
+  if (basis._tag === "RetryTargetHeadChanged") return undefined
+  const position =
+    basis._tag === "ConclusiveResult"
+      ? basis.evidence.resultRecordedAt
+      : basis._tag === "ProviderRunFailure"
+        ? basis.ownedActivityProvenAbsentAt
+        : basis.targetPromotionStaleAt
+  const record = oneRecordAt(records, position)
+  if (
+    record?.event._tag === "IntegratorRunResultRecorded" ||
+    record?.event._tag === "IntegrationProviderRunActivityAbsent"
+  ) {
+    return record.event.run
+  }
+  return record?.event._tag === "TargetPromotionStale" ? record.event.correlation.qualifiedCandidate.run : undefined
+}
+
+const predecessorEvidence = (
   records: JournalHistorySource,
   sessionRecord: CanonicalSessionRecord,
   quarantine: QuarantineRecord,
   authoritySession: IntegratorRunCorrelation["session"]
-): IntegratorRetryOrdinalOneEvidence | undefined => {
-  const runOne = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: authoritySession })
-  const start = exactRunStart(records, runOne, sessionRecord, quarantine.position)
+): IntegratorRetryPredecessorEvidence | undefined => {
+  const failedRun = quarantinedIntegratorRun(records, quarantine.event.basis)
+  if (failedRun === undefined || !integratorCorrelationsEqual(failedRun.session, authoritySession)) return undefined
+  const start = exactRunStart(records, failedRun, sessionRecord, quarantine.position)
   return start === undefined
     ? undefined
-    : (conclusiveResultEvidence(records, runOne, start, quarantine) ??
-        promotionStaleEvidence(records, runOne, start, quarantine) ??
-        providerFailureEvidence(records, runOne, start, quarantine))
+    : (conclusiveResultEvidence(records, failedRun, start, quarantine) ??
+        promotionStaleEvidence(records, failedRun, start, quarantine) ??
+        providerFailureEvidence(records, failedRun, start, quarantine))
 }
 
 const exactDirectionAndQuarantine = (
@@ -543,10 +574,29 @@ const exactDirectionAndQuarantine = (
       record.event.requestId.runId === runId &&
       record.event.fingerprint.direction === (options.requiredDirection ?? "Retry") &&
       record.event.fingerprint.sessionId === authoritySession.sessionId &&
+      (options.beforePosition === undefined || record.position < options.beforePosition) &&
+      (() => {
+        const quarantine = oneRecordAt(records, record.event.fingerprint.quarantineAt)
+        if (quarantine?.event._tag !== "IntegrationQuarantined") return false
+        const failedRun = quarantinedIntegratorRun(records, quarantine.event.basis)
+        return (
+          failedRun !== undefined &&
+          (options.requiredDirection === "FullRerun" || failedRun.ordinal === run.ordinal - 1)
+        )
+      })() &&
       record.key ===
         integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
   )
-  if (retryDirections.count !== 1) return "Retry requires one exact applied direction for its session and Run"
+  if (retryDirections.count !== 1) {
+    const hasDirection = someOfKind(
+      records,
+      "IntegrationQuarantineDirectionApplied",
+      (record) => isDirectionRecord(record) && record.event.fingerprint.sessionId === authoritySession.sessionId
+    )
+    return retryDirections.count === 0 && hasDirection
+      ? "Retry quarantine has no exact modern ordinal-one terminal evidence"
+      : "Retry requires one exact applied direction for its session and Run"
+  }
   const direction = retryDirections.first
   /* v8 ignore next -- @preserve a length-one array always yields an element; this guard protects malformed runtime data. */
   if (direction === undefined) return "Retry requires one exact applied direction for its session and Run"
@@ -681,25 +731,32 @@ const exactSessionDirections = (
   )
 
 /**
- * Reconstructs the one exact Retry relation used by both run-two admission and
- * changed-head Q2 recording. A session-only result is intentionally not an
- * ordinal-one evidence variant and therefore cannot authorize this relation.
+ * Reconstructs the one exact Retry relation used by both successor-run admission and
+ * changed-head quarantine recording. A session-only result is intentionally not an
+ * run-bound evidence variant and therefore cannot authorize this relation.
  */
 export const evaluateIntegratorRetryAuthorization = (
   records: JournalHistorySource,
   run: IntegratorRunCorrelation,
   options: IntegratorRetryAuthorizationOptions = {}
 ): IntegratorRetryAuthorizationResult => {
-  if (run.ordinal !== integratorRetryRunOrdinal) return rejected("Retry authorization applies only to run ordinal two")
+  if (!Schema.is(IntegratorRunOrdinal)(run.ordinal) || run.ordinal <= 1)
+    return rejected("Retry requires a safely representable successor ordinal")
+  const prefix =
+    options.beforePosition === undefined
+      ? records
+      : isJournalRecordEvidence(records)
+        ? journalEvidenceBefore(records, options.beforePosition)
+        : records.filter((record) => record.position < (options.beforePosition ?? Number.MAX_SAFE_INTEGER))
   const authoritySession = authoritySessionFor(run, options)
-  const preflightIssue = retryPreflightIssue(records, run, authoritySession)
+  const preflightIssue = retryPreflightIssue(prefix, run, authoritySession)
   if (preflightIssue !== undefined) return rejected(preflightIssue)
-  return authorizeRetryRelation(records, run, options)
+  return authorizeRetryRelation(prefix, run, options)
 }
 
 /**
  * Reconstructs the one canonical FullRerun relation. Candidate cleanup and
- * ordinary successor activation share this path so ordinal-two authority
+ * ordinary successor activation share this path so successor-run authority
  * cannot be weakened by a cleanup-local provider/quarantine predicate.
  */
 export const evaluateIntegratorFullRerunAuthorization = (
@@ -708,8 +765,7 @@ export const evaluateIntegratorFullRerunAuthorization = (
   predecessorSession: IntegratorRunCorrelation["session"],
   targetLineageObservedAt: JournalPosition
 ): IntegratorRetryAuthorizationResult => {
-  if (run.ordinal !== integratorRetryRunOrdinal)
-    return rejected("FullRerun authorization applies only to run ordinal two")
+  if (!Schema.is(IntegratorRunOrdinal)(run.ordinal)) return rejected("FullRerun requires an exact run ordinal")
   const preflightIssue = retryPreflightIssue(records, run, predecessorSession)
   if (preflightIssue !== undefined) return rejected(preflightIssue)
   const candidates = matchingOfKind<SuccessorSessionRecord>(
@@ -728,7 +784,7 @@ export const evaluateIntegratorFullRerunAuthorization = (
   if (relation.successor.targetLineageObservedAt !== targetLineageObservedAt) {
     return rejected("FullRerun successor uses a foreign target-lineage observation")
   }
-  const evidence = ordinalOneEvidence(records, relation.predecessorSession, relation.quarantine, predecessorSession)
+  const evidence = predecessorEvidence(records, relation.predecessorSession, relation.quarantine, predecessorSession)
   if (evidence === undefined) return rejected("FullRerun predecessor has no exact terminal evidence")
   if (relation.lineage.observation.event.observation.targetHeadSha !== run.session.expectedTargetHead) {
     return rejected("FullRerun requires the fresh target-lineage observation bound to S2")
@@ -738,7 +794,7 @@ export const evaluateIntegratorFullRerunAuthorization = (
     authorization: {
       direction: relation.direction,
       lineage: relation.lineage,
-      ordinalOneEvidence: evidence,
+      predecessorEvidence: evidence,
       quarantine: relation.quarantine,
       run,
       session: run.session,
@@ -789,7 +845,7 @@ const authorizeRetryRelation = (
   if (ordinalOneSessionRecord === undefined) return rejected("Retry has no exact predecessor fixed session S1")
   const directionAndQuarantine = exactDirectionAndQuarantine(records, run, options, authoritySession)
   if (typeof directionAndQuarantine === "string") return rejected(directionAndQuarantine)
-  const evidence = ordinalOneEvidence(
+  const evidence = predecessorEvidence(
     records,
     ordinalOneSessionRecord,
     directionAndQuarantine.quarantine,
@@ -804,7 +860,7 @@ const authorizeRetryRelation = (
     authorization: {
       direction: directionAndQuarantine.direction,
       lineage,
-      ordinalOneEvidence: evidence,
+      predecessorEvidence: evidence,
       quarantine: directionAndQuarantine.quarantine,
       run,
       session: run.session,
@@ -813,7 +869,7 @@ const authorizeRetryRelation = (
   }
 }
 
-/** Pure reconstruction validator for the exact unchanged-head chronology preceding an ordinal-two start. */
+/** Pure reconstruction validator for the exact unchanged-head chronology preceding an explicitly authorized successor start. */
 export const integratorRunTwoAuthorizationIssue = (
   records: JournalHistorySource,
   run: IntegratorRunCorrelation,
@@ -827,7 +883,7 @@ export const integratorRunTwoAuthorizationIssue = (
 }
 
 /**
- * Returns why a requested run-two preparation lacks the same exact Retry
+ * Returns why a requested Retry preparation lacks the same exact Retry
  * relation. The caller retains the separate changed-head result after this
  * relation has proved the fresh Git read chronology.
  */
@@ -840,7 +896,7 @@ export const integratorRetryAuthorizationIssue = (
     "IntegratorRunStarted",
     (record): record is RunStartedRecord =>
       isRunStartedRecord(record) &&
-      record.event.run.ordinal === integratorRetryRunOrdinal &&
+      record.event.run.ordinal === request.run.ordinal &&
       integratorCorrelationsEqual(record.event.run.session, request.run.session)
   )
   const beforePosition = existingRunStarts.count === 1 ? existingRunStarts.first?.position : undefined

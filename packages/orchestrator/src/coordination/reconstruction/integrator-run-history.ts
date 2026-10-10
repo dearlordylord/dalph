@@ -14,7 +14,6 @@ import {
 import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
-  integratorRetryRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../../workflow/protocols/integrator/events.js"
 import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator/state.js"
@@ -132,9 +131,7 @@ const integratorRunAuthorizationIssue = (
 ): string | undefined =>
   event.run.ordinal === 1
     ? undefined
-    : event.run.ordinal === integratorRetryRunOrdinal
-      ? integratorRunTwoAuthorizationIssue(records, event.run, { beforePosition: record.position })
-      : `Integrator run ordinal ${event.run.ordinal} exceeds Retry bound`
+    : integratorRunTwoAuthorizationIssue(records, event.run, { beforePosition: record.position })
 
 const invalidIntegratorRunStartedRecord = (
   record: JournalRecord,

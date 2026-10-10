@@ -1003,6 +1003,89 @@ it("starts one unchanged Retry run with the same session and fresh lineage posit
   })
 })
 
+it("delivers repeated human Retry runs through eight and blocks after each conclusive quarantine", () => {
+  const scenario = retryHistory("ConclusiveResult", fixedHead)
+  const records = [...scenario.records]
+  const current = () => ({
+    ...scenario,
+    records,
+    runState: {
+      ...scenario.runState,
+      appliedThrough: JournalPosition.make(records.length),
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
+  })
+  for (let ordinal = 2; ordinal <= 8; ordinal += 1) {
+    const run = integratorRunCorrelationForSession(scenario.session, IntegratorRunOrdinal.make(ordinal))
+    expect(transitionsFor(current())).toEqual([expect.objectContaining({ _tag: "RunIntegrator", run })])
+    records.push(
+      record(
+        records.length + 1,
+        IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }),
+        integratorRunStartedRecordKey(run)
+      )
+    )
+    records.push(
+      record(
+        records.length + 1,
+        IntegratorRunResultRecordedEvent.make({
+          run,
+          result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail: notPreparedDetail }),
+          version: workflowJournalEventVersion
+        }),
+        integratorRunResultRecordedRecordKey(run)
+      )
+    )
+    expect(transitionsFor(current())).toEqual([
+      expect.objectContaining({
+        _tag: "RecordRetryConclusiveIntegrationQuarantine",
+        result: expect.objectContaining({ run })
+      })
+    ])
+    const basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+      cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: notPreparedDetail }),
+      evidence: { resultRecordedAt: JournalPosition.make(records.length) }
+    })
+    const quarantineAt = JournalPosition.make(records.length + 1)
+    records.push(
+      record(
+        quarantineAt,
+        IntegrationQuarantinedEvent.make({
+          basis,
+          correlation: scenario.session,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        }),
+        integrationQuarantinedRecordKey(scenario.session.sessionId, basis)
+      )
+    )
+    expect(transitionsFor(current())).not.toContainEqual(expect.objectContaining({ _tag: "RunIntegrator" }))
+    if (ordinal === 8) break
+    const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+      direction: "Retry",
+      quarantineAt,
+      sessionId: scenario.session.sessionId
+    })
+    records.push(
+      record(
+        records.length + 1,
+        IntegrationQuarantineDirectionAppliedEvent.make({
+          fingerprint,
+          requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: `frontier-cycle-${ordinal}`, runId }),
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        }),
+        integrationQuarantineDirectionAppliedRecordKey(
+          IntegrationQuarantineDirectionSubject.make({ quarantineAt, sessionId: scenario.session.sessionId })
+        )
+      )
+    )
+    const fresh = lineageRecords(records.length + 2, scenario.currentLineage, `cycle-${ordinal}`)
+    records.push(fresh.intent, fresh.observation)
+  }
+})
+
 it("uses the last accepted journal position rather than record count for sparse Retry evidence", () => {
   const scenario = retryHistory("ConclusiveResult", fixedHead)
   const records = scenario.records.map((candidate) =>

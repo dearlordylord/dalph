@@ -2142,7 +2142,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       })
       const request = ApplyIntegrationQuarantineDirectionRequest.make({
         fingerprint,
-        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce, runId })
+        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: `${nonce}-${quarantine.position}`, runId })
       })
       return Effect.gen(function* () {
         const control = yield* makeIntegrationQuarantineDirectionControl(runtime.journal)
@@ -2171,7 +2171,9 @@ const acceptedResultIntegrationDriver = defineDriver(
       purpose: "retry" | "retry-foreign-target" | "successor",
       integrationTarget: IntegrationTarget = targetFor(id, modelResults)
     ) => {
-      const operationId = OperationId.make(`accepted-result-integration-${purpose}-target-lineage-${id}`)
+      const operationId = OperationId.make(
+        `accepted-result-integration-${purpose}-target-lineage-${id}-${latestQuarantineRecord(id).position}`
+      )
       const operation = makeTargetLineageObservationOperation({
         integrationTarget,
         operationId,
@@ -2621,14 +2623,21 @@ const acceptedResultIntegrationDriver = defineDriver(
         ...result,
         phase: "RetryInFlight",
         targetHeld: true,
-        retryRunCount: result.retryRunCount === 0n ? 1n : result.retryRunCount,
+        retryRunCount:
+          result.retryRunCount < result.quarantineOccurrenceCount ? result.retryRunCount + 1n : result.retryRunCount,
         integratorInvocationCount:
-          result.retryRunCount === 0n ? result.integratorInvocationCount + 1n : result.integratorInvocationCount,
+          result.retryRunCount < result.quarantineOccurrenceCount
+            ? result.integratorInvocationCount + 1n
+            : result.integratorInvocationCount,
         integratorRunOrdinal:
-          result.retryRunCount === 0n ? result.integratorRunOrdinal + 1n : result.integratorRunOrdinal,
+          result.retryRunCount < result.quarantineOccurrenceCount
+            ? result.integratorRunOrdinal + 1n
+            : result.integratorRunOrdinal,
         integratorRunSession: result.integrationSession,
-        lastRecoveryRunSession: result.retryRunCount === 0n ? 0n : result.lastRecoveryRunSession,
-        lastRecoveryRunOrdinal: result.retryRunCount === 0n ? 0n : result.lastRecoveryRunOrdinal
+        lastRecoveryRunSession:
+          result.retryRunCount < result.quarantineOccurrenceCount ? 0n : result.lastRecoveryRunSession,
+        lastRecoveryRunOrdinal:
+          result.retryRunCount < result.quarantineOccurrenceCount ? 0n : result.lastRecoveryRunOrdinal
       }))
       targetReacquisitionRequired = false
     }
@@ -3962,7 +3971,12 @@ const acceptedResultIntegrationDriver = defineDriver(
             targetLineage: lineage.event.observation,
             targetLineageObservedAt: lineage.position
           })
-          const run = runFor(1n, 2n)
+          const current = modelResultFor(1n)
+          const ordinal =
+            current.retryRunCount < current.quarantineOccurrenceCount
+              ? current.integratorRunOrdinal + 1n
+              : current.integratorRunOrdinal
+          const run = runFor(1n, ordinal)
           runtime.failNextIntegratorCall()
           const outcome = yield* Effect.exit(runtime.runProtocolFor(input, run))
           assertLostRun(run, outcome)
@@ -4537,6 +4551,53 @@ it.effect(
       }
       expect((yield* getState()).results.get(1n)).toMatchObject({ phase: "Queued", lineageCompatible: false })
       expect((yield* getState()).results.get(2n)).toMatchObject({ phase: "IntegratorSessionFixed" })
+    }),
+  30_000
+)
+
+it.effect(
+  "replays repeated human Retry cycles through run five and preserves crash admission ordinals",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("missing MBT state observer")
+      const invoke = (name: string) => {
+        const action = driver.actions[name]
+        if (action === undefined) return Effect.die(`missing repeated Retry MBT action ${name}`)
+        return action.handler({})
+      }
+      for (const name of [
+        "init",
+        "admitDestinationStep",
+        "acceptResultOne",
+        "queueAcceptedResultOne",
+        "startIntegrationOne",
+        "fixIntegratorSessionOne",
+        "invokeIntegratorOne",
+        "reportIntegratorNotPreparedOne",
+        "recordQuarantineOne"
+      ]) {
+        yield* invoke(name)
+      }
+      for (let ordinal = 2; ordinal <= 5; ordinal += 1) {
+        yield* invoke("chooseRetryOne")
+        if (ordinal === 2) yield* invoke("recoverCoordinatorStep")
+        yield* invoke("startRetryOne")
+        if (ordinal === 3) {
+          yield* invoke("recoverCoordinatorStep")
+          yield* invoke("startRetryOne")
+        }
+        yield* invoke("reportIntegratorNotPreparedOne")
+        if (ordinal === 4) yield* invoke("recoverCoordinatorStep")
+        yield* invoke("recordQuarantineOne")
+        expect((yield* getState()).results.get(1n)).toMatchObject({
+          integratorRunOrdinal: BigInt(ordinal),
+          retryRunCount: BigInt(ordinal - 1),
+          quarantineOccurrenceCount: BigInt(ordinal),
+          targetHeld: false
+        })
+      }
     }),
   30_000
 )

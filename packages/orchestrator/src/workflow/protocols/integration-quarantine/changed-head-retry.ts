@@ -14,13 +14,10 @@ import {
 } from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationQuarantineBasis, IntegrationQuarantinedEvent } from "./events.js"
-import {
-  IntegratorSessionCorrelation,
-  IntegratorRunCorrelation,
-  integratorRetryRunOrdinal
-} from "../integrator/events.js"
+import { IntegratorSessionCorrelation, IntegratorRunCorrelation, IntegratorRunOrdinal } from "../integrator/events.js"
 import {
   evaluateIntegratorRetryAuthorization,
+  quarantinedIntegratorRun,
   type IntegratorRetryAuthorization
 } from "../integrator/retry-authorization.js"
 import { integratorCorrelationsEqual } from "../integrator/state.js"
@@ -79,7 +76,15 @@ const retryRelationFor = (
   records: JournalHistorySource,
   input: ChangedHeadRetryQuarantineInput
 ): IntegratorRetryAuthorization | string => {
-  const run = IntegratorRunCorrelation.make({ ordinal: integratorRetryRunOrdinal, session: input.session })
+  const prior = journalRecordByPosition(records, input.priorQuarantineAt)
+  const failedRun =
+    prior?.event._tag === "IntegrationQuarantined" ? quarantinedIntegratorRun(records, prior.event.basis) : undefined
+  if (failedRun === undefined || failedRun.ordinal === Number.MAX_SAFE_INTEGER)
+    return "Retry has no representable successor run"
+  const run = IntegratorRunCorrelation.make({
+    ordinal: IntegratorRunOrdinal.make(failedRun.ordinal + 1),
+    session: input.session
+  })
   const result = evaluateIntegratorRetryAuthorization(records, run, {
     requiredTargetLineageObservedAt: input.targetLineageObservedAt
   })

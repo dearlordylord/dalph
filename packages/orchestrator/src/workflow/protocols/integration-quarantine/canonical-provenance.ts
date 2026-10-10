@@ -22,8 +22,6 @@ import type {
 } from "./events.js"
 import {
   type IntegratorRunCorrelation,
-  IntegratorRunOrdinal,
-  integratorRetryRunOrdinal,
   integratorRunCorrelationsEqual,
   type IntegratorSessionCorrelation
 } from "../integrator/events.js"
@@ -32,10 +30,7 @@ import {
   integratorResponsibilityFactsEqual,
   integratorResponsibilityFactsFromCorrelation
 } from "../integrator/state.js"
-import {
-  evaluateIntegratorFullRerunAuthorization,
-  evaluateIntegratorRetryAuthorization
-} from "../integrator/retry-authorization.js"
+import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
 import { exactTargetLineageRecord } from "./canonical-lineage.js"
 import { evaluateIntegratorFullRerunSuccessor } from "../integrator/successor-history.js"
 import { validateAutomaticSuccessorSessionFixedRecord } from "../integrator/automatic-successor-session.js"
@@ -48,7 +43,6 @@ type AbsenceRecord = JournalRecord & {
 type QuarantineRecord = JournalRecord & { readonly event: IntegrationQuarantinedEventType }
 
 const runIdFor = (run: IntegratorRunCorrelation) => run.session.plannedAttempt.runId
-const initialRunOrdinal = IntegratorRunOrdinal.make(1)
 
 const fixedSessionKey = (session: IntegratorSessionCorrelation) =>
   integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(session))
@@ -371,39 +365,12 @@ const providerRunStartFor = (
   return start !== undefined && start.position > fixedSession.session.position ? start : undefined
 }
 
-const firstSuccessorSessionFor = (
-  history: JournalHistorySource,
-  run: IntegratorRunCorrelation
-): JournalRecord | undefined => {
-  let successor: JournalRecord | undefined
-  for (const record of journalRecordsOfKind(history, "IntegratorSuccessorSessionFixed")) {
-    if (
-      record.event._tag === "IntegratorSuccessorSessionFixed" &&
-      integratorCorrelationsEqual(record.event.successor, run.session)
-    ) {
-      successor = record
-      break
-    }
-  }
-  return successor
-}
-
 const retryAuthorizationIssue = (
   history: JournalHistorySource,
   run: IntegratorRunCorrelation,
   runStart: JournalRecord
 ): string | undefined => {
-  if (run.ordinal !== integratorRetryRunOrdinal) return undefined
-  const successor = firstSuccessorSessionFor(history, run)
-  if (successor?.event._tag === "IntegratorSuccessorSessionFixed") {
-    const authorization = evaluateIntegratorFullRerunAuthorization(
-      history,
-      run,
-      successor.event.predecessor,
-      run.session.targetLineageObservedAt
-    )
-    return authorization._tag === "Authorized" ? undefined : authorization.detail
-  }
+  if (run.ordinal <= 1) return undefined
   const authorization = evaluateIntegratorRetryAuthorization(history, run, { beforePosition: runStart.position })
   if (authorization._tag === "Rejected") return authorization.detail
   return authorization.authorization.lineage.observation.event.observation.targetHeadSha ===
@@ -442,7 +409,7 @@ const validateRunOnePredecessors = (
   run: IntegratorRunCorrelation,
   beforePosition: JournalRecord["position"]
 ): ProviderRunPredecessorValidation => {
-  if (![initialRunOrdinal, integratorRetryRunOrdinal].includes(run.ordinal)) {
+  if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0) {
     return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
   }
   const history = records.filter((record) => record.position < beforePosition)
@@ -622,7 +589,7 @@ const validateIndexedProviderRunActivityAbsent = (
   if (!integratorCorrelationsEqual(record.event.correlation, run.session)) {
     return { _tag: "Invalid", detail: "provider-activity absence has a foreign session correlation" }
   }
-  if (![initialRunOrdinal, integratorRetryRunOrdinal].includes(run.ordinal)) {
+  if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0) {
     return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
   }
   const predecessors = indexedProviderRunStart(records, run, record.position)
@@ -666,7 +633,7 @@ export const validateProviderRunPredecessors = (
   beforePosition: JournalRecord["position"]
 ): ProviderRunPredecessorValidation => {
   if (!isJournalRecordEvidence(records)) return validateRunOnePredecessors(records, run, beforePosition)
-  if (![initialRunOrdinal, integratorRetryRunOrdinal].includes(run.ordinal)) {
+  if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0) {
     return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
   }
   const predecessors = indexedProviderRunStart(records, run, beforePosition)

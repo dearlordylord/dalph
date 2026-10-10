@@ -1,3 +1,5 @@
+import { appendChangedHeadRetryQuarantine } from "../integration-quarantine/changed-head-retry.js"
+import { makeIntegrationQuarantineDirectionControl } from "../integration-quarantine/control.js"
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
@@ -89,6 +91,7 @@ import {
   IntegratorRunQualifiedCandidate,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
+  nextIntegratorRunOrdinal,
   IntegratorNotPreparedDetail,
   IntegratorRequest,
   IntegratorSessionCorrelation,
@@ -337,7 +340,7 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
   const session = sessionRecord.event.correlation
   let basis: IntegrationQuarantineBasis
   if (evidence === "ConclusiveResult") {
-    const resultRecord = records.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+    const resultRecord = [...records].reverse().find(({ event }) => event._tag === "IntegratorRunResultRecorded")
     if (resultRecord?.event._tag !== "IntegratorRunResultRecorded") {
       return yield* Effect.die("expected ordinal-one result")
     }
@@ -347,7 +350,9 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
         evidence: { resultRecordedAt: resultRecord.position }
       })
     } else {
-      const observationRecord = records.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
+      const observationRecord = [...records]
+        .reverse()
+        .find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
       if (observationRecord?.event._tag !== "IntegratorRunCandidateGitObserved") {
         return yield* Effect.die("expected candidate Git observation")
       }
@@ -361,7 +366,9 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
     }
   } else {
     const detail = IntegrationQuarantineFailureDetail.make("provider reports no owned activity for run one")
-    const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+    const start = [...records].reverse().find(({ event }) => event._tag === "IntegratorRunStarted")
+    if (start?.event._tag !== "IntegratorRunStarted") return yield* Effect.die("expected failed run start")
+    const run = start.event.run
     const append = (key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
       raw ? appendRawJournalRecord(harness.records, key, event) : harness.journal.append(runId, key, event)
     const absence = yield* append(
@@ -390,29 +397,38 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
       version: workflowJournalEventVersion
     })
   )
-  const direction = yield* append(
-    integrationQuarantineDirectionAppliedRecordKey(
-      integrationQuarantineDirectionSubject(
-        IntegrationQuarantineDirectionFingerprint.make({
-          direction: "Retry",
-          quarantineAt: quarantine.position,
-          sessionId: session.sessionId
-        })
-      )
-    ),
-    IntegrationQuarantineDirectionAppliedEvent.make({
-      fingerprint: IntegrationQuarantineDirectionFingerprint.make({
-        direction: "Retry",
-        quarantineAt: quarantine.position,
-        sessionId: session.sessionId
-      }),
-      initiatedBy: { _tag: "Operator" },
-      occurrenceClassification: "InitiatedAction",
-      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "integrator-retry", runId }),
-      version: workflowJournalEventVersion
-    })
-  )
-  const operationId = OperationId.make("operation-target-lineage-retry")
+  const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+    direction: "Retry",
+    quarantineAt: quarantine.position,
+    sessionId: session.sessionId
+  })
+  const requestId = IntegrationQuarantineDirectionRequestId.make({
+    nonce: `integrator-retry-${quarantine.position}`,
+    runId
+  })
+  const directionEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+    fingerprint,
+    requestId,
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    version: workflowJournalEventVersion
+  })
+  let direction: JournalRecord
+  if (raw) {
+    direction = yield* append(
+      integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(fingerprint)),
+      directionEvent
+    )
+  } else {
+    const control = yield* makeIntegrationQuarantineDirectionControl(harness.journal).pipe(
+      Effect.provideService(AcceptedJournalReader, harness.accepted)
+    )
+    const request = { fingerprint, requestId }
+    const application = yield* control.apply(request)
+    expect(yield* control.apply(request)).toEqual(application)
+    direction = application.application
+  }
+  const operationId = OperationId.make(`operation-target-lineage-retry-${quarantine.position}`)
   const intent = yield* append(
     intentRecordKey(operationId),
     GitReadIntentRecordedEvent.make({
@@ -746,7 +762,7 @@ describe("outer Integrator protocol", () => {
       ).toBeUndefined()
       expect(evaluateIntegratorRetryAuthorization(records, integratorInitialRunCorrelationFor(input))).toMatchObject({
         _tag: "Rejected",
-        detail: expect.stringContaining("applies only to run ordinal two")
+        detail: expect.stringContaining("safely representable successor ordinal")
       })
 
       const changedHarness = yield* makeHarness(
@@ -771,6 +787,114 @@ describe("outer Integrator protocol", () => {
           run: changedRunTwo
         })
       ).toContain("does not match its exact Journal observation")
+    })
+  )
+
+  it("decodes only positive safely representable run ordinals without rounding or rollover", () => {
+    for (const ordinal of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN]) {
+      expect(Schema.is(IntegratorRunOrdinal)(ordinal)).toBe(false)
+    }
+    expect(Schema.is(IntegratorRunOrdinal)(Number.MAX_SAFE_INTEGER)).toBe(true)
+    expect(nextIntegratorRunOrdinal(IntegratorRunOrdinal.make(Number.MAX_SAFE_INTEGER))).toBeUndefined()
+    expect(nextIntegratorRunOrdinal(IntegratorRunOrdinal.make(Number.MAX_SAFE_INTEGER - 1))).toBe(
+      Number.MAX_SAFE_INTEGER
+    )
+    expect(nextIntegratorRunOrdinal(IntegratorRunOrdinal.make(16))).toBe(17)
+  })
+
+  it.effect("human directions admit runs two through sixteen once each in the same exact session", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(notPrepared(request)),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      for (let ordinal = 2; ordinal <= 16; ordinal += 1) {
+        const authorization = yield* appendRetryAuthorization(harness)
+        const run = integratorRunCorrelationForSession(authorization.session, IntegratorRunOrdinal.make(ordinal))
+        yield* harness.runExact(authorization.input, run.ordinal, run.session)
+        yield* harness.runExact(authorization.input, run.ordinal, run.session)
+        const records = yield* harness.readRecords
+        expect(deriveIntegratorRunState(records, responsibility, run)._tag).toBe("NotPrepared")
+        expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(ordinal)
+        expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(ordinal)
+        expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+      }
+      const changed = yield* appendRetryAuthorization(harness, changedTargetHead)
+      yield* harness.runExact(changed.input, IntegratorRunOrdinal.make(17), changed.session).pipe(Effect.flip)
+      yield* appendChangedHeadRetryQuarantine({
+        directionAppliedAt: changed.direction.position,
+        priorQuarantineAt: changed.quarantine.position,
+        session: changed.session,
+        targetLineage: changed.input.targetLineage,
+        targetLineageObservedAt: changed.observation.position
+      }).pipe(
+        Effect.provideService(InRunJournal, harness.journal),
+        Effect.provideService(AcceptedJournalReader, harness.accepted)
+      )
+      yield* harness
+        .runExact(
+          compatibleInput(targetHead, changed.observation.position),
+          IntegratorRunOrdinal.make(17),
+          changed.session
+        )
+        .pipe(Effect.flip)
+      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(16)
+      const records = yield* harness.readRecords
+      expect(
+        records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 17)
+      ).toHaveLength(0)
+      expect(
+        records.filter(
+          ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
+        )
+      ).toHaveLength(1)
+    })
+  )
+
+  it.effect("human retries invalid candidates repeatedly through run four", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) => Effect.succeed(prepared(request)),
+        successfulGitRead(commitObservation([acceptedResultCommit]))
+      )
+      const first = yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
+      expect(first._tag).toBe("CandidateRejected")
+      for (let ordinal = 2; ordinal <= 4; ordinal += 1) {
+        const authorization = yield* appendRetryAuthorization(harness)
+        const result = yield* harness.runExact(
+          authorization.input,
+          IntegratorRunOrdinal.make(ordinal),
+          authorization.session
+        )
+        expect(result._tag).toBe("CandidateRejected")
+        expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(ordinal)
+      }
+    })
+  )
+
+  it.effect("human retries exact provider-absence quarantines repeatedly through run four", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        (request) =>
+          Effect.fail(
+            new IntegratorCallFailure({ correlation: request.correlation, detail: "lost provider response" })
+          ),
+        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
+      )
+      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1)).pipe(Effect.flip)
+      for (let ordinal = 2; ordinal <= 4; ordinal += 1) {
+        const authorization = yield* appendRetryAuthorization(harness, targetHead, "ProviderRunFailure")
+        yield* harness
+          .runExact(authorization.input, IntegratorRunOrdinal.make(ordinal), authorization.session)
+          .pipe(Effect.flip)
+        const records = yield* harness.readRecords
+        expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(ordinal)
+        expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(ordinal)
+        expect(records.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toHaveLength(
+          ordinal - 1
+        )
+      }
     })
   )
 
@@ -1542,7 +1666,7 @@ describe("outer Integrator protocol", () => {
       const result = yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
       expect(result._tag).toBe("CandidateRejected")
       const records = yield* harness.readRecords
-      const resultRecord = records.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+      const resultRecord = [...records].reverse().find(({ event }) => event._tag === "IntegratorRunResultRecorded")
       const observationRecord = records.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
       if (
         resultRecord?.event._tag !== "IntegratorRunResultRecorded" ||
@@ -1575,7 +1699,7 @@ describe("outer Integrator protocol", () => {
       const resultAfterRewrite = evaluateIntegratorRetryAuthorization(yield* harness.readRecords, runTwo)
       expect(resultAfterRewrite).toMatchObject({
         _tag: "Authorized",
-        authorization: { ordinalOneEvidence: { _tag: "ConclusiveResult", candidateObservation: observationRecord } }
+        authorization: { predecessorEvidence: { _tag: "ConclusiveResult", candidateObservation: observationRecord } }
       })
 
       const missingResultBasis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
@@ -1596,7 +1720,7 @@ describe("outer Integrator protocol", () => {
       )
       expect(evaluateIntegratorRetryAuthorization(missingResultRecords, runTwo)).toMatchObject({
         _tag: "Rejected",
-        detail: expect.stringContaining("modern ordinal-one terminal evidence")
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
       })
 
       const directionWithMissingQuarantine = rewritten.map((record) => {
@@ -1617,7 +1741,7 @@ describe("outer Integrator protocol", () => {
       })
       expect(evaluateIntegratorRetryAuthorization(directionWithMissingQuarantine, runTwo)).toMatchObject({
         _tag: "Rejected",
-        detail: expect.stringContaining("no exact earlier ordinal-one quarantine")
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
       })
 
       const foreignCandidateText = IntegratorCandidateText.make("M-foreign-retry-evidence")
@@ -1644,7 +1768,7 @@ describe("outer Integrator protocol", () => {
       )
       expect(evaluateIntegratorRetryAuthorization(foreignEvidenceRecords, runTwo)).toMatchObject({
         _tag: "Rejected",
-        detail: expect.stringContaining("modern ordinal-one terminal evidence")
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
       })
     })
   )
@@ -1685,7 +1809,7 @@ describe("outer Integrator protocol", () => {
       )
       expect(evaluateIntegratorRetryAuthorization(wrongDetailRecords, runTwo)).toMatchObject({
         _tag: "Rejected",
-        detail: expect.stringContaining("modern ordinal-one terminal evidence")
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
       })
 
       const providerHarness = yield* makeHarness(
@@ -1726,7 +1850,10 @@ describe("outer Integrator protocol", () => {
           ordinal: IntegratorRunOrdinal.make(2),
           session: providerAuthorization.session
         })
-      ).toMatchObject({ _tag: "Rejected", detail: expect.stringContaining("modern ordinal-one terminal evidence") })
+      ).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
+      })
 
       const preparedHarness = yield* makeHarness(
         (request) => Effect.succeed(prepared(request)),
@@ -1780,7 +1907,10 @@ describe("outer Integrator protocol", () => {
           ordinal: IntegratorRunOrdinal.make(2),
           session: preparedAuthorization.session
         })
-      ).toMatchObject({ _tag: "Rejected", detail: expect.stringContaining("modern ordinal-one terminal evidence") })
+      ).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
+      })
 
       const mismatchedObservation = preparedWithInvalidBasis.map((record) =>
         record.position === preparedObservationRecord.position
@@ -1798,7 +1928,10 @@ describe("outer Integrator protocol", () => {
           ordinal: IntegratorRunOrdinal.make(2),
           session: preparedAuthorization.session
         })
-      ).toMatchObject({ _tag: "Rejected", detail: expect.stringContaining("modern ordinal-one terminal evidence") })
+      ).toMatchObject({
+        _tag: "Rejected",
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
+      })
 
       const delayedQuarantinePosition = JournalPosition.make(100)
       const directionBeforeQuarantine = notPreparedRecords.map((record) => {
@@ -1819,7 +1952,7 @@ describe("outer Integrator protocol", () => {
       })
       expect(evaluateIntegratorRetryAuthorization(directionBeforeQuarantine, runTwo)).toMatchObject({
         _tag: "Rejected",
-        detail: expect.stringContaining("no exact earlier ordinal-one quarantine")
+        detail: expect.stringMatching(/modern ordinal-one terminal evidence|no exact earlier ordinal-one quarantine/)
       })
 
       const duplicateLineage = {

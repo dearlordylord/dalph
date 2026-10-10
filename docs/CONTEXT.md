@@ -1400,6 +1400,10 @@ background retry loop
 **Integration Retry direction**:
 The Operator direction that resumes one quarantined integration responsibility
 through its same integration session and starts one new integration-agent run.
+Each later retry-supported quarantine may receive another explicit direction,
+including in a FullRerun successor. There is no numerical human Retry limit;
+ordinals remain positive safely representable integers and exhaustion refuses
+admission. The separate one-FullRerun-generation rule still prevents S3.
 Once its direction choice is durable, ordinary recovery carries it out without
 another Operator request. Before the agent call, Dalph checks that the
 session's fixed target head is still current. A changed target starts no agent
