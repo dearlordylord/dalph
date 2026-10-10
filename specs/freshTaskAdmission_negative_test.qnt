@@ -17,7 +17,7 @@ module freshTaskAdmissionNegativeTest {
     .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
     .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
     .then(acceptSafeReportFor(TaskA)).then(selectOrdinarySafeWithoutReopen)
-    .expect(not(revalidationRequiresLifecycleReopen))
+    .expect(not(revalidationRequiresLifecycleReopenOrReconciledResume))
 
   action revalidatePendingResumeWithoutExactSafeProjection: bool = all {
     state.existingResponsibility.get(TaskA) == SafeContinuationAwaitingRevalidation(AttemptA),

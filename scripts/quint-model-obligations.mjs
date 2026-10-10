@@ -276,7 +276,7 @@ export const freshTaskAdmissionObligations = Object.freeze({
     "safeContinuationAuthorizationRequiresEveryWitness",
     "continuationWitnessesRemainWithinExactContinuation",
     "revalidationRequiresAcceptedSafeReport",
-    "revalidationRequiresLifecycleReopen",
+    "revalidationRequiresLifecycleReopenOrReconciledResume",
     "pendingResumeRevalidationRequiresExactSafeReconciliation",
     "foreignClaimConstraintPreventsOccupancy",
     "newClaimCycleNeverReusesRejectedOperation",

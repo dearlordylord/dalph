@@ -1826,42 +1826,49 @@ it.effect("keeps C ahead of fresh E across the canonical cap-two lifecycle chron
   })
 )
 
-it.effect("reconstructs a post-Resume-intent attempt before retrying its exact Safe continuation", () =>
-  Effect.gen(function* () {
-    const driver = yield* freshTaskAdmissionDriver.create()
-    const action = <Name extends keyof typeof actionNames>(name: Name) =>
-      Option.getOrThrowWith(Option.fromUndefinedOr(driver.actions[name]), () => new Error(`missing action ${name}`))
-        .handler
-    const task = { task: "TaskA" }
+for (const lifecycle of ["Reopened", "OpenThroughout"] as const) {
+  it.effect(`reconstructs a ${lifecycle} post-Resume-intent attempt before retrying its exact Safe continuation`, () =>
+    Effect.gen(function* () {
+      const driver = yield* freshTaskAdmissionDriver.create()
+      const action = <Name extends keyof typeof actionNames>(name: Name) =>
+        Option.getOrThrowWith(Option.fromUndefinedOr(driver.actions[name]), () => new Error(`missing action ${name}`))
+          .handler
+      const task = { task: "TaskA" }
 
-    yield* action("init")({})
-    yield* action("reserveFreshEntryFor")(task)
-    yield* action("recordClaimIntentFor")(task)
-    yield* action("projectAcceptedWorktreeReadyFor")(task)
-    yield* action("handoffToExecutorResponsibilityFor")(task)
-    yield* action("observeLifecycleClosureFor")(task)
-    yield* action("acceptSafeReportFor")(task)
-    yield* action("observeLifecycleReopenFor")(task)
-    yield* action("selectSafeContinuationFor")(task)
-    yield* action("reserveReadyResponsibilityFor")(task)
-    for (const witness of continuationWitnessTags) {
-      yield* action("readContinuationWitnessFor")({ ...task, witness })
-    }
-    yield* action("authorizeSafeContinuationFor")(task)
-    yield* action("handoffReadyResponsibilityFor")(task)
-    yield* action("crash")({})
-    yield* action("recover")({})
+      yield* action("init")({})
+      yield* action("reserveFreshEntryFor")(task)
+      yield* action("recordClaimIntentFor")(task)
+      yield* action("projectAcceptedWorktreeReadyFor")(task)
+      yield* action("handoffToExecutorResponsibilityFor")(task)
+      if (lifecycle === "Reopened") yield* action("observeLifecycleClosureFor")(task)
+      yield* action("acceptSafeReportFor")(task)
+      if (lifecycle === "Reopened") {
+        yield* action("observeLifecycleReopenFor")(task)
+        yield* action("selectSafeContinuationFor")(task)
+        yield* action("reserveReadyResponsibilityFor")(task)
+        for (const witness of continuationWitnessTags) {
+          yield* action("readContinuationWitnessFor")({ ...task, witness })
+        }
+        yield* action("authorizeSafeContinuationFor")(task)
+      } else {
+        yield* action("projectOrdinarySafeContinuationReadyFor")(task)
+        yield* action("reserveReadyResponsibilityFor")(task)
+      }
+      yield* action("handoffReadyResponsibilityFor")(task)
+      yield* action("crash")({})
+      yield* action("recover")({})
 
-    const getState = driver.getState
-    if (getState === undefined) return yield* Effect.die("fresh admission driver must expose state")
-    expect((yield* getState()).occupied).toMatchObject([{ state: "ExactAttemptHeld", task: "TaskA" }])
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("fresh admission driver must expose state")
+      expect((yield* getState()).occupied).toMatchObject([{ state: "ExactAttemptHeld", task: "TaskA" }])
 
-    yield* action("reconcileResumeAsStillSafeFor")(task)
-    expect((yield* getState()).occupied).toEqual([])
-    yield* action("reserveReadyResponsibilityFor")(task)
-    expect((yield* getState()).occupied).toMatchObject([{ state: "ExistingResponsibilityReserved", task: "TaskA" }])
-  })
-)
+      yield* action("reconcileResumeAsStillSafeFor")(task)
+      expect((yield* getState()).occupied).toEqual([])
+      yield* action("reserveReadyResponsibilityFor")(task)
+      expect((yield* getState()).occupied).toMatchObject([{ state: "ExistingResponsibilityReserved", task: "TaskA" }])
+    })
+  )
+}
 
 quintIt(
   it.effect,

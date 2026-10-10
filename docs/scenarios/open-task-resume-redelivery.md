@@ -46,6 +46,18 @@ this repair. Provider/tool deadlines are immutable. No production journal or
 private-state editing, derived eligibility signalling, broad Suspend permission
 from Unreadable, or persisted frontier/resources/UI state is introduced.
 
+## Governing admission model
+
+The canonical [freshTaskAdmission.qnt](../../specs/freshTaskAdmission.qnt)
+keeps first lifecycle-reopen selection guarded by closed→Safe→Open. A pending
+Resume handed off from an accepted Safe attempt now remains pending for both
+Open and reopened tasks; exact still-Safe reconciliation restores read priority.
+`revalidationRequiresLifecycleReopenOrReconciledResume` distinguishes these two
+bases, and `pendingResumeRevalidationRequiresExactSafeReconciliation` still
+forbids retry without reconciliation. The existing capacity-proof
+`reconcileResumeStillSafe` action already maps both paths to the same occupancy
+release/restored priority; no proof-projection state or action changes.
+
 ## Acceptance mapping and evidence limits
 
 The controlled public workflow uses SQLite history and actual temporary Git
@@ -60,6 +72,7 @@ native process custody or execution of the original production attempts.
 | R2: current closed task, changed specification, foreign claim, blocked dependency, detached worktree, non-descendant lineage, Unreadable or foreign executor | Same file: `denies Open-task Resume redelivery with Closed current authority`, and `Specification`, `Claim`, `Dependency`, `Worktree`, `Lineage`, `Unreadable`, `Foreign` variants |
 | R2: exact eligibility, consumed/superseded/foreign projections, independent lifecycle guard | [recovery-activation.test.ts](../../packages/orchestrator/src/coordination/run/recovery-activation.test.ts): `mints pre-read capacity eligibility from lifecycle reopening or exact reconciled Resume` |
 | R2: missing/stale five current witnesses, swapped/consumed proof, later executor evidence | [resume-redelivery-authorization.test.ts](../../packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/resume-redelivery-authorization.test.ts); [admission tests](../../packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts) reject stale/swapped identities before reservation |
+| R1 admission model and runtime conformance | [freshTaskAdmission_test.qnt](../../specs/freshTaskAdmission_test.qnt): `openTaskResumeStillSafeRevalidationTest`; [fresh-task-admission.mbt.test.ts](../../packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts): `reconstructs a OpenThroughout post-Resume-intent attempt before retrying its exact Safe continuation` and `Reopened` variant; negative model tests retain ordinary-Safe-without-reopen and missing-reconciliation rejection |
 | Existing closed→Open and redelivery handoff cuts | [lifecycle-resume.test.ts](../../packages/dalph/test/cassettes/lifecycle-resume.test.ts): original ResumeIntent and RedeliveryIntent/Held/ResponseLost recovery cases |
 
 The leaf repair cannot substitute for #491/#495/#503 recovery. The root must
