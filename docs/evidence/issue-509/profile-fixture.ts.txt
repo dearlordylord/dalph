@@ -20,7 +20,7 @@ const results: unknown[] = []
 const bytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v))
 const p95 = (v: number[]) => v.toSorted((a,b) => a-b)[Math.ceil(v.length * .95)-1]
 const memory = () => ({ ...process.memoryUsage(), peakRssBytes: process.resourceUsage().maxRSS * 1024 })
-for (const [name, controls, dense] of [['Dense',512,true],['DenseOversized8192Utf8Bytes',512,true]] as const) {
+for (const [name, controls, dense] of [['Dense',512,true],['DenseOversized8192Utf8Bytes',512,true],['DenseOversizedUncachedSqlite',512,true]] as const) {
  it(name + ' native cold host reopen and warm public admission profile', async () => {
   await Effect.runPromise(Effect.scoped(Effect.gen(function*() {
    const fixture = yield* makeRunningHostFixture(process.cwd() + '/packages/dalph/dist/bin/dalph.js', dense, undefined, {startupIncludesE:dense})
@@ -34,7 +34,7 @@ for (const [name, controls, dense] of [['Dense',512,true],['DenseOversized8192Ut
     yield* fixture.releaseObservationCut
     const bootstrap = yield* fixture.bootstrap
     for(let i=0;i<controls;i++) yield* bootstrap.operatorControl.applyControlDirection({direction:'Pause',subject:{_tag:'Run',runId}})
-    if(name==='DenseOversized8192Utf8Bytes') {
+    if(name.startsWith('DenseOversized')) {
      const prior=yield* store!.read(runId)
      const ordinal=ControlDirectionApplicationOrdinal.make(Math.max(...prior.filter(record=>record.event._tag==='ControlDirectionApplied').map(record=>(record.event as any).ordinal))+1)
      yield* store!.append(runId,controlDirectionAppliedRecordKey(ordinal),ControlDirectionAppliedEvent.make({
@@ -85,14 +85,15 @@ for (const [name, controls, dense] of [['Dense',512,true],['DenseOversized8192Ut
        preparingHistory=true; const began=performance.now(),cpu=process.cpuUsage()
        phaseEvents.push({phase:'NativeCurrentFormatOccurrencePreparationStart',atMillis:began})
        const base = new Scheduler.MixedScheduler()
+       const taskPhases=new Set<string>()
        const scheduler: Scheduler.Scheduler = {
-        executionMode: 'async', shouldYield: fiber => base.shouldYield(fiber),
+        executionMode: 'async', shouldYield: fiber => { if(fiber.currentSpan?.name)taskPhases.add(fiber.currentSpan.name); if(fiber.currentStackFrame?.name)taskPhases.add(fiber.currentStackFrame.name);return base.shouldYield(fiber) },
         makeDispatcher: () => {
          const dispatcher = base.makeDispatcher()
          return {flush:()=>dispatcher.flush(),scheduleTask:(task,priority)=>dispatcher.scheduleTask(()=>{
-          const began=performance.now(); task(); const end=performance.now();
+          taskPhases.clear(); const eventReadsBefore=eventReads;const cpu=process.threadCpuUsage();const began=performance.now(); task(); const end=performance.now(); const threadCpuMicros=process.threadCpuUsage(cpu);
           if(eventReads>prefixReads && preparingHistory) Effect.runSync(Deferred.succeed(validationStarted,undefined))
-          synchronousTasks.push({start:began,end,wallMillis:end-began})
+          synchronousTasks.push({start:began,end,wallMillis:end-began,threadCpuMicros,phases:[...taskPhases],eventReadsBefore,eventReadsAfter:eventReads})
          },priority)}
         }
        }
@@ -117,6 +118,7 @@ for (const [name, controls, dense] of [['Dense',512,true],['DenseOversized8192Ut
      })
      const snapshot = yield* callRunningHost(address,runId,{_tag:'ReadSnapshot'})
      const measure = (temperature: string) => Effect.gen(function*(){
+      if(name.includes('Uncached')) yield* store!.scanHot()
       validationStarted = yield* Deferred.make<void>()
       synchronousTasks.length=0
       eventReads=0
@@ -139,7 +141,7 @@ for (const [name, controls, dense] of [['Dense',512,true],['DenseOversized8192Ut
       const usage=process.cpuUsage(cpu)
       const optionalHistoryEncodedBytes=bytes(preparedHistory)
       const optionalHistoryStructuralCharge=yield* observerStructuralBytes(preparedHistory,1024*1024*1024,'Preparation')
-      return {temperature, validationEventReadsAtControl: eventReads, prefixEnvelopeReads: prefixReads, synchronousTasks:[...synchronousTasks], admissionMillis, wallMillis:performance.now()-began,cpuUserMicros:usage.user,cpuSystemMicros:usage.system,maxEventLoopGapMillis,schedulingGaps,phaseEvents:[...phaseEvents],preparationMetrics,optionalHistoryEncodedBytes,optionalHistoryStructuralCharge,beforeMemory,memory:memory(),pageBytes:bytes(page),statusBytes:bytes(snapshot),controlBytes:bytes(control),records:records.length,decodedRecordBytes:bytes(records),eventPayloadBytes:records.reduce((sum,r)=>sum+bytes(r.event),0),unfinishedObligations:snapshot.result._tag==='Success' && snapshot.result.value._tag==='Ready' ? snapshot.result.value.retained.length : null,observerCount:0,pageCapacityBytes:8192,optionalRetainedBytes:'measured occurrence-cache logical structure and encoding; complete trace indexes and canonical retention excluded and unmeasured',startupMillis,startupCpu}
+      return {temperature,sourceReadMode:name.includes('Uncached')?'FreshNativeSqliteDecodeAfterReadOnlyScan':'AuthoritativeProcessLocalStoreCache', validationEventReadsAtControl: eventReads, prefixEnvelopeReads: prefixReads, synchronousTasks:[...synchronousTasks], admissionMillis, wallMillis:performance.now()-began,cpuUserMicros:usage.user,cpuSystemMicros:usage.system,maxEventLoopGapMillis,schedulingGaps,phaseEvents:[...phaseEvents],preparationMetrics,optionalHistoryEncodedBytes,optionalHistoryStructuralCharge,beforeMemory,memory:memory(),pageBytes:bytes(page),statusBytes:bytes(snapshot),controlBytes:bytes(control),records:records.length,decodedRecordBytes:bytes(records),eventPayloadBytes:records.reduce((sum,r)=>sum+bytes(r.event),0),unfinishedObligations:snapshot.result._tag==='Success' && snapshot.result.value._tag==='Ready' ? snapshot.result.value.retained.length : null,observerCount:0,pageCapacityBytes:8192,optionalRetainedBytes:'measured occurrence-cache logical structure and encoding; complete trace indexes and canonical retention excluded and unmeasured',startupMillis,startupCpu}
      })
      const coldSample = yield* measure('ColdHostReopen')
      const trace = yield* observation.traceReader.readAt(cursor)

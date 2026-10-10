@@ -829,13 +829,13 @@ export const validateAttemptStop = (
 export const validateAttemptStopHistorySteps = function* (
   runId: RunId,
   records: JournalHistorySource
-): Generator<void, ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue>> {
+): Generator<string, ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue>> {
   const collector = makeWorkflowJournalHistoryIssueCollector<
     WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue
   >()
   let indexes = emptyIndexes()
   for (const record of journalRecordsAfter(records, null)) {
-    yield
+    yield "AttemptStopHistory"
     indexes = validateAttemptStop(record, runId, records, indexes, collector.report)
   }
   return collector.toReadonlyArray()

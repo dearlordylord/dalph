@@ -3713,7 +3713,7 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
   const projection = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
     occurrences,
     version: workflowOccurrenceProjectionVersion
-  })
+  }).pipe(Effect.withSpan("WorkflowOccurrence.FinalProjectionSchema"))
   projectionCache.set(records, projection)
   return projection
 })
