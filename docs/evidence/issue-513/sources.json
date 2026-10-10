@@ -31,6 +31,11 @@
       "path": "packages/dalph/src/application/codex-integrator-worktree.ts",
       "sha256": "bcef20e891b529721f2d4e3c0566f326879a81b18963c897005d6811edeb0b00",
       "unchangedFromComposition": true
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts",
+      "sha256": "f79c43c884422d9356da5fb6939bb6e076268d299de2c21efe6c65601d4eea37",
+      "unchangedFromComposition": false
     }
   ],
   "artifacts": [

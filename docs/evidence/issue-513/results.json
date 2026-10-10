@@ -162,6 +162,38 @@
       "disposition": "credited documentation check",
       "log": "docs/evidence/issue-513/docs-first.log.gz",
       "sha256": "a190d554955686c737b49a5e727184790c9a3baf9c125cbd8650af757910ceab"
+    },
+    {
+      "name": "s2-focused",
+      "command": "mise exec -- pnpm exec vitest run packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts --maxWorkers=1",
+      "exitCode": 0,
+      "disposition": "credited S2 FullRerun test-proof repair",
+      "log": "docs/evidence/issue-513/s2-focused.log.gz",
+      "sha256": "40ed03139881d9ba88cc6faa91ac09ef308f1554dd035265f7a6f612744a165e"
+    },
+    {
+      "name": "s2-lint",
+      "command": "mise exec -- pnpm lint:fix packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts",
+      "exitCode": 0,
+      "disposition": "credited S2 FullRerun test-proof repair",
+      "log": "docs/evidence/issue-513/s2-lint.log.gz",
+      "sha256": "a155a4687c236b8c73985a2486a8245b4c3d0647f4fbf542df6f4403c76b72c6"
+    },
+    {
+      "name": "fast-s2",
+      "command": "DALPH_DIAGNOSTICS_BASE=3b5e51dd3ce201310b457748e8ddd20a406a15da mise exec -- pnpm check:fast",
+      "exitCode": 0,
+      "disposition": "credited final S2 test-proof repair",
+      "log": "docs/evidence/issue-513/fast-s2.log.gz",
+      "sha256": "b07d12a626f38da089d74fb9bc0d6b0f3799f2172fa05dd1d3e1bc0876c07c42"
+    },
+    {
+      "name": "docs-s2",
+      "command": "mise exec -- pnpm check:docs",
+      "exitCode": 0,
+      "disposition": "credited final S2 test-proof repair",
+      "log": "docs/evidence/issue-513/docs-s2.log.gz",
+      "sha256": "27c5efa50a484dc86f122f36b056d67b9fd62c4ff72427328bdb04f706fb9223"
     }
   ],
   "scope": {
@@ -173,7 +205,9 @@
   "scenarioResults": {
     "P1": {
       "protocol": "dense/gapped Started regression and interrupted Retry replay passed in focused-final",
-      "native": "one selected live native reopen passed in 58.51 seconds; two other cases deliberately skipped"
+      "native": "one selected live native reopen passed in 58.51 seconds; two other cases deliberately skipped",
+      "S2FullRerun": "Named S2/run2 split-prefix regression passed in s2-focused (15 successor-session tests); wrong predecessor/successor/session/result negatives on this path passed before provider admission.",
+      "nativeScope": "Native S1/run2 only; not real native S2 FullRerun."
     },
     "P2": {
       "protocol": "named contradiction branches passed in focused-final; original negative controls retained",

@@ -48,12 +48,22 @@ Acceptance tests:
 - `resumes the same Started Retry with a fresh post-Started lineage in dense and gapped histories`
   in [protocol tests](../../packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts)
   exercises ordinary replay and separately validates gapped canonical L positions.
+- `resumes Started S2 run two after canonical FullRerun with fresh lineage and rejects foreign session relations`
+  in [successor-session tests](../../packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts)
+  constructs accepted S1 FullRerun D/Q/L and canonical
+  `IntegratorSuccessorSessionFixed`, then S2/run1 conclusive Q, human Retry D,
+  original L and one S2/run2 Started. Fresh post-Started L admits that same S2/run2
+  once; conclusive replay calls no provider again. Wrong FullRerun predecessor,
+  successor, requested S1/foreign S2 session and S2 predecessor-result cases
+  reject on this split-prefix path before another provider admission.
 - `applies a recorded Retry after restart without another user request` exercises
   an interrupted provider call and a fresh Git read without another direction.
 - `reopens an authorized Started Retry through the native protocol with absent and recorded tokens`
   in [native qualification](../../packages/dalph/src/application/codex-integrator-conflict-real-qualification.test.ts),
   using [the live journal fixture](../../packages/dalph/test/support/native-started-retry.ts),
-  exercises actual Codex 0.162.1 and the production outer protocol. It proves
+  exercises actual Codex 0.162.1 and the production outer protocol for S1/run2.
+  The separate controlled FullRerun regression owns S2/run2 coverage; the native
+  fixture does not claim a real S2 FullRerun execution. It proves
   pre-token Started admission, sealed ordinal-one NotPrepared, stopped custody,
   run-two first allocation, lost outer response, unchanged run-history recorded-token
   recovery and conclusive replay. It checks session/path/thread, required check

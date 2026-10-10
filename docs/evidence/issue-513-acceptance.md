@@ -77,3 +77,19 @@ conformance tests passed separately. The exact qualified candidate receives a
 fresh same-model, medium-reasoning scoped reviewer before Accepted. Review
 receipt and candidate identity are retained externally under this issue's
 `evidence/leaf-review/`; no parent publication or full-gate success is inferred.
+
+
+## Parent review repair: canonical FullRerun S2/run2
+
+The parent Spec review identified missing explicit S2/run2 proof in the first
+candidate: its positive protocol/native fixtures used S1/run2. A new named
+successor-session regression constructs accepted FullRerun history and canonical
+`IntegratorSuccessorSessionFixed`, then original S2 Q/D/L/Started and a fresh
+post-Started request-bound L. It proves one admission and conclusive replay,
+with wrong predecessor, successor, requested session and predecessor-result
+refusals on this path. All 15 successor-session tests passed. The native fixture
+remains honestly scoped to S1/run2; its exact source/runtime hashes are unchanged.
+No source-runtime or model change was needed for this test-proof repair, so the
+passing native/artifact/model evidence remains bound to the same source bytes.
+The added test receives a fresh Base-scoped fast check, docs check, source/test
+hash binding and fresh two-axis review. No original #501 resource was changed.
