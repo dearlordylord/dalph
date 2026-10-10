@@ -1,6 +1,8 @@
-import type { PlannedTaskAttempt } from "@dalph/contracts"
+import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
 import {
+  journalRecordsForAttempt,
   journalRecordsForAttemptKind,
+  journalRecordsOfKind,
   lastJournalRecordOfKind,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
@@ -11,9 +13,9 @@ const lastElementOffset = -1
 
 /**
  * Authorizes one Suspend intent from accepted executor lifecycle evidence.
- * Cancellation may retain the last accepted Executing authority only across
+ * Owning Run Pause and cancellation may retain the last accepted Executing authority only across
  * an exact passive unavailable or unreadable observation. The observation may
- * precede or follow cancellation because neither result changes executor
+ * precede or follow the control because neither result changes executor
  * identity or lifecycle authority.
  */
 export const plannedAttemptExecutorSuspensionIsAuthorized = (
@@ -38,6 +40,43 @@ export const plannedAttemptExecutorSuspensionIsAuthorized = (
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
   )
   const cancellation = lastJournalRecordOfKind(records, "RunCancellationApplied")
+  const pause = Array.from(journalRecordsOfKind(records, "ControlDirectionApplied")).findLast(
+    ({ event }) =>
+      event._tag === "ControlDirectionApplied" &&
+      event.direction === "Pause" &&
+      event.subject._tag === "Run" &&
+      event.subject.runId === plannedAttempt.runId
+  )
+  const control = cancellation ?? pause
+  const retainedExecutingIsUncontradicted =
+    latestAcceptedReport !== undefined &&
+    Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId)).every(({ event, position }) => {
+      if (position <= latestAcceptedReport.position) return true
+      if (
+        event._tag === "PlannedAttemptExecutorStateObserved" ||
+        event._tag === "PlannedAttemptExecutorCommandProjectionObserved"
+      ) {
+        if (!plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)) return false
+        return (
+          event._tag === "PlannedAttemptExecutorStateObserved" &&
+          (event.observation._tag === "ExecutorStateUnreadable" ||
+            event.observation._tag === "ExecutorStateTemporarilyUnavailable" ||
+            (event.observation._tag === "ExactExecutorReport" &&
+              event.observation.report._tag === "ExecutorWorkExecuting" &&
+              event.observation.report.correlation.runId === plannedAttempt.runId &&
+              event.observation.report.correlation.attemptId === plannedAttempt.attemptId))
+        )
+      }
+      if (event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
+        return (
+          plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
+          event.report._tag === "ExecutorWorkExecuting" &&
+          event.report.correlation.runId === plannedAttempt.runId &&
+          event.report.correlation.attemptId === plannedAttempt.attemptId
+        )
+      }
+      return true
+    })
   const passiveObservationDoesNotContradictExecuting =
     latestStateObservation?.event._tag === "PlannedAttemptExecutorStateObserved" &&
     ((latestProjectionIssue?.reason === "Unreadable" &&
@@ -49,9 +88,10 @@ export const plannedAttemptExecutorSuspensionIsAuthorized = (
     latestAcceptedReport?.event._tag === "PlannedAttemptExecutorWorkReported" &&
     latestAcceptedReport.event.report._tag === "ExecutorWorkExecuting" &&
     passiveObservationDoesNotContradictExecuting &&
+    retainedExecutingIsUncontradicted &&
     latestStateObservation.position === latestProjectionIssue.observedAt &&
-    cancellation?.event._tag === "RunCancellationApplied" &&
+    control !== undefined &&
     latestAcceptedReport.position < latestStateObservation.position &&
-    latestAcceptedReport.position < cancellation.position
+    latestAcceptedReport.position < control.position
   )
 }

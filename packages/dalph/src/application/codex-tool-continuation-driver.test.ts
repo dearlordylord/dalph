@@ -1,3 +1,4 @@
+import { recoverThroughOwningWorkflow } from "../../test-support/owning-tool-recovery.js"
 /* eslint-disable import/no-nodejs-modules -- This internal test driver owns a disposable native controller. */
 import nodeProcess from "node:process"
 import { it } from "@effect/vitest"
@@ -280,13 +281,9 @@ driverTest(
           expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
             _tag: "Unreadable"
           })
-          expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Suspend" })).toMatchObject({
-            _tag: "Exact",
-            report: { _tag: "ExecutorWorkSafelySuspended", correlation }
-          })
+          yield* recoverThroughOwningWorkflow(attempt, specification)
           const preserved = yield* store.listToolEffects(attempt.runId, attempt.attemptId)
           expect(preserved).toMatchObject([{ ...item, suspensionCustody: { _tag: "Stopped", serverLaunch: launch } }])
-          expect(yield* executor.resume(request)).toMatchObject({ _tag: "ExecutorWorkExecuting", correlation })
           expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toMatchObject({
             _tag: "Some",
             value: {

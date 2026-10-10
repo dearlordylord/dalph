@@ -91,17 +91,27 @@ export const makePassivePlannedAttemptObserver = Effect.fn("PassivePlannedAttemp
           return current
         }
         const attached = yield* Deferred.make<void>()
-        const wait = Deferred.await(attached).pipe(
-          Effect.andThen(attachment.changes.pipe(Stream.take(1), Stream.runForEach(input.publishChange))),
-          Effect.ensuring(
-            attachment.close.pipe(
-              Effect.andThen(
-                attachmentGate.withPermit(
-                  Ref.update(owners, (results) => new Map([...results].filter(([id]) => id !== key)))
+        // Retire this one attachment before publication can wake coordination.
+        // Its finalizer must not remove a successor owner attached by that wake.
+        const finish = yield* Effect.cached(
+          attachment.close.pipe(
+            Effect.andThen(
+              attachmentGate.withPermit(
+                Ref.update(owners, (results) =>
+                  results.get(key) === current ? new Map([...results].filter(([id]) => id !== key)) : results
                 )
               )
             )
           )
+        )
+        const wait = Deferred.await(attached).pipe(
+          Effect.andThen(
+            attachment.changes.pipe(
+              Stream.take(1),
+              Stream.runForEach((projection) => finish.pipe(Effect.andThen(input.publishChange(projection))))
+            )
+          ),
+          Effect.ensuring(finish)
         )
         yield* wait.pipe(Effect.forkIn(scope))
         yield* Ref.update(owners, (results) => new Map(results).set(key, current))

@@ -250,3 +250,95 @@ it.effect("passive lifecycle owner has only current projection await and publica
     })
   )
 )
+
+it.effect("closes the old observer before publication wakes a fresh owner and preserves the successor wait", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const changes = yield* Queue.unbounded<PlannedAttemptExecutorProjectionType>()
+      const published = yield* Deferred.make<void>()
+      const unavailable = PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
+      let attachments = 0
+      let closes = 0
+      const observer = yield* makePassivePlannedAttemptObserver().pipe(
+        Effect.provideService(PlannedAttemptExecutorLifecycleObservation, {
+          attach: () =>
+            Effect.sync(() => {
+              attachments += 1
+              return {
+                current: executing,
+                changes: Stream.fromQueue(changes),
+                close: Effect.sync(() => {
+                  closes += 1
+                })
+              }
+            })
+        })
+      )
+      const successor = {
+        plannedAttempt,
+        publishCurrent: () =>
+          Effect.succeed({ acceptedFacts: "UnchangedPassiveObservation" as const, report: executing.report }),
+        publishChange: () => Effect.void
+      }
+      yield* observer.attach({
+        ...successor,
+        publishChange: () =>
+          Effect.gen(function* () {
+            expect(closes).toBe(1)
+            yield* observer.attach(successor)
+            yield* Deferred.succeed(published, undefined)
+          })
+      })
+      yield* Queue.offer(changes, unavailable)
+      yield* Deferred.await(published)
+      yield* Effect.yieldNow
+      yield* observer.attach(successor)
+      expect({ attachments, closes }).toEqual({ attachments: 2, closes: 1 })
+    })
+  )
+)
+
+it.effect("closes fresh unavailable and Safe attachments and rereads on each explicit wake", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const unavailable = PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
+      const safe = PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+      })
+      let attachments = 0
+      let closes = 0
+      const observed: Array<PlannedAttemptExecutorProjectionType> = []
+      const observer = yield* makePassivePlannedAttemptObserver().pipe(
+        Effect.provideService(PlannedAttemptExecutorLifecycleObservation, {
+          attach: () =>
+            Effect.sync(() => {
+              attachments += 1
+              return {
+                current: attachments < 3 ? unavailable : safe,
+                changes: Stream.never,
+                close: Effect.sync(() => {
+                  closes += 1
+                })
+              }
+            })
+        })
+      )
+      const input = {
+        plannedAttempt,
+        publishCurrent: (projection: PlannedAttemptExecutorProjectionType) =>
+          Effect.sync(() => {
+            observed.push(projection)
+          }).pipe(Effect.as({ acceptedFacts: "Changed" as const, report: safe.report })),
+        publishChange: () => Effect.die("closed attachment must not publish changes")
+      }
+      yield* observer.attach(input)
+      yield* observer.attach(input)
+      yield* observer.attach(input)
+      expect({ attachments, closes, observed }).toEqual({
+        attachments: 3,
+        closes: 3,
+        observed: [unavailable, unavailable, safe]
+      })
+    })
+  )
+)

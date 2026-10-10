@@ -1984,6 +1984,76 @@ it.effect(
 )
 
 it.effect(
+  "records owning Pause suspension intent before contacting the executor after executing state becomes unreadable",
+  () =>
+    Effect.gen(function* () {
+      yield* appendTaskWorkSpecification()
+      const journal = yield* InRunJournal
+      const intentWasVisibleAtSuspensionBoundary = yield* Ref.make(false)
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+      const executor = PlannedAttemptExecutor.of({
+        observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })),
+        requestSuspension: () =>
+          Effect.gen(function* () {
+            const records = yield* journal.read(plannedAttempt.runId).pipe(Effect.orDie)
+            const latest = records.at(-1)?.event
+            yield* Ref.set(
+              intentWasVisibleAtSuspensionBoundary,
+              latest?._tag === "PlannedAttemptExecutorCommandIntended" && latest.command === "Suspend"
+            )
+            return safe
+          }),
+        begin: () => Effect.succeed(executing),
+        resume: () => Effect.die("unused resume")
+      })
+
+      yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor)
+      )
+      expect(
+        yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.flip
+        )
+      ).toMatchObject({ _tag: "PlannedAttemptExecutorStateUnreadable" })
+      yield* (yield* ControlDirectionApplication).apply({
+        direction: "Pause",
+        subject: { _tag: "Run", runId: plannedAttempt.runId }
+      })
+
+      expect(
+        yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor)
+        )
+      ).toEqual(safe)
+      expect(yield* Ref.get(intentWasVisibleAtSuspensionBoundary)).toBe(true)
+
+      const records = yield* journal.read(plannedAttempt.runId)
+      const relevantChronology = records.flatMap(({ event }) => {
+        if (event._tag === "PlannedAttemptExecutorWorkReported") return [event.report._tag]
+        if (event._tag === "PlannedAttemptExecutorStateObserved") return [event.observation._tag]
+        if (event._tag === "ControlDirectionApplied") return [event.direction]
+        if (event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend") {
+          return ["SuspendIntended"]
+        }
+        return []
+      })
+      expect(relevantChronology).toEqual([
+        "ExecutorWorkExecuting",
+        "ExecutorStateUnreadable",
+        "Pause",
+        "SuspendIntended",
+        "ExecutorWorkSafelySuspended"
+      ])
+    }).pipe(
+      Effect.provide(controlDirectionApplicationLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provide(protocolJournalLayer())
+    )
+)
+
+it.effect(
   "records suspension intent and closes the executor after cancellation survives a passive response deadline",
   () =>
     Effect.gen(function* () {
@@ -3339,4 +3409,193 @@ it.effect("retains rejection custody until stopped proof and refuses passive res
       ).toMatchObject({ _tag: "PlannedAttemptExecutorLifecycleTransitionContradiction" })
     }
   }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect.each(["foreign", "lifecycle contradiction", "terminal"] as const)(
+  "owning Pause cannot suspend or resume after %s evidence even when followed by unreadable state",
+  (kind) =>
+    Effect.gen(function* () {
+      yield* appendTaskWorkSpecification()
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      let projection: PlannedAttemptExecutorProjection = exactProjection(executing)
+      let suspensionCalls = 0
+      let resumeCalls = 0
+      const executor = PlannedAttemptExecutor.of({
+        begin: () => Effect.succeed(executing),
+        observe: () => Effect.succeed(projection),
+        requestSuspension: () =>
+          Effect.sync(() => {
+            suspensionCalls += 1
+            return executing
+          }),
+        resume: () =>
+          Effect.sync(() => {
+            resumeCalls += 1
+            return executing
+          })
+      })
+      yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor)
+      )
+      if (kind === "foreign")
+        projection = PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+          expected: correlation,
+          observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: { ...correlation, attemptId: AttemptId.make("foreign-pause-attempt") }
+          })
+        })
+      else if (kind === "lifecycle contradiction")
+        projection = exactProjection(
+          PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+        )
+      else
+        projection = exactProjection(
+          PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
+        )
+      yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor),
+        Effect.result
+      )
+      projection = PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+      yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor),
+        Effect.result
+      )
+      yield* (yield* ControlDirectionApplication).apply({
+        direction: "Pause",
+        subject: { _tag: "Run", runId: plannedAttempt.runId }
+      })
+      expect(
+        (yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.result
+        ))._tag
+      ).toBe("Failure")
+      expect(
+        (yield* resumePlannedAttemptExecutorWork(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.result
+        ))._tag
+      ).toBe("Failure")
+      expect({ suspensionCalls, resumeCalls }).toEqual({ suspensionCalls: 0, resumeCalls: 0 })
+    }).pipe(
+      Effect.provide(controlDirectionApplicationLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provide(protocolJournalLayer())
+    )
+)
+
+it.effect.each(["Pause", "Suspend intent", "stop effect", "Safe", "Resume intent"] as const)(
+  "reopens owning workflow after %s and reconciles before retrying the same attempt",
+  (cut) =>
+    Effect.gen(function* () {
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+      let destination: PlannedAttemptExecutorReport = executing
+      let failed = false
+      const calls: Array<string> = []
+      const executor = PlannedAttemptExecutor.of({
+        begin: () =>
+          Effect.sync(() => {
+            calls.push("Begin")
+            return executing
+          }),
+        observe: () =>
+          Effect.sync(() => {
+            calls.push("Observe")
+            return exactProjection(destination)
+          }),
+        requestSuspension: () =>
+          Effect.gen(function* () {
+            calls.push("Suspend")
+            if (!failed && (cut === "Suspend intent" || cut === "stop effect")) {
+              failed = true
+              if (cut === "stop effect") destination = safe
+              return yield* Effect.die("controlled controller loss at suspension boundary")
+            }
+            destination = safe
+            return safe
+          }),
+        resume: () =>
+          Effect.gen(function* () {
+            calls.push("Resume")
+            destination = executing
+            if (!failed && cut === "Resume intent") {
+              failed = true
+              return yield* Effect.die("controlled controller loss after native Resume")
+            }
+            return executing
+          })
+      })
+      const records = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* appendTaskWorkSpecification()
+          yield* beginPlannedAttemptExecutorWork(plannedAttempt)
+          yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+            Effect.provideService(PlannedAttemptExecutor, {
+              ...executor,
+              observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }))
+            }),
+            Effect.result
+          )
+          const control = yield* ControlDirectionApplication
+          yield* control.apply({ direction: "Pause", subject: { _tag: "Run", runId: plannedAttempt.runId } })
+          if (cut !== "Pause") yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(Effect.exit)
+          if (cut === "Resume intent") {
+            yield* control.apply({ direction: "Unpause", subject: { _tag: "Run", runId: plannedAttempt.runId } })
+            yield* resumePlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.exit)
+          }
+          return yield* (yield* InRunJournal).read(plannedAttempt.runId)
+        }).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.provide(controlDirectionApplicationLayer),
+          Effect.provide(plannedAttemptProtocolControllerLayer),
+          Effect.provide(protocolJournalLayer())
+        )
+      )
+      const beforeReopen = calls.length
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          if (cut === "Resume intent") {
+            expect(yield* resumePlannedAttemptExecutorWork(plannedAttempt)).toEqual(executing)
+            expect(calls.slice(beforeReopen)).toEqual(["Observe"])
+          } else {
+            let suspension = yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(Effect.result)
+            // A reconciled intent with an Executing destination needs one further
+            // stop request; the lost effect itself was not inferred to have failed.
+            if (suspension._tag === "Success" && suspension.success._tag === "ExecutorWorkExecuting")
+              suspension = yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(Effect.result)
+            if (cut !== "Safe") expect(suspension).toMatchObject({ _tag: "Success", success: safe })
+            if (cut === "Suspend intent" || cut === "stop effect") expect(calls[beforeReopen]).toBe("Observe")
+            yield* (yield* ControlDirectionApplication).apply({
+              direction: "Unpause",
+              subject: { _tag: "Run", runId: plannedAttempt.runId }
+            })
+            expect(yield* resumePlannedAttemptExecutorWork(plannedAttempt)).toEqual(executing)
+          }
+          const after = yield* (yield* InRunJournal).read(plannedAttempt.runId)
+          expect(
+            after.filter(
+              ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Begin"
+            )
+          ).toHaveLength(1)
+          expect(
+            after.filter(
+              ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
+            )
+          ).toHaveLength(1)
+          expect(
+            after.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
+          ).toHaveLength(1)
+          expect(after.filter(({ event }) => event._tag === "RunCancellationApplied")).toHaveLength(0)
+          expect(calls.filter((call) => call === "Begin")).toHaveLength(1)
+          expect(calls.filter((call) => call === "Resume")).toHaveLength(1)
+        }).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.provide(controlDirectionApplicationLayer),
+          Effect.provide(plannedAttemptProtocolControllerLayer),
+          Effect.provide(liveJournalTestLayer({ records, runId: plannedAttempt.runId, target: recoveryTarget }))
+        )
+      )
+    })
 )
