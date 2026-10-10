@@ -1,4 +1,4 @@
-import { Context, Effect, Option } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 import type { IntegrationTarget } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
@@ -23,7 +23,6 @@ import {
   IntegratorRunProtocolResult,
   IntegratorRunQualifiedCandidate,
   IntegratorRunResultRecordedEvent,
-  integratorRetryRunOrdinal,
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
   integratorCandidateHasExactParents,
@@ -309,10 +308,14 @@ const exactRetrySessionForRequestedRun = Effect.fn("IntegratorProtocol.exactRetr
   const isOriginalSession = integratorCorrelationsEqual(recordedSession.value, request.run.session)
   const automaticSuccessorSession = automaticSuccessorRetrySessionFor(records, activeSession, request.run.session)
   const isExactAutomaticSuccessor = automaticSuccessorSession !== undefined
-  if (!isOriginalSession && !isExactAutomaticSuccessor) {
+  const isExactActiveSuccessor =
+    Option.isSome(activeSession) && integratorCorrelationsEqual(activeSession.value, request.run.session)
+  if (!isOriginalSession && !isExactAutomaticSuccessor && !isExactActiveSuccessor) {
     return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
   }
-  return automaticSuccessorSession ?? recordedSession.value
+  return isExactActiveSuccessor && Option.isSome(activeSession)
+    ? activeSession.value
+    : (automaticSuccessorSession ?? recordedSession.value)
 })
 
 const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForRequestedRun")(function* (
@@ -322,10 +325,6 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
 ) {
   if (request.run.ordinal === 1) return yield* correlationForPreparation(journal, request.preparation, records)
   const runId = request.preparation.responsibility.plannedAttempt.runId
-  /* v8 ignore next -- @preserve prepareIntegrationCandidateRun rejects ordinals above Retry before this helper is called. */
-  if (request.run.ordinal !== integratorRetryRunOrdinal) {
-    return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
-  }
   const retrySession = yield* exactRetrySessionForRequestedRun(request, records)
   if (!integratorLineageIsCompatible(request.preparation)) {
     return yield* new IntegratorTargetLineageIncompatible({
@@ -358,8 +357,11 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
   const journal = yield* InRunJournal
   const input = requestInput.preparation
   const runId = input.responsibility.plannedAttempt.runId
-  if (requestInput.run.ordinal > integratorRetryRunOrdinal) {
-    return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
+  if (!Schema.is(IntegratorRunOrdinal)(requestInput.run.ordinal)) {
+    return yield* new IntegratorJournalContradiction({
+      detail: "Integrator run ordinal must be a positive safely representable integer",
+      runId
+    })
   }
   const accepted = yield* AcceptedJournalReader
   const records = yield* accepted.readAccepted(runId)
@@ -379,7 +381,7 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
     run,
     recordsAfterSession,
     recordedRunResult,
-    run.ordinal === integratorRetryRunOrdinal
+    run.ordinal > 1
   )
   let result: IntegratorResult
   if (Option.isSome(reconciledRunResult)) {

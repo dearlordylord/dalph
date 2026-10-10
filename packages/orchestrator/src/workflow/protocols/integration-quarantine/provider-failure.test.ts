@@ -1862,7 +1862,7 @@ it.effect("reconstructs exact FullRerun authority and rejects moved or foreign c
         fullRerun.session,
         fullRerun.successorSession.targetLineageObservedAt
       )
-    ).toMatchObject({ _tag: "Rejected" })
+    ).toMatchObject({ _tag: "Authorized" })
 
     const fullInvalid = (records: ReadonlyArray<JournalRecord>) =>
       expect(

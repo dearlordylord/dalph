@@ -33,8 +33,6 @@ import { type IntegratorProviderActivityAbsent, IntegratorJournalContradiction }
 import {
   type IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
-  IntegratorRunOrdinal,
-  integratorRetryRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../integrator/events.js"
 import { validateAutomaticSuccessorSessionFixedRecord } from "../integrator/automatic-successor-session.js"
@@ -80,8 +78,6 @@ const reject = (run: IntegratorRunCorrelation, detail: string): Effect.Effect<ne
 
 const fixedSessionKey = (session: IntegratorSessionCorrelation) =>
   integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(session))
-
-const initialRunOrdinal = IntegratorRunOrdinal.make(1)
 
 const absenceKey = integrationProviderRunActivityAbsentRecordKey
 
@@ -437,13 +433,7 @@ const retryAuthorizationIssue = (
   run: IntegratorRunCorrelation,
   runStart: JournalRecord
 ): string | undefined => {
-  if (run.ordinal !== integratorRetryRunOrdinal) return undefined
-  const successor = history.find(
-    (record) =>
-      record.event._tag === "IntegratorSuccessorSessionFixed" &&
-      integratorCorrelationsEqual(record.event.successor, run.session)
-  )
-  if (successor?.event._tag === "IntegratorSuccessorSessionFixed") return undefined
+  if (run.ordinal <= 1) return undefined
   const authorization = evaluateIntegratorRetryAuthorization(history, run, { beforePosition: runStart.position })
   if (authorization._tag === "Rejected") return authorization.detail
   return authorization.authorization.lineage.observation.event.observation.targetHeadSha ===
@@ -489,7 +479,7 @@ export const validateProviderRunPredecessorsFromRecords = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
 ): ProviderRunPredecessorValidation => {
-  if (![initialRunOrdinal, integratorRetryRunOrdinal].includes(run.ordinal)) {
+  if (!Number.isSafeInteger(run.ordinal) || run.ordinal <= 0) {
     return invalidPredecessor("provider-run quarantine accepts only Integrator runs 1 and 2")
   }
   const predecessors = providerRunStartedAfterSession(records, run)
@@ -583,7 +573,7 @@ const conflictingQuarantineExists = (
       record.event._tag === "IntegrationQuarantined" &&
       integratorCorrelationsEqual(record.event.correlation, run.session) &&
       !quarantineMatches(record, run, expected, key) &&
-      !(retryPriorQuarantineAt !== undefined && record.position === retryPriorQuarantineAt)
+      !(retryPriorQuarantineAt !== undefined && record.position <= retryPriorQuarantineAt)
     )
       return true
   }
@@ -621,7 +611,7 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
     version: workflowJournalEventVersion
   })
   const retryPriorQuarantineAt =
-    run.ordinal === integratorRetryRunOrdinal
+    run.ordinal > 1
       ? (() => {
           const authorization = evaluateIntegratorRetryAuthorization(afterAbsence, run, {
             beforePosition: predecessors.value.runStart.position

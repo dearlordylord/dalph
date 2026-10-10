@@ -23,7 +23,9 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
   IntegratorSessionFixedEvent,
-  IntegratorSessionId
+  IntegratorSessionId,
+  IntegratorRunStartedEvent,
+  IntegratorRunOrdinal
 } from "../workflow/protocols/integrator/events.js"
 import { JournalPosition } from "./identity.js"
 import { makeHistoricalWorkflowRunBeganRecord } from "./run-lifecycle.js"
@@ -93,6 +95,19 @@ it.effect("round-trips the outer Integrator session with its exact causal identi
     })
 
     expect(yield* decodeJournalEvent(encodeJournalEvent(event))).toEqual(event)
+  })
+)
+
+it.effect("round-trips current-format run ordinals above two without rewriting their identities", () =>
+  Effect.gen(function* () {
+    const session = integrationFinalityFixture.promotionCorrelation.qualifiedCandidate.run.session
+    for (const ordinal of [1, 2, 3, 4, 16, Number.MAX_SAFE_INTEGER]) {
+      const event = IntegratorRunStartedEvent.make({
+        run: { ordinal: IntegratorRunOrdinal.make(ordinal), session },
+        version: workflowJournalEventVersion
+      })
+      expect(yield* decodeJournalEvent(encodeJournalEvent(event))).toEqual(event)
+    }
   })
 )
 

@@ -1,0 +1,514 @@
+{
+  "version": 1,
+  "baseCommit": "8f88caaa756a4b4ef26a2a7d3d1ab0c1ea045d0b",
+  "sourceCandidateCommit": "2e17bbcecee19785a33d2bded68fefe3d30304c4",
+  "sourceFiles": [
+    {
+      "path": "docs/CONTEXT.md",
+      "sha256": "6dc3230fd4fbc8c274b63b34fcecaedd3bb30b4ed3b17f326f4f92c852532200"
+    },
+    {
+      "path": "docs/scenarios/recover-or-quarantine-integration-session.md",
+      "sha256": "b084fe253c982fe4f74533a09ce19d4bb4e2149268d1c8f56da4099ae14a2e90"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-private-lifecycle.ts",
+      "sha256": "6dc0404cf299c2793f03b66fc97ac80a9bfd37663f1d91d9275f9579c12c33c2"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-private-preparation.ts",
+      "sha256": "97c4e73c58e50b711abbffa4a73cfe2e78d020f5a32fa7bc374c0545948a4dc5"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-private-store.test.ts",
+      "sha256": "a47df8f6b5a114f9ab178b9d81ca41b0a714a12ae44b2aae67f8ab4cd60f66ed"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator-private-store.ts",
+      "sha256": "334c73e243eaf6e1c92e8a133f704ab96f9540138e1640bce406e63b12756b4b"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator.test.ts",
+      "sha256": "ac12f782abdfeac2e511f02877863c09747e80ea1bf04a4707c0f6463ecc1a87"
+    },
+    {
+      "path": "packages/dalph/src/application/codex-integrator.ts",
+      "sha256": "af93944f14d14c2401ca06d1f0acf2c0923303b26767ef47e8a4ab520a5cb22d"
+    },
+    {
+      "path": "packages/dalph/test/cassettes/recorded-integrator-laws.test.ts",
+      "sha256": "dfbfbaf8fe24ffb9a509e0a5a1bceb76b7115a96f114cbba7544bb7fc9103871"
+    },
+    {
+      "path": "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts",
+      "sha256": "3f201dea3a9857c80f215f8833815af86d9a8a464058a0fd7acbc93823963499"
+    },
+    {
+      "path": "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts",
+      "sha256": "e42efc8c29f5f1d621dc4759fb12d6a93a81ee82d8457e0dbf3e1f60e152230b"
+    },
+    {
+      "path": "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.ts",
+      "sha256": "b11d4114464abad0a3ddcc50a239325b4d0edf3d681133e8364923396a4ac54a"
+    },
+    {
+      "path": "packages/orchestrator/src/coordination/reconstruction/integrator-run-history.ts",
+      "sha256": "687e668e2a64f3b5f951abcf93248b4d0126979d7148939b6a688a4f19d1b0f3"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow-journal/event-codec.test.ts",
+      "sha256": "eaab6fc5e0b7f0eef23ebac9bcd9234b52f7f9fa17b73ef71ea5e5e2a2d676bf"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts",
+      "sha256": "da5a1338dfb2ef062df670b25078e02377bec62c3efbdad2e705c114242385bd"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/changed-head-retry.ts",
+      "sha256": "1b307cd7b6e075bd3f861460de7bd566e3193895e9848271df4cb22b51dce25e"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/control.ts",
+      "sha256": "29733ed0f92a25942db865d57a5d791ec30288aa20a10dcdddfc2dc4b8951fbc"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.test.ts",
+      "sha256": "1a92172f58268521bb7fa10eaa34980664494588263c320b0658611c56e95206"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts",
+      "sha256": "185e3b79c1125b0609c184c995b3551676f4f833b631fc7cdfa27f4306338fd8"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.ts",
+      "sha256": "b3a63f35b856930e3173acea5a90a6d5b257a2eabcfdc3bb4658eaa34c16238e"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/state.ts",
+      "sha256": "8547038da751398b06b93ce42d56d727a792b1e23ae538b1652767d49e95c405"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/events.ts",
+      "sha256": "a91b8ed408552409e817bf20d8f291a1707b4742e6a68d60906384eb3c5fc1df"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
+      "sha256": "6272a1671361d7e03987ceccc0a141651bfe7aac865209cd3db901b50b77bc3a"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/protocol.ts",
+      "sha256": "f79035b6d06d66707854173960aadbc256db4ce8ce57fb4fc46774e81654c47d"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts",
+      "sha256": "b496b6bf313ffff44a55f716b423ab2c5e0db9e14f14679546c45ce9d3bebcd5"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts",
+      "sha256": "78211d49c0f2610bc1500482ec03a7bc7c0caa07e2c011cddfb21b5f5be253b1"
+    },
+    {
+      "path": "packages/orchestrator/src/workflow/protocols/integrator/state.ts",
+      "sha256": "25602ba981ca8cb4ef1194532c82b3b0b016dff4e5dddc29fa4ccc6f01fd30b4"
+    },
+    {
+      "path": "scripts/quint-effective-profile.test.mjs",
+      "sha256": "401232e4a7f68672bd6beff6e9acdca2d7a4fed22815a879827b74fc39610ac2"
+    },
+    {
+      "path": "specs/acceptedResultIntegration.qnt",
+      "sha256": "abb420ec0eaa3608c75501344fe185085dbb5376dea453b437bdb948dd54f0f5"
+    },
+    {
+      "path": "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
+      "sha256": "ee8245b1d4e5899bf203830c6039ab88d35709b597577e831df886c94313d8aa"
+    },
+    {
+      "path": "specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt",
+      "sha256": "66466ff42fd9e052a0e2f1a388fd095507b9bf5ca0a36f4fc8144212ccc04b94"
+    },
+    {
+      "path": "specs/acceptedResultIntegration_negative_test.qnt",
+      "sha256": "0bae2d7eab626a59c12f4013e2c74c83b5670c782072f284af1ddd5b2e18be3c"
+    },
+    {
+      "path": "specs/acceptedResultIntegration_proof.qnt",
+      "sha256": "d7ef44134eddca61b4bce381a44063c0b2444124ae8cd1eee06f1574469e83a8"
+    },
+    {
+      "path": "specs/acceptedResultIntegration_proof_test.qnt",
+      "sha256": "77d2d7090e21ad709909636a5cc3c88b7daac83c744f287e80b73e8c237df346"
+    }
+  ],
+  "capturedUtc": "2026-10-10T06:31:40Z",
+  "quint": {
+    "version": "0.32.0",
+    "resolvedBinary": "./node_modules/.bin/quint",
+    "packagePinnedVersion": "0.32.0"
+  },
+  "checks": [
+    {
+      "boundary": "mise exec -- pnpm check:artifacts",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "1076d90585e59a3e92945ba80bd562c82f213be4e84c39000945400c37f199c2",
+      "output": "\n> @dalph/root@0.0.0 check:artifacts <prepared-attempt-worktree>\n> node scripts/workspace-artifacts.mjs\n\n"
+    },
+    {
+      "boundary": "20 selected control/protocol/reconstruction/codec/custody/disposition/cassette files; 19 pass, cassette import failure separately repaired",
+      "exitCode": 1,
+      "passingCredit": false,
+      "rawLogSha256": "5f4a3751c43f1cc4083480ec70c5cce20acfdaf5dd7656e5b1e02f2abf50ee42",
+      "output": "\n RUN  v4.1.10 <prepared-attempt-worktree>\n\n \u276f |ordinary| packages/dalph/test/cassettes/recorded-integrator-laws.test.ts (2 tests | 1 failed) 578ms\n   \u00d7 projects, folds, and non-trivially renames the current FullRerun successor with repeated native Operator Retry cycles 513ms\n\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af Failed Tests 1 \u23af\u23af\u23af\u23af\u23af\u23af\u23af\n\n FAIL  |ordinary| packages/dalph/test/cassettes/recorded-integrator-laws.test.ts > projects, folds, and non-trivially renames the current FullRerun successor with repeated native Operator Retry cycles\nTypeError: Cannot read properties of undefined (reading 'make')\n \u276f Array.<anonymous> packages/dalph/test/cassettes/recorded-integrator-laws.test.ts:162:35\n    160|       baseRecords = append(\n    161|         baseRecords,\n    162|         IntegratorRunStartedEvent.make({ run: originalRetryRun, versio\u2026\n       |                                   ^\n    163|       )\n    164|       const absenceAt = JournalPosition.make(baseRecords.length + 1)\n \u276f Object.~effect/Effect/successCont node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1355:25\n \u276f Object.~effect/Effect/evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/core.ts:514:30\n \u276f FiberImpl.runLoop node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:654:39\n \u276f FiberImpl.evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:606:22\n \u276f Array.<anonymous> node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1111:14\n \u276f FiberImpl.evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:621:25\n \u276f node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1111:14\n \u276f Array.<anonymous> node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:773:43\n\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af[1/1]\u23af\n\n\n Test Files  1 failed | 19 passed (20)\n      Tests  1 failed | 326 passed (327)\n   Start at  02:16:24\n   Duration  20.55s (transform 1.12s, setup 0ms, import 14.24s, tests 4.42s, environment 1ms)\n\n"
+    },
+    {
+      "boundary": "recorded Integrator cassette repeated-cycle test; final fixture import repair",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "55f96605c73db1e274a4bd21d5169e1c5f791cbfcb2d24a34108f97116f170de",
+      "output": "\n RUN  v4.1.10 <prepared-attempt-worktree>\n\n\n Test Files  1 passed (1)\n      Tests  1 passed | 1 skipped (2)\n   Start at  02:17:27\n   Duration  6.18s (transform 1.79s, setup 0ms, import 4.43s, tests 1.52s, environment 0ms)\n\n"
+    },
+    {
+      "boundary": "mise exec -- pnpm exec vitest run --mode mbt --project accepted-result-integration-mbt packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts --testNamePattern repeated human Retry|Retry lineage|chooseRetry projection --maxWorkers=1",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "61654f6ebe4737eff4d3d3711bf2b8f90218f622577c8771abb0f6e6e0af2127",
+      "output": "\n RUN  v4.1.10 <prepared-attempt-worktree>\n\n\n Test Files  1 passed (1)\n      Tests  3 passed | 12 skipped (15)\n   Start at  02:18:06\n   Duration  1.54s (transform 354ms, setup 0ms, import 1.13s, tests 324ms, environment 0ms)\n\n"
+    },
+    {
+      "boundary": "DALPH_DIAGNOSTICS_BASE=8f88caaa756a4b4ef26a2a7d3d1ab0c1ea045d0b mise exec -- pnpm check:fast",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "e263ccf883705b1985912bfec63710be1f771679089758161fb827a28d145116",
+      "outputExcerpt": "\n> @dalph/root@0.0.0 check:fast <prepared-attempt-worktree>\n> pnpm typecheck && pnpm lint:changed && node scripts/check-quality-selection-fixtures.mjs\n\n\n> @dalph/root@0.0.0 typecheck <prepared-attempt-worktree>\n> node scripts/run-clean-typecheck.mjs\n\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-qualification-host.ts(109,16): suggestion TS377019: This `yield* Effect.fail(...\n[full log retained locally; SHA-256 above]\ncripts/quint-effective-profile.test.mjs\",\"specs/acceptedResultIntegration.qnt\",\"specs/acceptedResultIntegration_automaticSuccessor_proof.qnt\",\"specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt\",\"specs/acceptedResultIntegration_proof.qnt\",\"specs/acceptedResultIntegration_proof_test.qnt\"],\"selectedPaths\":[\"packages/dalph/src/application/codex-integrator-private-lifecycle.ts\",\"packages/dalph/src/application/codex-integrator-private-preparation.ts\",\"packages/dalph/src/application/codex-integrator-private-store.test.ts\",\"packages/dalph/src/application/codex-integrator-private-store.ts\",\"packages/dalph/src/application/codex-integrator.test.ts\",\"packages/dalph/src/application/codex-integrator.ts\",\"packages/dalph/test/cassettes/recorded-integrator-laws.test.ts\",\"packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts\",\"packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts\",\"packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.ts\",\"packages/orchestrator/src/coordination/reconstruction/integrator-run-history.ts\",\"packages/orchestrator/src/workflow-journal/event-codec.test.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/changed-head-retry.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/control.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.test.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/state.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/events.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/protocol.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/state.ts\",\"scripts/quint-effective-profile.test.mjs\"]}\n\n RUN  v4.1.10 <prepared-attempt-worktree>\n\n\n Test Files  3 passed (3)\n      Tests  14 passed (14)\n   Start at  02:22:59\n   Duration  5.16s (transform 197ms, setup 0ms, import 499ms, tests 4.38s, environment 0ms)\n\n"
+    },
+    {
+      "boundary": "mise exec -- pnpm test:formal:controls",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "41157ea1ae394e553229f24d6a06c867825c247da4d498d695996319664ad9ae",
+      "output": "\n> @dalph/root@0.0.0 test:formal:controls <prepared-attempt-worktree>\n> node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/generate-formal-command-inventory.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quint-hosted-diagnostics.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs\n\nVERDICT {\"success\":true,\"violation\":false}\ncontrolled TLC stdout\nVERDICT {\"success\":true,\"violation\":false}\ncontrolled TLC stderr\ncontrolled TLC stdout\ncontrolled TLC stderr\nVERDICT {\"success\":false,\"violation\":true}\n\u2139 tests 151\n\u2139 suites 0\n\u2139 pass 151\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 9434.529989\n"
+    },
+    {
+      "boundary": "independent effective-profile focused repair",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "a59604d7989121cb008ac3ab9705460439f5d275d6a2d8c0f58a189c73d79709",
+      "output": "\u2139 tests 19\n\u2139 suites 0\n\u2139 pass 19\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 362.211266\n"
+    },
+    {
+      "boundary": "collected acceptedResultIntegrationTest; specs/acceptedResultIntegration_test.qnt",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "195080fb9049e1e36c8ca843ce4914223e7a99b52d3917b81d2743803ebba050",
+      "output": "\n  acceptedResultIntegrationTest\n    ok journalOrderSurvivesRestartTest passed 1 test(s)\n    ok ordinaryAcceptedConsumesCancellationAndStartsOneResponsibilityTest passed 1 test(s)\n    ok changedTargetHeadStopsBeforeNewSessionTest passed 1 test(s)\n    ok incompatibleTargetLineageStopsBeforeIntegratorTest passed 1 test(s)\n    ok changedHeadAfterSessionCannotStartSuccessorTest passed 1 test(s)\n    ok outerIntegratorReportsOneExplicitCandidateTest passed 1 test(s)\n    ok outerIntegratorNotPreparedIsConclusiveTest passed 1 test(s)\n    ok unfinishedIntegratorRestoresSameSessionTest passed 1 test(s)\n    ok unfinishedIntegratorReacquiresWithoutTargetRereadTest passed 1 test(s)\n    ok independentResponseLossPreservesHeldTargetProofTest passed 1 test(s)\n    ok reportedCandidateRestoresWithoutIntegratorRerunTest passed 1 test(s)\n    ok exactGitParentsQualifyReportedCandidateTest passed 1 test(s)\n    ok missingCandidateIsRejectedWithoutPromotionTest passed 1 test(s)\n    ok nonCommitCandidateIsRejectedWithoutPromotionTest passed 1 test(s)\n    ok wrongParentCandidateIsRejectedWithoutPromotionTest passed 1 test(s)\n    ok ambiguousCandidateGitReadReconcilesSameCandidateTest passed 1 test(s)\n    ok exactCandidatePromotesWithDirectCompareAndSetTest passed 1 test(s)\n    ok changedHeadMakesPromotionStaleAndPreservesCandidateTest passed 1 test(s)\n    ok ambiguousPromotionRequiresFreshGitBeforeRetryTest passed 1 test(s)\n    ok unreadablePromotionReadRemainsPendingUntilFreshFactsTest passed 1 test(s)\n    ok authorityFreeExpectedHeadWaitsDurablyForRetryAuthorityTest passed 1 test(s)\n    ok authorityFreeUnreadableWaitsDurablyForFreshFactsTest passed 1 test(s)\n    ok authorityFreeChangedHeadStillRecordsStaleTest passed 1 test(s)\n    ok promotionExhaustionPreservesQualifiedCandidateTest passed 1 test(s)\n    ok conclusiveFailureQuarantinesBeforeReleaseAndKeepsUnrelatedWorkRunnableTest passed 1 test(s)\n    ok retryRedeliveryStartsOneRunInTheSameSessionTest passed 1 test(s)\n    ok fullRerunAfterRetryPreservesExplicitRetryAuthorizationTest passed 1 test(s)\n    ok retryNotPreparedClearsRejectedRunOneCandidateProjectionTest passed 1 test(s)\n    ok retryRecoveryPreservesQuarantineAndExactRunTest passed 1 test(s)\n    ok retryAtChangedHeadCreatesFreshQuarantineWithoutIntegratorCallTest passed 1 test(s)\n    ok changedHeadQuarantineCannotSelectRetryTest passed 1 test(s)\n    ok fullRerunPreservesPredecessorAndRestartsOneSuccessorTest passed 1 test(s)\n    ok unrelatedResultKeepsIndependentAdmissionFactsTest passed 1 test(s)\n    ok destinationAdmissionPinsEndpointAndRefBeforeWorkTest passed 1 test(s)\n    ok publicationProofMustPrecedeLocalPromotionTest passed 1 test(s)\n    ok initialPublicationCurrentReadRecordsAttemptBeforeProofTest passed 1 test(s)\n    ok initialPublicationAncestorReadRecordsAttemptBeforeProofTest passed 1 test(s)\n    ok publicationNonFastForwardAppendsNextIntentAfterReconciliationTest passed 1 test(s)\n    ok thirdPublicationNonFastForwardFinalReadCanProveCandidateTest passed 1 test(s)\n    ok thirdPublicationNonFastForwardFinalReadExhaustsWithoutFourthIntentTest passed 1 test(s)\n    ok incompatiblePublicationReadRetainsWithoutPushTest passed 1 test(s)\n    ok incompatiblePublicationResumeKeepsUnchangedFactsRetainedWithoutWorkTest passed 1 test(s)\n    ok incompatiblePublicationResumeUsesOnlyFreshCandidateCurrentProofTest passed 1 test(s)\n    ok ambiguousPublicationReconcilesToRetainedAncestorProofTest passed 1 test(s)\n    ok deniedPublicationRetainsTypedWaitWithoutRetryTest passed 1 test(s)\n    ok resumeAfterDeniedPublicationUsesSameRunCandidateAndRemainingAllowanceTest passed 1 test(s)\n    ok resumeAfterAuthorizedRetryPreservesExistingIntegratorHistoryTest passed 1 test(s)\n    ok resumePreExistingCompatibleHeadWakesOrdinaryFrontierWithoutMintingWorkTest passed 1 test(s)\n    ok resumeDeniedPublicationOperatorMatchesTheProductionResumeEndpointTest passed 1 test(s)\n    ok resumeSchemaMismatchFailsBeforeMutationTest passed 1 test(s)\n    ok throttleResumeRecordsStatusButCannotRetryMutationTest passed 1 test(s)\n    ok pauseDoesNotGetOverriddenByAcceptedResumeTest passed 1 test(s)\n    ok exitDoesNotGetOverriddenByAcceptedResumeTest passed 1 test(s)\n    ok settledDeliveryResumeReturnsStatusWithoutWorkTest passed 1 test(s)\n    ok initialSafetyRefusalRequiresFreshReadTest passed 1 test(s)\n    ok mutationSafetyRefusalPreservesAttemptBudgetTest passed 1 test(s)\n\n  56 passing (39952ms)\n"
+    },
+    {
+      "boundary": "collected acceptedResultIntegrationQuarantineProofTest; specs/acceptedResultIntegration_proof_test.qnt",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "a5424507b9f6bb2c8c042a5f2d716ed57188c9559a92a37712a64f63f517a593",
+      "output": "\n  acceptedResultIntegrationQuarantineProofTest\n    ok quarantineRecordsBeforeTargetReleaseTest passed 1 test(s)\n    ok processLossResumesSameSessionAndOrdinalTest passed 1 test(s)\n    ok retryStartsRunTwoAndRecordsFreshQ2Test passed 1 test(s)\n    ok fullRerunAllowsFreshHeadEqualToFixedHeadTest passed 1 test(s)\n    ok fullRerunUsesFreshDifferentHeadTest passed 1 test(s)\n    ok humanRetriesRunsTwoThreeFourFiveTest passed 1 test(s)\n    ok fullRerunSuccessorRetainsSessionAcrossRepeatedHumanRetriesTest passed 1 test(s)\n\n  7 passing (620ms)\n"
+    },
+    {
+      "boundary": "collected acceptedResultIntegrationQuarantineProofNegativeTest; specs/acceptedResultIntegration_proof_negative_test.qnt",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "b928972756571079cae6ce4330b367864b6a6d635de474dfc9e633af410f9379",
+      "output": "\n  acceptedResultIntegrationQuarantineProofNegativeTest\n    ok releaseBeforeQuarantineIsDetectedTest passed 1 test(s)\n    ok quarantineWithoutOccurrenceIsDetectedTest passed 1 test(s)\n    ok retryWithoutChoiceIsDetectedTest passed 1 test(s)\n    ok conflictingDirectionReplacementIsDetectedTest passed 1 test(s)\n    ok retryNewSessionIsDetectedTest passed 1 test(s)\n    ok recoveryOrdinalChangeIsDetectedTest passed 1 test(s)\n    ok successorWithoutFreshReadIsDetectedTest passed 1 test(s)\n    ok successorOrdinalTwoIsDetectedTest passed 1 test(s)\n    ok runTwoNeedsFreshQ2BeforeDirectionIsDetectedTest passed 1 test(s)\n\n  9 passing (622ms)\n"
+    },
+    {
+      "boundary": "collected acceptedResultIntegrationAutomaticSuccessorProofTest; specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "19db915e3414677928b62157891eb3ab05363f5360611756084cf895dd5f061f",
+      "output": "\n  acceptedResultIntegrationAutomaticSuccessorProofTest\n    ok beforeDiscoveryCatchesUpExactAncestorAndFixesOneSuccessorTest passed 1 test(s)\n    ok betweenDiscoveryAndPushUsesSameHeadAndProviderRunAfterRecoveryTest passed 1 test(s)\n    ok lostPushResponseAndAuthorizationCutRecoverFromReopenedSQLiteTest passed 1 test(s)\n    ok exactOperatorRetryOfAutomaticS2AfterConclusiveQTest passed 1 test(s)\n    ok thirdSessionAndThirdPushExhaustWithoutUnrequestedFourthSessionTest passed 1 test(s)\n    ok unsafeLocalWorkKeepsTypedDispositionAndNoCatchUpTest passed 1 test(s)\n    ok conclusiveDeniedPublicationDoesNotAuthorizeSuccessorTest passed 1 test(s)\n    ok pauseRetainsAuthorizedSuccessorWithoutForwardEffectsTest passed 1 test(s)\n    ok exitRetainsAuthorizedSuccessorAtCutoffTest passed 1 test(s)\n    ok compatibleH3BeforeBaselineFixesUnderSameAuthorizationTest passed 1 test(s)\n    ok compatibleH3AfterBaselineAndSQLiteRestartFixesUnderSameAuthorizationTest passed 1 test(s)\n    ok recoveredReadyBaselineRefreshesSameHeadOnceTest passed 1 test(s)\n    ok repeatedOperatorRetryOfAutomaticS2RetainsGenerationTest passed 1 test(s)\n\n  13 passing (2403ms)\n"
+    },
+    {
+      "boundary": "collected acceptedResultIntegrationAutomaticSuccessorProofNegativeTest; specs/acceptedResultIntegration_automaticSuccessor_proof_negative_test.qnt",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "04880265e1aa4a8a18d4b01a570fea050ef140e7d6af8d3b5f6b84d3c3ad9bf9",
+      "output": "\n  acceptedResultIntegrationAutomaticSuccessorProofNegativeTest\n    ok secondPreFixationGitReadInOneActivationIsDetectedTest passed 1 test(s)\n    ok staleH2FixationBeforeRequiredRefreshIsDetectedTest passed 1 test(s)\n    ok incompatibleH3StaysInOriginalRetainedWaitTest passed 1 test(s)\n    ok duplicateAuthorizationForOneOccurrenceIsDetectedTest passed 1 test(s)\n    ok automaticSuccessorRunTwoCannotStartWithoutExactOperatorRetryTest passed 1 test(s)\n    ok positiveResumeRequiresFixedSuccessorSessionTest passed 1 test(s)\n\n  6 passing (1601ms)\n"
+    },
+    {
+      "boundary": "bounded diagnostic only: --spec acceptedResultIntegrationAutomaticSuccessorProof --max-mutants 1 --samples 10 --steps 10 --seed 31337; pinned local node_modules/.bin/quint 0.32.0",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "3f53616af6c95188f2b1bb5d0dffd13fbbaf9db535bee029b1facc29043715b2",
+      "output": "warning: npm_execpath unset, using `quint` from PATH, which may not be the gate's pinned version\n\n## acceptedResultIntegration_automaticSuccessor_proof.qnt (seed 31337)\n\n1 of 641 generated mutants selected, 1 typecheck, 1 killed (0 by an invariant, 1 by a witness only), 0 survive.\n\n| Invariant | mutants killed |\n|---|---|\n| journalFirstAutomaticAuthorization | **0** |\n| authorizationRequiresCurrentExactAuthority | **0** |\n| catchUpRequiresJournaledExactCompareAndSet | **0** |\n| catchUpCasIsBoundedByBaselineRounds | **0** |\n| successorRefreshRoundsAreBounded | **0** |\n| localCatchUpPreservesUnsafeWork | **0** |\n| successorRequiresFreshBaseLineageAndJournaledAuthorization | **0** |\n| successorKeepsAcceptedResultLineage | **0** |\n| successorUsesLatestBaselineRoundUnderOriginalAuthorization | **0** |\n| successorRecoveryReusesOneFixedRun | **0** |\n| automaticSuccessorRetryRequiresExactOperatorChronology | **0** |\n| automaticSuccessorBoundsAreFinite | **0** |\n| automaticAuthorizationIsOccurrenceScoped | **0** |\n| predecessorCleanupRequiresStoppedWriter | **0** |\n| noUnrequestedFourthSession | **0** |\n| oneGitObservationOrCompareAndSetPerActivation | **0** |\n| noReadUntilStableLoop | **0** |\n| pauseAndExitStopNewSuccessorActions | **0** |\n| exactTaskAndResponsibilityAreRetained | **0** |\n| forbiddenProofAndForceShortcutsRemainFalse | **0** |\n| proofStateIsBounded | **0** |\n\n| Witness | mutants it alone caught |\n|---|---|\n| competingHeadRetainedReached | 1 |\n| automaticAuthorizationReached | 1 |\n| baselineReadReached | 1 |\n| refreshedH3BaselineReached | 1 |\n| catchUpIntentReached | 1 |\n| catchUpAppliedReached | 1 |\n| successorSessionFixedReached | 1 |\n| successorRecoveryReached | 1 |\n| boundedWaitReached | 1 |\n| unsafeLocalWaitReached | 1 |\n\nKilling nothing: `journalFirstAutomaticAuthorization`, `authorizationRequiresCurrentExactAuthority`, `catchUpRequiresJournaledExactCompareAndSet`, `catchUpCasIsBoundedByBaselineRounds`, `successorRefreshRoundsAreBounded`, `localCatchUpPreservesUnsafeWork`, `successorRequiresFreshBaseLineageAndJournaledAuthorization`, `successorKeepsAcceptedResultLineage`, `successorUsesLatestBaselineRoundUnderOriginalAuthorization`, `successorRecoveryReusesOneFixedRun`, `automaticSuccessorRetryRequiresExactOperatorChronology`, `automaticSuccessorBoundsAreFinite`, `automaticAuthorizationIsOccurrenceScoped`, `predecessorCleanupRequiresStoppedWriter`, `noUnrequestedFourthSession`, `oneGitObservationOrCompareAndSetPerActivation`, `noReadUntilStableLoop`, `pauseAndExitStopNewSuccessorActions`, `exactTaskAndResponsibilityAreRetained`, `forbiddenProofAndForceShortcutsRemainFalse`, `proofStateIsBounded`\n"
+    },
+    {
+      "boundary": "clean typecheck closing readonly and branded-fingerprint fixture repair",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "41cfffc50724c0b1c0451aa7f13577e0e7e13202632bf03c7fb2054508815563",
+      "outputExcerpt": "\n> @dalph/root@0.0.0 typecheck <prepared-attempt-worktree>\n> node scripts/run-clean-typecheck.mjs\n\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-qualification-host.ts(109,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)\np\n[full log retained locally; SHA-256 above]\nblication/resume-control.ts(82,19): suggestion TS377090: This `typeof ... .Type` query can be replaced with `StartedIntegrationResponsibility`. effect(unnecessaryTypeofType)\npackages/orchestrator/src/workflow/protocols/direct-publication/resume-control.ts(120,4): suggestion TS377090: This `typeof ... .Type` query can be replaced with `StartedIntegrationResponsibility`. effect(unnecessaryTypeofType)\npackages/orchestrator/src/workflow/protocols/direct-publication/resume-control.ts(176,19): suggestion TS377090: This `typeof ... .Type` query can be replaced with `StartedIntegrationResponsibility`. effect(unnecessaryTypeofType)\npackages/orchestrator/src/workflow/protocols/direct-publication/resume-control.ts(203,10): suggestion TS377090: This `typeof ... .Type` query can be replaced with `RemotePublicationState`. effect(unnecessaryTypeofType)\npackages/orchestrator/src/workflow/protocols/direct-publication/state.test.ts(396,12): suggestion TS377090: This `typeof ... .Type` query can be replaced with `RemotePublicationRetainedCause`. effect(unnecessaryTypeofType)\npackages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts(731,18): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)\npackages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts(797,18): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)\npackages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.test.ts(1250,20): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)\npackages/orchestrator/src/workflow/protocols/task-attempt-planning/plan.property.test.ts(140,18): suggestion TS377037: `Schema.decodeUnknownSync` is used inside an Effect generator. `Schema.decodeUnknownEffect` preserves the typed Effect error channel for this operation without throwing. effect(schemaSyncInEffect)\npackages/orchestrator/src/workflow/registry/occurrence-projection.test.ts(3256,29): suggestion TS377090: This `typeof ... .Type` query can be replaced with `RemotePublicationRetainedCause`. effect(unnecessaryTypeofType)\n"
+    },
+    {
+      "boundary": "final recorded cassette composition including original run-one/run-two/FullRerun prefix and repeated S2 cycles",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "294198dc4ef67f776d7b309d1b2cac680f159db151a3e18e3699f46a3a4f2024",
+      "retainedLocalLog": "/tmp/retry-cassette-qualified.log",
+      "output": "\n RUN  v4.1.10 <prepared-attempt-worktree>\n\n\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n   Start at  02:27:32\n   Duration  3.05s (transform 760ms, setup 0ms, import 2.07s, tests 861ms, environment 0ms)\n\n"
+    },
+    {
+      "boundary": "final protocol/control fixture with an actual fresh Git observation of restored H after changed-head Q",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "fd45668b59f73f169bfb087bebfbbfae20e476a3b793245c2b00b53a760f0307",
+      "retainedLocalLog": "/tmp/retry-restored-head-qualified.log",
+      "output": "\n RUN  v4.1.10 <prepared-attempt-worktree>\n\n\n Test Files  1 passed (1)\n      Tests  37 passed (37)\n   Start at  02:29:27\n   Duration  2.58s (transform 517ms, setup 0ms, import 1.69s, tests 783ms, environment 0ms)\n\n"
+    },
+    {
+      "boundary": "mise exec -- pnpm exec quint test specs/acceptedResultIntegration_negative_test.qnt --main acceptedResultIntegrationNegativeTest --max-samples 1 --seed 153067",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "789f716192e81ad0177cf84638d5ae56cc75b2e2158b0af7ecae0b21dd9c5267",
+      "retainedLocalLog": "/tmp/retry-quint-main-negative.log",
+      "output": "\n  acceptedResultIntegrationNegativeTest\n    ok releaseBeforeQuarantineViolatesDurableBoundaryTest passed 1 test(s)\n    ok retryWithoutChoiceViolatesNoAutomaticRetryTest passed 1 test(s)\n    ok fullRerunCannotErasePriorRetryAuthorizationTest passed 1 test(s)\n    ok q2CannotStartAnotherRunWithoutFreshDirectionTest passed 1 test(s)\n    ok changedHeadQ2CannotAuthorizeRetryTest passed 1 test(s)\n    ok conflictingDirectionCannotReplaceFirstChoiceTest passed 1 test(s)\n    ok retryCannotUseChangedHeadTest passed 1 test(s)\n    ok successorCannotBeAllocatedTwiceTest passed 1 test(s)\n    ok retryRecoveryCannotEraseAuthorizingQuarantineTest passed 1 test(s)\n    ok ordinaryAcceptedCannotLoseItsOneResponsibilityTest passed 1 test(s)\n    ok rejectedCandidateCannotAdvanceLaterSameTargetQueueTest passed 1 test(s)\n    ok staleTargetCannotAuthorizePromotionReacquisitionTest passed 1 test(s)\n    ok independentResponseLossCannotEraseHeldTargetProofTest passed 1 test(s)\n    ok retryNotPreparedCannotKeepRejectedRunOneCandidateTest passed 1 test(s)\n    ok freshQuarantineCannotCarryPriorDirectionConflictTest passed 1 test(s)\n    ok unreportedCandidateCannotAuthorizePromotionTest passed 1 test(s)\n    ok processSuccessWithoutIntegratorResultCannotAuthorizePromotionTest passed 1 test(s)\n    ok resourceHeadWithoutIntegratorResultCannotAuthorizePromotionTest passed 1 test(s)\n    ok legacyVerificationWithoutIntegratorResultCannotAuthorizePromotionTest passed 1 test(s)\n    ok equivalentContentWithoutIntegratorResultCannotAuthorizePromotionTest passed 1 test(s)\n    ok resourceHeadCannotAuthorizePromotionTest passed 1 test(s)\n    ok processSuccessCannotAuthorizePromotionTest passed 1 test(s)\n    ok legacyVerificationCannotAuthorizePromotionTest passed 1 test(s)\n    ok wrongParentCandidateCannotAuthorizePromotionTest passed 1 test(s)\n    ok crashedIntegratorCannotAllocateSuccessorTest passed 1 test(s)\n    ok integratorResourceCannotSubstituteCommitTest passed 1 test(s)\n    ok promotionPremiseCannotAdvanceLaterSameTargetQueueTest passed 1 test(s)\n    ok fourthPromotionAttemptViolatesBoundTest passed 1 test(s)\n    ok deferredPromotionCannotReacquireWithoutAuthorityTest passed 1 test(s)\n    ok deferredPromotionCannotRetryWithoutAuthorityTest passed 1 test(s)\n    ok unreadablePromotionCannotReacquireWithoutAuthorityTest passed 1 test(s)\n    ok unreadablePromotionCannotRetryWithoutAuthorityTest passed 1 test(s)\n    ok acceptedWorkCannotBypassDestinationAdmissionTest passed 1 test(s)\n    ok localPromotionCannotBypassPublicationProofTest passed 1 test(s)\n    ok processSuccessCannotForgeRemotePublicationProofTest passed 1 test(s)\n    ok fourthPublicationAttemptViolatesBoundTest passed 1 test(s)\n    ok publicationReadOutcomesCannotFollowPushTest passed 1 test(s)\n    ok publicationPushOutcomesCannotFollowReconciliationTest passed 1 test(s)\n    ok publicationExhaustionRequiresFinalReconciliationReadTest passed 1 test(s)\n    ok publicationResumeCannotChangeItsRunOrResponsibilityTest passed 1 test(s)\n    ok publicationResumeCannotAcceptWrongSchemaTest passed 1 test(s)\n    ok publicationResumeCannotMintIntegratorWorkAfterAuthorizedRetryTest passed 1 test(s)\n    ok throttledPublicationCannotBeRetriedThroughResumeTest passed 1 test(s)\n    ok pausedRunCannotExecuteAcceptedPublicationResumeTest passed 1 test(s)\n\n  44 passing (11525ms)\n"
+    },
+    {
+      "boundary": "final mise exec -- pnpm test:formal:controls",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "6dc40c3c4f93b226a17df8ffd8ce57c9d8b8ad6e0922d8706910bc2171c29024",
+      "retainedLocalLog": "/tmp/retry-formal-controls-qualified.log",
+      "output": "\n> @dalph/root@0.0.0 test:formal:controls <prepared-attempt-worktree>\n> node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/generate-formal-command-inventory.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-affected-selection.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quint-hosted-diagnostics.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs\n\nVERDICT {\"success\":true,\"violation\":false}\ncontrolled TLC stdout\ncontrolled TLC stderr\nVERDICT {\"success\":true,\"violation\":false}\ncontrolled TLC stdout\ncontrolled TLC stderr\nVERDICT {\"success\":false,\"violation\":true}\n\u2139 tests 151\n\u2139 suites 0\n\u2139 pass 151\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 7352.832488\n"
+    },
+    {
+      "boundary": "mise exec -- node scripts/generate-hosted-formal-input-manifest.mjs --check",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retainedLocalLog": "/tmp/retry-input-manifest.log",
+      "output": ""
+    },
+    {
+      "boundary": "mise exec -- pnpm check:docs",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "dc3c05e9206d603914f7883eca9fd14da7178aea1f670220dcf3a77207a859f8",
+      "retainedLocalLog": "/tmp/retry-docs.log",
+      "output": "\n> @dalph/root@0.0.0 check:docs <prepared-attempt-worktree>\n> node scripts/check-docs.mjs\n\n\ud83d\udd0d 1517 Total (in 104ms) \ud83d\udd17 821 Unique \u2705 1181 OK \ud83d\udeab 0 Errors \ud83d\udc7b 336 Excluded\n\n"
+    },
+    {
+      "boundary": "final DALPH_DIAGNOSTICS_BASE=8f88caaa756a4b4ef26a2a7d3d1ab0c1ea045d0b mise exec -- pnpm check:fast after restored-H fixture",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "4967bd680b2b2da9e70abd567d90139e5e8817e2fe0cbb61f7577bb17df11251",
+      "retainedLocalLog": "/tmp/retry-check-fast-review.log",
+      "outputExcerpt": "\n> @dalph/root@0.0.0 check:fast <prepared-attempt-worktree>\n> pnpm typecheck && pnpm lint:changed && node scripts/check-quality-selection-fixtures.mjs\n\n\n> @dalph/root@0.0.0 typecheck <prepared-attempt-worktree>\n> node scripts/run-clean-typecheck.mjs\n\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-integrator-qualification-host.ts(134,22): suggestion TS377015: This expression contains chained `pipe` calls that can be simplified to a single `pipe` call. effect(unnecessaryPipeChain)\npackages/dalph/bin/codex-qualification-host.ts(109,16): suggestion TS377019: This `yield* Effect.fail(...\n[full retained log]\neptedResultIntegration.qnt\",\"specs/acceptedResultIntegration_automaticSuccessor_proof.qnt\",\"specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt\",\"specs/acceptedResultIntegration_negative_test.qnt\",\"specs/acceptedResultIntegration_proof.qnt\",\"specs/acceptedResultIntegration_proof_test.qnt\"],\"selectedPaths\":[\"packages/dalph/src/application/codex-integrator-private-lifecycle.ts\",\"packages/dalph/src/application/codex-integrator-private-preparation.ts\",\"packages/dalph/src/application/codex-integrator-private-store.test.ts\",\"packages/dalph/src/application/codex-integrator-private-store.ts\",\"packages/dalph/src/application/codex-integrator.test.ts\",\"packages/dalph/src/application/codex-integrator.ts\",\"packages/dalph/test/cassettes/recorded-integrator-laws.test.ts\",\"packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts\",\"packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts\",\"packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.ts\",\"packages/orchestrator/src/coordination/reconstruction/integrator-run-history.ts\",\"packages/orchestrator/src/workflow-journal/event-codec.test.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/changed-head-retry.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/control.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.test.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.ts\",\"packages/orchestrator/src/workflow/protocols/integration-quarantine/state.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/events.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/protocol.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts\",\"packages/orchestrator/src/workflow/protocols/integrator/state.ts\",\"scripts/quint-effective-profile.test.mjs\"]}\n\n RUN  v4.1.10 <prepared-attempt-worktree>\n\n\n Test Files  3 passed (3)\n      Tests  14 passed (14)\n   Start at  02:30:52\n   Duration  4.53s (transform 37ms, setup 0ms, import 318ms, tests 3.94s, environment 0ms)\n\n"
+    },
+    {
+      "boundary": "final mise exec -- pnpm check:docs with candidate-bound evidence",
+      "exitCode": 0,
+      "passingCredit": true,
+      "rawLogSha256": "80cbe3ecc173cdc836a9177f84956d4791d72c8d2f38f6c532cdd8d9992c09b6",
+      "output": "\n> @dalph/root@0.0.0 check:docs <prepared-attempt-worktree>\n> node scripts/check-docs.mjs\n\n\ud83d\udd0d 1517 Total (in 95ms) \ud83d\udd17 821 Unique \u2705 1181 OK \ud83d\udeab 0 Errors \ud83d\udc7b 336 Excluded\n\n"
+    }
+  ],
+  "modelTypechecks": [
+    {
+      "command": [
+        "mise",
+        "exec",
+        "--",
+        "pnpm",
+        "exec",
+        "quint",
+        "typecheck",
+        "specs/acceptedResultIntegration.qnt"
+      ],
+      "exitCode": 0,
+      "durationSeconds": 6.971,
+      "finishedUtc": "2026-10-10T06:22:11Z",
+      "output": ""
+    },
+    {
+      "command": [
+        "mise",
+        "exec",
+        "--",
+        "pnpm",
+        "exec",
+        "quint",
+        "typecheck",
+        "specs/acceptedResultIntegration_proof.qnt"
+      ],
+      "exitCode": 0,
+      "durationSeconds": 1.33,
+      "finishedUtc": "2026-10-10T06:22:13Z",
+      "output": ""
+    },
+    {
+      "command": [
+        "mise",
+        "exec",
+        "--",
+        "pnpm",
+        "exec",
+        "quint",
+        "typecheck",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt"
+      ],
+      "exitCode": 0,
+      "durationSeconds": 3.564,
+      "finishedUtc": "2026-10-10T06:22:16Z",
+      "output": ""
+    }
+  ],
+  "stoppedDiagnostics": [
+    {
+      "exitCode": 1,
+      "passingCredit": false,
+      "atUtc": "2026-10-10T06:12:11Z",
+      "reason": "06:12 UTC diagnostic stop; first mutant still attributing invariants",
+      "processes": [
+        {
+          "ppid": 482874,
+          "state": "S",
+          "args": "node scripts/quint-mutate-specs.mjs --spec acceptedResultIntegration --max-mutants 4 --samples 100 --steps 10 --seed 31337 ",
+          "pid": 482899
+        },
+        {
+          "ppid": 482899,
+          "state": "R",
+          "args": "node ./node_modules/.bin/../@informalsystems/quint/dist/src/cli.js run /tmp/quint-mutation-kL4GJM/acceptedResultIntegration-0.qnt --invariant promotionFreshObservationIsExactExpectedHead --max-samples 100 --max-steps 10 --seed 31337 --verbosity 0 ",
+          "pid": 506006
+        }
+      ],
+      "runningAfterStop": []
+    },
+    {
+      "exitCode": 1,
+      "passingCredit": false,
+      "atUtc": "2026-10-10T06:14:17Z",
+      "reason": "06:14 UTC reduced diagnostic stop; fixed main-model startup/attribution cost",
+      "processes": [
+        {
+          "ppid": 506274,
+          "state": "S",
+          "args": "node scripts/quint-mutate-specs.mjs --spec acceptedResultIntegration --max-mutants 1 --samples 1 --steps 10 --seed 31337 ",
+          "pid": 506330
+        },
+        {
+          "ppid": 506330,
+          "state": "S",
+          "args": "/home/node/.local/share/mise/installs/node/24.20.0/bin/node /usr/local/share/npm-global/bin/pnpm quint run /tmp/quint-mutation-TEEmAS/acceptedResultIntegration-0.qnt --invariant integratorIntentPrecedesCall --max-samples 1 --max-steps 10 --seed 31337 --verbosity 0 ",
+          "pid": 508139
+        },
+        {
+          "ppid": 508139,
+          "state": "R",
+          "args": "node ./node_modules/.bin/../@informalsystems/quint/dist/src/cli.js run /tmp/quint-mutation-TEEmAS/acceptedResultIntegration-0.qnt --invariant integratorIntentPrecedesCall --max-samples 1 --max-steps 10 --seed 31337 --verbosity 0 ",
+          "pid": 508151
+        }
+      ],
+      "runningAfterStop": []
+    }
+  ],
+  "custody": {
+    "execution": "serial selected children; every retained completed check has its observed exit; two incomplete diagnostics stopped exact owned children and observed no running descendants",
+    "heavyGateAdmission": "none acquired; no check:all/check:submit/broad live suite started"
+  },
+  "remainingOwners": {
+    "root": "actual retained #491/#495 mounting, native Pause/Suspend, isolated frozen runtime qualification, native Retry, subsequent native #508 integration",
+    "501": "combined check:submit and original eight scenarios/resource acceptance"
+  },
+  "review": {
+    "status": "closed: no reasonable blocking Spec or Standards findings",
+    "baseCommit": "8f88caaa756a4b4ef26a2a7d3d1ab0c1ea045d0b",
+    "reviewedCandidateCommit": "074239ccccb7ebbe0dea21349a216fc7e03dfcdb",
+    "reviewer": "fresh same-model medium-reasoning sub-agent review_final",
+    "axes": [
+      "Spec",
+      "Standards"
+    ],
+    "verdict": "No blocking findings. Exact predecessor authorization, historical prefixes, original/successor retention, no automatic retry/no S3, safe exhaustion, provider custody and scenario mapping reviewed.",
+    "ownerIndependentReview": "Owner reported no runtime blocker; obsolete comments/messages corrected.",
+    "closureScope": "Only documentary closure follows reviewed candidate; no behavior or contract change."
+  },
+  "operationWindows": [
+    {
+      "operation": "final artifact build",
+      "expectedSeconds": 60,
+      "stopUtc": "2026-10-10T06:18:00Z",
+      "completed": true
+    },
+    {
+      "operation": "selected focused suite",
+      "expectedSeconds": 60,
+      "stopUtc": "2026-10-10T06:18:00Z",
+      "completed": true
+    },
+    {
+      "operation": "final fast check before restored-H fixture",
+      "expectedSeconds": 120,
+      "stopUtc": "2026-10-10T06:25:00Z",
+      "completed": true
+    },
+    {
+      "operation": "main negative controls",
+      "expectedSeconds": 60,
+      "stopUtc": "2026-10-10T06:28:00Z",
+      "completed": true
+    },
+    {
+      "operation": "final fast check after restored-H fixture",
+      "expectedSeconds": 60,
+      "stopUtc": "2026-10-10T06:32:00Z",
+      "completed": true
+    }
+  ],
+  "fixtureRepairFailures": [
+    {
+      "retainedLocalLog": "/tmp/retry-check-fast-final.log",
+      "exitCode": 1,
+      "passingCredit": false,
+      "sha256": "4002d342687f3f7ec45a0713b5824ef4393ede03ca3242d68dc292fb157cfea9",
+      "reason": "readonly cassette prefix assignment; closed by explicit readonly type and clean owner typecheck"
+    },
+    {
+      "retainedLocalLog": "/tmp/retry-type-repair-final.log",
+      "exitCode": 1,
+      "passingCredit": false,
+      "sha256": "f3a7070ad7346a3f75482b6b856327a7e3ec43d16f4c47b690df9491f7ec481a",
+      "reason": "unbranded cassette Retry fingerprint; closed by branded constructor"
+    },
+    {
+      "retainedLocalLog": "/tmp/retry-cassette-type-repair.log",
+      "exitCode": 1,
+      "passingCredit": false,
+      "sha256": "4129d8e08bde18a85743e6f4523254a7e2614b166a4fe95cc3feebd3c10091ca",
+      "reason": "temporary focused config root/type resolution input guard"
+    },
+    {
+      "retainedLocalLog": "/tmp/retry-cassette-type-repair2.log",
+      "exitCode": 1,
+      "passingCredit": false,
+      "sha256": "f275e65ee365db5dc4ff018772761804fe31f1e4896b90dcec52b6a211c88b28",
+      "reason": "temporary focused composite project dependency input guard; changed experiment to repository owner"
+    },
+    {
+      "retainedLocalLog": "/tmp/retry-restored-head.log",
+      "exitCode": 1,
+      "passingCredit": false,
+      "sha256": "a7c7c1bc5f13cf57db7a4d58be893c80ff70449cc6e426a151ceae93efd64442",
+      "reason": "restored-H fixture operation helper import; closed by existing operation owner and passing protocol fixture"
+    }
+  ],
+  "wordingRepair": {
+    "candidateCommit": "074239ccccb7ebbe0dea21349a216fc7e03dfcdb",
+    "changes": "Four obsolete bounded/run-one/run-two comments/messages replaced with positive safe ordinal and exact predecessor wording; formatting only otherwise.",
+    "focusedCheck": {
+      "command": "mise exec -- pnpm exec vitest run packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts packages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts --maxWorkers=1",
+      "retainedLocalLog": "/tmp/retry-wording-focused.log",
+      "exitCode": 0,
+      "testsPassed": 58,
+      "durationSeconds": 2.86,
+      "sha256": "176defcdf318dc42d985511d5e53c8c03fb1f0fbb8682bb61ce34f014497bf39"
+    }
+  }
+}

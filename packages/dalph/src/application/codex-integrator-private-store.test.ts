@@ -143,8 +143,8 @@ describe("Codex Integrator private store", () => {
     expect(sealedPrivateRunHistoryFrom([sealedRun, validRun(2)])).toBeUndefined()
     expect(sealedPrivateRunHistoryFrom([sealedRun])).toEqual([sealedRun])
     expect(newPrivateRecordRunError(runCorrelation(1))).toBeUndefined()
-    expect(newPrivateRecordRunError(runCorrelation(2))).toContain("sealed run-one")
-    expect(newPrivateRecordRunError(runCorrelation(3))).toContain("exceeds Retry")
+    expect(newPrivateRecordRunError(runCorrelation(2))).toContain("sealed predecessor")
+    expect(newPrivateRecordRunError(runCorrelation(3))).toContain("sealed predecessor")
   })
 
   it("fails closed when private-record lifecycle helpers receive the wrong durable phase", () => {

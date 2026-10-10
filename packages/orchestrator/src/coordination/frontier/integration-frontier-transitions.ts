@@ -37,7 +37,7 @@ import type {
 } from "../../workflow/protocols/integrator/session.js"
 import {
   IntegratorRunProtocolResult,
-  integratorRetryRunOrdinal,
+  nextIntegratorRunOrdinal,
   integratorRunCorrelationsEqual,
   maximumIntegratorSessionsPerResponsibility,
   type IntegratorRunCorrelation
@@ -264,10 +264,7 @@ const providerRunFailureQuarantineFor = (
   runState: ReconstructedRunState,
   integratorState: CurrentIntegratorState
 ): ProviderRunFailureQuarantineInput | undefined => {
-  if (
-    integratorState._tag !== "RunUnfinished" ||
-    (integratorState.run.ordinal !== 1 && integratorState.run.ordinal !== integratorRetryRunOrdinal)
-  ) {
+  if (integratorState._tag !== "RunUnfinished") {
     return undefined
   }
   const { run } = integratorState
@@ -309,15 +306,28 @@ const initialConclusiveQuarantineFor = (
   return quarantine._tag === "NoQuarantine" ? result : undefined
 }
 
-/** Finds an authorized run-2 conclusive result whose fresh Q2 append is absent. */
+/** Finds an authorized Retry result whose exact conclusive quarantine append is absent. */
 const retryConclusiveQuarantineFor = (
   runState: ReconstructedRunState,
   integratorState: CurrentIntegratorState
 ): Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" | "CandidateRejected" }> | undefined => {
   const runBoundState = runBoundIntegratorStateFor(integratorState)
-  if (runBoundState === undefined || runBoundState.run.ordinal !== integratorRetryRunOrdinal) return undefined
+  if (runBoundState === undefined || runBoundState.run.ordinal <= 1) return undefined
   const result = conclusiveQuarantineResultFor(integratorState)
   if (result === undefined) return undefined
+  const records = workflowHistorySource(runState)
+  const alreadyQuarantined = Array.from(journalRecordsOfKind(records, "IntegrationQuarantined")).some((record) => {
+    if (record.event._tag !== "IntegrationQuarantined" || record.event.basis._tag !== "ConclusiveResult") return false
+    const resultRecordedAt = record.event.basis.evidence.resultRecordedAt
+    const resultRecord = Array.from(journalRecordsOfKind(records, "IntegratorRunResultRecorded")).find(
+      (candidate) => candidate.position === resultRecordedAt
+    )
+    return (
+      resultRecord?.event._tag === "IntegratorRunResultRecorded" &&
+      integratorRunCorrelationsEqual(resultRecord.event.run, runBoundState.run)
+    )
+  })
+  if (alreadyQuarantined) return undefined
   const quarantine = deriveIntegrationQuarantineState(
     workflowHistorySource(runState),
     runBoundState.run.session.sessionId
@@ -370,9 +380,17 @@ const retryIntegratorProgressFor = (
   if (lineage === undefined) {
     return { _tag: "AwaitingLineage" }
   }
-  if (quarantine.application.fingerprint.direction === "Retry" && runBoundState.run.ordinal !== 1) {
-    /* v8 ignore next -- @preserve Integrator history rejects ordinals above the single bounded Retry before frontier derivation. */
-    if (runBoundState.run.ordinal !== integratorRetryRunOrdinal) return { _tag: "Blocked" }
+  if (
+    quarantine.application.fingerprint.direction === "Retry" &&
+    Array.from(journalRecordsOfKind(workflowHistorySource(runState), "IntegratorRunStarted")).some(
+      (record) =>
+        record.position > quarantine.applicationAt &&
+        record.event._tag === "IntegratorRunStarted" &&
+        integratorRunCorrelationsEqual(record.event.run, runBoundState.run)
+    )
+  ) {
+    /* v8 ignore next -- @preserve Integrator history requires a positive safe ordinal and exact predecessor authorization before frontier derivation. */
+    if (runBoundState.run.ordinal <= 1) return { _tag: "Blocked" }
     if (integratorState._tag === "GitQualifiedPrepared") return { _tag: "NotApplicable" }
     const authorizationIssue = integratorRunTwoAuthorizationIssue(workflowHistorySource(runState), runBoundState.run, {
       beforePosition: nextJournalPositionFor(runState),
@@ -411,7 +429,9 @@ const retryIntegratorProgressFor = (
     return { _tag: "Blocked" }
   }
 
-  const run = integratorRunCorrelationForSession(runBoundState.run.session, integratorRetryRunOrdinal)
+  const nextOrdinal = nextIntegratorRunOrdinal(runBoundState.run.ordinal)
+  if (nextOrdinal === undefined) return { _tag: "Blocked" }
+  const run = integratorRunCorrelationForSession(runBoundState.run.session, nextOrdinal)
   const authorizationIssue = integratorRunTwoAuthorizationIssue(workflowHistorySource(runState), run, {
     beforePosition: nextJournalPositionFor(runState),
     requiredTargetLineageObservedAt: lineage.observedAt

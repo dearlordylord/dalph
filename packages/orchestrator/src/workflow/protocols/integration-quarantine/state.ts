@@ -25,12 +25,7 @@ import {
   type IntegrationQuarantineBasis,
   sameIntegrationQuarantineDirectionSubject
 } from "./events.js"
-import {
-  IntegratorGitObservation,
-  IntegratorSessionId,
-  integratorRetryRunOrdinal,
-  integratorRunCorrelationsEqual
-} from "../integrator/events.js"
+import { IntegratorGitObservation, IntegratorSessionId, integratorRunCorrelationsEqual } from "../integrator/events.js"
 import { integratorCorrelationsEqual } from "../integrator/state.js"
 import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
 import { providerRunStartFor, validateProviderRunActivityAbsent } from "./provider-failure.js"
@@ -158,7 +153,7 @@ const hasMatchingRunStart = (records: JournalHistorySource, record: IntegratorRe
     if (
       candidate.position < record.position &&
       candidate.event._tag === "IntegratorRunStarted" &&
-      (run.ordinal !== integratorRetryRunOrdinal || candidate.key === integratorRunStartedRecordKey(run)) &&
+      (run.ordinal <= 1 || candidate.key === integratorRunStartedRecordKey(run)) &&
       integratorRunCorrelationsEqual(candidate.event.run, run)
     )
       return true
@@ -168,7 +163,7 @@ const hasMatchingRunStart = (records: JournalHistorySource, record: IntegratorRe
 
 const resultBelongsToQuarantinedRun = (record: IntegratorResultRecord, quarantine: QuarantineRecord): boolean => {
   const run = record.event.run
-  const supportedOrdinal = run.ordinal === 1 || run.ordinal === integratorRetryRunOrdinal
+  const supportedOrdinal = Number.isSafeInteger(run.ordinal) && run.ordinal > 0
   return (
     supportedOrdinal &&
     record.key === integratorRunResultRecordedRecordKey(run) &&
@@ -234,7 +229,7 @@ const candidateObservationMatches = (
   gitObservationEqual(record.event.observation, cause.observation)
 
 const retryResultIsAuthorized = (records: JournalHistorySource, resultRecord: IntegratorResultRecord) => {
-  if (resultRecord.event.run.ordinal !== integratorRetryRunOrdinal) return true
+  if (resultRecord.event.run.ordinal <= 1) return true
   const runStart = providerRunStartFor(records, resultRecord.event.run)
   if (runStart === undefined || runStart.position >= resultRecord.position) return false
   const authorization = evaluateIntegratorRetryAuthorization(records, resultRecord.event.run, {
@@ -428,7 +423,13 @@ const quarantineContradiction = (
   )
   if (directionCount > 1) return "one quarantine occurrence has more than one applied direction"
   const successorSession = hasPriorSuccessorSession(records, quarantine, sessionId)
-  if (successorSession && directionCount > 0) {
+  if (
+    successorSession &&
+    directionCount > 0 &&
+    Array.from(directionRecordsFor(records, subject)).some(
+      (record) => record.event.fingerprint.direction === "FullRerun"
+    )
+  ) {
     return "a FullRerun successor quarantine cannot apply another direction"
   }
   if (hasForeignDirection) {

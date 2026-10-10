@@ -324,6 +324,8 @@ module acceptedResultIntegration {
   // Finite model bounds for exploration; neither is a production policy.
   // Enough finite recovery turns to exercise all three promotion ordinals;
   // this bounds the model only and is not a production retry policy.
+  // Finite exploration projection only; human Retry has no runtime count limit.
+  pure val RETRY_PROJECTION_LIMIT = 4
   pure val RESTART_LIMIT = 4
   pure val RECONCILIATION_LIMIT = 2
   var state: State
@@ -1083,8 +1085,8 @@ module acceptedResultIntegration {
         or and {
           result.retryDirectionSession == result.integrationSession,
           result.retryDirectionPosition > 0,
-          result.retryRunCount == 1,
-          result.integratorInvocationCount == 2,
+          result.retryRunCount > 0,
+          result.integratorInvocationCount == 1 + result.retryRunCount,
         }
     })
 
@@ -1092,16 +1094,12 @@ module acceptedResultIntegration {
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       and {
-        result.retryRunCount <= 1,
+        result.retryRunCount <= RETRY_PROJECTION_LIMIT,
         not(and {
           result.quarantineCause == RetryHeadChangedQuarantine,
           result.quarantineDirection == RetryDirection,
         }),
-        not(and {
-          result.retryRunCount == 1,
-          result.quarantineOccurrenceCount > 1,
-          result.quarantineDirection == RetryDirection,
-        }),
+
       }
     })
 
@@ -1109,7 +1107,7 @@ module acceptedResultIntegration {
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       result.phase != RetryInFlight or and {
-        result.retryRunCount == 1,
+        result.retryRunCount > 0,
         result.integrationSession == id,
         result.successorSession == 0,
         result.targetHeld,
@@ -1123,7 +1121,7 @@ module acceptedResultIntegration {
       val result = state.results.get(id)
       and {
         result.integratorRunOrdinal >= 0,
-        result.integratorRunOrdinal <= 2,
+        result.integratorRunOrdinal <= 1 + RETRY_PROJECTION_LIMIT,
         result.integratorRunOrdinal == 0 implies result.integratorRunSession == 0,
         result.integratorRunOrdinal > 0 implies result.integratorRunSession == result.integrationSession,
         result.lastRecoveryRunSession == 0 or and {
@@ -1138,8 +1136,8 @@ module acceptedResultIntegration {
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
       result.retryRunCount == 0 or and {
-        result.retryRunCount == 1,
-        result.integratorRunOrdinal == 2,
+        result.retryRunCount > 0,
+        result.integratorRunOrdinal == 1 + result.retryRunCount,
         result.integratorRunSession == result.integrationSession,
         result.integrationSession == id,
       }
@@ -2036,7 +2034,7 @@ module acceptedResultIntegration {
       Set(IntegratorInFlight, RetryInFlight).contains(result.phase),
       result.targetHeld,
       result.sessionFixed,
-      result.integratorInvocationCount == if (result.phase == RetryInFlight) 2 else 1,
+      result.integratorInvocationCount == 1 + result.retryRunCount,
       state' = {
         ...state,
         results: state.results.put(id, {
@@ -2082,7 +2080,7 @@ module acceptedResultIntegration {
       Set(IntegratorInFlight, RetryInFlight).contains(result.phase),
       result.targetHeld,
       result.sessionFixed,
-      result.integratorInvocationCount == if (result.phase == RetryInFlight) 2 else 1,
+      result.integratorInvocationCount == 1 + result.retryRunCount,
       candidate != 0,
       state' = {
         ...state,
@@ -2295,7 +2293,7 @@ module acceptedResultIntegration {
     val result = state.results.get(id)
     all {
       canChooseQuarantineDirection(state, id, position),
-      result.retryRunCount == 0,
+      result.retryRunCount < RETRY_PROJECTION_LIMIT,
       result.quarantineCause != RetryHeadChangedQuarantine,
       state' = {
         ...state,
@@ -2402,11 +2400,11 @@ module acceptedResultIntegration {
       result.quarantineDirectionSession == result.integrationSession,
       result.quarantineDirectionPosition == result.quarantinePosition,
       result.targetHeld == false,
-      result.retryRunCount <= 1,
+      result.retryRunCount <= RETRY_PROJECTION_LIMIT,
       result.successorSession == 0,
       result.sessionFixed,
       result.expectedTargetHead != 0,
-      result.integratorRunOrdinal == 1 or result.integratorRunOrdinal == 2,
+      result.integratorRunOrdinal == 1 + result.retryRunCount,
       state.targetFactsCurrent,
       state.targetHeadProof == result.expectedTargetHead,
       state' = {
@@ -2418,19 +2416,19 @@ module acceptedResultIntegration {
           // Q1 remains a durable authorization fact while the exact run-two
           // boundary is in flight or is resumed after process loss.
           quarantineRecorded: result.quarantineRecorded,
-          retryRunCount: if (result.retryRunCount == 0) 1 else result.retryRunCount,
+          retryRunCount: if (result.retryRunCount < result.quarantineOccurrenceCount) result.retryRunCount + 1 else result.retryRunCount,
           // Retry is a second explicit outer Integrator run. A process-loss
           // resume leaves this count unchanged; only the winning Retry
           // direction advances it.
           integratorInvocationCount:
-            if (result.retryRunCount == 0) result.integratorInvocationCount + 1
+            if (result.retryRunCount < result.quarantineOccurrenceCount) result.integratorInvocationCount + 1
             else result.integratorInvocationCount,
           lastRecoveryRunSession:
-            if (result.retryRunCount == 0) 0 else result.lastRecoveryRunSession,
+            if (result.retryRunCount < result.quarantineOccurrenceCount) 0 else result.lastRecoveryRunSession,
           lastRecoveryRunOrdinal:
-            if (result.retryRunCount == 0) 0 else result.lastRecoveryRunOrdinal,
+            if (result.retryRunCount < result.quarantineOccurrenceCount) 0 else result.lastRecoveryRunOrdinal,
           integratorRunOrdinal:
-            if (result.retryRunCount == 0) result.integratorRunOrdinal + 1 else result.integratorRunOrdinal,
+            if (result.retryRunCount < result.quarantineOccurrenceCount) result.integratorRunOrdinal + 1 else result.integratorRunOrdinal,
           integratorRunSession: result.integrationSession,
         }),
         // Starting the selected Retry atomically reacquires the same resource
@@ -2483,7 +2481,6 @@ module acceptedResultIntegration {
       result.phase == RetrySelected,
       result.quarantineDirection == RetryDirection,
       result.targetHeld == false,
-      result.retryRunCount == 0,
       state.targetFactsCurrent,
       state.targetHeadProof != result.expectedTargetHead,
       state' = recordFreshQuarantine(state, id, RetryNotApplicable, RetryHeadChangedQuarantine),

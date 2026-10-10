@@ -470,7 +470,7 @@ describe("Integrator reconstruction states", () => {
     const overRetry = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(3))
     expect(validateIntegratorHistoryEvent(runStartRecord(overRetry, 12), makeRunHistoryIndexes())).toMatchObject({
       handled: true,
-      issue: expect.stringContaining("exceeds Retry bound")
+      issue: expect.stringContaining("no exact fixed session")
     })
   })
 
@@ -654,7 +654,7 @@ describe("Integrator reconstruction states", () => {
         [...complete, runStartRecord(successorRunTwo, 17, integratorRunStartedRecordKey(successorRunTwo))],
         responsibility
       )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("initial Integrator run") })
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("exact applied direction") })
 
     expect(
       deriveCurrentIntegratorState([...complete, runStartRecord(successorRunOne, 17)], responsibility)

@@ -27,7 +27,6 @@ import {
   IntegratorGitObservation,
   integratorCandidateHasExactParents,
   integratorRunCorrelationsEqual,
-  integratorRetryRunOrdinal,
   IntegratorRunProtocolResult
 } from "../integrator/events.js"
 import type { IntegratorRunCorrelation } from "../integrator/events.js"
@@ -37,7 +36,7 @@ import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-author
 type NotPreparedInput = Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" }>
 type CandidateRejectedInput = Extract<IntegratorRunProtocolResult, { readonly _tag: "CandidateRejected" }>
 
-/** The only Retry run-two results that are conclusive enough to create Q2. */
+/** The Retry results that conclusively authorize a new quarantine occurrence. */
 export type RetryConclusiveIntegrationQuarantineInput = NotPreparedInput | CandidateRejectedInput
 
 type CandidateText = CandidateRejectedInput["candidateText"]
@@ -329,7 +328,7 @@ const validateHistory = (
   result: RetryConclusiveIntegrationQuarantineInput
 ): EvidenceValidation<ConclusiveBasis> => {
   const run = result.run
-  if (run.ordinal !== integratorRetryRunOrdinal) {
+  if (run.ordinal <= 1) {
     return invalidEvidence("Retry conclusive quarantine requires Integrator run 2")
   }
   const start = validateRunStart(records, run)
@@ -386,7 +385,7 @@ export const retryConclusiveIntegrationQuarantineIssueFromRecords = (
     : undefined
 }
 
-/** Records Q2 for one exact Retry run-two conclusive result before ownership is released. */
+/** Records the quarantine for one exact Retry result before ownership is released. */
 export const appendRetryConclusiveIntegrationQuarantine = Effect.fn(
   "IntegrationQuarantine.appendRetryConclusiveIntegrationQuarantine"
 )(function* (input: unknown) {

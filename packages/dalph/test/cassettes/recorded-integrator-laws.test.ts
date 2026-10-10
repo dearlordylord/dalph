@@ -1,5 +1,11 @@
+import { IntegratorRunStartedEvent } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
+import { makeIntegrationQuarantineDirectionControl } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/control.js"
+import { appendInitialConclusiveIntegrationQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/initial-conclusive.js"
+import { appendRetryConclusiveIntegrationQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.js"
+import { integratorResponsibilityFactsFromCorrelation } from "../../../orchestrator/src/workflow/protocols/integrator/session-correlation.js"
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { expect, it } from "vitest"
 import {
   describeJournalEvent,
@@ -13,6 +19,16 @@ import {
   IntegrationQuarantinedEvent,
   IntegratorCandidateResourceLocator,
   IntegratorJournalEvent,
+  StartedIntegrationResponsibility,
+  Integrator,
+  IntegratorGit,
+  IntegratorResult,
+  IntegratorNotPreparedDetail,
+  IntegratorRunOrdinal,
+  IntegratorRunCorrelation,
+  InRunJournal,
+  AcceptedJournalReader,
+  prepareIntegrationCandidateRun,
   IntegratorSessionId,
   JournalPosition,
   JournalRecord,
@@ -42,7 +58,7 @@ import {
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 
-it("projects, folds, and non-trivially renames the current FullRerun successor chronology", async () => {
+it("projects, folds, and non-trivially renames the current FullRerun successor with repeated native Operator Retry cycles", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
@@ -56,7 +72,7 @@ it("projects, folds, and non-trivially renames the current FullRerun successor c
       }
       const predecessor = predecessorRecord.event.correlation
       const predecessorRun = predecessorRunRecord.event.run
-      const baseRecords = run.records.slice(0, predecessorRunRecord.position)
+      let baseRecords: ReadonlyArray<JournalRecord> = run.records.slice(0, predecessorRunRecord.position)
       const append = (
         records: ReadonlyArray<JournalRecord>,
         event: WorkflowJournalEvent
@@ -70,6 +86,85 @@ it("projects, folds, and non-trivially renames the current FullRerun successor c
         })
       ]
 
+      // Retain the original run-one/run-two/FullRerun chronology before reopening S2.
+      const originalAbsenceAt = JournalPosition.make(baseRecords.length + 1)
+      baseRecords = append(
+        baseRecords,
+        IntegrationProviderRunActivityAbsentEvent.make({
+          correlation: predecessor,
+          detail: IntegrationQuarantineFailureDetail.make("original writer absent"),
+          occurrenceClassification: "NonActionOccurrence",
+          run: predecessorRun,
+          version: workflowJournalEventVersion
+        })
+      )
+      const originalQuarantineAt = JournalPosition.make(baseRecords.length + 1)
+      baseRecords = append(
+        baseRecords,
+        IntegrationQuarantinedEvent.make({
+          basis: IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+            detail: IntegrationQuarantineFailureDetail.make("original writer absent"),
+            ownedActivityProvenAbsentAt: originalAbsenceAt
+          }),
+          correlation: predecessor,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      )
+      baseRecords = append(
+        baseRecords,
+        IntegrationQuarantineDirectionAppliedEvent.make({
+          fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+            direction: "Retry",
+            quarantineAt: originalQuarantineAt,
+            sessionId: predecessor.sessionId
+          }),
+          initiatedBy: WorkflowActor.cases.Operator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          requestId: IntegrationQuarantineDirectionRequestId.make({
+            nonce: "recorded-original-retry",
+            runId: run.runId
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const originalLineageOperation = WorkflowOperation.cases.ReadTargetLineage.make({
+        integrationTarget: predecessor.integrationTarget,
+        operationId: OperationId.make("recorded-original-retry-lineage"),
+        plannedAttempt: predecessor.plannedAttempt,
+        predecessorOperationIds: []
+      })
+      baseRecords = append(
+        baseRecords,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          operation: originalLineageOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      baseRecords = append(
+        baseRecords,
+        TargetLineageObservedEvent.make({
+          observation: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: predecessor.plannedAttempt.baseSha,
+            targetHeadSha: predecessor.expectedTargetHead
+          },
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: originalLineageOperation.operationId,
+          plannedAttempt: predecessor.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const originalRetryRun = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(2),
+        session: predecessor
+      })
+      baseRecords = append(
+        baseRecords,
+        IntegratorRunStartedEvent.make({ run: originalRetryRun, version: workflowJournalEventVersion })
+      )
       const absenceAt = JournalPosition.make(baseRecords.length + 1)
       const quarantineAt = JournalPosition.make(baseRecords.length + 2)
       const directionAppliedAt = JournalPosition.make(baseRecords.length + 3)
@@ -78,7 +173,7 @@ it("projects, folds, and non-trivially renames the current FullRerun successor c
         correlation: predecessor,
         detail,
         occurrenceClassification: "NonActionOccurrence",
-        run: predecessorRun,
+        run: originalRetryRun,
         version: workflowJournalEventVersion
       })
       const quarantine = IntegrationQuarantinedEvent.make({
@@ -152,6 +247,99 @@ it("projects, folds, and non-trivially renames the current FullRerun successor c
       records = append(records, lineageIntent)
       records = append(records, lineageObserved)
       records = append(records, successor)
+      const began = records.find((record) => record.event._tag === "WorkflowRunBegan")
+      if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("missing Run beginning")
+      const context = yield* Layer.build(
+        liveJournalTestLayer({ records, runId: run.runId, target: began.event.target })
+      )
+      const journal = Context.get(context, InRunJournal)
+      const accepted = Context.get(context, AcceptedJournalReader)
+      const control = yield* makeIntegrationQuarantineDirectionControl(journal).pipe(
+        Effect.provideService(AcceptedJournalReader, accepted)
+      )
+      let observedAt = freshLineageObservedAt
+      const providerCalls: Array<number> = []
+      const controlledProvider = Integrator.of({
+        prepare: (request) => {
+          providerCalls.push(request.correlation.ordinal)
+          return Effect.succeed(
+            IntegratorResult.cases.NotPrepared.make({
+              correlation: request.correlation,
+              detail: IntegratorNotPreparedDetail.make("controlled conclusive non-success")
+            })
+          )
+        }
+      })
+      const fixed = successor.successor
+      const withJournal = <A, E>(effect: Effect.Effect<A, E, InRunJournal | AcceptedJournalReader>) =>
+        effect.pipe(
+          Effect.provideService(InRunJournal, journal),
+          Effect.provideService(AcceptedJournalReader, accepted)
+        )
+      for (let ordinal = 1; ordinal <= 8; ordinal += 1) {
+        const request = {
+          preparation: {
+            responsibility: StartedIntegrationResponsibility.make(integratorResponsibilityFactsFromCorrelation(fixed)),
+            targetLineage: lineageObserved.observation,
+            targetLineageObservedAt: observedAt
+          },
+          run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(ordinal), session: fixed })
+        }
+        const result = yield* withJournal(
+          prepareIntegrationCandidateRun(request).pipe(
+            Effect.provideService(Integrator, controlledProvider),
+            Effect.provideService(
+              IntegratorGit,
+              IntegratorGit.of({ readCandidate: () => Effect.die("NotPrepared cannot query candidate Git") })
+            )
+          )
+        )
+        if (result._tag !== "NotPrepared") return yield* Effect.die("expected exact conclusive result")
+        const q = yield* withJournal(
+          ordinal === 1
+            ? appendInitialConclusiveIntegrationQuarantine(result)
+            : appendRetryConclusiveIntegrationQuarantine(result)
+        )
+        const forbidden = yield* control
+          .apply({
+            fingerprint: { direction: "FullRerun", quarantineAt: q.position, sessionId: fixed.sessionId },
+            requestId: { nonce: `no-S3-${ordinal}`, runId: run.runId }
+          })
+          .pipe(Effect.flip)
+        expect(forbidden._tag).toBe("IntegrationQuarantineDirectionNotAvailable")
+        if (ordinal === 8) break
+        const retry = {
+          fingerprint: { direction: "Retry", quarantineAt: q.position, sessionId: fixed.sessionId },
+          requestId: { nonce: `native-S2-retry-${ordinal}`, runId: run.runId }
+        }
+        const chosen = yield* control.apply(retry)
+        expect(yield* control.apply(retry)).toEqual(chosen)
+        const operation = WorkflowOperation.cases.ReadTargetLineage.make({
+          integrationTarget: fixed.integrationTarget,
+          operationId: OperationId.make(`native-S2-lineage-${ordinal}`),
+          plannedAttempt: fixed.plannedAttempt,
+          predecessorOperationIds: []
+        })
+        const intentEvent = GitReadIntentRecordedEvent.make({
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          operation,
+          version: workflowJournalEventVersion
+        })
+        yield* journal.append(run.runId, describeJournalEvent(intentEvent).expectedKey, intentEvent)
+        const observedEvent = TargetLineageObservedEvent.make({
+          ...lineageObserved,
+          operationId: operation.operationId
+        })
+        const observed = yield* journal.append(
+          run.runId,
+          describeJournalEvent(observedEvent).expectedKey,
+          observedEvent
+        )
+        observedAt = observed.position
+      }
+      expect(providerCalls).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+      records = [...(yield* journal.read(run.runId))]
       const recorded = yield* projectRecordedCassette(records)
       expect(recorded.entries.map(({ _tag }) => _tag)).toEqual(
         expect.arrayContaining([
@@ -216,7 +404,7 @@ it("projects, folds, and non-trivially renames the current FullRerun successor c
         )
       ).toBe(true)
       expect(renderRecordedCassetteLyrics(recorded)).toContain("FullRerun successor")
-    }).pipe(Effect.provide(NodeCrypto.layer))
+    }).pipe(Effect.provide(NodeCrypto.layer), Effect.scoped)
   )
 })
 

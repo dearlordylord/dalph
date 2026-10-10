@@ -1,3 +1,4 @@
+import { quarantinedIntegratorRun } from "../integrator/retry-authorization.js"
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -36,7 +37,8 @@ import {
 } from "./events.js"
 import { ReadIntegrationQuarantineDirectionRequest } from "./request.js"
 import { quarantineRecordForFingerprint } from "./state.js"
-import { IntegratorRunCorrelation, IntegratorRunOrdinal, integratorRunCorrelationsEqual } from "../integrator/events.js"
+import type { IntegratorRunCorrelation } from "../integrator/events.js"
+import { integratorRunCorrelationsEqual, nextIntegratorRunOrdinal } from "../integrator/events.js"
 import { integratorCorrelationsEqual } from "../integrator/state.js"
 
 /** A transport identity was redelivered with different exact direction content. */
@@ -152,8 +154,8 @@ const appliedRecordsForSubject = (
 
 type QuarantineRecord = JournalRecord & { readonly event: IntegrationQuarantinedEvent }
 
-const runOneFor = (quarantine: QuarantineRecord): IntegratorRunCorrelation =>
-  IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: quarantine.event.correlation })
+const failedRunFor = (records: JournalHistorySource, quarantine: QuarantineRecord) =>
+  quarantinedIntegratorRun(records, quarantine.event.basis)
 
 const runStartFor = (
   records: JournalHistorySource,
@@ -176,7 +178,7 @@ const runStartFor = (
     : undefined
 }
 
-const conclusiveResultIsFromRunOne = (
+const conclusiveResultIsFromFailedRun = (
   records: JournalHistorySource,
   quarantine: QuarantineRecord,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ConclusiveResult" }>
@@ -187,7 +189,8 @@ const conclusiveResultIsFromRunOne = (
 
   /* v8 ignore next -- @preserve quarantineRecordForFingerprint admits only the exact conclusive-result event selected by this basis. */
   if (record.event._tag !== "IntegratorRunResultRecorded") return false
-  const run = runOneFor(quarantine)
+  const run = failedRunFor(records, quarantine)
+  if (run === undefined || nextIntegratorRunOrdinal(run.ordinal) === undefined) return false
   return (
     record.runId === run.session.plannedAttempt.runId &&
     integratorRunCorrelationsEqual(record.event.run, run) &&
@@ -196,18 +199,21 @@ const conclusiveResultIsFromRunOne = (
   )
 }
 
-const providerFailureIsFromRunOne = (
+const providerFailureIsFromFailedRun = (
   records: JournalHistorySource,
   quarantine: QuarantineRecord,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>
 ): boolean => {
-  const run = runOneFor(quarantine)
+  const run = failedRunFor(records, quarantine)
+  if (run === undefined || nextIntegratorRunOrdinal(run.ordinal) === undefined) return false
   const absence = journalRecordByPosition(records, basis.ownedActivityProvenAbsentAt)
   if (absence === undefined || absence.position >= quarantine.position) return false
-  return providerAbsenceMatchesRunOne(absence, run, basis) && runStartFor(records, run, absence.position) !== undefined
+  return (
+    providerAbsenceMatchesFailedRun(absence, run, basis) && runStartFor(records, run, absence.position) !== undefined
+  )
 }
 
-const providerAbsenceMatchesRunOne = (
+const providerAbsenceMatchesFailedRun = (
   absence: JournalRecord,
   run: IntegratorRunCorrelation,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>
@@ -219,11 +225,19 @@ const providerAbsenceMatchesRunOne = (
   absence.key === integrationProviderRunActivityAbsentRecordKey(run) &&
   integratorRunCorrelationsEqual(absence.event.run, run)
 
-/** Retry is allowed only from the first quarantine's exact run-one evidence. */
+/** Retry requires the current quarantine's exact failed-run predecessor evidence. */
 const retryIsEligible = (records: JournalHistorySource, quarantine: QuarantineRecord): boolean => {
   const { basis } = quarantine.event
-  if (basis._tag === "ConclusiveResult") return conclusiveResultIsFromRunOne(records, quarantine, basis)
-  if (basis._tag === "ProviderRunFailure") return providerFailureIsFromRunOne(records, quarantine, basis)
+  if (basis._tag === "ConclusiveResult") return conclusiveResultIsFromFailedRun(records, quarantine, basis)
+  if (basis._tag === "ProviderRunFailure") return providerFailureIsFromFailedRun(records, quarantine, basis)
+  if (basis._tag === "PromotionStale") {
+    const run = failedRunFor(records, quarantine)
+    return (
+      run !== undefined &&
+      nextIntegratorRunOrdinal(run.ordinal) !== undefined &&
+      runStartFor(records, run, quarantine.position) !== undefined
+    )
+  }
   return false
 }
 
@@ -306,7 +320,7 @@ const ensureDirectionAvailable = (
       })
     )
   }
-  if (quarantineBelongsToSuccessor(records, quarantine)) {
+  if (request.fingerprint.direction === "FullRerun" && quarantineBelongsToSuccessor(records, quarantine)) {
     return Effect.fail(
       new IntegrationQuarantineDirectionNotAvailable({
         fingerprint: request.fingerprint,

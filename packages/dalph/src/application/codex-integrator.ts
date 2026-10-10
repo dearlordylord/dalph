@@ -31,7 +31,6 @@ import {
   updateRun
 } from "./codex-integrator-private-store.js"
 import {
-  isInitialProviderRun,
   isRetryProviderRun,
   isSealedPrivateRun,
   newPrivateRecordRunError,
@@ -148,7 +147,7 @@ const ensureRunPreconditionError = (
   record: CodexIntegratorPrivateRecord,
   run: IntegratorRunCorrelation
 ): string | undefined => {
-  const first = privateRuns(record).find((item) => isInitialProviderRun(item.correlation))
+  const first = privateRuns(record).find((item) => item.correlation.ordinal === run.ordinal - 1)
   const hasSealedInitialRun = isSealedPrivateRun(first)
   return providerRunAdmissionError(run, hasSealedInitialRun)
 }

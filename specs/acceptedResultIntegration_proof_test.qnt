@@ -136,4 +136,40 @@ module acceptedResultIntegrationQuarantineProofTest {
         successorStartsAtFreshOrdinalOne,
       })
   }
+  run humanRetriesRunsTwoThreeFourFiveTest = {
+    init.then(startInitialIntegrator).then(observeNotPrepared).then(recordQuarantine)
+      .then(chooseRetry).then(startRetry).then(observeRetryNotPrepared).then(recordRetryQuarantine)
+      .then(chooseRetry).then(startRetry).then(observeRetryNotPrepared).then(recordRetryQuarantine)
+      .then(chooseRetry).then(startRetry).then(observeRetryNotPrepared).then(recordRetryQuarantine)
+      .then(chooseRetry).then(startRetry).then(observeRetryNotPrepared).then(recordRetryQuarantine)
+      .expect(and {
+        state.integratorRunOrdinal == 5,
+        state.retryRunCount == 4,
+        state.quarantineOccurrenceCount == 5,
+        state.quarantinePosition == 5,
+        not(state.targetHeld),
+        retryRequiresSameSessionAndChoice,
+        retryConclusiveRunRequiresFreshQ2,
+        retryOrdinalAdvancesOnce,
+      })
+  }
+  run fullRerunSuccessorRetainsSessionAcrossRepeatedHumanRetriesTest = {
+    init.then(startInitialIntegrator).then(observeNotPrepared).then(recordQuarantine)
+      .then(chooseFullRerun).then(observeFreshHead(FIXED_TARGET_HEAD)).then(startSuccessor)
+      .then(observeSuccessorNotPrepared).then(recordSuccessorQuarantine)
+      .then(chooseSuccessorRetry).then(startSuccessorRetry)
+      .then(observeSuccessorNotPrepared).then(recordSuccessorQuarantine)
+      .then(chooseSuccessorRetry).then(startSuccessorRetry)
+      .then(observeSuccessorNotPrepared).then(recordSuccessorQuarantine)
+      .then(chooseSuccessorRetry).then(startSuccessorRetry)
+      .expect(and {
+        state.successorSession == 2,
+        state.successorRunOrdinal == 4,
+        state.successorResource == INITIAL_RESOURCE + 1000,
+        state.successorDirectionCount == 3,
+        successorStartsAtFreshOrdinalOne,
+        fullRerunRequiresFreshObservation,
+      })
+      .then(chooseFullRerun.fail())
+  }
 }

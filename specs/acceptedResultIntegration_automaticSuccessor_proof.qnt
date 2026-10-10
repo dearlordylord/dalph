@@ -208,6 +208,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     processSuccessUsedAsProof: bool,
   }
 
+  // Finite sampled/exhaustive projection, never a product retry budget.
+  pure val RETRY_PROJECTION_LIMIT = 4
   var state: State
 
   pure val BASE_COMMIT = 5
@@ -395,9 +397,10 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
 
   val automaticSuccessorRetryRequiresExactOperatorChronology: bool =
     state.successorRetryRunStartCount == 0 or and {
-      state.successorRetryRunStartCount == 1,
-      state.successorRetryRunOrdinal == 2,
+      state.successorRetryRunStartCount > 0,
+      state.successorRetryRunOrdinal == 1 + state.successorRetryRunStartCount,
       state.successorRetryRunSession == state.successorSession,
+      state.phase == AutomaticSuccessorRetryInFlight implies and {
       state.successorResultPosition > 0,
       state.successorResultSession == state.successorSession,
       state.successorQuarantinePosition > state.successorResultPosition,
@@ -410,7 +413,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       state.successorRetryLineageHead == state.successorExpectedHead,
       state.successorRetryLineageBaseCommit == BASE_COMMIT,
       state.successorRetryRunStartPosition > state.successorRetryLineagePosition,
-      state.successorRetryInvocationCount == 1,
+      },
+      state.successorRetryInvocationCount == state.successorRetryRunStartCount,
     }
 
   val automaticSuccessorBoundsAreFinite: bool = and {
@@ -1360,8 +1364,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
 
   action recordAutomaticSuccessorNotPrepared: bool = all {
     isRunning(state),
-    state.phase == AutomaticSuccessorInFlight,
-    state.successorRunOrdinal == 1,
+    Set(AutomaticSuccessorInFlight, AutomaticSuccessorRetryInFlight).contains(state.phase),
+    state.successorRunOrdinal > 0,
     state.successorInvocationCount == 1,
     state.successorWriterInFlight,
     state' = {
@@ -1425,8 +1429,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   action startAuthorizedAutomaticSuccessorRetry: bool = all {
     isRunning(state),
     state.phase == AutomaticSuccessorRetryLineageProven,
-    state.successorRetryRunStartCount == 0,
-    state.successorRunOrdinal == 1,
+    state.successorRetryRunStartCount < RETRY_PROJECTION_LIMIT,
+    state.successorRunOrdinal == 1 + state.successorRetryRunStartCount,
     state.successorResultSession == state.successorSession,
     state.successorQuarantineSession == state.successorSession,
     state.successorRetryDirectionSession == state.successorSession,
@@ -1437,12 +1441,13 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state' = {
       ...state,
       phase: AutomaticSuccessorRetryInFlight,
+      successorWriterInFlight: true,
       successorRetryRunStartPosition: state.nextJournalPosition,
       successorRetryRunSession: state.successorSession,
-      successorRetryRunOrdinal: 2,
+      successorRetryRunOrdinal: state.successorRunOrdinal + 1,
       successorRetryRunStartCount: state.successorRetryRunStartCount + 1,
       successorRetryInvocationCount: state.successorRetryInvocationCount + 1,
-      successorRunOrdinal: 2,
+      successorRunOrdinal: state.successorRunOrdinal + 1,
       nextJournalPosition: state.nextJournalPosition + 1,
     },
   }

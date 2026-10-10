@@ -49,11 +49,17 @@ export type IntegratorSessionCorrelation = typeof IntegratorSessionCorrelation.T
  */
 export const integratorSessionCorrelationsEqual = Schema.toEquivalence(IntegratorSessionCorrelation)
 
-/** One-based ordinal identifying one opaque outer-Integrator run within a session. */
+/** Positive safely representable ordinal identifying one opaque outer-Integrator run within a session. */
 export const IntegratorRunOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("IntegratorRunOrdinal"))
 export type IntegratorRunOrdinal = typeof IntegratorRunOrdinal.Type
 
-/** The only successor ordinal admitted by one operator-authorized Retry. */
+/** Pure ordinal choice: representational exhaustion never authorizes an external effect. */
+export const nextIntegratorRunOrdinal = (ordinal: IntegratorRunOrdinal): IntegratorRunOrdinal | undefined =>
+  Schema.is(IntegratorRunOrdinal)(ordinal) && ordinal < Number.MAX_SAFE_INTEGER
+    ? IntegratorRunOrdinal.make(ordinal + 1)
+    : undefined
+
+/** The first Retry ordinal, retained for existing callers; it is not a runtime retry limit. */
 export const integratorRetryRunOrdinal = IntegratorRunOrdinal.make(Number(IntegratorRunOrdinal.make(1)) + 1)
 
 /** Exact identity of one outer-Integrator run, including its owning session. */
