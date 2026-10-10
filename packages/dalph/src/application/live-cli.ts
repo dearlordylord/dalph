@@ -25,11 +25,7 @@ import {
   ProductionCliUsageError,
   type ProductionCliHostObservation
 } from "./production-cli.js"
-import {
-  type ApplicationExitSignalBoundary,
-  installApplicationExitSignalAdapter,
-  nodeApplicationExitSignalBoundary
-} from "./supervisor-exit.js"
+import { type ApplicationExitSignalBoundary, nodeApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import {
@@ -38,23 +34,27 @@ import {
   type ProductionPublicationSubject,
   type ProductionRepositoryHostAdapters,
   type ProductionHostObservation,
+  type ProductionHostStartup,
   withDecodedProductionRepositoryHost
 } from "./production-host.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { traceOutputStdioLayer } from "../presentation/stdio-trace-output.js"
 import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
+import { makeProductionCliStartup, ProductionHostExitUnsuccessful } from "./production-cli-startup.js"
+import { writeLine as writeLifecycleLine, runningHostCliStdioLayer } from "./running-host-cli-output.js"
 import { makeRunningHostCommands, type ProductionListeningHostRunner } from "./running-host-cli.js"
 
 /** Host callback consumed by the public command after all CLI/configuration validation. */
-export type ProductionCliHostRunner<E, R> = <EUse>(
+export type ProductionCliHostRunner<E, R> = <EUse, EStartup = never>(
   input: ProductionRepositoryHostConfiguration,
   use: (
     observation: ProductionCliHostObservation,
     applicationExitRequestBoundary: ApplicationExitRequestBoundaryService,
     remotePublicationControl?: ProductionHostObservation["remotePublicationControl"]
   ) => Effect.Effect<void, EUse>,
-  operation?: "Run" | "Cancel"
-) => Effect.Effect<void, E | EUse, R>
+  operation?: "Run" | "Cancel",
+  startup?: ProductionHostStartup<void, EStartup, never>
+) => Effect.Effect<void, E | EUse | EStartup, R>
 
 const runConfiguration = { version: "0.0.0" }
 
@@ -71,6 +71,19 @@ const mapProductionOutputFailure = <E>(failure: E): E | ProductionCliOutputError
   const known = knownProductionCliFailure(failure)
   return known instanceof ProductionCliOutputError ? known : failure
 }
+
+const beforeObservation = (signals: ApplicationExitSignalBoundary) =>
+  makeProductionCliStartup(signals, (result) =>
+    writeLifecycleLine(
+      JSON.stringify({ applicationExit: { _tag: result._tag, requestedStatus: result.requestedStatus } }),
+      "stderr"
+    ).pipe(
+      Effect.andThen(
+        result._tag === "Succeeded" ? Effect.void : new ProductionHostExitUnsuccessful({ disposition: result._tag })
+      ),
+      Effect.provide(runningHostCliStdioLayer)
+    )
+  )
 
 /** Builds the explicit dry/production command over one injected production host. */
 export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = never>(
@@ -94,10 +107,12 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
         const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
           fileSystem.readFileString(locator)
         )
+        const early = yield* beforeObservation(signals)
         yield* runProductionHost(
           loaded,
           (observation) => presentSelectedProductionRun(observation, output.writeLine),
-          "Cancel"
+          "Cancel",
+          early.startup
         ).pipe(Effect.mapError(mapProductionOutputFailure))
       }).pipe(
         Effect.tapError((failure) => {
@@ -156,19 +171,16 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
           const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
             fileSystem.readFileString(locator)
           )
+          const early = yield* beforeObservation(signals)
           yield* runProductionHost(
             loaded,
-            (observation, applicationExitRequestBoundary) =>
+            (observation) =>
               Deferred.succeed(selectedRunId, observation.selection.runId).pipe(
                 Effect.andThen(
                   Effect.scoped(
                     Effect.gen(function* () {
                       const selected = yield* Deferred.make<void>()
-                      const signalAdapter = yield* installApplicationExitSignalAdapter(
-                        applicationExitRequestBoundary,
-                        signals,
-                        ["SIGINT", "SIGTERM"]
-                      )
+                      const signalAdapter = yield* early.awaitAdapter
                       yield* presentSelectedProductionRun(
                         observation,
                         output.writeLine,
@@ -185,7 +197,8 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
                   )
                 )
               ),
-            "Run"
+            "Run",
+            early.startup
           ).pipe(Effect.mapError(mapProductionOutputFailure))
         }).pipe(
           Effect.tapError((failure) => {
@@ -246,16 +259,13 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
             catch: () =>
               new ProductionCliUsageError({ code: "usage.invalid", detail: "publication request is not JSON", subject })
           })
+          const early = yield* beforeObservation(signals)
           yield* runProductionHost(
             loaded,
-            (observation, applicationExitRequestBoundary, remotePublicationControl) =>
+            (observation, _applicationExitRequestBoundary, remotePublicationControl) =>
               Effect.scoped(
                 Effect.gen(function* () {
-                  const signalAdapter = yield* installApplicationExitSignalAdapter(
-                    applicationExitRequestBoundary,
-                    signals,
-                    ["SIGINT", "SIGTERM"]
-                  )
+                  const signalAdapter = yield* early.awaitAdapter
                   yield* presentSelectedProductionRun(
                     observation,
                     output.writeLine,
@@ -299,7 +309,8 @@ export const makeProductionCli = <EHost, RHost, EInspect = never, RInspect = nev
                   )
                 })
               ),
-            "Run"
+            "Run",
+            early.startup
           ).pipe(Effect.mapError(mapProductionOutputFailure))
         }).pipe(
           Effect.tapError((failure) => {
@@ -389,14 +400,15 @@ export const productionCliFromStdio = <EHost, RHost, EInspect = never, RInspect 
 
 export const makeProductionCliHostRunner =
   <ECodex, EGithub, ETrace>(adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>) =>
-  <EUse>(
+  <EUse, EStartup = never>(
     input: ProductionRepositoryHostConfiguration,
     use: (
       observation: ProductionCliHostObservation,
       applicationExitRequestBoundary: ApplicationExitRequestBoundaryService,
       remotePublicationControl?: ProductionHostObservation["remotePublicationControl"]
     ) => Effect.Effect<void, EUse>,
-    operation: "Run" | "Cancel" = "Run"
+    operation: "Run" | "Cancel" = "Run",
+    startup?: ProductionHostStartup<void, EStartup, never>
   ) =>
     withDecodedProductionRepositoryHost(
       input,
@@ -407,7 +419,9 @@ export const makeProductionCliHostRunner =
           observation.applicationExitRequestBoundary,
           observation.remotePublicationControl
         ),
-      operation
+      operation,
+      "Invocation",
+      startup
     )
 
 /** Removes host lifecycle authority before the shipped presentation callback receives its observation. */
@@ -446,13 +460,14 @@ export const makeProductionCliApplication = <ECodex = never, EGithub = never, ET
   makeProductionCliApplicationFromHost(
     makeProductionCliHostRunner(adapters),
     (configuration) => inspectProductionPublicationSubjects(configuration, adapters),
-    (configuration, use) =>
+    (configuration, use, startup) =>
       withDecodedProductionRepositoryHost(
         configuration,
         productionRepositoryHostGraph(adapters),
         use,
         "Run",
-        "Listening"
+        "Listening",
+        startup
       )
   )
 

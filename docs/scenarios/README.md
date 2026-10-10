@@ -95,6 +95,7 @@ Git history.
 
 - [Gracefully exit the Dalph application](graceful-application-exit.md)
 - [Exit when the CLI receiver stops reading](cli-exit-output-grace.md)
+- [CLI Exit during host acquisition](cli-exit-before-observation.md) maps the existing NoRun and provider-startup Exit contracts before selection.
 - [Application Exit model, decision-kernel, and test mapping](application-exit-model-mapping.md)
 - [Application Exit runtime mapping](application-exit-runtime-mapping.md)
 - [Suspend running executor work during application Exit](running-executor-application-exit.md)

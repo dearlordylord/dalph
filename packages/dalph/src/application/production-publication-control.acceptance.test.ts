@@ -37,6 +37,7 @@ import {
 import { expect } from "vitest"
 import { makeRunningHostFixture, runningHostFixtureLayer } from "../../test-support/production-running-host-fixture.js"
 import { runProductionCli, productionCliHostObservationOf } from "./live-cli.js"
+
 import { ProductionCliRecord } from "./production-cli.js"
 import { inspectProductionPublicationSubjects, withDecodedProductionRepositoryHost } from "./production-host.js"
 import { projectRecordedCassette, verifyRecordedCassetteRoundTrip } from "../cassettes/recorded.js"
@@ -279,7 +280,7 @@ for (const [recovery, paused, authorityWait, custodyWait] of [
             const output = yield* Ref.make<ReadonlyArray<ProductionCliRecord>>([])
             const receiptWritten = yield* Deferred.make<void>()
             const application = runProductionCli(
-              (input, use, mode) =>
+              (input, use, mode, startup) =>
                 withDecodedProductionRepositoryHost(
                   input,
                   graph,
@@ -334,7 +335,9 @@ for (const [recovery, paused, authorityWait, custodyWait] of [
                         Effect.ensuring(observation.applicationExitRequestBoundary.requestExit.pipe(Effect.asVoid))
                       )
                     }),
-                  mode
+                  mode,
+                  "Invocation",
+                  startup
                 ),
               { addSignalListener: () => Effect.void, removeSignalListener: () => Effect.void },
               (input) => inspectProductionPublicationSubjects(input)

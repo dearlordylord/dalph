@@ -167,12 +167,31 @@ import {
 import { publicDeliveryStatusOf } from "./production-cli-status-schema.js"
 import { ObligationReference } from "./production-cli-status-identity-schema.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
-import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
+import { productionCliHostObservationOf, runProductionCli as runProductionCliWithStartup } from "./live-cli.js"
+
 import type { ProductionHostObservation } from "./production-host.js"
 import { ProductionCancellationBlocked } from "./production.js"
 import type { ApplicationExitSignal, ApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
+
+// These controlled hosts start at the selected observation; model transport installation at that explicit seam.
+const runProductionCli: typeof runProductionCliWithStartup = (runHost, ...options) =>
+  runProductionCliWithStartup(
+    (configuration, use, operation, startup) =>
+      runHost(
+        configuration,
+        (observation, boundary, control) =>
+          Effect.scoped(
+            (startup?.installTransport(boundary) ?? Effect.void).pipe(
+              Effect.andThen(use(observation, boundary, control))
+            )
+          ),
+        operation,
+        startup
+      ),
+    ...options
+  )
 
 const runId = AllocatedWorkflowRunId.make(RunId.make("production-cli-run"))
 const target = GithubIssueTarget.make({

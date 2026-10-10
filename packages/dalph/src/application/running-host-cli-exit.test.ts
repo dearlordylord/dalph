@@ -50,7 +50,7 @@ for (const blockedChannel of ["stdout", "stderr", undefined, "failed"] as const)
         const resultReported = yield* Deferred.make<void>()
         const finalized = yield* Ref.make(false)
         const writes = yield* Ref.make<ReadonlyArray<{ channel: string; text: string }>>([])
-        const runHost: ProductionListeningHostRunner<unknown, never> = (_configuration, use) =>
+        const runHost: ProductionListeningHostRunner<unknown, never> = (_configuration, use, startup) =>
           Effect.scoped(
             Effect.gen(function* () {
               yield* Effect.addFinalizer(() => Ref.set(finalized, true))
@@ -60,6 +60,7 @@ for (const blockedChannel of ["stdout", "stderr", undefined, "failed"] as const)
                     ? Deferred.succeed(resultReported, undefined).pipe(Effect.asVoid)
                     : Effect.void
               })
+              if (startup !== undefined) yield* startup.installTransport(shell.requestBoundary)
               return yield* use({
                 ...probe.observation,
                 applicationExitRequestBoundary: shell.requestBoundary,
