@@ -219,7 +219,10 @@ driverTest(
             if (current === undefined || current.pid === null)
               return yield* Effect.die("no-item current launch missing")
             const items = yield* store.listToolEffects(attempt.runId, attempt.attemptId)
-            expect(items.every((item) => item.incarnation !== current.incarnation)).toBe(true)
+            expect(items.filter((item) => item.incarnation === current.incarnation)).toMatchObject([
+              { _tag: "Started", itemId: "known-current-item", suspensionCustody: { _tag: "Stopped" } },
+              { _tag: "Started", itemId: "late-after-safe" }
+            ])
             blockedLaunchPid = current.pid
             expect((yield* executor.resume(request).pipe(Effect.result))._tag).toBe("Failure")
             expect((yield* app.listThreadTurns(record.value.threadId)).map((turn) => turn.id)).toEqual([
@@ -227,7 +230,11 @@ driverTest(
               "native-turn-2",
               "native-turn-3"
             ])
-            expect(yield* store.listToolEffects(attempt.runId, attempt.attemptId)).toEqual(items)
+            expect(yield* store.listToolEffects(attempt.runId, attempt.attemptId)).toMatchObject(
+              items.map((item) =>
+                item.itemId === "late-after-safe" ? { ...item, suspensionCustody: { _tag: "StopIntended" } } : item
+              )
+            )
             blockedLaunchPid = undefined
             expect(yield* executor.resume(request)).toMatchObject({ _tag: "ExecutorWorkExecuting", correlation })
             expect((yield* app.listThreadTurns(record.value.threadId)).map((turn) => turn.id)).toEqual([
@@ -302,10 +309,44 @@ driverTest(
             "native-turn-2",
             "native-turn-3"
           ])
+          const current = Option.getOrThrow(yield* store.readAttempt(attempt.runId, attempt.attemptId))
+          if (current._tag !== "Running") return yield* Effect.die("current turn absent")
+          const knownCurrent = CodexToolEffectRecord.cases.Started.make({
+            ...item,
+            _tag: "Started",
+            itemId: CodexToolItemId.make("known-current-item"),
+            turnId: current.observedTurnId,
+            incarnation: app.incarnation
+          })
+          yield* store.writeToolEffect(knownCurrent)
           expect(yield* executor.requestSuspension(attempt)).toMatchObject({
             _tag: "ExecutorWorkSafelySuspended",
             correlation
           })
+          const safe = Option.getOrThrow(yield* store.readAttempt(attempt.runId, attempt.attemptId))
+          if (safe._tag !== "SafelySuspended" || safe.turnStartIncarnation === undefined)
+            return yield* Effect.die("exact Safe missing")
+          const late = CodexToolEffectRecord.cases.Started.make({
+            ...item,
+            _tag: "Started",
+            itemId: CodexToolItemId.make("late-after-safe"),
+            turnId: safe.observedTurnId,
+            incarnation: safe.turnStartIncarnation
+          })
+          yield* store.writeToolEffect(late)
+          // Started reopens in the next physical controller; LimitReached proves
+          // the same suffix here with real native and independent storage custody.
+          if (disposition === "LimitReached") {
+            expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+              _tag: "Exact",
+              report: { _tag: "ExecutorWorkSafelySuspended" }
+            })
+            expect(yield* store.listToolEffects(attempt.runId, attempt.attemptId)).toMatchObject([
+              preserved[0],
+              { ...knownCurrent, suspensionCustody: { _tag: "Stopped" } },
+              { ...late, suspensionCustody: { _tag: "Stopped" } }
+            ])
+          }
         }).pipe(Effect.provide(layer))
       })
     ).pipe(Effect.provide(NodeServices.layer)),
