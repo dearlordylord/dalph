@@ -112,3 +112,62 @@ item completion at … without an unreadable projection` enqueue early and expir
 completions while Suspend holds admission; neither can alter retired evidence or
 poison later observation. These repairs introduce no additional durable boundary:
 they read existing stop intents and ignore already retired notifications.
+
+## Owning Pause and fresh Unpause observations
+
+The Operator applies whole-Run Pause at the owning host. This suffix preserves
+chronology 2 and [whole-Run Pause](pause-whole-run.md): retained Executing
+responsibility permits an exact Suspend request, never continuation or inferred
+stopped custody. The executor still owns every native launch and independent
+storage proof above. [D3](../DELIVERY-INVARIANTS.md#identity), [D31](../DELIVERY-INVARIANTS.md#process-and-durability),
+and the existing suspension
+and continuation protocols remain governing; this suffix adds no provider
+allowance, task claim, Begin, Run, history edit, or synthetic completion.
+
+**W1.** The original #495 planned attempt remains Executing after LimitReached
+and an interrupted resumed turn. A correlated passive Unreadable observation
+cannot erase that responsibility when the Operator applies Run Pause. Dalph
+records exact Suspend intent, then the executor freshly proves and stops owned
+launches, records Stopped, and only then reports Safe. Repeated Pause after Safe
+cannot request another Suspend. Unpause requires fresh tracker graph,
+specification and claim, plus Git worktree and lineage admission, before one
+Resume of the same Run/Attempt/Worktree/Base. Foreign, contradictory, and
+terminal evidence cannot provide suspension or continuation authority, including
+when followed by another unreadable observation.
+
+**W2.** #503 starts on Base `203235bcef8314b3938e45cb312f0302d58c01a7`.
+Pause reaches exact Safe at position 6326, a passive observer publishes
+TemporarilyUnavailable at 6327, and Unpause is accepted at 6328. Dalph requests
+one fresh lifecycle attachment after that Unpause or a later owner activation.
+A fresh unavailable or contradictory answer remains a wait with no command.
+A freshly proved exact Safe answer clears the earlier unavailable projection,
+even when it repeats the accepted lifecycle report. Dalph records the fresh
+observation, not another distinct Safe report. Tracker and Git still admit the
+same-attempt Resume. No new Begin is selected. Each completed attachment closes
+before its publication can wake a successor owner; an old finalizer cannot
+remove the successor's wait.
+
+Crashes after Pause, Suspend intent, stop effect, Safe, and Resume intent reopen
+the accepted history and reconcile the destination before retry. The tool's
+original disposition, deadline and identities remain immutable. There is no
+new tracker/Git mutation or public event type in this repair, so new mutation
+crash cuts at those boundaries do not apply. Existing fresh admission reads
+and executor stop/storage crash cuts continue to apply.
+
+| Accepted outcome or cut | Focused acceptance evidence |
+| --- | --- |
+| W1: Pause selects exact Suspend across passive Unreadable; reopening Suspend intent stays valid | [recovery activation](../../packages/orchestrator/src/coordination/run/recovery-activation.test.ts): `lets owning Run Pause override an unreadable executor projection (Suspend intended: %s)` |
+| W1: intent precedes executor call | [executor workflow protocol](../../packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.test.ts): `records owning Pause suspension intent before contacting the executor after executing state becomes unreadable` |
+| W1: foreign, lifecycle contradiction, terminal, and later unreadable evidence refuse both commands | Same protocol file: `owning Pause cannot suspend or resume after %s evidence even when followed by unreadable state` |
+| W1/W2: outer cuts after Pause, Suspend intent, stop effect, Safe, Resume intent | Same protocol file: `reopens owning workflow after %s and reconciles before retrying the same attempt`; executor private crash cuts remain chronology 4 above |
+| W2: stale unavailable, absent, unreadable and foreign projections get one read; a fresh negative answer refuses continuation and another read in that activation | Recovery activation: `refreshes stale passive … once after Unpause and refuses a fresh unavailable observation`; `does not schedule another passive executor read after an unresolved … projection` |
+| W2: attachment closure, publication wake, successor ownership, repeated explicit wake | [passive observer](../../packages/orchestrator/src/coordination/run/passive-planned-attempt-observer.test.ts): `closes the old observer before publication wakes a fresh owner and preserves the successor wait`; `closes fresh unavailable and Safe attachments and rereads on each explicit wake`; existing fresh-process reattachment tests |
+| W1/W2: physical stopped custody, same attempt, unchanged deadline, actual passive owner, owning planner, fresh tracker/Git admission, exactly one Resume, repeated Pause | Native recovery tests from chronology 2 now call [owning workflow composition](../../packages/dalph/test-support/owning-tool-recovery.ts), using the real native lifecycle observer and ordinary journal protocols. Tracker and Git reads use controlled providers; no live tracker is mutated. |
+
+The physical fixture retains the original native private records across separate
+controller processes; its public fixture begins with an accepted executing
+chronology. It proves the outer recovery suffix, not reopening the production
+#491 journal. Parent #501 must depend on this repair, wait for all original
+leaves, qualify the combined candidate with `check:submit`, then pin a separate
+runtime and reopen the original Run after proving only its own host writers
+stopped. Leaf acceptance alone does not demonstrate production W1/W2 recovery.

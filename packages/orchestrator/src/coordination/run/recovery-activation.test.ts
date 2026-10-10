@@ -3023,7 +3023,7 @@ it.each([
           coverageRunId,
           coverageTarget,
           reconstructed,
-          records
+          records.filter(({ position }) => position < 15)
         )
 
         expect(projection.evidence._tag).toBe("AvailableDeliveryProjectionEvidence")
@@ -3047,6 +3047,171 @@ it.each([
       })
     )
   )
+)
+
+it.each([
+  { name: "absent", observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateNoCurrentReport.make({}) },
+  {
+    name: "temporarily unavailable",
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({})
+  },
+  { name: "unreadable", observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({}) },
+  {
+    name: "foreign",
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorReportContradiction.make({
+      observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: { attemptId: AttemptId.make("recovery-activation-passive-foreign-attempt"), runId: coverageRunId }
+      })
+    })
+  }
+] as const)(
+  "refreshes stale passive $name once after Unpause and refuses a fresh unavailable observation",
+  ({ observation }) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+          })
+          const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+          const began = makeHistoricalWorkflowRunBeganRecord(
+            coverageRunId,
+            coverageTarget,
+            coveragePolicy,
+            remotePublicationTargetForTest
+          )
+          const records = [
+            began,
+            ...acceptedCoverageLineageRecords().map((record) => ({
+              ...record,
+              position: JournalPosition.make(Number(record.position) + 1)
+            })),
+            coverageRecord(
+              12,
+              PlannedAttemptExecutorCommandIntendedEvent.make({
+                command: "Begin",
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                ordinal: beginOrdinal,
+                plannedAttempt: coverageAttempt,
+                version: workflowJournalEventVersion
+              })
+            ),
+            coverageRecord(
+              13,
+              PlannedAttemptExecutorCommandResponseObservedEvent.make({
+                commandOrdinal: beginOrdinal,
+                occurrenceClassification: "NonActionOccurrence",
+                plannedAttempt: coverageAttempt,
+                report: executing,
+                version: workflowJournalEventVersion
+              })
+            ),
+            executorReport(14, executing, 1),
+            coverageRecord(15, runPause(1)),
+            coverageRecord(
+              16,
+              PlannedAttemptExecutorCommandIntendedEvent.make({
+                command: "Suspend",
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+                plannedAttempt: coverageAttempt,
+                version: workflowJournalEventVersion
+              })
+            ),
+            coverageRecord(
+              17,
+              PlannedAttemptExecutorCommandResponseObservedEvent.make({
+                commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+                occurrenceClassification: "NonActionOccurrence",
+                plannedAttempt: coverageAttempt,
+                report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                  correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+                }),
+                version: workflowJournalEventVersion
+              })
+            ),
+            executorReport(
+              18,
+              PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+              }),
+              2
+            ),
+            executorStateObservation(19, observation),
+            coverageRecord(20, runUnpause(2))
+          ]
+          const reconstructed: ReconstructedRunState = {
+            ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
+            controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision })
+          }
+          const resources = yield* makeIntegrationTargetResourceController()
+          const projection = yield* liveProjectionFor(
+            makeRunRecoveryProjection(coverageRunId, undefined, resources),
+            coverageRunId,
+            coverageTarget,
+            reconstructed,
+            records
+          )
+
+          expect(projection.evidence._tag).toBe("AvailableDeliveryProjectionEvidence")
+          if (projection.evidence._tag !== "AvailableDeliveryProjectionEvidence") return
+          expect(
+            projection.evidence.facts.find(({ _tag }) => _tag === "PlannedAttemptExecutorFreshFacts")
+          ).toMatchObject({
+            _tag: "PlannedAttemptExecutorFreshFacts",
+            disposition: { _tag: "PlannedAttemptExecutorProjectionWait" },
+            responsibility: { plannedAttempt: coverageAttempt }
+          })
+          expect(
+            projection.frontier.transitions.filter(
+              (transition) =>
+                transition._tag === "ObservePlannedAttemptExecutorWork" ||
+                transition._tag === "ReconcilePlannedAttemptExecutorWork" ||
+                transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                transition._tag === "SuspendPlannedAttemptExecutorWork"
+            )
+          ).toEqual([
+            RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+              acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(11) },
+              plannedAttempt: coverageAttempt
+            })
+          ])
+          const freshRecords = [
+            ...records,
+            coverageRecord(
+              21,
+              PlannedAttemptExecutorStateObservedEvent.make({
+                observation,
+                occurrenceClassification: "NonActionOccurrence",
+                ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(2),
+                plannedAttempt: coverageAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+          ]
+          const fresh = yield* liveProjectionFor(
+            makeRunRecoveryProjection(coverageRunId, undefined, resources),
+            coverageRunId,
+            coverageTarget,
+            {
+              ...reconstructed,
+              workflowHistory: coverageRunState(freshRecords, [coverageResponsibilityAfterBeginning]).workflowHistory
+            },
+            records
+          )
+          expect(
+            fresh.frontier.transitions.filter(
+              (transition) =>
+                transition._tag === "ObservePlannedAttemptExecutorWork" ||
+                transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                transition._tag === "BeginPlannedAttemptExecutorWork"
+            )
+          ).toEqual([])
+        })
+      )
+    )
 )
 
 it("reconciles one unsettled command when its prior activation recorded a non-exact projection", () =>
@@ -3556,6 +3721,105 @@ effectIt.effect.each([false, true])(
       const cancelledState: ReconstructedRunState = {
         ...reduced.runState,
         cancellation: { _tag: "RunCancellationApplied", appliedAt: cancellationPosition },
+        graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
+      }
+      const resources = yield* makeIntegrationTargetResourceController()
+      const projection = yield* liveProjectionFor(
+        makeRunRecoveryProjection(coverageRunId, undefined, resources),
+        coverageRunId,
+        coverageTarget,
+        cancelledState,
+        records
+      )
+      expect(projection.frontier.transitions).toContainEqual(
+        suspendWasIntended
+          ? RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+          : RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+      )
+      expect(projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptExecutorWork")).toBe(
+        false
+      )
+    })
+)
+
+effectIt.effect.each([false, true])(
+  "lets owning Run Pause override an unreadable executor projection (Suspend intended: %s)",
+  (suspendWasIntended) =>
+    Effect.gen(function* () {
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+      })
+      const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      const beginIntent = coverageRecord(
+        12,
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Begin",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: beginOrdinal,
+          plannedAttempt: coverageAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const beginResponse = coverageRecord(
+        13,
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: beginOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt: coverageAttempt,
+          report: executing,
+          version: workflowJournalEventVersion
+        })
+      )
+      const runningReport = executorReport(14, executing, 1)
+      const unreadableProjection = executorStateObservation(
+        15,
+        PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})
+      )
+      const cancellationPosition = JournalPosition.make(16)
+      const cancellation = coverageRecord(Number(cancellationPosition), runPause(1))
+      const began = makeHistoricalWorkflowRunBeganRecord(
+        coverageRunId,
+        coverageTarget,
+        coveragePolicy,
+        remotePublicationTargetForTest
+      )
+      const records = [
+        began,
+        ...acceptedCoverageLineageRecords().map((record) => ({
+          ...record,
+          position: JournalPosition.make(Number(record.position) + 1)
+        })),
+        beginIntent,
+        beginResponse,
+        runningReport,
+        unreadableProjection,
+        cancellation,
+        ...(suspendWasIntended
+          ? [
+              coverageRecord(
+                17,
+                PlannedAttemptExecutorCommandIntendedEvent.make({
+                  command: "Suspend",
+                  initiatedBy: { _tag: "DalphCoordinator" },
+                  occurrenceClassification: "InitiatedAction",
+                  ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+                  plannedAttempt: coverageAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ]
+          : [])
+      ]
+      const reduced = reduceWorkflowJournalHistory(coverageRunId, records)
+      if (reduced._tag === "InvalidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `cancellation fixture must be accepted: ${reduced.issues.map(workflowJournalHistoryIssueDetail).join("; ")}`
+        )
+      }
+      const cancelledState: ReconstructedRunState = {
+        ...reduced.runState,
+        pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "NoTaskPauses" } },
         graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
       }
       const resources = yield* makeIntegrationTargetResourceController()
@@ -6940,15 +7204,16 @@ effectIt.effect("uses normal-layer current state without exporting records and r
       ref: IntegrationTargetRef.make("refs/heads/main"),
       repository: GitRepositoryLocator.make("/repositories/recovery-activation-coverage.git")
     })
+    // Cold validation is fixture preparation, not the normal-layer read under test.
+    const preparedJournal = yield* Layer.build(
+      liveJournalTestLayer({ records: [began], runId: coverageRunId, target: coverageTarget })
+    )
     const operations: Array<string> = []
     const stopObserving = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
     const configuredProjection = yield* Effect.gen(function* () {
       const configuredRecovery = yield* makeRunRecoveryProjection(coverageRunId, integrationTarget)
       return yield* configuredRecovery.readDeliveryProjection
-    }).pipe(
-      Effect.provide(liveJournalTestLayer({ records: [began], runId: coverageRunId, target: coverageTarget })),
-      Effect.ensuring(Effect.sync(stopObserving))
-    )
+    }).pipe(Effect.provide(preparedJournal), Effect.ensuring(Effect.sync(stopObserving)))
     if (configuredProjection.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
       return expect.fail("expected configured delivery projection evidence")
     }
@@ -6967,7 +7232,7 @@ effectIt.effect("uses normal-layer current state without exporting records and r
       expectedRunId: coverageRunId,
       receivedRunId: otherRunId
     })
-  })
+  }).pipe(Effect.scoped)
 )
 
 it("rejects a pending active-refresh graph without its exact plan or Run identity", () => {

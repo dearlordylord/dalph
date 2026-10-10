@@ -1,3 +1,4 @@
+import { plannedAttemptExecutorSuspensionIsAuthorized } from "../../workflow/protocols/planned-attempt-executor-work/suspension-authority.js"
 import { evaluateResultRecoveryRestartFacts } from "../../workflow/protocols/result-recovery/restart-authorization.js"
 import {
   resultRecoveryContinueReadPlan,
@@ -1669,7 +1670,8 @@ export const deriveJournalResponsibilityFacts = (
     const report = latestAcceptedPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
     const projectionIssue = latestPlannedAttemptExecutorProjectionIssue(records, responsibility.plannedAttempt)
     const projectionWait =
-      projectionIssue !== undefined && (report === undefined || projectionIssue.observedAt > report.observedAt)
+      projectionIssue !== undefined &&
+      latestPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt) === undefined
     const attemptTaskGraph = graphForAttempt(responsibility.plannedAttempt)
     const attemptRefreshOpportunity = attemptOpportunity(responsibility.plannedAttempt)
     const paused = reconstructedTaskIsPaused(runState.pause, responsibility.plannedAttempt.taskId, attemptTaskGraph)
@@ -2160,6 +2162,12 @@ export const deriveJournalResponsibilityFacts = (
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition
       if (projectionWait) {
+        if (
+          runPauseSuspensionOwed &&
+          plannedAttemptExecutorSuspensionIsAuthorized(records, responsibility.plannedAttempt)
+        ) {
+          return suspensionRequested()
+        }
         return ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: projectionIssue.reason })
       }
       return nonterminalTaskStateDisposition()
@@ -4325,9 +4333,10 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   /**
    * A non-exact projection recorded while a command is still unsettled is
    * ambiguous command evidence and must be reconciled on a later Run entry.
-   * Passive projection evidence has no such retry authority.
+   * Passive projection evidence permits only a fresh lifecycle attachment after
+   * a later activation or completed Unpause, not command reconciliation.
    */
-  const commandProjectionRetryDecisions = responsibilityFacts.flatMap((facts) => {
+  const commandProjectionRetryDecisions = responsibilityFacts.flatMap<RunnableFrontierTransition>((facts) => {
     if (
       facts._tag !== "PlannedAttemptExecutorFreshFacts" ||
       facts.disposition._tag !== "PlannedAttemptExecutorProjectionWait"
@@ -4337,10 +4346,21 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     const plannedAttempt = facts.responsibility.plannedAttempt
     const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(journalHistoryOf(runState), plannedAttempt)
     const issue = latestPlannedAttemptExecutorProjectionIssue(journalHistoryOf(runState), plannedAttempt)
-    return unsettledCommand !== undefined &&
-      issue !== undefined &&
-      !positionIsAfter(issue.observedAt, activationBaselinePosition)
-      ? [RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })]
+    if (issue === undefined) return []
+    if (unsettledCommand !== undefined) {
+      return !positionIsAfter(issue.observedAt, activationBaselinePosition)
+        ? [RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })]
+        : []
+    }
+    // A later owner activation or completed Unpause permits one fresh read,
+    // never continuation from the retained unavailable projection itself.
+    const accepted = latestAcceptedPlannedAttemptExecutorEvidence(journalHistoryOf(runState), plannedAttempt)
+    const acceptedProgress =
+      accepted === undefined
+        ? { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: facts.responsibility.beganAt }
+        : { _tag: "ExecutorReportAccepted" as const, ordinal: accepted.source.ordinal }
+    return !positionIsAfter(issue.observedAt, freshnessBaselineForTask(plannedAttempt.taskId))
+      ? [RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({ acceptedProgress, plannedAttempt })]
       : []
   })
   const integrationResponsibilities = deriveIntegrationAdmission(journalHistoryOf(runState)).responsibilities

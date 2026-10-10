@@ -21,7 +21,7 @@ import {
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal
 } from "./events.js"
-import { latestUnsettledPlannedAttemptExecutorCommand } from "./evidence.js"
+import { latestPlannedAttemptExecutorEvidence, latestUnsettledPlannedAttemptExecutorCommand } from "./evidence.js"
 import { type PlannedAttemptProtocolPermit, withPlannedAttemptProtocolPermit } from "./protocol-controller.js"
 import { reconcileUnsettledPlannedAttemptExecutorCommand } from "./command.js"
 import {
@@ -135,6 +135,10 @@ const publishPlannedAttemptExecutorProjectionResultUnserialized = Effect.fn(
           latestAccepted?.event._tag === "PlannedAttemptExecutorWorkReported" &&
           samePlannedAttemptExecutorReport(latestAccepted.event.report, report)
         ) {
+          if (latestPlannedAttemptExecutorEvidence(records, plannedAttempt) === undefined) {
+            yield* recordObservation(PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }))
+            return { acceptedFacts: "Changed" as const, report } satisfies PlannedAttemptExecutorObservationResult
+          }
           return {
             acceptedFacts: "UnchangedPassiveObservation" as const,
             report
