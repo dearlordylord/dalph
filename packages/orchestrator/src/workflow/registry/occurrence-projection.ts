@@ -3666,7 +3666,7 @@ const projectWorkflowRecord = Effect.fn("WorkflowOccurrence.projectRecord")(func
 
 export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project")(function* (
   records: ReadonlyArray<JournalRecord>,
-  options: { readonly includeControlDisposition?: boolean } = {}
+  options: { readonly includeControlDisposition?: boolean; readonly cooperative?: boolean } = {}
 ) {
   const includeControlDisposition = options.includeControlDisposition === true
   const projectionCache = includeControlDisposition ? traceProjectionsByRecords : projectionsByRecords
@@ -3706,6 +3706,7 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
   }
 
   for (const record of records) {
+    if (options.cooperative === true) yield* Effect.yieldNow
     yield* projectWorkflowRecord(record, context, historicalContext, includeControlDisposition)
   }
 

@@ -102,6 +102,7 @@ import {
 } from "../workflow/protocols/integration-finality/history.js"
 import { validateIntegrationHistoryRecord } from "../coordination/reconstruction/integration-history-validation.js"
 import { invalidWorkflowRunBinding } from "../coordination/reconstruction/integration-history-run-binding.js"
+import { validateAttemptStopHistorySteps } from "../coordination/reconstruction/attempt-validation.js"
 import {
   validateAttemptStopHistory,
   validateCancellationMultiplicityHistory
@@ -1776,10 +1777,14 @@ const itemFromOccurrence = (runId: RunId, occurrence: WorkflowOccurrenceValue): 
     taskIds: sortedUniqueTaskIds(taskIdsOfOccurrence(occurrence))
   })
 
-const prefixIssues = (runId: RunId, records: ReadonlyArray<JournalRecord>): ReadonlyArray<TracePrefixIssue> => {
+const prefixIssues = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  offset = 0
+): ReadonlyArray<TracePrefixIssue> => {
   const issues: Array<TracePrefixIssue> = []
   for (const [index, record] of records.entries()) {
-    const expectedPosition = JournalPosition.make(index + 1)
+    const expectedPosition = JournalPosition.make(offset + index + 1)
     if (record.runId !== runId) {
       issues.push(
         TracePrefixIssue.cases.RunMismatch.make({
@@ -1798,7 +1803,7 @@ const prefixIssues = (runId: RunId, records: ReadonlyArray<JournalRecord>): Read
         TracePrefixIssue.cases.RecordKeyMismatch.make({ actualKey: record.key, expectedKey, position: record.position })
       )
     }
-    if (index === 0 && record.event._tag !== "WorkflowRunBegan") {
+    if (offset + index === 0 && record.event._tag !== "WorkflowRunBegan") {
       issues.push(TracePrefixIssue.cases.FirstRecordNotRunBeginning.make({ position: record.position }))
     }
   }
@@ -1953,10 +1958,31 @@ const operationIndexOf = (
   return predecessorIssueResult === undefined ? Effect.succeed(index) : Effect.fail(predecessorIssueResult)
 }
 
+/** One record step retains the exact validator state; only completed results escape. */
+const finishHistorySteps = <A>(steps: Generator<void, A>): A => {
+  let next = steps.next()
+  while (!next.done) next = steps.next()
+  return next.value
+}
+
+const cooperativeHistorySteps = <A>(steps: Generator<void, A>): Effect.Effect<A> =>
+  Effect.gen(function* () {
+    let next = steps.next()
+    while (!next.done) {
+      yield* Effect.yieldNow
+      next = steps.next()
+    }
+    return next.value
+  })
+
 /** Runs the exact indexed finality validator before exposing any finality facet. */
-const finalityHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+const finalityHistoryIssueSteps = function* (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): Generator<void, string | undefined> {
   let indexes = makeIntegrationFinalityHistoryIndexes()
   for (const record of records) {
+    yield
     let issue: string | undefined
     indexes = validateIntegrationFinalityHistoryRecord(
       record,
@@ -1975,9 +2001,16 @@ const finalityHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord
   return undefined
 }
 
-const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+const finalityHistoryIssue = (...args: Parameters<typeof finalityHistoryIssueSteps>): string | undefined =>
+  finishHistorySteps(finalityHistoryIssueSteps(...args))
+
+const integrationHistoryIssueSteps = function* (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): Generator<void, string | undefined> {
   let indexes = makeIntegrationHistoryIndexes()
   for (const record of records) {
+    yield
     let issue: string | undefined
     indexes = validateIntegrationHistoryRecord(
       record,
@@ -2021,6 +2054,9 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
   return undefined
 }
 
+const integrationHistoryIssue = (...args: Parameters<typeof integrationHistoryIssueSteps>): string | undefined =>
+  finishHistorySteps(integrationHistoryIssueSteps(...args))
+
 type CleanupEventWithFamily =
   | { readonly family: "Worktree"; readonly event: WorktreeCleanupJournalEvent }
   | { readonly family: "Branch"; readonly event: BranchCleanupJournalEvent }
@@ -2056,20 +2092,27 @@ const cleanupFamilyValidationIssue = (
   return settledWorktree._tag === "Invalid" ? `${family} cleanup provenance: ${settledWorktree.detail}` : undefined
 }
 
-const cleanupHistoryIssue = (records: ReadonlyArray<JournalRecord>): string | undefined => {
+const cleanupHistoryIssueSteps = function* (
+  records: ReadonlyArray<JournalRecord>
+): Generator<void, string | undefined> {
   const latestByAuthorization = new Map<string, CleanupEventWithFamily>()
   for (const record of records) {
+    yield
     const cleanup = cleanupEventWithFamily(record.event)
     if (cleanup !== undefined) {
       latestByAuthorization.set(`${cleanup.family}:${cleanup.event.authorization.operationId}`, cleanup)
     }
   }
   for (const cleanup of latestByAuthorization.values()) {
+    yield
     const issue = cleanupFamilyValidationIssue(records, cleanup)
     if (issue !== undefined) return issue
   }
   return undefined
 }
+
+const cleanupHistoryIssue = (...args: Parameters<typeof cleanupHistoryIssueSteps>): string | undefined =>
+  finishHistorySteps(cleanupHistoryIssueSteps(...args))
 
 const canonicalHistoryIssue = (
   issues: ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue>
@@ -2094,8 +2137,12 @@ const canonicalQuerySourceFor = (records: ReadonlyArray<JournalRecord>): Journal
   return journalEvidenceFrom(records)
 }
 
-const indexedCancelledAttemptHistoryIssue = (runId: RunId, source: JournalHistorySource): string | undefined => {
+const indexedCancelledAttemptHistoryIssueSteps = function* (
+  runId: RunId,
+  source: JournalHistorySource
+): Generator<void, string | undefined> {
   for (const record of journalRecordsAfter(source, null)) {
+    yield
     let detail: string | undefined
     validateCancelledAttemptHistory(record, runId, source, (candidate) => {
       detail ??= candidate
@@ -2105,13 +2152,25 @@ const indexedCancelledAttemptHistoryIssue = (runId: RunId, source: JournalHistor
   return undefined
 }
 
-const nestedWorkflowRunBindingIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+const indexedCancelledAttemptHistoryIssue = (
+  ...args: Parameters<typeof indexedCancelledAttemptHistoryIssueSteps>
+): string | undefined => finishHistorySteps(indexedCancelledAttemptHistoryIssueSteps(...args))
+
+const nestedWorkflowRunBindingIssueSteps = function* (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): Generator<void, string | undefined> {
   for (const record of records) {
+    yield
     const bindingIssue = invalidWorkflowRunBinding(record.event, runId)
     if (bindingIssue !== undefined) return `${bindingIssue} at journal position ${record.position}`
   }
   return undefined
 }
+
+const nestedWorkflowRunBindingIssue = (
+  ...args: Parameters<typeof nestedWorkflowRunBindingIssueSteps>
+): string | undefined => finishHistorySteps(nestedWorkflowRunBindingIssueSteps(...args))
 
 const orderedWorkflowHistoryIssue = (
   runId: RunId,
@@ -2137,6 +2196,28 @@ const fullHistoryIssue = (
   querySourceFor: (records: ReadonlyArray<JournalRecord>) => JournalHistorySource = (records) => records
 ): string | undefined =>
   nestedWorkflowRunBindingIssue(runId, records) ?? orderedWorkflowHistoryIssue(runId, records, querySourceFor(records))
+
+const cooperativeFullHistoryIssue = Effect.fn("TraceReader.cooperativeFullHistoryIssue")(function* (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+) {
+  const binding = yield* cooperativeHistorySteps(nestedWorkflowRunBindingIssueSteps(runId, records))
+  if (binding !== undefined) return binding
+  yield* Effect.yieldNow
+  const stop = canonicalHistoryIssue(yield* cooperativeHistorySteps(validateAttemptStopHistorySteps(runId, records)))
+  if (stop !== undefined) return stop
+  yield* Effect.yieldNow
+  const cancellation = canonicalHistoryIssue(validateCancellationMultiplicityHistory(runId, records))
+  if (cancellation !== undefined) return cancellation
+  yield* Effect.yieldNow
+  const cancelled = yield* cooperativeHistorySteps(indexedCancelledAttemptHistoryIssueSteps(runId, records))
+  if (cancelled !== undefined) return cancelled
+  const cleanup = yield* cooperativeHistorySteps(cleanupHistoryIssueSteps(records))
+  if (cleanup !== undefined) return cleanup
+  const integration = yield* cooperativeHistorySteps(integrationHistoryIssueSteps(runId, records))
+  if (integration !== undefined) return integration
+  return yield* cooperativeHistorySteps(finalityHistoryIssueSteps(runId, records))
+})
 
 type CompleteGraphObservation = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
 
@@ -2310,21 +2391,52 @@ const workflowRunBeginningOf = (
 
 const historyFromRecords = Effect.fn("TraceReader.historyFromRecords")(function* (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>
+  records: ReadonlyArray<JournalRecord>,
+  cooperative = false
 ) {
-  yield* validateRecords(runId, records)
-  const historyIssue = fullHistoryIssue(runId, records)
+  if (cooperative) {
+    if (records.length === 0) return yield* new TraceRunNotFound({ runId })
+    const issues: Array<TracePrefixIssue> = []
+    for (const [index, record] of records.entries()) {
+      yield* Effect.yieldNow
+      issues.push(...prefixIssues(runId, [record], index))
+    }
+    if (issues.length > 0) return yield* new TraceJournalPrefixInvalid({ issues, runId })
+  } else {
+    yield* validateRecords(runId, records)
+  }
+  const historyIssue = cooperative
+    ? yield* cooperativeFullHistoryIssue(runId, records)
+    : fullHistoryIssue(runId, records)
   if (historyIssue !== undefined) {
     return yield* new TraceProjectionInvalid({ detail: historyIssue, runId })
   }
   yield* operationIndexOf(runId, records)
-  const projection = yield* projectWorkflowOccurrences(records, { includeControlDisposition: true }).pipe(
+  const projection = yield* projectWorkflowOccurrences(records, { includeControlDisposition: true, cooperative }).pipe(
     Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId }))
   )
   /* v8 ignore next -- @preserve a validated history that reaches this fallback has the same projection used by the complete index; its item mapping is schema-total. */
-  const items = projection.occurrences.map((occurrence) => itemFromOccurrence(runId, occurrence))
+  const items: Array<TraceHistoryItem> = []
+  for (const occurrence of projection.occurrences) {
+    if (cooperative) yield* Effect.yieldNow
+    items.push(itemFromOccurrence(runId, occurrence))
+  }
   const committedThrough = Option.getOrThrow(Option.fromUndefinedOr(records[records.length - 1]?.position))
-  return TraceHistory.make({ committedThrough, items, runId, version: traceReaderSchemaVersion })
+  if (!cooperative) return TraceHistory.make({ committedThrough, items, runId, version: traceReaderSchemaVersion })
+  // Validate every schema field and every item using the unchanged complete schema.
+  // Singleton histories cover the item/Run/boundary invariants; the only invariant
+  // spanning items is strict position order, checked separately in source order.
+  TraceHistory.make({ committedThrough, items: [], runId, version: traceReaderSchemaVersion })
+  let previous: JournalPosition | undefined
+  for (const item of items) {
+    yield* Effect.yieldNow
+    TraceHistory.make({ committedThrough, items: [item], runId, version: traceReaderSchemaVersion })
+    if (previous !== undefined && item.identity.position <= previous) {
+      return yield* new TraceProjectionInvalid({ detail: "Trace items must have distinct increasing positions", runId })
+    }
+    previous = item.identity.position
+  }
+  return { committedThrough, items, runId, version: traceReaderSchemaVersion } satisfies TraceHistory
 })
 
 /**
@@ -2750,7 +2862,7 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
       return cached.history
     yield* Effect.yieldNow
     const prefix = yield* cursorPrefixOf(cursor, records)
-    const history = yield* historyFromRecords(cursor.runId, prefix)
+    const history = yield* historyFromRecords(cursor.runId, prefix, true)
     // At most one selected prefix per immutable read, with no retained graph or facets.
     occurrenceHistories.set(records, { cursor, history })
     return history

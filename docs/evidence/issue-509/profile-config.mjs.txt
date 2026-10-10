@@ -1,0 +1,10 @@
+import { resolve } from "node:path"
+const root = process.cwd()
+export default {
+  root,
+  resolve: { alias: Object.fromEntries(["contracts", "orchestrator", "dalph"].map(name => [`@dalph/${name}`, resolve(root, `packages/${name}/src/index.ts`)])) },
+  test: {
+    include: [".scratch/combined-profile.test.ts"], maxWorkers: 1, pool: "forks", testTimeout: 300000,
+    reporters: ["verbose", "json"], outputFile: { json: "/tmp/issue-509-qualification/combined-profile-tests.json" }
+  }
+}

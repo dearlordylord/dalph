@@ -826,18 +826,26 @@ export const validateAttemptStop = (
  * production reducer remains the owner of these chronology rules; trace
  * readers only need its exact issues before projecting a facet.
  */
-export const validateAttemptStopHistory = (
+export const validateAttemptStopHistorySteps = function* (
   runId: RunId,
   records: JournalHistorySource
-): ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue> => {
+): Generator<void, ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue>> {
   const collector = makeWorkflowJournalHistoryIssueCollector<
     WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue
   >()
   let indexes = emptyIndexes()
   for (const record of journalRecordsAfter(records, null)) {
+    yield
     indexes = validateAttemptStop(record, runId, records, indexes, collector.report)
   }
   return collector.toReadonlyArray()
+}
+
+export const validateAttemptStopHistory = (...args: Parameters<typeof validateAttemptStopHistorySteps>) => {
+  const steps = validateAttemptStopHistorySteps(...args)
+  let next = steps.next()
+  while (!next.done) next = steps.next()
+  return next.value
 }
 
 export const validateOperationEvent = (
