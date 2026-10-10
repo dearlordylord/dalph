@@ -1,0 +1,458 @@
+{
+  "version": 1,
+  "outcome": "RepairHandoffPendingNativeDependency",
+  "base": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+  "qualifiedRuntimeCandidate": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+  "handoffSourceIdentity": {
+    "basePlusTestOnlyRepairSha256": "04c5083394aea97ccb5dfebbabc3d9d22d3d103cea5596f7d911436e09ceca66",
+    "files": {
+      "packages/dalph/src/application/production-public-recovery.integration.test.ts": "3a2effcd1bd29b084d946da3ca23b3cac7ddeb550fb85a814669caac74fde75f",
+      "packages/dalph/src/cassettes/delivery-story-capstone.ts": "975fb7476edf6f5db7ddcc3d175052435b54a7d0c34cdb140f7452b8edc5dc15",
+      "packages/dalph/src/cassettes/run-cancellation-cassettes.ts": "cc8e346ac33db815ab1968ec79b292b87f527f642083da1badd46019551a0902"
+    }
+  },
+  "readiness": {
+    "command": "mise exec -- pnpm check:submit",
+    "exit": 1,
+    "stages": [
+      {
+        "name": "check:artifacts",
+        "exit": 0
+      },
+      {
+        "name": "test:formal:controls",
+        "exit": 0
+      },
+      {
+        "name": "check:fast",
+        "exit": 0
+      },
+      {
+        "name": "lint:code --census",
+        "exit": 0
+      },
+      {
+        "name": "test:cassettes:memory",
+        "exit": 1
+      }
+    ],
+    "unexecutedSuffix": [],
+    "originalFailures": [
+      "capstone.execution.test.ts: maintained delivery capstone proves the #413 publication and integration interval through DS17",
+      "run-cancellation.test.ts: cancels after admitted integration settles without rollback or replacement",
+      "scenario.test.ts: alpha-renames every Dalph-generated identity and preserves tracker revisions, task revisions, and Git SHAs"
+    ],
+    "closure": "Test-only cassette chronology repair; retained broad failure plus exact focused reproducer and full three-file focused repair. No full rerun or conversion of failed run into passing run."
+  },
+  "checks": {
+    "readiness-focused-repair": {
+      "passed": 147,
+      "failed": 0,
+      "skipped": 3,
+      "result": "readiness-focused-repair.json",
+      "log": "readiness-focused-repair.log"
+    },
+    "scenario-native-results": {
+      "passed": 267,
+      "failed": 0,
+      "skipped": 0,
+      "result": "scenario-native-results.json",
+      "log": "scenario-native.log"
+    },
+    "scenario-supplement-results": {
+      "passed": 36,
+      "failed": 0,
+      "skipped": 0,
+      "result": "scenario-supplement-results.json",
+      "log": "scenario-supplement.log"
+    },
+    "public-recovery-results": {
+      "passed": 9,
+      "failed": 4,
+      "skipped": 0,
+      "result": "public-recovery-results.json",
+      "log": "public-recovery.log"
+    },
+    "public-recovery-final-repair": {
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0,
+      "result": "public-recovery-final-repair.json",
+      "log": "public-recovery-final-repair.log"
+    },
+    "typecheck": {
+      "exit": 0,
+      "log": "typecheck.log"
+    },
+    "lint:changed": {
+      "exit": 0,
+      "log": "lint-changed.log"
+    }
+  },
+  "profiles": [
+    {
+      "name": "Sparse",
+      "temperature": "ColdHostReopen",
+      "samples": 20,
+      "admissionP95Millis": 0.8480490000001737,
+      "admission100msMet": true,
+      "heap1GiBMet": true,
+      "rss1_5GiBMet": true,
+      "maxRssBytes": 434081792,
+      "maxHeapUsedBytes": 226689192,
+      "maxProcessCpuMicros": 74035,
+      "maxEventLoopGapMillis": 16.255632000000332,
+      "observerCount": 0,
+      "workQuantum10ms": "Unproven",
+      "capacityAccepted": false,
+      "prefixAndOutputRanges": {
+        "records": [
+          56,
+          75
+        ],
+        "eventPayloadBytes": [
+          50389,
+          57761
+        ],
+        "decodedRecordBytes": [
+          69087,
+          81513
+        ],
+        "taskCount": [
+          1,
+          1
+        ],
+        "graphEdges": [
+          0,
+          0
+        ],
+        "causalEdges": [
+          9,
+          9
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryEncodedBytes": [
+          70562,
+          83273
+        ],
+        "optionalHistoryStructuralCharge": [
+          317618,
+          380888
+        ],
+        "pageBytes": [
+          4629,
+          4629
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          582,
+          582
+        ]
+      },
+      "synchronousDiagnostic": [
+        {
+          "phase": "FullCurrentFormatHistoryValidation",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 3.362443999999414,
+          "maxProcessCpuMicros": 7527
+        },
+        {
+          "phase": "OccurrenceItemSchemaMapping",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 4.998873999999887,
+          "maxProcessCpuMicros": 6102
+        },
+        {
+          "phase": "TraceHistorySchemaConstruction",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 2.2846019999997225,
+          "maxProcessCpuMicros": 6100
+        }
+      ]
+    },
+    {
+      "name": "Sparse",
+      "temperature": "WarmHost",
+      "samples": 20,
+      "admissionP95Millis": 0.6832140000005893,
+      "admission100msMet": true,
+      "heap1GiBMet": true,
+      "rss1_5GiBMet": true,
+      "maxRssBytes": 451923968,
+      "maxHeapUsedBytes": 249643128,
+      "maxProcessCpuMicros": 29427,
+      "maxEventLoopGapMillis": 11.00896399999965,
+      "observerCount": 0,
+      "workQuantum10ms": "Unproven",
+      "capacityAccepted": false,
+      "prefixAndOutputRanges": {
+        "records": [
+          75,
+          75
+        ],
+        "eventPayloadBytes": [
+          57761,
+          57761
+        ],
+        "decodedRecordBytes": [
+          81513,
+          81513
+        ],
+        "taskCount": [
+          1,
+          1
+        ],
+        "graphEdges": [
+          0,
+          0
+        ],
+        "causalEdges": [
+          9,
+          9
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryEncodedBytes": [
+          83273,
+          83273
+        ],
+        "optionalHistoryStructuralCharge": [
+          380888,
+          380888
+        ],
+        "pageBytes": [
+          4629,
+          4629
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          582,
+          582
+        ]
+      },
+      "synchronousDiagnostic": [
+        {
+          "phase": "FullCurrentFormatHistoryValidation",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 1.8886819999997897,
+          "maxProcessCpuMicros": 2148
+        },
+        {
+          "phase": "OccurrenceItemSchemaMapping",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 3.0496490000004997,
+          "maxProcessCpuMicros": 7085
+        },
+        {
+          "phase": "TraceHistorySchemaConstruction",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 3.198566999999457,
+          "maxProcessCpuMicros": 6134
+        }
+      ]
+    },
+    {
+      "name": "Dense",
+      "temperature": "ColdHostReopen",
+      "samples": 20,
+      "admissionP95Millis": 0.6876309999988734,
+      "admission100msMet": true,
+      "heap1GiBMet": true,
+      "rss1_5GiBMet": true,
+      "maxRssBytes": 575561728,
+      "maxHeapUsedBytes": 291406792,
+      "maxProcessCpuMicros": 273936,
+      "maxEventLoopGapMillis": 69.30752199999915,
+      "observerCount": 0,
+      "workQuantum10ms": "Failed",
+      "capacityAccepted": false,
+      "prefixAndOutputRanges": {
+        "records": [
+          536,
+          555
+        ],
+        "eventPayloadBytes": [
+          254783,
+          262174
+        ],
+        "decodedRecordBytes": [
+          403058,
+          415541
+        ],
+        "taskCount": [
+          4,
+          4
+        ],
+        "graphEdges": [
+          7,
+          7
+        ],
+        "causalEdges": [
+          6,
+          6
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryEncodedBytes": [
+          404349,
+          417117
+        ],
+        "optionalHistoryStructuralCharge": [
+          1929402,
+          1992710
+        ],
+        "pageBytes": [
+          4631,
+          4631
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          584,
+          584
+        ]
+      },
+      "synchronousDiagnostic": [
+        {
+          "phase": "FullCurrentFormatHistoryValidation",
+          "samples": 20,
+          "over10Millis": 20,
+          "maxSynchronousWallMillis": 42.254219000000376,
+          "maxProcessCpuMicros": 56549
+        },
+        {
+          "phase": "OccurrenceItemSchemaMapping",
+          "samples": 20,
+          "over10Millis": 1,
+          "maxSynchronousWallMillis": 11.996264999999767,
+          "maxProcessCpuMicros": 37353
+        },
+        {
+          "phase": "TraceHistorySchemaConstruction",
+          "samples": 20,
+          "over10Millis": 1,
+          "maxSynchronousWallMillis": 11.900972000001275,
+          "maxProcessCpuMicros": 11905
+        }
+      ]
+    },
+    {
+      "name": "Dense",
+      "temperature": "WarmHost",
+      "samples": 20,
+      "admissionP95Millis": 0.7769229999976233,
+      "admission100msMet": true,
+      "heap1GiBMet": true,
+      "rss1_5GiBMet": true,
+      "maxRssBytes": 575692800,
+      "maxHeapUsedBytes": 283757376,
+      "maxProcessCpuMicros": 193787,
+      "maxEventLoopGapMillis": 146.03148000000147,
+      "observerCount": 0,
+      "workQuantum10ms": "Failed",
+      "capacityAccepted": false,
+      "prefixAndOutputRanges": {
+        "records": [
+          555,
+          555
+        ],
+        "eventPayloadBytes": [
+          262174,
+          262174
+        ],
+        "decodedRecordBytes": [
+          415541,
+          415541
+        ],
+        "taskCount": [
+          4,
+          4
+        ],
+        "graphEdges": [
+          7,
+          7
+        ],
+        "causalEdges": [
+          6,
+          6
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryEncodedBytes": [
+          417117,
+          417117
+        ],
+        "optionalHistoryStructuralCharge": [
+          1992710,
+          1992710
+        ],
+        "pageBytes": [
+          4631,
+          4631
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          584,
+          584
+        ]
+      },
+      "synchronousDiagnostic": [
+        {
+          "phase": "FullCurrentFormatHistoryValidation",
+          "samples": 20,
+          "over10Millis": 20,
+          "maxSynchronousWallMillis": 29.505614999998215,
+          "maxProcessCpuMicros": 30476
+        },
+        {
+          "phase": "OccurrenceItemSchemaMapping",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 7.103932000001805,
+          "maxProcessCpuMicros": 7078
+        },
+        {
+          "phase": "TraceHistorySchemaConstruction",
+          "samples": 20,
+          "over10Millis": 0,
+          "maxSynchronousWallMillis": 5.584837000002153,
+          "maxProcessCpuMicros": 5587
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Dense runtime 10 ms validation quantum failed; dependency repair required, no accepted combined result.",
+    "Sparse work quantum not comprehensively proved; observed diagnostic spans alone do not qualify every runtime chunk.",
+    "Warm/cold refer to host scopes within one Node process; fixed-prefix payloads are not full database storage sizes after concurrent appends.",
+    "NotReady status only; no Ready expansion or combined multi-observer whole-host profile here.",
+    "Measured logical occurrence history charge excludes canonical retention and complete trace indexes; observer tests separately bound their native output resources.",
+    "Provider waits, root native custody and historical failed RSS/read timeout evidence remain separate boundaries."
+  ]
+}

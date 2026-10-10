@@ -1,0 +1,400 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+stdout | packages/dalph/test/cassettes/scenario.test.ts > alpha-renames every Dalph-generated identity and preserves tracker revisions, task revisions, and Git SHAs
+[03:03:58.910] ERROR (#3085): AuthoredCassetteInteractionMismatch: 
+    at Array.<anonymous> (/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/dalph/src/cassettes/authored-cursor.ts:1295:23) {
+  _tag: 'AuthoredCassetteInteractionMismatch',
+  actual: 'CoordinatorActivationReturned',
+  expected: 'OperatorAppliesRunCancellation',
+  storyPosition: 49,
+  [cause]: undefined
+}
+
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > renders every maintained authored cassette from its structured story
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > preserves exact, conflicting, and unclaimed authored acquisition observations
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > fails closed at cursor and executor-projection boundaries
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > holds a delivery claim until the earlier operator control boundary completes
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records both task fingerprints when Alice continues the exact attempt
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records one atomic P1 to P2 replacement before ordinary clean successor work
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconstructs P2 after replacement and never allocates P3
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records no P2 when fresh restart authority is changed, unreadable, or non-ready
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > cancels an admitted but unissued Resume when Restart wins, then starts only P2
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > cancels held Resume but records no P2 when the fresh Restart specification changed again
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects Restart after integration without appending a choice or crossing another boundary
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > never claims the executor incorporated changed instructions
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > coalesces exact Continue redelivery and rejects request identity reuse
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > requires a new choice when instructions change again before continuation
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > lets the first journaled valid choice win a concurrent Continue and Stop race
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reopens Continue and performs fresh reads before admitting the same attempt
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > releases only the freshly confirmed exact claim after Stop
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > proves the exact executor stopped before abandoning implementation responsibility
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > coalesces exact Stop redelivery and rejects request identity reuse
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > stops implementation without mutating an absent or foreign claim
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > preserves worktree WIP session history and evidence after Stop
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconciles ambiguous suspension and claim release across later activations without duplicates
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > cancels held Resume before Stop and preserves a foreign claim
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > preserves every exact attempt artifact after Stop cancels held Resume
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > uses the injected projection when the public Run entry reconstructs an ambiguous Suspend
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects Continue and Stop after the exact integration cutoff
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > does not cross cleanup or integration boundaries for a stale direction
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > durably reconciles an unresolved claim release through bounded later activations
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > does not create a Pause view after Alice's stale task request is rejected
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > shows an incomplete control read without recording a direction
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > pauses A and its grouping child while recording only A's direction
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > lets independent B use capacity only after paused A confirms suspension
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > finishes an already-held integration boundary after task Pause without later cleanup
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > freshly rereads preserved task authorities before resuming after task Unpause
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reopens after task Unpause and finishes suspension before executor work
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > stops before the next forward operation after Alice pauses the Run
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > cancelling Alice's Pause observation does not cancel delivery or authorize cleanup
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > Alice unpauses task A before its Pause observation confirms
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > Alice sees current grouping facts add D to task A's Pause
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > Alice sees task A and grouping child D reach their exact Pause boundaries
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > restarts a confirmed paused Run without selecting new forward progress
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > accepts successful recovered completion at the terminal assertion boundary
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > Dalph confirms A before a later graph read releases B
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > Dalph checks A after losing the tracker completion response
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > Restart keeps B blocked between A's success confirmation and the later graph
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > the fresh complete graph blocks before a later edit can release B
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > A tracker client changes A while Dalph's completion request is pending
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects the completion conflict cassette when its terminal G2 response is omitted
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > finishes the exact safe suspension before fresh reads after Unpause
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reprojects the exact suspension on the second ordinary Run activation without a duplicate command
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > applies an authored operator direction through the production control boundary
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > continues an accepted result after process death and crosses its integration cutoff once
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > projects exact integration order from typed delivery obligations
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > promotes Git-qualified M by exact compare-and-set and records exact ancestry
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > preserves the Git-qualified candidate and releases integration when a blocker appears before promotion
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > preserves the Integrator session and releases target ownership when a blocker appears before promotion
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > keeps an unfinished Integrator session dormant when a blocker appears after process loss
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > delegates changed H after a cleared blocker without reusing M or creating S2
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > promotes the preserved candidate after a blocker clears at unchanged H
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > restarts after a durable blocker read with the candidate and queue history intact
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > durably waits after an unreadable blocker restart read and resumes only on later complete facts
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > preserves promotion proof and releases target ownership before tracker completion on a new blocker
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconstructs a post-promotion blocker without repeating Git promotion
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > preserves accepted tracker completion when a prerequisite concurrently reopens
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records completion finality after Git-qualified promotion history
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > settles a promoted authored task through the real completion-claim boundary
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > runs the five-task controlled-provider diamond through exact accepted-result finality
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > proves promoted ancestry after the blocker clears and completes without reintegration
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconciles a lost promotion response and never sends a fourth request
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records stale H2 and never overwrites it
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records a rejected target compare-and-set as stale exact authority
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > discovers M in current target ancestry after losing the promotion response
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > keeps another target usable while M promotion waits and releases only M when it settles
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > waits without another request when Git cannot be read
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects protocol cassettes with duplicate, missing, or unsettled participants
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > starts a queued accepted result in the same live coordinator process
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > releases B only after A's accepted-result finality in one Run
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > captures every authored delivery frame from production and keeps desired tickets separate from held work
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > notifies the read-only delivery observer before returning the terminal authored result
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reuses one delivery relation evaluation for the authored publication frame
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > retains every conflicting production proposal owner in the delivery frame
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > projects every isolated action-planning issue through its typed maintainer meaning
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > separates delivery frames across authored coordinator activations
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > separates every coordinator activation while a lost claim-release response is reconciled
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > retains the exact paused quiescence disposition in production delivery frames
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > performs one final tracker read before the current bounded activation returns or terminates
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > re-enters the same Run and activates it after quiescent incomplete return
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > gives newly begun and reconstructed Runs the same one-shot finality path
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > an invalid quiescent refresh authorizes no new work
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > an incomplete quiescent refresh authorizes no new work
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > later complete reads add newly selected D and keep removed unstarted C from responsibility
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > runs the maintained singleton through production activation and describes only its task-work result
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > keeps the maintained singleton Run active while its tracker task remains open
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > assigns a fresh exact run identity each time the same tracker target starts
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > runs another story with a different initial task-execution capacity
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > requires one terminal assertion group and one owner for every decoded story item
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > lowers capacity while A holds a position and admits B only after A releases it
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > retains both executing holders until terminal observations release contracted capacity
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > safely suspends A after membership removal while independent B continues, including external success
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects cassette-local contradictions and leaves an authority mismatch to its ordinary boundary
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reports mismatches through the surface that owns the current story item
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects a contradictory coordinator activation return decision
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > derives failed task-work results and safely suspended orchestration evidence from recorded handling
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records a foreign claim after process death and safely suspends only its exact attempt
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > drives a public operator claim-reacquisition request through a later activation
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records a foreign reacquisition rejection and never retries it after the next activation
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records a lost planned worktree in the authored and recorded post-death cassette
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > records compatible target advancement and isolates a proven target rewrite in maintained cassettes
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconciles the same Run and attempt after typed cassette death without another Begin
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects missing, stale, later, and wrong-attempt continuation witnesses before executor contact
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects forged continuation authorization during journal reconstruction
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > fails typed expected-behavior assertions and renders the applied capacity item
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > matches optional orchestration and protocol evidence in exact order
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > requires orchestration evidence when task-work results cannot distinguish attempts
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects missing, reordered, or additional evidence within either present authored assertion lens
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects no-work-undertaken when Dalph assumed executor-work responsibility for that task
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > keeps explicit story interactions chronological when lower-level evidence is omitted
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > projects every occurrence and checks state, history, position, and selection after every non-empty prefix
+ × |ordinary| packages/dalph/test/cassettes/scenario.test.ts > alpha-renames every Dalph-generated identity and preserves tracker revisions, task revisions, and Git SHAs 2076ms
+   → 
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > renames and renders every contradictory planned-worktree observation distinctly
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects identity renaming that repeats a source or destination
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > has no recording for an empty unidentified journal
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects responsibility and ExecutorWorkExecuting before worktree readiness even when later entries match
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > renders a recorded applied operator direction from its structured occurrence
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > labels the 100-task four-read encoding experiment as a baseline
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects unclosed, unbounded, and misordered integration-finality protocol stories
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > rejects promoted finality replay without each exact causal premise
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > keeps an empty frontier active while claim replacement is non-convergent
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > replays definite completion-claim boundary rejections as terminal typed failures
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > replaces the exact active claim with a promotion-bound completion claim
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > restart after promotion resumes completion settlement without another integration agent
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconciles a lost completion-claim replacement without allocating another claim
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > does not mutate a foreign claim while settling a promoted task
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > deletes only the exact completion claim after focused task success
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconciles a lost completion-claim deletion without reopening success
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > waits without replacing when the current completion claim cannot be read
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > keeps successful work final when the completion claim cannot be read before deletion
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > keeps successful work final when completion-claim deletion cannot converge
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > does not terminate an empty frontier while completion settlement is pending
+ ↓ |ordinary| packages/dalph/test/cassettes/scenario.test.ts > round-trips guidance metadata and refuses uncertainty without intent
+stdout | packages/dalph/test/cassettes/capstone.execution.test.ts > maintained delivery capstone proves the #413 publication and integration interval through DS17
+[03:04:04.833] ERROR (#2668): IntegratorCandidateCleanupEvidenceReadFailure: 
+    at /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/orchestrator/src/workflow/protocols/disposition-cleanup/loop.ts:522:19
+    at file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:1383:96
+    at ~effect/Utils/internal (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/Utils.js:79:14) {
+  _tag: 'IntegratorCandidateCleanupEvidenceReadFailure',
+  detail: 'provider-private evidence revision could not be read for the exact candidate subject',
+  [cause]: undefined
+}
+
+ × |ordinary| packages/dalph/test/cassettes/capstone.execution.test.ts > maintained delivery capstone proves the #413 publication and integration interval through DS17 4959ms
+   → 
+ ↓ |ordinary| packages/dalph/test/cassettes/capstone.execution.test.ts > maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run
+ ↓ |ordinary| packages/dalph/test/cassettes/capstone.execution.test.ts > completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup
+ ↓ |ordinary| packages/dalph/test/cassettes/capstone.execution.test.ts > replays the maintained capstone with the same exact chronology
+ ↓ |ordinary| packages/dalph/test/cassettes/run-cancellation.test.ts > cancels an idle Run after the durable direction and fresh graph read
+ ↓ |ordinary| packages/dalph/test/cassettes/run-cancellation.test.ts > cancels a running exact attempt through suspension, claim release, and fresh classification
+stdout | packages/dalph/test/cassettes/run-cancellation.test.ts > cancels after admitted integration settles without rollback or replacement
+[03:04:06.885] ERROR (#3051): AuthoredCassetteInteractionMismatch: 
+    at Array.<anonymous> (/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/dalph/src/cassettes/authored-cursor.ts:1295:23) {
+  _tag: 'AuthoredCassetteInteractionMismatch',
+  actual: 'CoordinatorActivationReturned',
+  expected: 'OperatorAppliesRunCancellation',
+  storyPosition: 49,
+  [cause]: undefined
+}
+
+ × |ordinary| packages/dalph/test/cassettes/run-cancellation.test.ts > cancels after admitted integration settles without rollback or replacement 727ms
+   → 
+ ↓ |ordinary| packages/dalph/test/cassettes/run-cancellation.test.ts > cancels a running exact attempt without releasing a foreign claim
+ ↓ |ordinary| packages/dalph/test/cassettes/run-cancellation.test.ts > re-enters once after an unacknowledged cancellation termination append
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |ordinary| packages/dalph/test/cassettes/capstone.execution.test.ts > maintained delivery capstone proves the #413 publication and integration interval through DS17
+{
+  _tag: 'IntegratorCandidateCleanupEvidenceReadFailure',
+  detail: 'provider-private evidence revision could not be read for the exact candidate subject',
+  message: '',
+  stack: 'IntegratorCandidateCleanupEvidenceReadFailure: \n' +
+    '    at /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/orchestrator/src/workflow/protocols/disposition-cleanup/loop.ts:522:19\n' +
+    '    at file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:1383:96\n' +
+    '    at ~effect/Utils/internal (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/Utils.js:79:14)\n' +
+    '    at Object.~effect/Effect/args (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:720:53)\n' +
+    '    at Object.~effect/Effect/evaluate (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:681:22)\n' +
+    '    at FiberImpl.runLoop (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:461:107)\n' +
+    '    at FiberImpl.evaluate (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:421:23)\n' +
+    '    at file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:780:15\n' +
+    '    at releaseTakers (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/Queue.js:1481:5)\n' +
+    '    at Array.<anonymous> (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/Queue.js:1492:38)',
+  name: 'IntegratorCandidateCleanupEvidenceReadFailure',
+  stacks: [
+    {
+      method: '',
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/orchestrator/src/workflow/protocols/disposition-cleanup/loop.ts',
+      line: 522,
+      column: 19
+    },
+    {
+      line: 3266,
+      column: 72,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: ''
+    },
+    {
+      line: 208,
+      column: 13,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/Utils.ts',
+      method: '~effect/Utils/internal'
+    },
+    {
+      line: 1011,
+      column: 94,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'Object.~effect/Effect/args'
+    },
+    {
+      line: 943,
+      column: 21,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'Object.~effect/Effect/evaluate'
+    },
+    {
+      line: 654,
+      column: 39,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'FiberImpl.runLoop'
+    },
+    {
+      line: 606,
+      column: 22,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'FiberImpl.evaluate'
+    },
+    {
+      line: 1111,
+      column: 14,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: ''
+    },
+    {
+      line: 1964,
+      column: 4,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/Queue.ts',
+      method: 'releaseTakers'
+    },
+    {
+      line: 1976,
+      column: 37,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/Queue.ts',
+      method: 'Array.<anonymous>'
+    }
+  ]
+}
+ ❯ packages/orchestrator/src/workflow/protocols/disposition-cleanup/loop.ts:522:19
+    520|               Effect.mapError(
+    521|                 () =>
+    522|                   new IntegratorCandidateCleanupEvidenceReadFailure({
+       |                   ^
+    523|                     detail: "provider-private evidence revision could …
+    524|                   })
+ ❯ node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:3266:72
+ ❯ ~effect/Utils/internal node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/Utils.ts:208:13
+ ❯ Object.~effect/Effect/args node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1011:94
+ ❯ Object.~effect/Effect/evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:943:21
+ ❯ FiberImpl.runLoop node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:654:39
+ ❯ FiberImpl.evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:606:22
+ ❯ node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1111:14
+ ❯ releaseTakers node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/Queue.ts:1964:4
+ ❯ Array.<anonymous> node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/Queue.ts:1976:37
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { _tag: 'IntegratorCandidateCleanupEvidenceReadFailure', detail: 'provider-private evidence revision could not be read for the exact candidate subject' }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  |ordinary| packages/dalph/test/cassettes/run-cancellation.test.ts > cancels after admitted integration settles without rollback or replacement
+ FAIL  |ordinary| packages/dalph/test/cassettes/scenario.test.ts > alpha-renames every Dalph-generated identity and preserves tracker revisions, task revisions, and Git SHAs
+{
+  _tag: 'AuthoredCassetteInteractionMismatch',
+  actual: 'CoordinatorActivationReturned',
+  expected: 'OperatorAppliesRunCancellation',
+  storyPosition: 49,
+  diff: 'Expected: "OperatorAppliesRunCancellation"\n' +
+    'Received: "CoordinatorActivationReturned"',
+  message: '',
+  stack: 'AuthoredCassetteInteractionMismatch: \n' +
+    '    at Array.<anonymous> (/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/dalph/src/cassettes/authored-cursor.ts:1295:23)\n' +
+    '    at Generator.next (<anonymous>)\n' +
+    '    at Object.~effect/Effect/successCont (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:927:26)\n' +
+    '    at Object.~effect/Effect/evaluate (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/core.js:297:30)\n' +
+    '    at FiberImpl.runLoop (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:461:107)\n' +
+    '    at FiberImpl.evaluate (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:421:23)\n' +
+    '    at file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:780:15\n' +
+    '    at Array.<anonymous> (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:569:42)\n' +
+    '    at FiberImpl.evaluate (file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:434:25)\n' +
+    '    at file:///workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/dist/internal/effect.js:780:15',
+  name: 'AuthoredCassetteInteractionMismatch',
+  stacks: [
+    {
+      method: 'Array.<anonymous>',
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/dalph/src/cassettes/authored-cursor.ts',
+      line: 1295,
+      column: 23
+    },
+    {
+      line: 1355,
+      column: 25,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'Object.~effect/Effect/successCont'
+    },
+    {
+      line: 514,
+      column: 30,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/core.ts',
+      method: 'Object.~effect/Effect/evaluate'
+    },
+    {
+      line: 654,
+      column: 39,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'FiberImpl.runLoop'
+    },
+    {
+      line: 606,
+      column: 22,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'FiberImpl.evaluate'
+    },
+    {
+      line: 1111,
+      column: 14,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: ''
+    },
+    {
+      line: 773,
+      column: 43,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'Array.<anonymous>'
+    },
+    {
+      line: 621,
+      column: 25,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: 'FiberImpl.evaluate'
+    },
+    {
+      line: 1111,
+      column: 14,
+      file: '/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts',
+      method: ''
+    }
+  ]
+}
+
+Expected: "OperatorAppliesRunCancellation"
+Received: "CoordinatorActivationReturned"
+
+ ❯ Array.<anonymous> packages/dalph/src/cassettes/authored-cursor.ts:1295:23
+    1293|       const claimed = yield* claimNext((item): item is StoryItem => it…
+    1294|       if (claimed._tag === "Mismatch") {
+    1295|         return yield* new AuthoredCassetteInteractionMismatch({
+       |                       ^
+    1296|           actual: tag,
+    1297|           /* v8 ignore next -- The terminal assertion item keeps a dec…
+ ❯ Object.~effect/Effect/successCont node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1355:25
+ ❯ Object.~effect/Effect/evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/core.ts:514:30
+ ❯ FiberImpl.runLoop node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:654:39
+ ❯ FiberImpl.evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:606:22
+ ❯ node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1111:14
+ ❯ Array.<anonymous> node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:773:43
+ ❯ FiberImpl.evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:621:25
+ ❯ node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1111:14
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { _tag: 'AuthoredCassetteInteractionMismatch', storyPosition: 49 }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+
+ Test Files  3 failed (3)
+      Tests  3 failed | 147 skipped (150)
+   Start at  03:03:55
+   Duration  11.88s (transform 613ms, setup 0ms, import 3.78s, tests 7.76s, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/readiness-failure-reproducer.json

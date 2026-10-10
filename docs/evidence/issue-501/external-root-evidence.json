@@ -1,0 +1,1599 @@
+[
+  {
+    "path": "/workspace/dalph-dogfood/issue-491-20261009/evidence/combined-runtime-composition.json",
+    "sha256": "23cad6bf291aeaf8234de7582d4be46c46ebb6592b2c3a8f9d5453d152666bb5",
+    "boundary": "External root evidence; not this candidate combined readiness or capacity",
+    "record": {
+      "at": "2026-10-10T06:56:20.156277+00:00",
+      "candidate": "3a125e161404ba492a31b84fe7abee2fb1ff7cd0",
+      "publishedBase": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+      "build": "combined-runtime-build-result.json",
+      "reviews": {
+        "Spec": "NoBlockers",
+        "Standards": "NoBlockers"
+      },
+      "rootDelta": "package.json,pnpm-lock.yaml Codex0.162.1only",
+      "custody508": "18/18Proved",
+      "remaining": "501eightscenario/profile/checksubmit then491nativefinality"
+    }
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-491-20261009/evidence/operator-retry-runtime-final-composition.json",
+    "sha256": "80bd7acdf318bc7063af53b190fafcff83f40d6fc0831c72c2e6f160056fef33",
+    "boundary": "External root evidence; not this candidate combined readiness or capacity",
+    "record": {
+      "at": "2026-10-10T06:43:30.681952+00:00",
+      "finalCandidate": "2cd23687a99a48127ae83c166f4f44e598bf50c9",
+      "runtime": "564e093b51a2b0a0b92ad80aa01495dbb2890b0d",
+      "ordinaryBuild": "operator-retry-runtime-final-build-result.json",
+      "specReview": "NoBlockers; earlier leaf source hashes four wording owners stale; original preserved, final bytes bound separately",
+      "standardsReview": "NoBlockers; stale languagefindingclosed",
+      "finalSourceFiles": [
+        {
+          "path": "docs/CONTEXT.md",
+          "sha256": "6dc3230fd4fbc8c274b63b34fcecaedd3bb30b4ed3b17f326f4f92c852532200"
+        },
+        {
+          "path": "docs/evidence/issue-508-acceptance.md",
+          "sha256": "f4208a020196eb9084eea407cdd100e115a1ea71f2c815767a2759748a0f17e2"
+        },
+        {
+          "path": "docs/evidence/issue-508-results.json",
+          "sha256": "3e3d69d465d5624c9502096084c2005b173c71a149739ef166da1844ba497715"
+        },
+        {
+          "path": "docs/scenarios/recover-or-quarantine-integration-session.md",
+          "sha256": "b084fe253c982fe4f74533a09ce19d4bb4e2149268d1c8f56da4099ae14a2e90"
+        },
+        {
+          "path": "packages/dalph/src/application/codex-integrator-private-lifecycle.ts",
+          "sha256": "6dc0404cf299c2793f03b66fc97ac80a9bfd37663f1d91d9275f9579c12c33c2"
+        },
+        {
+          "path": "packages/dalph/src/application/codex-integrator-private-preparation.ts",
+          "sha256": "97c4e73c58e50b711abbffa4a73cfe2e78d020f5a32fa7bc374c0545948a4dc5"
+        },
+        {
+          "path": "packages/dalph/src/application/codex-integrator-private-store.test.ts",
+          "sha256": "a47df8f6b5a114f9ab178b9d81ca41b0a714a12ae44b2aae67f8ab4cd60f66ed"
+        },
+        {
+          "path": "packages/dalph/src/application/codex-integrator-private-store.ts",
+          "sha256": "334c73e243eaf6e1c92e8a133f704ab96f9540138e1640bce406e63b12756b4b"
+        },
+        {
+          "path": "packages/dalph/src/application/codex-integrator.test.ts",
+          "sha256": "ac12f782abdfeac2e511f02877863c09747e80ea1bf04a4707c0f6463ecc1a87"
+        },
+        {
+          "path": "packages/dalph/src/application/codex-integrator.ts",
+          "sha256": "af93944f14d14c2401ca06d1f0acf2c0923303b26767ef47e8a4ab520a5cb22d"
+        },
+        {
+          "path": "packages/dalph/test/cassettes/recorded-integrator-laws.test.ts",
+          "sha256": "dfbfbaf8fe24ffb9a509e0a5a1bceb76b7115a96f114cbba7544bb7fc9103871"
+        },
+        {
+          "path": "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts",
+          "sha256": "3f201dea3a9857c80f215f8833815af86d9a8a464058a0fd7acbc93823963499"
+        },
+        {
+          "path": "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts",
+          "sha256": "e42efc8c29f5f1d621dc4759fb12d6a93a81ee82d8457e0dbf3e1f60e152230b"
+        },
+        {
+          "path": "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.ts",
+          "sha256": "d3b71ca3108a5dbff8c552c7f122d7e0f5958f349c6efbc059d17b8262256804"
+        },
+        {
+          "path": "packages/orchestrator/src/coordination/reconstruction/integrator-run-history.ts",
+          "sha256": "687e668e2a64f3b5f951abcf93248b4d0126979d7148939b6a688a4f19d1b0f3"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow-journal/event-codec.test.ts",
+          "sha256": "eaab6fc5e0b7f0eef23ebac9bcd9234b52f7f9fa17b73ef71ea5e5e2a2d676bf"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts",
+          "sha256": "382361d227cc8129cf6fcdcb4e6ae1ec708dd4cd50930576ed59fe8b47b6c923"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/changed-head-retry.ts",
+          "sha256": "1b307cd7b6e075bd3f861460de7bd566e3193895e9848271df4cb22b51dce25e"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/control.ts",
+          "sha256": "d1ccf8b3f0205a2c33d436f0a24808e6430ecda66528e683d72d38e8ea8faa93"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.test.ts",
+          "sha256": "1a92172f58268521bb7fa10eaa34980664494588263c320b0658611c56e95206"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts",
+          "sha256": "185e3b79c1125b0609c184c995b3551676f4f833b631fc7cdfa27f4306338fd8"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.ts",
+          "sha256": "b3a63f35b856930e3173acea5a90a6d5b257a2eabcfdc3bb4658eaa34c16238e"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integration-quarantine/state.ts",
+          "sha256": "8547038da751398b06b93ce42d56d727a792b1e23ae538b1652767d49e95c405"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integrator/events.ts",
+          "sha256": "a91b8ed408552409e817bf20d8f291a1707b4742e6a68d60906384eb3c5fc1df"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
+          "sha256": "6272a1671361d7e03987ceccc0a141651bfe7aac865209cd3db901b50b77bc3a"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integrator/protocol.ts",
+          "sha256": "26bbebb4cb36f5d762f96dc10941087d7b20e9a2d496a0bb4654054d8317c2dc"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts",
+          "sha256": "b496b6bf313ffff44a55f716b423ab2c5e0db9e14f14679546c45ce9d3bebcd5"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts",
+          "sha256": "78211d49c0f2610bc1500482ec03a7bc7c0caa07e2c011cddfb21b5f5be253b1"
+        },
+        {
+          "path": "packages/orchestrator/src/workflow/protocols/integrator/state.ts",
+          "sha256": "25602ba981ca8cb4ef1194532c82b3b0b016dff4e5dddc29fa4ccc6f01fd30b4"
+        },
+        {
+          "path": "scripts/quint-effective-profile.test.mjs",
+          "sha256": "401232e4a7f68672bd6beff6e9acdca2d7a4fed22815a879827b74fc39610ac2"
+        },
+        {
+          "path": "specs/acceptedResultIntegration.qnt",
+          "sha256": "abb420ec0eaa3608c75501344fe185085dbb5376dea453b437bdb948dd54f0f5"
+        },
+        {
+          "path": "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
+          "sha256": "ee8245b1d4e5899bf203830c6039ab88d35709b597577e831df886c94313d8aa"
+        },
+        {
+          "path": "specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt",
+          "sha256": "66466ff42fd9e052a0e2f1a388fd095507b9bf5ca0a36f4fc8144212ccc04b94"
+        },
+        {
+          "path": "specs/acceptedResultIntegration_negative_test.qnt",
+          "sha256": "0bae2d7eab626a59c12f4013e2c74c83b5670c782072f284af1ddd5b2e18be3c"
+        },
+        {
+          "path": "specs/acceptedResultIntegration_proof.qnt",
+          "sha256": "d7ef44134eddca61b4bce381a44063c0b2444124ae8cd1eee06f1574469e83a8"
+        },
+        {
+          "path": "specs/acceptedResultIntegration_proof_test.qnt",
+          "sha256": "77d2d7090e21ad709909636a5cc3c88b7daac83c744f287e80b73e8c237df346"
+        }
+      ]
+    }
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-491-20261009/evidence/startup-custody-9f91e57a/repair-evidence.json",
+    "sha256": "c6f455510738bb112fdf49ecf79a41e5fbbc0dedefe4b48d3ed77e0afd4b2505",
+    "boundary": "External root evidence; not this candidate combined readiness or capacity",
+    "record": {
+      "candidate": "9f91e57a94d16fcd57962a0495c29d0dadcf7c07",
+      "base": "203235bcef8314b3938e45cb312f0302d58c01a7",
+      "bootstrapSource": "377ed0068639736fbe20c8817b023442a4d0c42f",
+      "provider": "/workspace/typescript/dalph-worktrees/issue-491-runtime/node_modules/.bin/codex",
+      "providerVersion": "0.162.1",
+      "originalQualification": {
+        "status": "Failed",
+        "passed": 306,
+        "failed": 4
+      },
+      "bootstrapBroad": "Interrupted; earlier Exit failure retained",
+      "repairEvidence": {
+        "nativeCompleteFile": {
+          "passed": 31,
+          "durationSeconds": 196.84
+        },
+        "focusedFinal": {
+          "passed": 127,
+          "files": 5
+        },
+        "checkFast": "Passed",
+        "scopedReviews": [
+          "No reasonable blocking findings",
+          "No reasonable blocking findings"
+        ]
+      },
+      "scenarioMapping": {
+        "S1": "Linux/Darwin exact+different and absent+different discovery; all three native startup crash cuts with two independent owners, unchanged launch/PID and subsequent terminal responsiveness",
+        "S2": "Process-policy signal-negative/UID/token/duplicate controls plus real native foreign-PID stop refusal; startup admission and Node boundary checks",
+        "S3": "Unchanged stuck-writer focused fixture passed, then complete native file passed; original five-second TimedOut, retained position, live child and explicit stop assertions preserved; no runtime or assertion correction"
+      },
+      "retainedDiagnostics": [
+        "Initial native setup ENOENT in Vitest cache ran zero tests; serial retry passed",
+        "Initial checkfast passed typecheck then failed formatting; focused formatter check and checkfast passed after correction"
+      ],
+      "remainingOwner": "#501 coherent combined check:submit; native publication/integration through Dalph; no check:all requested"
+    }
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-491-20261009/evidence/generation4-rss-failure-diagnostic.json",
+    "sha256": "b732071494d71810dad746be3269f3ed8cf9acc301a90646ec2132caf9374b33",
+    "boundary": "External root evidence; not this candidate combined readiness or capacity",
+    "record": {
+      "at": "2026-10-10T03:48:53.933611+00:00",
+      "failure": {
+        "at": "2026-10-10T03:46:46.011935+00:00",
+        "exitCode": 3,
+        "reason": "host RSS exceeded 2 GiB observation limit",
+        "hostAbsent": true,
+        "selected": {
+          "runId": "r1.eyJmcmVzaG5lc3MiOiIwMWExMjJhNC05MGQ3LTc3YTItOTQxNS03MGM0Y2QyOThiOGIiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjQ5MSwib3duZXIiOiJkZWFybG9yZHlsb3JkIiwicmVwb3NpdG9yeSI6ImRhbHBoIn19",
+          "target": {
+            "_tag": "GithubIssue",
+            "issueNumber": 491,
+            "owner": "dearlordylord",
+            "repository": "dalph"
+          }
+        },
+        "runDisposition": null,
+        "invalidPublicLines": 0,
+        "nativeCustodyReconciliationRequired": true
+      },
+      "stop": {
+        "at": "2026-10-10T03:46:36.079554+00:00",
+        "reason": "host RSS exceeded 2 GiB observation limit",
+        "host": {
+          "pid": 4101508,
+          "state": "R",
+          "startTicks": "33995350",
+          "rssKiB": 2113616
+        },
+        "signal": "SIGTERM",
+        "runDisposition": null
+      },
+      "custodyRecordsProved": 69,
+      "competingCauses": [
+        "retained live workflow/history data",
+        "delayed GC under unconstrained default heap"
+      ],
+      "nextExperiment": "/workspace/dalph-dogfood/issue-491-20261009/hosts/recovery-5/run-intent.json",
+      "acceptance": "No performance acceptance inferred; #501 must assess coherent source under agreed limits."
+    }
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-491-20261009/evidence/recovery-live-storage-size.json",
+    "sha256": "b1dc61bece0e6b9a537437a696bb7b07edc7c52d38f112f6f84f547204297378",
+    "boundary": "External root evidence; not this candidate combined readiness or capacity",
+    "record": {
+      "at": "2026-10-10T01:31:04.736264+00:00",
+      "scope": "Filesystem byte sizes only; no live SQLite read; sizes do not prove retention limits",
+      "journalFilesBytes": {
+        "journal.sqlite-shm": 32768,
+        "journal.sqlite-wal": 4148872,
+        "journal.sqlite": 39018496
+      },
+      "hostLogsBytes": {
+        "stdout.ndjson": 754,
+        "stderr.log": 136249
+      }
+    }
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-491-20261009/hosts/recovery-8/reconciliation.json",
+    "sha256": "a9d1972c56a43181988d47f7f92a6ad741e833f76358cce9af7f8efb1131dc04",
+    "boundary": "Exact original native custody reconciliation, not replayed here",
+    "record": {
+      "at": "2026-10-10T06:50:21.830Z",
+      "records": [
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/0cfc178269c0b3d758d750cdf5ad9a4591d68fe582843a7f4129c72d7f3cfbf5/executor-private-state.json",
+          "documentDigest": "3d345b037fb29cc07d67ced5d13875192388d3368cf6edb0e898b4985713821f",
+          "pid": 2845163,
+          "incarnation": "89c3fcf4-cf5e-4163-a6cd-abc78f77af98|linux%3A32145556",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/0cfc178269c0b3d758d750cdf5ad9a4591d68fe582843a7f4129c72d7f3cfbf5/executor-private-state.json",
+          "documentDigest": "66ef23e496993a55fae4b8daa073d55692b888a7d30f4eed35dc73e87aa94031",
+          "pid": 2845163,
+          "incarnation": "89c3fcf4-cf5e-4163-a6cd-abc78f77af98|linux%3A32145556",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/2d5b06c6578c2f23f6804a5767c8e465766d81c41cc4934f6f23e4f35b342b46/executor-private-state.json",
+          "documentDigest": "ea816d6d42094d44a3abc3aa769d53e66aa57712467da65b3399b5547d05be3f",
+          "pid": 2776660,
+          "incarnation": "11f39974-7aa2-4d6b-b384-0121f6e86058|linux%3A32036222",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/2d5b06c6578c2f23f6804a5767c8e465766d81c41cc4934f6f23e4f35b342b46/executor-private-state.json",
+          "documentDigest": "6cc1699584075da07a45890e41a5808442dd5b3ba4ea2e18affb77046abc9c9a",
+          "pid": 2776660,
+          "incarnation": "11f39974-7aa2-4d6b-b384-0121f6e86058|linux%3A32036222",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "fe264f15295dc900497f0584f33cc9bb8ba3462f5b22b2b9bbf9cf1f81af95d7",
+          "pid": 2832219,
+          "incarnation": "cd27e203-b3d2-47d3-8f9f-b514e2e51661|linux%3A32131908",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "8b0f00cd903a29908fd82958dfa4d064195c9d3bbd460a3a0bd27256a4b807bf",
+          "pid": 2832219,
+          "incarnation": "cd27e203-b3d2-47d3-8f9f-b514e2e51661|linux%3A32131908",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "730d5248957740a4f20c75aaf68111b0afde9ade416bcec3d1c3b6d74dacdc89",
+          "pid": 3811483,
+          "incarnation": "b553aaef-880b-48e4-ab10-ee184fba7255|linux%3A33476353",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "ef5ae93998ab67e610f63e7f872f21de36e74b4911340af9d6197b73101fd2dc",
+          "pid": 3811483,
+          "incarnation": "b553aaef-880b-48e4-ab10-ee184fba7255|linux%3A33476353",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "a68931448d0e2cd6cfdee5293134bb090252bac73f6488d532e359828ae558b7",
+          "pid": 3966621,
+          "incarnation": "d2031384-79f4-463f-83dd-831a0803f976|linux%3A33783900",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "791e034f294baec4297a4ffe525b5ab5c66e0bd3a8a21671a61ba86a8144563b",
+          "pid": 3966621,
+          "incarnation": "d2031384-79f4-463f-83dd-831a0803f976|linux%3A33783900",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "98b460e61c0d030e991570cb5c65ee819f303fcdc6cb1d2908abc64583d01aab",
+          "pid": 4101735,
+          "incarnation": "d6266dca-e956-4df0-afb2-be5aabfb755a|linux%3A33997374",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "0da515ab0840d9d4da654a49c07f37e728b9d3c42b479b73b918aac724ab329c",
+          "pid": 4101735,
+          "incarnation": "d6266dca-e956-4df0-afb2-be5aabfb755a|linux%3A33997374",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "d8c69e2c712b42ac5048c418a507f356c002a76bca44ae36f68905ef2e3b22d6",
+          "pid": 49839,
+          "incarnation": "99f062a3-6494-4460-a972-7e50a3d832dc|linux%3A34192386",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "8799c9301e3675c47c59588048a611f4adccf1cd947d29812d94d0d39ac37038",
+          "pid": 49839,
+          "incarnation": "99f062a3-6494-4460-a972-7e50a3d832dc|linux%3A34192386",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "fd9715d9f88315c336629fa288836d787bef13399775f22f212459055d303f9e",
+          "pid": 3677246,
+          "incarnation": "452e1140-9636-43bc-b7f2-8faf6ffff957|linux%3A33251350",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "aca7aab4acae9360ff2ff328f1982cbd3872cd12a59dd7a60f205d08007e0d8a",
+          "pid": 3677246,
+          "incarnation": "452e1140-9636-43bc-b7f2-8faf6ffff957|linux%3A33251350",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "6f940cd03c228243f9514291ccf954a8ff3a162bbf75346a687c87531ba77977",
+          "pid": 3811882,
+          "incarnation": "22fa7c87-ccd5-402d-83a6-61cbea95fdf5|linux%3A33476824",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "1d4b4bff942ca89af1970a8e633e632fad6a9d61f2fe0480cd4e6119455c47f8",
+          "pid": 3811882,
+          "incarnation": "22fa7c87-ccd5-402d-83a6-61cbea95fdf5|linux%3A33476824",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "21d77b6e5c537a5cf1ccbbf5934b439ba6262786006710d1fb2c9a717cbfa09c",
+          "pid": 3966536,
+          "incarnation": "220a49ec-2191-4735-a906-76b0c8620169|linux%3A33783846",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "09f8b7ae32ea1d59db9f512c034010352b1ecb0cfb81ec93eed65f55f514fe67",
+          "pid": 3966536,
+          "incarnation": "220a49ec-2191-4735-a906-76b0c8620169|linux%3A33783846",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "191fca155c87b52834bc0a91ce234f1ef11b2a6a04bb279c46c44b407e7c4ba8",
+          "pid": 4101793,
+          "incarnation": "74709ccb-7be9-4f4e-835b-58522cb9d31c|linux%3A33997407",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "6ab7fd84d940eac32207fbbe774d6af3df8b3c55f87ea389d0ae2acf8fdba494",
+          "pid": 4101793,
+          "incarnation": "74709ccb-7be9-4f4e-835b-58522cb9d31c|linux%3A33997407",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/4423b8ad189bd0b1e0ef40f225d26a5b6cf5be4ae77def4c2e57c5687a483182/executor-private-state.json",
+          "documentDigest": "1e9177e60fca7d9b240d9323aa7d8376fef1ea7d6d9788841dc038c85cb3eee1",
+          "pid": 2845355,
+          "incarnation": "d4636441-181d-4d39-8f97-eff458a413e9|linux%3A32145736",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/4423b8ad189bd0b1e0ef40f225d26a5b6cf5be4ae77def4c2e57c5687a483182/executor-private-state.json",
+          "documentDigest": "426005c759a8ca0690a427645eceddb0bf3bd1fc970e5c74bfa173610d27b343",
+          "pid": 2845355,
+          "incarnation": "d4636441-181d-4d39-8f97-eff458a413e9|linux%3A32145736",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/4f3bc630e31eb12f24716653c022b3a64ffb63214e0bf46429cd754f5754d78b/executor-private-state.json",
+          "documentDigest": "46dd2e94f345f84536118fec37acf0d36b02345cd8f1eff972fca12e635e4976",
+          "pid": 2877743,
+          "incarnation": "e3288c96-543a-42af-bea0-798217ca17df|linux%3A32189984",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/4f3bc630e31eb12f24716653c022b3a64ffb63214e0bf46429cd754f5754d78b/executor-private-state.json",
+          "documentDigest": "28569db14fa0cc356caa8148520a94fd6175237fbfb03fd45198b39bcbf0253f",
+          "pid": 2877743,
+          "incarnation": "e3288c96-543a-42af-bea0-798217ca17df|linux%3A32189984",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/78cafb1bae7c9e5ce4c113389c0e9c7633847a7d75ffb2129d90b44cf064769a/executor-private-state.json",
+          "documentDigest": "1c4d2cef9c6be06c76abe3be6e8a2f4f318759600bac1a09331d035669161749",
+          "pid": 2884635,
+          "incarnation": "298e3725-beb7-4650-8fab-dffd4dc00bfb|linux%3A32202606",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/78cafb1bae7c9e5ce4c113389c0e9c7633847a7d75ffb2129d90b44cf064769a/executor-private-state.json",
+          "documentDigest": "2d5135d5fa90e9ab1249280e85fde394c47d80e3eb57005056ba6c7a24e1428c",
+          "pid": 2884635,
+          "incarnation": "298e3725-beb7-4650-8fab-dffd4dc00bfb|linux%3A32202606",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/8db89d48fa6f06dc602d915e5298bbda9343a7ab466b70421e693501045bce54/executor-private-state.json",
+          "documentDigest": "a464c66d9e1f99d4d66fa1136722ad0b06f691012c42e404b0ce3a36c80e5d42",
+          "pid": 3054010,
+          "incarnation": "9af4deac-fa7d-4c9a-bdb4-0d953cece95f|linux%3A32434523",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/8db89d48fa6f06dc602d915e5298bbda9343a7ab466b70421e693501045bce54/executor-private-state.json",
+          "documentDigest": "0fb6df137b41ce0709d1614bb9797d0d6ec1ca5d1dfeeee4d7703bc19124d7ad",
+          "pid": 3054010,
+          "incarnation": "9af4deac-fa7d-4c9a-bdb4-0d953cece95f|linux%3A32434523",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/bef3eb0714b313cce9b95f789c0f5c5b64ac7d60d058624fb5f0f0793aa865a0/executor-private-state.json",
+          "documentDigest": "65ad73f6f28ce53af47d8922cd219051f73f21ffc005b79e369c156acab19b51",
+          "pid": 2927319,
+          "incarnation": "3c3e5b77-fd93-489b-837f-b6e404318ba0|linux%3A32258495",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/bef3eb0714b313cce9b95f789c0f5c5b64ac7d60d058624fb5f0f0793aa865a0/executor-private-state.json",
+          "documentDigest": "feb74a9aeb4a810df16fcbe149ac3f955d09f630bfc0fcc372d8fe48fd066fb2",
+          "pid": 2927319,
+          "incarnation": "3c3e5b77-fd93-489b-837f-b6e404318ba0|linux%3A32258495",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/c0acc0a7c89d149fb8467bf18f6c4587d7ac2d41c1f30758028aacacb5eb6c73/executor-private-state.json",
+          "documentDigest": "b3529161c68bb0b3ce2c0aa4862ae09abfcbf38c0131c68112eff7fcb9ed8ced",
+          "pid": 3701159,
+          "incarnation": "7d0dec32-4801-44a8-aee2-9c8463e0b2d9|linux%3A33297262",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/c0acc0a7c89d149fb8467bf18f6c4587d7ac2d41c1f30758028aacacb5eb6c73/executor-private-state.json",
+          "documentDigest": "c628fdd6976f815543475b3f41787327136ee9d2a2c4f8a78a8ad87793df0cca",
+          "pid": 3701159,
+          "incarnation": "7d0dec32-4801-44a8-aee2-9c8463e0b2d9|linux%3A33297262",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/c9ac5507de3cbd01db5f28117dfa8266fefdfadebcb1fd4b3bc15686b8952600/executor-private-state.json",
+          "documentDigest": "3a27eec38991c4876f7bb5c3bc1e06dea793e011f0690d3732118bc1ca1722fb",
+          "pid": 2776296,
+          "incarnation": "7a22b6a3-4865-4f37-8758-1890213bb900|linux%3A32036068",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/c9ac5507de3cbd01db5f28117dfa8266fefdfadebcb1fd4b3bc15686b8952600/executor-private-state.json",
+          "documentDigest": "e2eef9c1bba92a34a6980e9ace064e85bf0956902db9ca80ae1d981b04aca483",
+          "pid": 2776296,
+          "incarnation": "7a22b6a3-4865-4f37-8758-1890213bb900|linux%3A32036068",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/fda53ab5ebc1b86714af618419033243030849767ffb864d7336e1506f9009f3/executor-private-state.json",
+          "documentDigest": "47ebd24da1df84ff4f1cbf29f7707c5fc1cde8cf368d9665f0b385e030782360",
+          "pid": 2776384,
+          "incarnation": "1f453209-7036-40df-905f-c91f3ab38558|linux%3A32036131",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/fda53ab5ebc1b86714af618419033243030849767ffb864d7336e1506f9009f3/executor-private-state.json",
+          "documentDigest": "d60aa4115fba36c11fb0629fda2532afc2fa5faa5f6a47101a110334cdf159e2",
+          "pid": 2776384,
+          "incarnation": "1f453209-7036-40df-905f-c91f3ab38558|linux%3A32036131",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "43770649e88b31db9839013022ffc85b934ab163cbb05bbc2b0967feef93ff8c",
+          "pid": 2774505,
+          "incarnation": "606ced9d-43ff-4cc3-a025-7479d60796c6|linux%3A32032420",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "a2ce682311af901b88d480e51fc71d0788f5e268122c1517ea8cc7b67f223469",
+          "pid": 2774505,
+          "incarnation": "606ced9d-43ff-4cc3-a025-7479d60796c6|linux%3A32032420",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "cb8140df4cfb8e8b919d1c374ec4a33d70d18237b151c9dbe9c1047ca6f3eb6e",
+          "pid": 3675962,
+          "incarnation": "8699a0ef-1df6-499e-a37a-fbd7f95cd9e3|linux%3A33248409",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "0c822430e609305b8239b5bd88b824f1cd9deb4d6e873d62fc2d2a0383ebc448",
+          "pid": 3675962,
+          "incarnation": "8699a0ef-1df6-499e-a37a-fbd7f95cd9e3|linux%3A33248409",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "879a07c0183fbd4da8edc0fab94c93eb2cdb9b8c5e9ad7e88027e252773be4ac",
+          "pid": 3809536,
+          "incarnation": "f95a3bec-0192-40b2-adf2-c90f4f0e1a26|linux%3A33474723",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "75df96a1a5933eb699206d80ccc360158758582899ccaa317b2131489b433932",
+          "pid": 3809536,
+          "incarnation": "f95a3bec-0192-40b2-adf2-c90f4f0e1a26|linux%3A33474723",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "f8e082a4755f885304c93591c5e4584fbcdb56e2b1ad7369de4d5c5627e7b1eb",
+          "pid": 3965753,
+          "incarnation": "f1c077aa-21a8-47e9-81ca-e5e2b3704ee9|linux%3A33782694",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "318e51ffa21246cf099873338fb53b8a88b8cef2b468ac118001fe31a117a441",
+          "pid": 3965753,
+          "incarnation": "f1c077aa-21a8-47e9-81ca-e5e2b3704ee9|linux%3A33782694",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "63df03c4d788550fccd9c614c0a988183e18feabf9d07dd06c0515df8fc05346",
+          "pid": 4101600,
+          "incarnation": "5350bced-79bd-4b11-9072-192bad03605b|linux%3A33996117",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "b3177f1f6eafbd6784aa4ccdc96b4ccd302688bf1895ed19fbc2398c40087690",
+          "pid": 4101600,
+          "incarnation": "5350bced-79bd-4b11-9072-192bad03605b|linux%3A33996117",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "36a2f409b2829c0c005e483f0458714fc6437bd7e1a3aa66f793c9e2f2c57b4f",
+          "pid": 48912,
+          "incarnation": "9a5c7b31-8e03-4aa1-86aa-5387ff703464|linux%3A34191037",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "18a5c68014fa8aeb2af175dd6f6cd446b1db5d0ccefc54eb9a4f796a42dec01e",
+          "pid": 48912,
+          "incarnation": "9a5c7b31-8e03-4aa1-86aa-5387ff703464|linux%3A34191037",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "00faa6fe30e6925a98bcedab3346efbc61b708bdb3e29e81b3edf4e12498af23",
+          "pid": 121428,
+          "incarnation": "dd25e245-0944-4ec2-828f-b019716cd7fb|linux%3A34304378",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "7207759c5fa799885dd95fd5cf18fb0f764e0b3fb24d82dc0084b288187ea7d4",
+          "pid": 121428,
+          "incarnation": "dd25e245-0944-4ec2-828f-b019716cd7fb|linux%3A34304378",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "8f764685c8dee6f3ec588e54e7eee9637c5fe56ae3d5e03dfe5d23cf69d27c65",
+          "pid": 253366,
+          "incarnation": "e5b8677f-fa54-46be-b996-bb45ecab10de|linux%3A34555952",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "16464c170f1b588344d512db36dc2be0bc8db457a40da9b8f486eb88d40e8747",
+          "pid": 253366,
+          "incarnation": "e5b8677f-fa54-46be-b996-bb45ecab10de|linux%3A34555952",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "50f94157a11e278e3758d653a3c27cb4ac61b9d9af6e431163804f7c45813e51",
+          "pid": 638875,
+          "incarnation": "6615381c-4490-4a3b-aa7a-cdb072cd7f34|linux%3A35242456",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "100bfb4177e52124a44c2bd38580d1962cc53e7aefe948bff0d988d4b0e78e2d",
+          "pid": 638875,
+          "incarnation": "6615381c-4490-4a3b-aa7a-cdb072cd7f34|linux%3A35242456",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/0cfc178269c0b3d758d750cdf5ad9a4591d68fe582843a7f4129c72d7f3cfbf5/executor-private-state.json",
+          "documentDigest": "3b9135962918ed8b56f0402391feab389f0a5cdfd96e8bf4cd60992dde4c9755",
+          "pid": null,
+          "incarnation": "89c3fcf4-cf5e-4163-a6cd-abc78f77af98",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2845163,
+              "incarnation": "89c3fcf4-cf5e-4163-a6cd-abc78f77af98|linux%3A32145556"
+            },
+            {
+              "pid": 2845163,
+              "incarnation": "89c3fcf4-cf5e-4163-a6cd-abc78f77af98|linux%3A32145556"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/2d5b06c6578c2f23f6804a5767c8e465766d81c41cc4934f6f23e4f35b342b46/executor-private-state.json",
+          "documentDigest": "5aacffb117e252078127b1ddad6d81114baa51365752200989d6de9838b7398b",
+          "pid": null,
+          "incarnation": "11f39974-7aa2-4d6b-b384-0121f6e86058",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2776660,
+              "incarnation": "11f39974-7aa2-4d6b-b384-0121f6e86058|linux%3A32036222"
+            },
+            {
+              "pid": 2776660,
+              "incarnation": "11f39974-7aa2-4d6b-b384-0121f6e86058|linux%3A32036222"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "87a28ccef7dbe0e36b415d769413324d145d8b184208aae9e50de75c323d0c05",
+          "pid": null,
+          "incarnation": "cd27e203-b3d2-47d3-8f9f-b514e2e51661",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2832219,
+              "incarnation": "cd27e203-b3d2-47d3-8f9f-b514e2e51661|linux%3A32131908"
+            },
+            {
+              "pid": 2832219,
+              "incarnation": "cd27e203-b3d2-47d3-8f9f-b514e2e51661|linux%3A32131908"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "59af7d3fa7de1068d0cba45425e3af610776c192d3a8340ca1f66e3d0e26c207",
+          "pid": null,
+          "incarnation": "b553aaef-880b-48e4-ab10-ee184fba7255",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3811483,
+              "incarnation": "b553aaef-880b-48e4-ab10-ee184fba7255|linux%3A33476353"
+            },
+            {
+              "pid": 3811483,
+              "incarnation": "b553aaef-880b-48e4-ab10-ee184fba7255|linux%3A33476353"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "87f9639dcc59b7e7abe10a362d14709a0720cb540c876b429c2cc0d24f1b4133",
+          "pid": null,
+          "incarnation": "d2031384-79f4-463f-83dd-831a0803f976",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3966621,
+              "incarnation": "d2031384-79f4-463f-83dd-831a0803f976|linux%3A33783900"
+            },
+            {
+              "pid": 3966621,
+              "incarnation": "d2031384-79f4-463f-83dd-831a0803f976|linux%3A33783900"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "ac62d587291ba43fc01945f60701469e52130a73207551175e32be62fc3e3fad",
+          "pid": null,
+          "incarnation": "d6266dca-e956-4df0-afb2-be5aabfb755a",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 4101735,
+              "incarnation": "d6266dca-e956-4df0-afb2-be5aabfb755a|linux%3A33997374"
+            },
+            {
+              "pid": 4101735,
+              "incarnation": "d6266dca-e956-4df0-afb2-be5aabfb755a|linux%3A33997374"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/35ece7537a1e9a2fe470f056aea290bfcda1e853f728168a91a25b8f38732abc/executor-private-state.json",
+          "documentDigest": "2c3459b993b8ac6aab16b78cf4770091a0bd5c5e627bfcae79a2c5d439f7325b",
+          "pid": null,
+          "incarnation": "99f062a3-6494-4460-a972-7e50a3d832dc",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 49839,
+              "incarnation": "99f062a3-6494-4460-a972-7e50a3d832dc|linux%3A34192386"
+            },
+            {
+              "pid": 49839,
+              "incarnation": "99f062a3-6494-4460-a972-7e50a3d832dc|linux%3A34192386"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "2b3525a72dcf17bf665253a16b51811c3359e4309a9b7d915605427922773fa8",
+          "pid": null,
+          "incarnation": "452e1140-9636-43bc-b7f2-8faf6ffff957",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3677246,
+              "incarnation": "452e1140-9636-43bc-b7f2-8faf6ffff957|linux%3A33251350"
+            },
+            {
+              "pid": 3677246,
+              "incarnation": "452e1140-9636-43bc-b7f2-8faf6ffff957|linux%3A33251350"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "16ee951209f7debf2ccb1b68439d5f76d5c08c5387e92d9086063391532f13d5",
+          "pid": null,
+          "incarnation": "22fa7c87-ccd5-402d-83a6-61cbea95fdf5",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3811882,
+              "incarnation": "22fa7c87-ccd5-402d-83a6-61cbea95fdf5|linux%3A33476824"
+            },
+            {
+              "pid": 3811882,
+              "incarnation": "22fa7c87-ccd5-402d-83a6-61cbea95fdf5|linux%3A33476824"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "384d9376c547dbfd7f00a7d7c6e931f05adf6c4db17591e4ae1674b45445f80f",
+          "pid": null,
+          "incarnation": "220a49ec-2191-4735-a906-76b0c8620169",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3966536,
+              "incarnation": "220a49ec-2191-4735-a906-76b0c8620169|linux%3A33783846"
+            },
+            {
+              "pid": 3966536,
+              "incarnation": "220a49ec-2191-4735-a906-76b0c8620169|linux%3A33783846"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/364216bff97d7e44988e56267133f98cab0c7ab5c74595cbc37f04aaddbe9d7a/executor-private-state.json",
+          "documentDigest": "fa4d9943960c7e9c9f6444e849acce1372042cb1f71dd97131dda6b319b5119a",
+          "pid": null,
+          "incarnation": "74709ccb-7be9-4f4e-835b-58522cb9d31c",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 4101793,
+              "incarnation": "74709ccb-7be9-4f4e-835b-58522cb9d31c|linux%3A33997407"
+            },
+            {
+              "pid": 4101793,
+              "incarnation": "74709ccb-7be9-4f4e-835b-58522cb9d31c|linux%3A33997407"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/4423b8ad189bd0b1e0ef40f225d26a5b6cf5be4ae77def4c2e57c5687a483182/executor-private-state.json",
+          "documentDigest": "621e7235e36dc373039cdc1d52edd3e081cb5ff492e53f4dfe77e14b8f943c0a",
+          "pid": null,
+          "incarnation": "d4636441-181d-4d39-8f97-eff458a413e9",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2845355,
+              "incarnation": "d4636441-181d-4d39-8f97-eff458a413e9|linux%3A32145736"
+            },
+            {
+              "pid": 2845355,
+              "incarnation": "d4636441-181d-4d39-8f97-eff458a413e9|linux%3A32145736"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/4f3bc630e31eb12f24716653c022b3a64ffb63214e0bf46429cd754f5754d78b/executor-private-state.json",
+          "documentDigest": "a0a7f2b3082affd7fe1e8d7408c5154a198b5136ccc3154ce15f216c885014dc",
+          "pid": null,
+          "incarnation": "e3288c96-543a-42af-bea0-798217ca17df",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2877743,
+              "incarnation": "e3288c96-543a-42af-bea0-798217ca17df|linux%3A32189984"
+            },
+            {
+              "pid": 2877743,
+              "incarnation": "e3288c96-543a-42af-bea0-798217ca17df|linux%3A32189984"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/78cafb1bae7c9e5ce4c113389c0e9c7633847a7d75ffb2129d90b44cf064769a/executor-private-state.json",
+          "documentDigest": "df319205d5e024a27c0e2f4555a9cc3bbd6d178c3c230c18232b657a700e084f",
+          "pid": null,
+          "incarnation": "298e3725-beb7-4650-8fab-dffd4dc00bfb",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2884635,
+              "incarnation": "298e3725-beb7-4650-8fab-dffd4dc00bfb|linux%3A32202606"
+            },
+            {
+              "pid": 2884635,
+              "incarnation": "298e3725-beb7-4650-8fab-dffd4dc00bfb|linux%3A32202606"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/8db89d48fa6f06dc602d915e5298bbda9343a7ab466b70421e693501045bce54/executor-private-state.json",
+          "documentDigest": "520b6d01c50e5ee6c08527a4865636d786ece74048d16d620964cd2fab893dda",
+          "pid": null,
+          "incarnation": "9af4deac-fa7d-4c9a-bdb4-0d953cece95f",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3054010,
+              "incarnation": "9af4deac-fa7d-4c9a-bdb4-0d953cece95f|linux%3A32434523"
+            },
+            {
+              "pid": 3054010,
+              "incarnation": "9af4deac-fa7d-4c9a-bdb4-0d953cece95f|linux%3A32434523"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/bef3eb0714b313cce9b95f789c0f5c5b64ac7d60d058624fb5f0f0793aa865a0/executor-private-state.json",
+          "documentDigest": "919e90a8d8a3fba92e9e23b74c5fd75ae0901bc2b7d52c99d17686ace209bc78",
+          "pid": null,
+          "incarnation": "3c3e5b77-fd93-489b-837f-b6e404318ba0",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2927319,
+              "incarnation": "3c3e5b77-fd93-489b-837f-b6e404318ba0|linux%3A32258495"
+            },
+            {
+              "pid": 2927319,
+              "incarnation": "3c3e5b77-fd93-489b-837f-b6e404318ba0|linux%3A32258495"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/c0acc0a7c89d149fb8467bf18f6c4587d7ac2d41c1f30758028aacacb5eb6c73/executor-private-state.json",
+          "documentDigest": "61c017697f65b11f47d6242646a87a233c047c6a9f9357f430fc2ad6d053f97c",
+          "pid": null,
+          "incarnation": "7d0dec32-4801-44a8-aee2-9c8463e0b2d9",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3701159,
+              "incarnation": "7d0dec32-4801-44a8-aee2-9c8463e0b2d9|linux%3A33297262"
+            },
+            {
+              "pid": 3701159,
+              "incarnation": "7d0dec32-4801-44a8-aee2-9c8463e0b2d9|linux%3A33297262"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/c9ac5507de3cbd01db5f28117dfa8266fefdfadebcb1fd4b3bc15686b8952600/executor-private-state.json",
+          "documentDigest": "941c6b5ac73e73f8a6e1e7948e8f7e5cf76265ab4d31d360ab9046a8165facf0",
+          "pid": null,
+          "incarnation": "7a22b6a3-4865-4f37-8758-1890213bb900",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2776296,
+              "incarnation": "7a22b6a3-4865-4f37-8758-1890213bb900|linux%3A32036068"
+            },
+            {
+              "pid": 2776296,
+              "incarnation": "7a22b6a3-4865-4f37-8758-1890213bb900|linux%3A32036068"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/attempts/fda53ab5ebc1b86714af618419033243030849767ffb864d7336e1506f9009f3/executor-private-state.json",
+          "documentDigest": "027aa66a6e02ac83a8de4162152747555c7e83db0b7464a7dc848c9978906936",
+          "pid": null,
+          "incarnation": "1f453209-7036-40df-905f-c91f3ab38558",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2776384,
+              "incarnation": "1f453209-7036-40df-905f-c91f3ab38558|linux%3A32036131"
+            },
+            {
+              "pid": 2776384,
+              "incarnation": "1f453209-7036-40df-905f-c91f3ab38558|linux%3A32036131"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "bce010a9c4f92d74ad67534643ad4f12b94d46a8695abfa22b8d36f2df0c2ef1",
+          "pid": null,
+          "incarnation": "606ced9d-43ff-4cc3-a025-7479d60796c6",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 2774505,
+              "incarnation": "606ced9d-43ff-4cc3-a025-7479d60796c6|linux%3A32032420"
+            },
+            {
+              "pid": 2774505,
+              "incarnation": "606ced9d-43ff-4cc3-a025-7479d60796c6|linux%3A32032420"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "38f7eaeb16ea56b944190f8c072dcf45f7eff93b4e5d58897ed31d9df8b8baaa",
+          "pid": null,
+          "incarnation": "8699a0ef-1df6-499e-a37a-fbd7f95cd9e3",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3675962,
+              "incarnation": "8699a0ef-1df6-499e-a37a-fbd7f95cd9e3|linux%3A33248409"
+            },
+            {
+              "pid": 3675962,
+              "incarnation": "8699a0ef-1df6-499e-a37a-fbd7f95cd9e3|linux%3A33248409"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "e2d7cf6f26be4260f070677543b05b7d652125272e5346d73526347e5751a52c",
+          "pid": null,
+          "incarnation": "f95a3bec-0192-40b2-adf2-c90f4f0e1a26",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3809536,
+              "incarnation": "f95a3bec-0192-40b2-adf2-c90f4f0e1a26|linux%3A33474723"
+            },
+            {
+              "pid": 3809536,
+              "incarnation": "f95a3bec-0192-40b2-adf2-c90f4f0e1a26|linux%3A33474723"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "54aaf349fd147b983c2988db132a2d2933cdaa1cbe913a991545ce672b5b549e",
+          "pid": null,
+          "incarnation": "f1c077aa-21a8-47e9-81ca-e5e2b3704ee9",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 3965753,
+              "incarnation": "f1c077aa-21a8-47e9-81ca-e5e2b3704ee9|linux%3A33782694"
+            },
+            {
+              "pid": 3965753,
+              "incarnation": "f1c077aa-21a8-47e9-81ca-e5e2b3704ee9|linux%3A33782694"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "4bc1e040b2dcf20dc6ddeb16eda17585732c16a17b0d764bd77b27c9f80d64d6",
+          "pid": null,
+          "incarnation": "5350bced-79bd-4b11-9072-192bad03605b",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 4101600,
+              "incarnation": "5350bced-79bd-4b11-9072-192bad03605b|linux%3A33996117"
+            },
+            {
+              "pid": 4101600,
+              "incarnation": "5350bced-79bd-4b11-9072-192bad03605b|linux%3A33996117"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "a24bc751c49c2528c6a9ab75cb3ea78d3b6723ebf3f11d101344404283c1ccfc",
+          "pid": null,
+          "incarnation": "9a5c7b31-8e03-4aa1-86aa-5387ff703464",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 48912,
+              "incarnation": "9a5c7b31-8e03-4aa1-86aa-5387ff703464|linux%3A34191037"
+            },
+            {
+              "pid": 48912,
+              "incarnation": "9a5c7b31-8e03-4aa1-86aa-5387ff703464|linux%3A34191037"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "28062717f91972832765b21d7d8d061d295d1c6c7fc91301a78c4dcab951c507",
+          "pid": null,
+          "incarnation": "dd25e245-0944-4ec2-828f-b019716cd7fb",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 121428,
+              "incarnation": "dd25e245-0944-4ec2-828f-b019716cd7fb|linux%3A34304378"
+            },
+            {
+              "pid": 121428,
+              "incarnation": "dd25e245-0944-4ec2-828f-b019716cd7fb|linux%3A34304378"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "8fedfdbc15534bcf856cfa9af8d3d84724d50b4b17bae8dceb67257545d76e87",
+          "pid": null,
+          "incarnation": "e5b8677f-fa54-46be-b996-bb45ecab10de",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 253366,
+              "incarnation": "e5b8677f-fa54-46be-b996-bb45ecab10de|linux%3A34555952"
+            },
+            {
+              "pid": 253366,
+              "incarnation": "e5b8677f-fa54-46be-b996-bb45ecab10de|linux%3A34555952"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-491-20261009/codex-private/executor-private-state.json",
+          "documentDigest": "204d74c0500b393c8613f988560ad0d35ad68566952f014839fa4a66e2a1808e",
+          "pid": null,
+          "incarnation": "6615381c-4490-4a3b-aa7a-cdb072cd7f34",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 638875,
+              "incarnation": "6615381c-4490-4a3b-aa7a-cdb072cd7f34|linux%3A35242456"
+            },
+            {
+              "pid": 638875,
+              "incarnation": "6615381c-4490-4a3b-aa7a-cdb072cd7f34|linux%3A35242456"
+            }
+          ],
+          "result": "Proved"
+        }
+      ],
+      "complete": true
+    }
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-508-20261010/hosts/attempt-4/reconciliation.json",
+    "sha256": "f1b176bcb7d29963e4b69996bb209f5b787aa0eec9f74f217e146a147765874b",
+    "boundary": "Exact original native custody reconciliation, not replayed here",
+    "record": {
+      "at": "2026-10-10T06:55:03.673Z",
+      "records": [
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "e1a36bfc01565325da67b4c7b8d52e2f976ad85c02fce7c1bd1a4b1cd525fc71",
+          "pid": 366859,
+          "incarnation": "db76cb7e-4182-43b3-a125-593968da64cd|linux%3A34840978",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "eb5691873af6c05e6f088fe6b7394726de73e55a1d1056e03cdefa7bcd6acdac",
+          "pid": 366859,
+          "incarnation": "db76cb7e-4182-43b3-a125-593968da64cd|linux%3A34840978",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "cf26936139363c99c8bdf0b76355fcd4bba566fbd95e35b2dabb2a0dc353fea8",
+          "pid": 628195,
+          "incarnation": "88abead0-5049-4da7-8b1e-2b4ecbad6b19|linux%3A35202841",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "3441c3a1b2f6f3f60fa0c377233fa3467e7b291a8a3c13d1ade757ebf74b4d00",
+          "pid": 628195,
+          "incarnation": "88abead0-5049-4da7-8b1e-2b4ecbad6b19|linux%3A35202841",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "a103e3bac7478e2b2a613a36103f56ea3890548b034d5fcadb1f53c67a66b2b3",
+          "pid": 663608,
+          "incarnation": "ee7e286a-8591-4258-844c-66b1147c3828|linux%3A35283350",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "79670c12446ce68f736e30c1c48927b5967fd608d7c570ee28859691f2ddf637",
+          "pid": 663608,
+          "incarnation": "ee7e286a-8591-4258-844c-66b1147c3828|linux%3A35283350",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "31907d8379f7add09d23415b125d38da03a404169f05003271b5dfdc32c15b0c",
+          "pid": 365691,
+          "incarnation": "fa616d4c-6126-4326-b894-68b64bc1f987|linux%3A34838249",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "0209cd73275d130d2927ebb1247301ad16dbaea3a657bab442ed18732b1c0dfb",
+          "pid": 365691,
+          "incarnation": "fa616d4c-6126-4326-b894-68b64bc1f987|linux%3A34838249",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "4feb88ee68cf4e75f38f61d4b84dce01a9825d78f8fcda236235ce820224f92a",
+          "pid": 628073,
+          "incarnation": "be57e4fb-18c1-48d3-b5ae-d42547b08ce0|linux%3A35202459",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "61b7fb5ee5919611a98226eaea81fa070786e8f6e78e696658c04d08eda9e721",
+          "pid": 628073,
+          "incarnation": "be57e4fb-18c1-48d3-b5ae-d42547b08ce0|linux%3A35202459",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "b287baecfa77df6a0f6f11316c66eb8a42fc969d037d546d1896f0098b536d49",
+          "pid": 663259,
+          "incarnation": "92c14d93-7008-4cb2-b495-5bcd1f5e3a1d|linux%3A35281046",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "fa1436f0783e9d142d90bfdaafe7a29e3a120c9881ef0d657d21842684ce9076",
+          "pid": 663259,
+          "incarnation": "92c14d93-7008-4cb2-b495-5bcd1f5e3a1d|linux%3A35281046",
+          "process": "Absent",
+          "group": "Absent",
+          "tokenActivities": "ReconciledAbsent",
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "52c9495e9a66df18c5d51b09683b27fb2a7beb00a280719214f7a7ccf81a491a",
+          "pid": null,
+          "incarnation": "db76cb7e-4182-43b3-a125-593968da64cd",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 366859,
+              "incarnation": "db76cb7e-4182-43b3-a125-593968da64cd|linux%3A34840978"
+            },
+            {
+              "pid": 366859,
+              "incarnation": "db76cb7e-4182-43b3-a125-593968da64cd|linux%3A34840978"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "de02b5ff5cbb50f77911c880783c9bb37e01f91e6b9ee867ddafaa73d367070c",
+          "pid": null,
+          "incarnation": "88abead0-5049-4da7-8b1e-2b4ecbad6b19",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 628195,
+              "incarnation": "88abead0-5049-4da7-8b1e-2b4ecbad6b19|linux%3A35202841"
+            },
+            {
+              "pid": 628195,
+              "incarnation": "88abead0-5049-4da7-8b1e-2b4ecbad6b19|linux%3A35202841"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/attempts/efe3e3c2c8144de99d86f492e96e450d9d1a8dfa9bbecec595947ddda9355ea5/executor-private-state.json",
+          "documentDigest": "37929eb6817b8ba5c944259b8707ed61b45bfd51947cf901a6f82fd8c7e69750",
+          "pid": null,
+          "incarnation": "ee7e286a-8591-4258-844c-66b1147c3828",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 663608,
+              "incarnation": "ee7e286a-8591-4258-844c-66b1147c3828|linux%3A35283350"
+            },
+            {
+              "pid": 663608,
+              "incarnation": "ee7e286a-8591-4258-844c-66b1147c3828|linux%3A35283350"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "7cb0a8cc8935deff13e457d14d45b479dce1d8cec4b1fc4a45eb33f7327c2b3a",
+          "pid": null,
+          "incarnation": "fa616d4c-6126-4326-b894-68b64bc1f987",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 365691,
+              "incarnation": "fa616d4c-6126-4326-b894-68b64bc1f987|linux%3A34838249"
+            },
+            {
+              "pid": 365691,
+              "incarnation": "fa616d4c-6126-4326-b894-68b64bc1f987|linux%3A34838249"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "393129fa6f108c3de4aa0492d4bd800484bf6537f391a52cdb108855e9e3aa2e",
+          "pid": null,
+          "incarnation": "be57e4fb-18c1-48d3-b5ae-d42547b08ce0",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 628073,
+              "incarnation": "be57e4fb-18c1-48d3-b5ae-d42547b08ce0|linux%3A35202459"
+            },
+            {
+              "pid": 628073,
+              "incarnation": "be57e4fb-18c1-48d3-b5ae-d42547b08ce0|linux%3A35202459"
+            }
+          ],
+          "result": "Proved"
+        },
+        {
+          "source": "/workspace/dalph-dogfood/issue-508-20261010/codex-private/executor-private-state.json",
+          "documentDigest": "e12483da37ac19a1673a4621b80d2873a51f7af9da87442ee8da4d04aa5f89fa",
+          "pid": null,
+          "incarnation": "92c14d93-7008-4cb2-b495-5bcd1f5e3a1d",
+          "launchIntent": "ReconciledRecordedAcknowledgement",
+          "acknowledgedLaunches": [
+            {
+              "pid": 663259,
+              "incarnation": "92c14d93-7008-4cb2-b495-5bcd1f5e3a1d|linux%3A35281046"
+            },
+            {
+              "pid": 663259,
+              "incarnation": "92c14d93-7008-4cb2-b495-5bcd1f5e3a1d|linux%3A35281046"
+            }
+          ],
+          "result": "Proved"
+        }
+      ],
+      "complete": true
+    }
+  }
+]

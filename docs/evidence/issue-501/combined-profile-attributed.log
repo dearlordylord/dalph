@@ -1,0 +1,18 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+stderr | .scratch/combined-profile.test.ts > Sparse native cold host reopen and warm public admission profile
+{"_tag":"CodexExecutorCompletionTrace","appServerIncarnation":"hermetic-provider-incarnation","attemptId":"attempt:run-386-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a52684f5330344f5755354c5463325a5463744f474d794d5330775a6a426a4d7a426d4d5467774d4463694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f645731695a5849694f6a4573496d3933626d5679496a6f69614756796257563061574d694c434a795a58427663326c3062334a35496a6f695a6d6c34644856795a534a396651-task-114-74312e57794a6f5a584a745a585270597931795a58427663326c3062334a3549697769614756796257563061574d7461584e7a645755695851-attempt-0","initial":true,"lifecycleReadOrdinal":1,"phase":"LifecycleRereadResult","projection":"Exact","report":"ExecutorWorkExecuting","runId":"r1.eyJmcmVzaG5lc3MiOiIwMWExMjRhOS04OWU5LTc2ZTctOGMyMS0wZjBjMzBmMTgwMDciLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiaGVybWV0aWMiLCJyZXBvc2l0b3J5IjoiZml4dHVyZSJ9fQ","threadId":"hermetic-thread:0","turnId":"hermetic-turn:hermetic-thread:0:0"}
+
+ ✓ .scratch/combined-profile.test.ts > Sparse native cold host reopen and warm public admission profile 3139ms
+stderr | .scratch/combined-profile.test.ts > Dense native cold host reopen and warm public admission profile
+{"_tag":"CodexExecutorCompletionTrace","appServerIncarnation":"hermetic-provider-incarnation","attemptId":"attempt:run-386-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a52684f5330354e6a457a4c54637a4e5449744f4759344e43316d4f47597a4e7a45795a6a55345a6a41694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f645731695a5849694f6a4573496d3933626d5679496a6f69614756796257563061574d694c434a795a58427663326c3062334a35496a6f695a6d6c34644856795a534a396651-task-114-74312e57794a6f5a584a745a585270597931795a58427663326c3062334a3549697769614756796257563061574d7461584e7a645755695851-attempt-0","initial":true,"lifecycleReadOrdinal":1,"phase":"LifecycleRereadResult","projection":"Exact","report":"ExecutorWorkExecuting","runId":"r1.eyJmcmVzaG5lc3MiOiIwMWExMjRhOS05NjEzLTczNTItOGY4NC1mOGYzNzEyZjU4ZjAiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiaGVybWV0aWMiLCJyZXBvc2l0b3J5IjoiZml4dHVyZSJ9fQ","threadId":"hermetic-thread:0","turnId":"hermetic-turn:hermetic-thread:0:0"}
+
+ ✓ .scratch/combined-profile.test.ts > Dense native cold host reopen and warm public admission profile 10985ms
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  03:14:08
+   Duration  18.26s (transform 3.04s, setup 0ms, import 4.03s, tests 14.13s, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/combined-profile-tests.json

@@ -1,0 +1,289 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > keeps dry-run explicit and selects production only from --production 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > accepts cancellation only for one production GitHub target and absolute configuration 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > rejects every incomplete or malformed command selection before acquiring a production host 15ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > brands only normalized absolute production configuration locators at the command boundary 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > the explicit dry mode keeps the controlled dry-run interpreter and never invokes the production host 90ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > the production output mapper does not reclassify a dry-run TraceOutputError 16ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps invalid production input to a stable redacted configuration code 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > rejects removed Codex provider and state fields before production host acquisition 6ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > redacts every configuration read document and required GitHub credential failure 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > rejects a schema-invalid configuration before invoking the production host 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps a startup ownership conflict to one stable redacted public code 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > a lost startup Failure record surfaces output.write_failed without a recursive write 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps every typed startup boundary failure without retaining private diagnostic fields 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps a typed stdout write failure to one stable redacted public output code 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > fails once when public stdout is lost without recursive Failure output or graceful Exit 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps a typed task-tracker throttle to a selected-Run delivery failure 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps a cancellation proof blocker without retaining private executor diagnostics 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > delivery throttle closes presentation and host scope without requesting graceful Exit 14ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > delivery throttle output is redacted and preserves only safe R operation and retry evidence 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > rejects mismatched public failure codes details and subjects 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > preserves original task-tracker throttle after lost Failure output without requesting graceful Exit 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > two CLI invocations report allocated then the same recovered Run without presentation retry 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps every Journal storage failure through one exhaustive redacted public algebra 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > public startup refusal names the supported format and separate retirement without leaking source details 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps every causal trace failure to the selected Run without retaining causal identities 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > maps each passive status projection failure to a stable redacted status code 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > leaves an unknown defect outside the public Failure algebra 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > does not misreport an unknown production-host failure as a public known failure 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > preserves a non-credential tracker read failure from an explicit GitHub dry run 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > startup Journal and ownership failures each emit one stable redacted Failure record 5ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > a TraceReader Journal failure emits one stable redacted Failure after selection 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > typed status or TraceAtCursor projection failure fails fast without calling ApplicationExitRequestBoundary.requestExit or mutating a workflow boundary 11ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > loads ambient Codex CLI production configuration with only the GitHub credential 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > rejects fixture targets and relative configuration paths before acquiring the production host 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > cold public production command reports one allocated Run after its beginning and before status 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > bounded history output keeps the exact cursor without rereading a full snapshot after budget exhaustion 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > an oversized first snapshot publishes its exact cursor without requesting complete projection 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > snapshot admission failure remains visible before cursor-only publication 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > normal Run termination closes an open history attachment after its final snapshot and returns 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > an unfinished Run cannot hide status, history, or output presenter failures 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > production presentation reports the host's exact recovered Run without allocating a replacement 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > attaches current-first without missing a delivery publication racing with CLI attachment 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > renders not-ready and waits without invoking a workflow boundary 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > closed status without a final value cannot report Run completion 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor and current status/disposition remain separate 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > encodes the exact passive not-ready value as a separate current-status record 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > rejects malformed current-status wire variants at the public codec boundary 35ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > preserves current status subjects evidence classifications and structural order 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > projects and encodes all twelve status variants through the production current-first attachment 22ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > presents Alice's nonterminal status change before the accepted Run termination 12ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > rate-limits a rapid passive status source before it reaches stdout 21ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > publishes the first recovered status immediately and the newest silent passive update after one second 12ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > publishes a passive status immediately when it arrives after an idle window 12ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > round-trips the ordered identity evidence of every canonical current-status entry 6ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > production status rendering has no tracker Git executor Integrator Journal mutation admission retry cleanup control or Exit capability 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > reports the selected Run when termination races with current-first status attachment 5ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > public publication commands report exact control receipts before ordinary Run disposition 10ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > public publication subject inspection does not start the delivery host 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > successful application Exit without authoritative Closed fails without a synthetic terminal record 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > SIGINT and SIGTERM enter the same configured production Exit request boundary 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > a signal after Run selection interrupts presentation and reports the host Exit result 7ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > a presentation failure while a signal is selecting the Run becomes the public output failure 5ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > a presentation failure during an accepted Exit drain becomes the public output failure 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > repeated public signals join one cutoff and one five-second drain 19ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > a Run termination during an accepted Exit request cannot replace its timed-out disposition 6ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > public conclusive Exit failure renders a stable lifecycle code and exits one 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > public production timeout remains bounded by the first signal and exits one 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > lost timeout output can never become a successful process result 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > invokes one production host only after configuration and reports its acknowledged selection 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > routes cancel through the production host cancellation operation 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > writes one public cancellation failure for a typed startup boundary error 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > does not invent public cancellation output for an unknown host failure 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > does not recursively write when cancellation failure output is lost 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > production help names only the GitHub credential required by the ordinary path 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > exports only the canonical production CLI seam and omits the unreleased historical alias 313ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > explains exact unresolved responsibility evidence through passive production status 84ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > joins only accepted evidence for the exact immutable responsibility and required operation 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > preserves exact cancellation claim evidence when an unrelated later read is accepted 4ms
+ ✓ |ordinary| packages/dalph/src/application/production-cli.test.ts > keeps task-local Base refusal diagnostics out of an independent task status 6ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production passes the explicit provider home to independent executor and integrator children 168ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production refuses malformed integrator ownership before acquiring any app-server 7ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production provider refuses retained shared attempts before spawning and preserves their custody 11ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production isolates executor A, executor B and integrator processes and stops all owners on host Exit 476ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production executor expiry preserves B and the original gated integration session 127ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production host adapter surface cannot replace workflow mutation capabilities 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > ordinary Exit shells cannot inhabit the production-host shell boundary 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > an Integrator provider layer acquires eagerly at construction 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production host composition keeps ambient Codex home separate from executor private state 163ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production host Exit succeeds when qualification observers are absent 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production host graph exposes only explicit non-retryable activation failures 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > rejects a retained non-Codex provider before building a Codex Run 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > uses one canonical fatal classifier for throttles and recoverable failures 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > admits cancellation termination only after every terminal precondition is discharged 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > does not acquire a Codex provider for the built-in Kimi executor profile 0ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > isolated fresh SQLite dataset starts only after exact Run selection and acknowledged WorkflowRunBegan 24ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production host exposes TaskTrackerMutationThrottled unchanged and tears down only its ordinary scope 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > listening host retains an activation failure while its client scope stays open 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > next host invocation recovers the same Run and authority-reads before mutation 127ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > invalid production host configuration opens no scoped production graph 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > Codex policy admission follows safe history discovery and fails before Run allocation or provider work 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production cancellation fails before provider acquisition when no unfinished Run exists 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > allocated and recovered selections identify the exact Run and never append a second beginning 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > cold production host records one beginning before the first GitHub delivery read 54ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production host connects supplied Exit request and trace observers 59ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > unfinished SQLite public restart preserves Run identity, process-local status, and reconciliation before requests 2208ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > terminal Run is not reactivated 105ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > two unfinished Runs fail before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations and name both identities 37ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > mismatched unfinished history fails before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations 33ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > malformed history fails before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations 35ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > unsupported development history refuses before effects and preserves source bytes 219ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > default production graph keeps one owner per mutation capability while H2 fails before every boundary and fresh H2 recovers 79ms
+ ✓ |ordinary| packages/dalph/src/application/production-host.test.ts > production reconciles historical Failed custody through a fresh scoped transport after terminal retirement 131ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > snapshot admission preserves small complete views and proves excess for dense causal histories 156ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > indexes provider quarantine and successor identities in the public trace 11ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > projects automatic S2 authorization and predecessor preservation as distinct coordinator facts 34ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > indexes completion lookup and candidate ancestry roles in the public trace 24ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > rejects the coordinator's acknowledgement when it names a different completion request 9ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > rejects a tracker read when its operation ID already identifies the completion lookup 10ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > maps projection failures consistently through complete and cursor trace reads 1ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > maps a reachable historical occurrence projection failure through every reader boundary 9ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > keeps the composed trace reader context read-only 1ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > moves Alice through journal positions without reordering history and follows exact causal predecessors 9ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > rejects a causal predecessor absent from the validated Run prefix instead of using the previous record 1ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > reuses the immutable complete-prefix trace result for repeated reads 5ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > matches the prefix projection at every early cursor when a later immutable suffix is malformed 14ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > keeps process-local integration serialization separate from other trace relationships 2ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > rejects duplicate OperationIds as visible causal contradictions 1ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > rejects a predecessor recorded after its successor as a visible causal contradiction 1ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > rejects trace identities and observations outside their committed prefix 9ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > reports empty, mismatched, gapped, and non-beginning committed prefixes 3ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > fails closed when a complete tracker observation addresses another target 2ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > does not reconstruct a graph from a reconfirmation with no earlier full observation 3ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > combines a fixed historical trace with a newer passive current status without rewriting either 3ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > keeps the fixed cursor when the passive current status is explicitly unavailable 3ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > reads actual Cold memory and reopened SQLite history with identical cursors, causality, and evidence 134ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > replays a committed occurrence at its original Run and JournalPosition after output is lost 44ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.test.ts > reconnects current status while retaining the same historical cursor 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > only observed initialization permits a new startup intent in the original namespace 5ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > private startup intent survives launch cleanup and restart without a replenished deadline 19ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > retains result-cycle intent and refuses removal or deadline replenishment before a memory write 2ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > reopens the exact durable response cycle and preserves it after a refused budget reset 10ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > survives an application restart with the exact private association and server launch 8ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > survives an application restart with an unresolved suspension stop intent 6ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > survives an application restart with an unresolved suspension interrupt intent 6ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > durably records a spawned child before process identity reconciliation 5ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > admits only one independent filesystem store lease 12ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > reclaims an exact stale lease but never releases a foreign owner 6ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fails closed for a live or unreadable persisted lease 7ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fails closed when the private snapshot is malformed 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > does not upcast a legacy flat attempt record 4ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > recovers a complete legacy next snapshot after an interrupted write 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fails closed on duplicate private attempt correlations 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fails closed when one Codex thread is aliased to multiple attempts 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > rejects a same-process executor alias before persisting the resulting snapshot 23ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > rejects relative and traversal state directories before filesystem access 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > treats an empty private snapshot as a fresh store 5ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > reports a locked lease with no readable owner instead of reclaiming it 7ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fails closed for unsafe private directories and every sidecar file kind 8ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > creates and verifies owner-only private directory and snapshot permissions 5ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fails closed for a symlink or foreign-permission private file 2ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fails closed when a private snapshot path is swapped to a symlink before descriptor write 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > retains a typed persistence failure after a sidecar becomes non-regular 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > replays the newest complete checksummed snapshot after torn and invalid append records 8ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > retains a typed load failure for every later operation after no snapshot record is readable 3ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > reads the configured default state directory through Effect Config 6ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > keeps the production default under the explicit Dalph state directory 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > reopens an exact tool stop intent and rejects a contradictory item transition 11ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > keeps memory attempt, launch, and lease facts exact across replacement and release 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > loads initial memory snapshot associations and launch ownership 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > rejects impossible private record and launch combinations before they can be stored 2ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > persists an immutable purged-unit replacement ledger and reopens it exactly 12ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > admits only one competing initial result-cycle intent and durably retains its winner 7ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > opens exactly one explicitly authorized cycle and preserves history across ordinary memory writes 4ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > persists recovery permission and predecessor before native reopen without resetting the cycle 17ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > fresh storage custody refuses missing, contradictory and released lease ownership 5ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > reads exact historical launch without clearing it and rejects contradictory launch history 10ms
+ ✓ |ordinary| packages/dalph/src/application/codex-attempt-store.test.ts > recovers no-item containment obligations from exact Suspend history and rejects foreign queries 8ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > escalates a real resistant writer and recovers after its leader exits before close 504ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > keeps controlled app-server and owned-activity substitutions at their public seams 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > reports exact owned activities only after fresh turn, terminal, and process observations 7ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > keeps two independent session threads scoped to their own activity 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > keeps app-server token descendants out of Integrator sessions but in planned-attempt scope 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > excludes only a settled provider code-mode host while retaining its task descendant 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > recognizes the settled provider code-mode host from Darwin process facts 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > classifies controlled Linux process census observations at the public activity boundary 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > planned-attempt census excludes foreign-thread helpers 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > planned-attempt census keeps missing-thread helpers unresolved (Live) 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > planned-attempt census keeps missing-thread helpers unresolved (Reused) 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > planned-attempt census keeps missing-thread helpers unresolved (Unreadable) 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > planned-attempt census excludes a missing-thread helper only after fresh process absence 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > planned-attempt census counts exact-thread escaped helpers 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > keeps Integrator activity census scoped to its reported terminal root 0ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > suspension census for one Codex thread never signals another thread 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > revalidates and signals controlled Linux descendants without touching native processes 1106ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > revalidates exact descendant identities before stopping owned activity 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > keeps unsupported host process census fail-closed 1ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > reconciles an exact launch-token process before starting a replacement server 173ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > classifies controlled Unix launch identity observations before replacement 23ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > reconciles application lease owner identity before spawning 14ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > classifies controlled launch-token discovery candidates before replacement 16ms
+ ✓ |ordinary| packages/dalph/src/application/codex-app-server-public.test.ts > reconciles controlled detached process-group ownership before close 356ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-exit.test.ts > graceful host Exit reports the lifecycle result, then releases the coordinator lock 16ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-exit.test.ts > does not finalize host resources while the reporting callback is blocked 3ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-exit.test.ts > host cancellation without an Exit result never reports graceful shutdown 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-exit.test.ts > Exit timeout or conclusive drain failure remains non-graceful and preserves unfinished Run recovery 9ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-exit.test.ts > host Exit timeout preserves recovery and starts a fresh five-second lifecycle 6ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-exit.test.ts > output grace expiry returns through host finalization before process completion 2ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > a typed boundary failure emits a safe diagnostic without its private payload 748ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > reports a private-store configuration failure before Run allocation 715ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > an already reported command exit adds no duplicate failure diagnostic 718ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > unsafe private-directory startup reports its boundary without repairing permissions 818ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > an unexpected defect retains useful structured cause facts without credentials or provider-private payload 735ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > a failing scoped finalizer writes a structured stderr diagnostic and fails the process 775ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > an unavailable defect diagnostic does not prevent the original failed host result 757ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > the shipped Node runner leaves SIGTERM to the host Exit boundary until result and scope finalization 769ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > the shipped Node runner fails closed when the parent ends release input 811ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > keeps JSON Run Completed visible when provider close makes process exit nonzero 819ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > keeps JSON Run Cancelled visible when provider close makes process exit nonzero 818ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > stalled Exit output ends the Node process after finalization with Succeeded status 1238ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > stalled Exit output ends the Node process after finalization with TimedOut status 736ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > stalled Exit output ends the Node process after finalization with FinalizationFailed status 1208ms
+ ✓ |ordinary| packages/dalph/src/application/node-main.integration.test.ts > accepted stdout below the high-water mark remains inside Exit output grace 1654ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-occurrences.acceptance.test.ts > pages the canonical fixed prefix across an append with no read mutations and refuses exact oversized occurrences 533ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-occurrences.acceptance.test.ts > reports the SQLite archive owner's historical deletion without mutating authorities or losing compact Run control 221ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.prepared.test.ts > lets the maintainer inspect exact graph, causal evidence and retained cleanup responsibilities at every cursor 540ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.prepared.test.ts > retains exact ordered invalid-prefix issues and storage-order duplicate cursor availability 3ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.prepared.test.ts > reads storage once and retains earlier snapshots without rereading or accumulating selected views 4ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.prepared.test.ts > does not leave an interrupted storage read as a successful or pending prepared snapshot 1ms
+ ✓ |ordinary| packages/orchestrator/src/presentation/trace-reader.prepared.test.ts > bounds source inspection at preparation and never replays source records when selecting N or 2N cursors 4ms
+ ✓ |ordinary| packages/dalph/src/application/linux-supervisor-exit.integration.test.ts > an idle Linux child reports successful Exit and status zero after SIGTERM 821ms
+ ✓ |ordinary| packages/dalph/src/application/linux-supervisor-exit.integration.test.ts > a running controlled executor suspends before its Linux child exits zero 902ms
+ ✓ |ordinary| packages/dalph/src/application/linux-supervisor-exit.integration.test.ts > repeated SIGTERM joins the original stuck Linux child drain and exits nonzero at five seconds 5723ms
+ ✓ |ordinary| packages/dalph/src/application/linux-supervisor-exit.integration.test.ts > signal receipt, scope closure, and unexpected death leave only the ordinary journal prefix 1375ms
+ ✓ |ordinary| packages/dalph/src/application/linux-supervisor-exit.integration.test.ts > a successor Linux child acquires the coordinator lock after zero success and nonzero failed or timed-out Exit 9368ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > Exit before the acquisition start permits no boundary call 7ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > normal acquisition retires its drain without closing host resources 5ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > acquired resources remain owned through lifecycle reporting 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > the lifecycle timeout remains observable while owned acquisition cleanup is pending 2ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > Exit cannot replace a conclusive acquisition failure 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > a cleanup defect after TimedOut remains a host finalization failure 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > normal acquisition retains its fiber children until the host scope closes 1ms
+ ✓ |ordinary| packages/dalph/src/application/production-host-acquisition.test.ts > early host Exit joins the existing provider startup cleanup exactly once 4ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-observer-profile.test.ts > Native paused TCP reader times out an admitted write, retains charged latest and releases exactly (262144 bytes) 5900ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-observer-profile.test.ts > Native paused TCP reader times out an admitted write, retains charged latest and releases exactly (1835008 bytes) 5070ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-cli-exit.test.ts > host Exit preserves the shared allowance with stdout output 45ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-cli-exit.test.ts > host Exit preserves the shared allowance with stderr output 10ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-cli-exit.test.ts > host Exit preserves the shared allowance with draining output 10ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-cli-exit.test.ts > host Exit preserves the shared allowance with failed output 9ms
+ ✓ |ordinary| packages/dalph/src/application/exit-owner-custody.integration.test.ts > a timed-out native provider owner retains its exact descendant and lock until close proves stopped writers 7190ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-inspection-watch.test.ts > publishes inspection changes through bounded watch and reconnects to current state 65ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-inspection-watch.test.ts > An oversized required current inspection is refused whole, releases its slot and reconnects to latest state without workflow calls 35ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-watch-diagnostics.test.ts > A Ready watch refuses large diagnostic preparation before materialization despite small current output, then reconnects passively 186ms
+ ✓ |ordinary| packages/dalph/src/application/running-host-exit-owners.acceptance.test.ts > the public owner read names a NoRun acquisition owner during Exit without admitting another action 232ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > CLI public clients apply whole-Run controls while history remains busy 2017ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > CLI lost pause replies retain the host command without replay 1059ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > CLI lost cancel replies retain the host command without replay 980ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > MCP public clients apply whole-Run controls while history remains busy 1986ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > MCP lost pause replies retain the host command without replay 1102ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > MCP lost cancel replies retain the host command without replay 1079ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > CLI reports an ambiguous pause reply without retransmission 914ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > CLI reports an ambiguous cancel reply without retransmission 996ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > MCP reports an ambiguous pause reply without retransmission 1037ms
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > MCP reports an ambiguous cancel reply without retransmission 959ms
+stderr | packages/dalph/src/application/running-host-run-control.acceptance.test.ts > attached cancellation retains Unavailable executor responsibility
+{"_tag":"CodexExecutorCompletionTrace","appServerIncarnation":"hermetic-provider-incarnation","attemptId":"attempt:run-386-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a52684e43316a596a49794c5463304d324574596a45314e53316b59325a6d4d6d5a694f545a6c4e6a6b694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f645731695a5849694f6a4573496d3933626d5679496a6f69614756796257563061574d694c434a795a58427663326c3062334a35496a6f695a6d6c34644856795a534a396651-task-114-74312e57794a6f5a584a745a585270597931795a58427663326c3062334a3549697769614756796257563061574d7461584e7a645755695851-attempt-0","initial":true,"lifecycleReadOrdinal":1,"phase":"LifecycleRereadResult","projection":"Exact","report":"ExecutorWorkExecuting","runId":"r1.eyJmcmVzaG5lc3MiOiIwMWExMjRhNC1jYjIyLTc0M2EtYjE1NS1kY2ZmMmZiOTZlNjkiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiaGVybWV0aWMiLCJyZXBvc2l0b3J5IjoiZml4dHVyZSJ9fQ","threadId":"hermetic-thread:0","turnId":"hermetic-turn:hermetic-thread:0:0"}
+
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > attached cancellation retains Unavailable executor responsibility 560ms
+stderr | packages/dalph/src/application/running-host-run-control.acceptance.test.ts > attached cancellation retains Foreign executor responsibility
+{"_tag":"CodexExecutorCompletionTrace","appServerIncarnation":"hermetic-provider-incarnation","attemptId":"attempt:run-386-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a52684e43316a5a44517a4c5463325a6a45744f474a684e5330354e32566a4e6a4d774d7a51345a444d694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f645731695a5849694f6a4573496d3933626d5679496a6f69614756796257563061574d694c434a795a58427663326c3062334a35496a6f695a6d6c34644856795a534a396651-task-114-74312e57794a6f5a584a745a585270597931795a58427663326c3062334a3549697769614756796257563061574d7461584e7a645755695851-attempt-0","initial":true,"lifecycleReadOrdinal":1,"phase":"LifecycleRereadResult","projection":"Exact","report":"ExecutorWorkExecuting","runId":"r1.eyJmcmVzaG5lc3MiOiIwMWExMjRhNC1jZDQzLTc2ZjEtOGJhNS05N2VjNjMwMzQ4ZDMiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiaGVybWV0aWMiLCJyZXBvc2l0b3J5IjoiZml4dHVyZSJ9fQ","threadId":"hermetic-thread:0","turnId":"hermetic-turn:hermetic-thread:0:0"}
+
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > attached cancellation retains Foreign executor responsibility 461ms
+stderr | packages/dalph/src/application/running-host-run-control.acceptance.test.ts > native repeated profiles measure local admission separately from provider settlement
+{"_tag":"CodexExecutorCompletionTrace","appServerIncarnation":"hermetic-provider-incarnation","attemptId":"attempt:run-386-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a52684e43316a5a6a49794c5464694d5751744f446b304f5331695a6a4a694e7a686a4f444d774e4455694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f645731695a5849694f6a4573496d3933626d5679496a6f69614756796257563061574d694c434a795a58427663326c3062334a35496a6f695a6d6c34644856795a534a396651-task-114-74312e57794a6f5a584a745a585270597931795a58427663326c3062334a3549697769614756796257563061574d7461584e7a645755695851-attempt-0","initial":true,"lifecycleReadOrdinal":1,"phase":"LifecycleRereadResult","projection":"Exact","report":"ExecutorWorkExecuting","runId":"r1.eyJmcmVzaG5lc3MiOiIwMWExMjRhNC1jZjIyLTdiMWQtODk0OS1iZjJiNzhjODMwNDUiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiaGVybWV0aWMiLCJyZXBvc2l0b3J5IjoiZml4dHVyZSJ9fQ","threadId":"hermetic-thread:0","turnId":"hermetic-turn:hermetic-thread:0:0"}
+
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > native repeated profiles measure local admission separately from provider settlement 2577ms
+stderr | packages/dalph/src/application/running-host-run-control.acceptance.test.ts > attached cancellation settles an executing attempt through exact stop abandonment and claim release
+{"_tag":"CodexExecutorCompletionTrace","appServerIncarnation":"hermetic-provider-incarnation","attemptId":"attempt:run-386-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a52684e43316b4f5449354c5463355a474d7459575934597930774e3251325a6d45795a4751304e6a67694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f645731695a5849694f6a4573496d3933626d5679496a6f69614756796257563061574d694c434a795a58427663326c3062334a35496a6f695a6d6c34644856795a534a396651-task-114-74312e57794a6f5a584a745a585270597931795a58427663326c3062334a3549697769614756796257563061574d7461584e7a645755695851-attempt-0","initial":true,"lifecycleReadOrdinal":1,"phase":"LifecycleRereadResult","projection":"Exact","report":"ExecutorWorkExecuting","runId":"r1.eyJmcmVzaG5lc3MiOiIwMWExMjRhNC1kOTI5LTc5ZGMtYWY4Yy0wN2Q2ZmEyZGQ0NjgiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiaGVybWV0aWMiLCJyZXBvc2l0b3J5IjoiZml4dHVyZSJ9fQ","threadId":"hermetic-thread:0","turnId":"hermetic-turn:hermetic-thread:0:0"}
+
+ ✓ |ordinary-serial| packages/dalph/src/application/running-host-run-control.acceptance.test.ts > attached cancellation settles an executing attempt through exact stop abandonment and claim release 963ms
+
+ Test Files  18 passed (18)
+      Tests  267 passed (267)
+   Start at  03:07:31
+   Duration  95.42s (transform 2.70s, setup 0ms, import 17.56s, tests 76.21s, environment 1ms)
+
+JSON report written to /tmp/issue-501-qualification/scenario-native-results.json

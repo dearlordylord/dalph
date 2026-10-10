@@ -351,9 +351,9 @@ const deliveryStoryCapstoneInput = {
     },
     ...bPreparationWithF2,
     ...bIntegrationReleasingEWithF2,
-    terminal("C"),
     bCleanupRevision,
     bCleanupAbsentObservation,
+    terminal("C"),
     ...readGraph(graphs.G5),
     select({ _tag: "ReadTaskClaim", taskId: "C" }),
     { _tag: "TaskClaimCurrentReadReturned", taskId: "C" },
@@ -377,9 +377,9 @@ const deliveryStoryCapstoneInput = {
     ...integrate("C", candidateCommit("B"), candidateCommit("C"), cPositions).slice(
       integrationCompletionReplacementEnd
     ),
-    terminal("D"),
     cCleanupRevision,
     cCleanupAbsentObservation,
+    terminal("D"),
     ...readGraph(graphs.G5),
     select({ _tag: "ReadTaskClaim", taskId: "D" }),
     { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
@@ -411,10 +411,10 @@ const deliveryStoryCapstoneInput = {
         positions
       )
       return [
-        terminal(taskId),
         ...(taskId === "E" ? [dCleanupRevision, dCleanupAbsentObservation] : []),
         ...(taskId === "F" ? [eCleanupRevision, eCleanupAbsentObservation] : []),
         ...(taskId === "G" ? [fCleanupRevision, fCleanupAbsentObservation] : []),
+        terminal(taskId),
         ...readGraph(graphs.G5),
         ...(taskId === "F" || taskId === "G"
           ? []

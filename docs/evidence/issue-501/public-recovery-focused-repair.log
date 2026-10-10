@@ -1,0 +1,51 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > the shipped binary and recovery qualification select the same CLI and host composition 6ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > one-minute production activation keeps stdout bounded while executor work remains active 4690ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > SIGINT suspends active production executor work and preserves the exact unfinished Run evidence 2472ms
+stdout | packages/dalph/src/application/production-public-recovery.integration.test.ts > SIGINT reports the exact failed suspension boundary and retains unmatched intent without completion
+[03:13:32.900] ERROR (#264): Error [TypeError]: Cannot read properties of undefined (reading '0')
+    at Array.<anonymous> (/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/packages/dalph/src/application/production-public-recovery.integration.test.ts:583:27) {
+  [cause]: undefined
+}
+
+ × |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > SIGINT reports the exact failed suspension boundary and retains unmatched intent without completion 2257ms
+   → Cannot read properties of undefined (reading '0')
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > current-format SQLite restart reconciles a lost Begin acknowledgement without another turn 4100ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > unfinished SQLite public restart repeats a cut claim read in the same Run without another acquisition 4526ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > the public cancel command stops retained executor work, abandons it, releases its exact claim, and redelivers 5448ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > already-terminal tracker state exits the public command once without active-refresh reactivation 1542ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > already-terminal tracker state exits the public command once without active-refresh reactivation with injected process EACCES 1348ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > application Exit during recovered Git cleanup closes the attached public status without claiming Run completion 1555ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > application Exit during recovered Git cleanup closes the attached public status without claiming Run completion with injected process EACCES 1697ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > public stdout decoder rejects a runtime cause dump instead of filtering it 1ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > built public recovery rejects a dirty stdout negative control 1402ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > SIGINT reports the exact failed suspension boundary and retains unmatched intent without completion
+TypeError: Cannot read properties of undefined (reading '0')
+ ❯ Array.<anonymous> packages/dalph/src/application/production-public-recovery.integration.test.ts:583:27
+    581|           return expect.fail("missing suspension intent")
+    582|         expect(command.event.command).toBe("Suspend")
+    583|         expect(diagnostic.diagnostics[0]).toContain(command.event.plan…
+       |                           ^
+    584|         expect(
+    585|           journal.filter(({ event }) => event._tag === "PlannedAttempt…
+ ❯ Object.~effect/Effect/successCont node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1355:25
+ ❯ Object.~effect/Effect/evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/core.ts:514:30
+ ❯ FiberImpl.runLoop node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:654:39
+ ❯ FiberImpl.evaluate node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:606:22
+ ❯ node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1111:14
+ ❯ node_modules/.pnpm/effect@4.0.0-beta.106/node_modules/effect/src/internal/effect.ts:1072:15
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 12 passed (13)
+   Start at  03:13:21
+   Duration  33.02s (transform 706ms, setup 0ms, import 1.86s, tests 31.05s, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/public-recovery-focused-repair.json

@@ -1,0 +1,23 @@
+
+ RUN  v4.1.10 /workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf
+
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > the shipped binary and recovery qualification select the same CLI and host composition 37ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > one-minute production activation keeps stdout bounded while executor work remains active 11134ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > SIGINT suspends active production executor work and preserves the exact unfinished Run evidence 5892ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > SIGINT reports the exact failed suspension boundary and retains unmatched intent without completion 2593ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > current-format SQLite restart reconciles a lost Begin acknowledgement without another turn 4870ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > unfinished SQLite public restart repeats a cut claim read in the same Run without another acquisition 4840ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > the public cancel command stops retained executor work, abandons it, releases its exact claim, and redelivers 5748ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > already-terminal tracker state exits the public command once without active-refresh reactivation 1412ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > already-terminal tracker state exits the public command once without active-refresh reactivation with injected process EACCES 1399ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > application Exit during recovered Git cleanup closes the attached public status without claiming Run completion 1617ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > application Exit during recovered Git cleanup closes the attached public status without claiming Run completion with injected process EACCES 2058ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > public stdout decoder rejects a runtime cause dump instead of filtering it 1ms
+ ✓ |ordinary-serial| packages/dalph/src/application/production-public-recovery.integration.test.ts > built public recovery rejects a dirty stdout negative control 1462ms
+
+ Test Files  1 passed (1)
+      Tests  13 passed (13)
+   Start at  03:17:59
+   Duration  50.03s (transform 2.79s, setup 0ms, import 6.63s, tests 43.07s, environment 0ms)
+
+JSON report written to /tmp/issue-501-qualification/public-recovery-final-repair.json
