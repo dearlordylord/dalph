@@ -18,6 +18,7 @@ integration facts. This map does not mirror issue status.
 | Which verifier script should I inspect? | [Verification drivers and callers](development/tooling.md#verification-drivers-and-owners) | Start with the invoked driver, then its imported policy |
 | Which check should I run, and does it need a build? | [Choosing checks](development/checks.md#choosing-checks), then [command preparation](development/commands.md#focused-test-preparation) | `package.json` owns the actual command |
 | Where is failure evidence, and may I retry? | [Finite diagnosis](development/workflow.md#keeping-implementation-work-finite) and [gate custody](development/gates.md#heavy-gate-admission) | `pnpm gate:status <run-id>` and retained child logs |
+| What qualifies the combined Operator observation, control, diagnostics and restart outcome? | [Parent acceptance ledger](evidence/issue-491-acceptance.md) | Exact integrated source binding, eight scenario rows, declared profiles and retained limits |
 | Which model owns this runtime boundary? | [Quint guide](QUINT-GUIDE.md) | Its model-family and runtime/test mapping |
 
 Use `rg -n -F '<term or symbol>' <owner>` before opening a whole reference.

@@ -1143,8 +1143,11 @@ paired with the configured target. Historical journals written under the
 former `StartOrContinue` protocol may contain a Restart choice before a late
 accepted result. That vocabulary is historical documentation and proof
 terminology only: the current journal schema does not decode it, and any
-retained provisional journal requires an explicit offline migration before
-use. Under issue #264,
+retained incompatible provisional journal is refused before effects. The
+Operator may separately retire obsolete development data after resolving
+external custody; current-format recovery remains required. See
+[development history refusal](scenarios/unsupported-development-history.md).
+Under issue #264,
 a terminal choice cancels an admitted-but-unissued Resume, while a recorded
 Resume intent or accepted executing report makes the choice unavailable.
 _Avoid_: Completed task, integrated commit, promoted result
