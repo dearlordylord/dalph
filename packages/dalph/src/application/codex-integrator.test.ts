@@ -910,13 +910,17 @@ describe("Codex Integrator", () => {
       "intended existing target is unambiguous",
       "Preserve link labels",
       "manifest-bound document is immutable",
+      "Invoking an optional diagnostic does not make it a mandatory gate",
+      "including a required whitespace check",
+      "Retain and report the actual failed diagnostic",
+      "no numeric Retry cap, no automatic retry, and no S3",
       "Do not edit hashed evidence",
       "focused check:docs",
       "obtain exit0",
       "accepted C is unchanged",
       "ambiguous or absent",
       "prose/acceptance/evidence-content changes",
-      "a non-documentation check fails",
+      "an applicable required non-documentation check fails",
       "preservation is uncertain",
       "other required-check failures still require NotPrepared",
       "retain the exact candidate and native custody",
@@ -1587,7 +1591,9 @@ describe("Codex Integrator", () => {
     "ambiguous or absent intended local target",
     "repair requires prose/acceptance/evidence-content changes",
     "non-documentation check failed",
-    "manifest-bound document is immutable; preservation uncertain"
+    "manifest-bound document is immutable; preservation uncertain",
+    "applicable required whitespace check failed",
+    "applicable required runtime check failed"
   ])("replays a sealed NotPrepared boundary (%s) without starting another turn", async (detail) => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
