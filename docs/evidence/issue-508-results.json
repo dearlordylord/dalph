@@ -418,8 +418,17 @@
     "501": "combined check:submit and original eight scenarios/resource acceptance"
   },
   "review": {
-    "status": "pending fresh candidate review",
-    "baseCommit": "8f88caaa756a4b4ef26a2a7d3d1ab0c1ea045d0b"
+    "status": "closed: no reasonable blocking Spec or Standards findings",
+    "baseCommit": "8f88caaa756a4b4ef26a2a7d3d1ab0c1ea045d0b",
+    "reviewedCandidateCommit": "074239ccccb7ebbe0dea21349a216fc7e03dfcdb",
+    "reviewer": "fresh same-model medium-reasoning sub-agent review_final",
+    "axes": [
+      "Spec",
+      "Standards"
+    ],
+    "verdict": "No blocking findings. Exact predecessor authorization, historical prefixes, original/successor retention, no automatic retry/no S3, safe exhaustion, provider custody and scenario mapping reviewed.",
+    "ownerIndependentReview": "Owner reported no runtime blocker; obsolete comments/messages corrected.",
+    "closureScope": "Only documentary closure follows reviewed candidate; no behavior or contract change."
   },
   "operationWindows": [
     {
@@ -489,5 +498,17 @@
       "sha256": "a7c7c1bc5f13cf57db7a4d58be893c80ff70449cc6e426a151ceae93efd64442",
       "reason": "restored-H fixture operation helper import; closed by existing operation owner and passing protocol fixture"
     }
-  ]
+  ],
+  "wordingRepair": {
+    "candidateCommit": "074239ccccb7ebbe0dea21349a216fc7e03dfcdb",
+    "changes": "Four obsolete bounded/run-one/run-two comments/messages replaced with positive safe ordinal and exact predecessor wording; formatting only otherwise.",
+    "focusedCheck": {
+      "command": "mise exec -- pnpm exec vitest run packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts packages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts --maxWorkers=1",
+      "retainedLocalLog": "/tmp/retry-wording-focused.log",
+      "exitCode": 0,
+      "testsPassed": 58,
+      "durationSeconds": 2.86,
+      "sha256": "176defcdf318dc42d985511d5e53c8c03fb1f0fbb8682bb61ce34f014497bf39"
+    }
+  }
 }
