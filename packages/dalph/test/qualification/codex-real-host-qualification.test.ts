@@ -779,6 +779,40 @@ const terminalReport = (event: HostEvent) => {
   return report
 }
 
+/** Independent native owners must remain responsive across another owner's recovery. */
+const withIndependentOwners = async (recover: () => Promise<void>): Promise<void> => {
+  const owners: Array<{ fixture: Fixture; hosts: Array<BuiltHost>; launch: CodexServerLaunchRecord }> = []
+  const cleanups: Array<{ fixture: Fixture; hosts: Array<BuiltHost> }> = []
+  try {
+    for (let index = 0; index < 2; index++) {
+      const fixture = await makeFixture("accepted-race")
+      const hosts: Array<BuiltHost> = []
+      // Retain cleanup custody even if native startup fails.
+      cleanups.push({ fixture, hosts })
+      const host = await spawnHost(fixture, "settle")
+      hosts.push(host)
+      await fixture.model.waitForCalls(1)
+      const launch = (await latestPrivateSnapshot(fixture)).serverLaunch
+      if (launch === null || launch.pid === null) throw new Error("independent owner has no live launch")
+      owners.push({ fixture, hosts, launch })
+      expect(processIsLive(launch.pid)).toBe(true)
+    }
+    await recover()
+    for (const owner of owners) {
+      expect((await latestPrivateSnapshot(owner.fixture)).serverLaunch).toEqual(owner.launch)
+      if (owner.launch.pid === null) throw new Error("independent owner lost its PID")
+      expect(processIsLive(owner.launch.pid)).toBe(true)
+      owner.fixture.model.releaseTerminal()
+      const host = owner.hosts[0]
+      if (host === undefined) throw new Error("independent owner lost its controller")
+      expect(terminalReport(await host.waitForReport(2)).result._tag).toBe("Accepted")
+      expect(await host.waitForExit()).toEqual({ code: 0, signal: null })
+    }
+  } finally {
+    for (const owner of cleanups) await dispose(owner.fixture, owner.hosts)
+  }
+}
+
 describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
   qualificationTest.each(["native-long-check", "code-mode-long-check"] as const)(
     "native long check completes with its exact shell allowance (%s)",
@@ -856,68 +890,70 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
   )
   qualificationTest.each(["initialize-response-cut", "initialize-observed-cut"] as const)(
     "%s recovers exact admission custody without repeating an unobserved startup budget",
-    async (action) => {
-      const fixture = await makeFixture("accepted")
-      const hosts: Array<BuiltHost> = []
-      try {
-        const cut = spawnRawHost(fixture, action)
-        hosts.push(cut)
-        const observation = requireEvent(await cut.waitFor("initialize-cut"), "initialize-cut")
-        const before = await latestPrivateSnapshot(fixture)
-        if (before.serverStartup === undefined || before.serverLaunch === null || before.serverLaunch.pid === null)
-          throw new Error("startup and exact acknowledged launch are required")
-        expect(before.serverStartup._tag).toBe(action === "initialize-response-cut" ? "Pending" : "Initialized")
-        expect(observation.observation).toBe(
-          action === "initialize-response-cut" ? "ResponseOnly" : "DurableInitialized"
-        )
-        expect(processIsLive(before.serverLaunch.pid)).toBe(true)
-        await cut.stop("SIGKILL")
-        const recovered = await spawnHost(fixture, "wait")
-        hosts.push(recovered)
-        const after = await latestPrivateSnapshot(fixture)
-        expect(after.serverStartup?._tag).toBe("Initialized")
-        if (action === "initialize-response-cut") {
-          expect(after.serverStartup).toMatchObject({ ...before.serverStartup, _tag: "Initialized" })
-        } else {
-          expect(after.serverStartup?.home).toBe(before.serverStartup.home)
-          expect(after.serverStartup?.startupId).not.toBe(before.serverStartup.startupId)
+    async (action) =>
+      withIndependentOwners(async () => {
+        const fixture = await makeFixture("accepted")
+        const hosts: Array<BuiltHost> = []
+        try {
+          const cut = spawnRawHost(fixture, action)
+          hosts.push(cut)
+          const observation = requireEvent(await cut.waitFor("initialize-cut"), "initialize-cut")
+          const before = await latestPrivateSnapshot(fixture)
+          if (before.serverStartup === undefined || before.serverLaunch === null || before.serverLaunch.pid === null)
+            throw new Error("startup and exact acknowledged launch are required")
+          expect(before.serverStartup._tag).toBe(action === "initialize-response-cut" ? "Pending" : "Initialized")
+          expect(observation.observation).toBe(
+            action === "initialize-response-cut" ? "ResponseOnly" : "DurableInitialized"
+          )
+          expect(processIsLive(before.serverLaunch.pid)).toBe(true)
+          await cut.stop("SIGKILL")
+          const recovered = await spawnHost(fixture, "wait")
+          hosts.push(recovered)
+          const after = await latestPrivateSnapshot(fixture)
+          expect(after.serverStartup?._tag).toBe("Initialized")
+          if (action === "initialize-response-cut") {
+            expect(after.serverStartup).toMatchObject({ ...before.serverStartup, _tag: "Initialized" })
+          } else {
+            expect(after.serverStartup?.home).toBe(before.serverStartup.home)
+            expect(after.serverStartup?.startupId).not.toBe(before.serverStartup.startupId)
+          }
+          expect(after.serverLaunch?.pid).not.toBe(before.serverLaunch.pid)
+          await waitForOwnedServerAbsence(before.serverLaunch)
+          expect(fixture.model.calls).toHaveLength(0)
+        } finally {
+          await dispose(fixture, hosts)
         }
-        expect(after.serverLaunch?.pid).not.toBe(before.serverLaunch.pid)
-        await waitForOwnedServerAbsence(before.serverLaunch)
-        expect(fixture.model.calls).toHaveLength(0)
-      } finally {
-        await dispose(fixture, hosts)
-      }
-    },
-    30_000
+      }),
+    45_000
   )
   qualificationTest(
     "crash before initialize reconciles the exact server and retains the original startup deadline",
-    async () => {
-      const fixture = await makeFixture("accepted")
-      const hosts: Array<BuiltHost> = []
-      try {
-        const cut = spawnRawHost(fixture, "startup-cut")
-        hosts.push(cut)
-        const acknowledged = requireEvent(await cut.waitFor("startup-cut"), "startup-cut")
-        const before = await latestPrivateSnapshot(fixture)
-        if (before.serverStartup?._tag !== "Pending") throw new Error("pending startup intent is required")
-        expect(before.serverLaunch?.pid).toBe(acknowledged.serverPid)
-        expect(processIsLive(acknowledged.serverPid)).toBe(true)
-        await cut.stop("SIGKILL")
-        const recovered = await spawnHost(fixture, "wait")
-        hosts.push(recovered)
-        const after = await latestPrivateSnapshot(fixture)
-        expect(after.serverStartup).toMatchObject({ ...before.serverStartup, _tag: "Initialized" })
-        expect(after.serverLaunch?.pid).not.toBe(acknowledged.serverPid)
-        if (before.serverLaunch === null) throw new Error("exact prior launch is required")
-        await waitForOwnedServerAbsence(before.serverLaunch)
-        expect(fixture.model.calls).toHaveLength(0)
-      } finally {
-        await dispose(fixture, hosts)
-      }
-    },
-    30_000
+    async () =>
+      withIndependentOwners(async () => {
+        const fixture = await makeFixture("accepted")
+        const hosts: Array<BuiltHost> = []
+        try {
+          const cut = spawnRawHost(fixture, "startup-cut")
+          hosts.push(cut)
+          const acknowledged = requireEvent(await cut.waitFor("startup-cut"), "startup-cut")
+          const before = await latestPrivateSnapshot(fixture)
+          if (before.serverStartup?._tag !== "Pending") throw new Error("pending startup intent is required")
+          expect(before.serverLaunch?.pid).toBe(acknowledged.serverPid)
+          expect(processIsLive(acknowledged.serverPid)).toBe(true)
+          await cut.stop("SIGKILL")
+          const recovered = await spawnHost(fixture, "wait")
+          hosts.push(recovered)
+          const after = await latestPrivateSnapshot(fixture)
+          expect(after.serverStartup).toMatchObject({ ...before.serverStartup, _tag: "Initialized" })
+          expect(after.serverLaunch?.pid).not.toBe(acknowledged.serverPid)
+          if (before.serverLaunch === null) throw new Error("exact prior launch is required")
+          await waitForOwnedServerAbsence(before.serverLaunch)
+          expect(fixture.model.calls).toHaveLength(0)
+        } finally {
+          await dispose(fixture, hosts)
+        }
+      }),
+    45_000
   )
   qualificationTest(
     "built create reports ExecutorWorkExecuting, process restart projects the same thread as terminal Accepted, and rereads evidence",
@@ -1387,7 +1423,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
         const result = requireEvent(await exited.waitFor("exit-result"), "exit-result").exitResult
-        expect(result).toEqual({ _tag: "Succeeded", requestedStatus: 0 })
+        expect(result, JSON.stringify(exited.events)).toEqual({ _tag: "Succeeded", requestedStatus: 0 })
         expect(exited.events.filter((event) => event.event === "exit-trace").map((event) => event.detail)).toEqual(
           expect.arrayContaining([
             "AdmissionCutoffClosed",
@@ -1401,13 +1437,15 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(await exited.waitForExit()).toEqual({ code: 0, signal: null })
         if (appServerPid !== null && appServerPid !== undefined) await waitForProcessAbsence(appServerPid)
 
+        expect(fixture.model.calls).toHaveLength(1)
         const resumed = await spawnHost(fixture, "resume")
         hosts.push(resumed)
         const resumedReport = requireEvent(await resumed.waitForReport(1), "report")
         expect(resumedReport.command).toBe("Resume")
         expect(resumedReport.report._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
-        expect(fixture.model.calls).toHaveLength(1)
+        await fixture.model.waitForCalls(2)
+        expect(fixture.model.calls).toHaveLength(2)
       } finally {
         await dispose(fixture, hosts)
       }

@@ -3391,9 +3391,10 @@ const discoverProcessCandidate = async (
   if (processIdentity === undefined) {
     return { _tag: "Unreadable", detail: `process ${pid} launch token has no start identity` }
   }
+  // Global discovery is scoped to this token; independent owners are outside its custody.
   return token === expectedToken
     ? { _tag: "Exact", pid, processIdentity: CodexProcessStartIdentity.make(processIdentity) }
-    : { _tag: "Foreign", detail: `pid ${pid} carries a different launch token` }
+    : { _tag: "Skip" }
 }
 
 /* v8 ignore start -- @preserve Darwin launch-token discovery is exercised by process-policy properties and macOS qualification. */
@@ -3413,7 +3414,7 @@ const discoverDarwinProcessCandidate = async (
     }
     return tokenEntry.slice(codexServerIncarnationEnvironment.length + 1) === expectedToken
       ? { _tag: "Exact", pid, processIdentity: CodexProcessStartIdentity.make(processIdentity) }
-      : { _tag: "Foreign", detail: `pid ${pid} carries a different launch token` }
+      : { _tag: "Skip" }
   } catch (error) {
     try {
       native.kill(pid, 0)

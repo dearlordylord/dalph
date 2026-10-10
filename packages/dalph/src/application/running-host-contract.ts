@@ -415,9 +415,7 @@ export const runningHostSuccessEnvelope = (
 })
 export const encodeRunningHostEnvelope: (envelope: RunningHostEnvelope) => Effect.Effect<string, RunningHostError> =
   Effect.fn("RunningHost.encodeEnvelope")(function* (envelope: RunningHostEnvelope) {
-    const encoded = yield* Schema.encodeUnknownEffect(RunningHostEnvelope)(envelope, {
-      onExcessProperty: "error"
-    }).pipe(
+    const wire = yield* Schema.encodeUnknownEffect(RunningHostEnvelope)(envelope, { onExcessProperty: "error" }).pipe(
       Effect.mapError(
         (): RunningHostError => ({
           _tag: "ProjectionFailed",
@@ -426,7 +424,7 @@ export const encodeRunningHostEnvelope: (envelope: RunningHostEnvelope) => Effec
         })
       )
     )
-    const json = JSON.stringify(encoded)
+    const json = JSON.stringify(wire)
     const measuredBytes = new TextEncoder().encode(json).byteLength
     if (measuredBytes > runningHostLimits.resultBytes)
       return yield* Effect.fail<RunningHostError>({
