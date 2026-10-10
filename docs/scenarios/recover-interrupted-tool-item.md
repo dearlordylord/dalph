@@ -17,9 +17,12 @@ with the exact suspension turn and native launch. Started and LimitReached keep
 their original dispositions, identities, timestamps and immutable deadline.
 LimitReached remains a historical fence. No item receives a new allowance.
 
-Only requestSuspension and observation for the owning Suspend command retire
-items. Passive observation never turns old historical evidence into authority to
-signal a later writer. An unresolved historical item makes observation Unreadable.
+RequestSuspension and observation for the owning Suspend command retire
+interrupted items. The exact recorded-Safe exception in L2 below also permits
+ordinary destination observation to reconcile a late same-stopped-turn Started
+append using fresh stopped-launch and independent storage proof, without any
+signal. Passive observation never turns old historical evidence into authority to
+signal a later writer. Other unresolved historical items make observation Unreadable.
 Intent is appended before containment effects; stopped observations are appended
 before Safe. Reopened reconciliation reads those destinations before another
 idempotent native stop, which itself freshly observes exact launch identity,
@@ -103,11 +106,12 @@ its original schema type. The focused Dalph build and running-host contract/HTTP
 consumer tests cover this declaration-only prerequisite to pinning a real runtime.
 
 The Started physical recovery case also stops a distinct successor incarnation
-whose turn has no item, exits that controller and reopens again. An unavailable
-fresh read for that exact launch blocks Resume without another turn; a later
-exact read admits one fourth turn under the same attempt. Store test `recovers
-no-item containment obligations from exact Suspend history and rejects foreign
-queries` checks the history ownership boundary. Tests `ignores a queued retired
+with a known Started item, appends a late unknown Started after Safe, exits that
+controller and reopens again. An unavailable fresh read for that exact launch
+blocks Resume without another turn; a later exact read retires the late suffix
+and admits one fourth turn under the same attempt. The independent store test
+`recovers no-item containment obligations from exact Suspend history and rejects
+foreign queries` retains the no-item history ownership control. Tests `ignores a queued retired
 item completion at … without an unreadable projection` enqueue early and expired
 completions while Suspend holds admission; neither can alter retired evidence or
 poison later observation. These repairs introduce no additional durable boundary:
@@ -171,3 +175,49 @@ chronology. It proves the outer recovery suffix, not reopening the production
 leaves, qualify the combined candidate with `check:submit`, then pin a separate
 runtime and reopen the original Run after proving only its own host writers
 stopped. Leaf acceptance alone does not demonstrate production W1/W2 recovery.
+
+## Late old-turn notifications after Safe (#505)
+
+The provider may buffer a previously unknown Started notification while the
+owning Suspend stops the exact launch and appends Safe. The lifecycle observer
+must reread the current typed attempt under its admission gate before handling
+that old-turn notification, even after Safe publication or observer closure.
+
+**L1.** One Running attempt owns Suspend intent. A buffered old-turn Started
+arrives after Safe: preserve its actual Started disposition, timestamp and
+original policy deadline, append StopIntended and Stopped custody through the
+store, and freshly verify the recorded stopped launch and independent storage.
+Completed and Malformed late notifications cannot arm a timer, manufacture a
+completion, or stop another turn. Once a successor turn is admitted, callbacks
+for the retired turn have no authority over it. Closed attachments own no
+notification consumer. Existing queued completed retirement controls remain.
+
+**L2.** Reopen SafelySuspended with original LimitReached and current Started
+already Stopped, plus unknown same-stopped-turn Started appended after Safe.
+The outer journal may already contain an unsettled Resume intent (production
+Resume7), with no response. Reconcile that command's destination through the
+ordinary executor observation; do not issue a new Suspend, Begin, claim, Run or
+Resume. The Safe record's exact recorded Suspend launch authorizes only fresh
+stopped proof, never signalling. Append distinct item StopIntended before proof,
+then Stopped after independent storage revalidation. The original disposition
+and deadline remain immutable. Fresh Safe observation still reproves all old
+launches before the owning workflow's tracker/Git admission permits continuation.
+
+| Accepted boundary, crash cut or negative | Scenario-to-test manifest |
+| --- | --- |
+| L1: unknown Started, Completed and Malformed buffered under actual lifecycle attachment while Suspend holds admission; after Safe no timer/stop or unreadable projection | Executor: `binds queued unknown … notification to its suspended turn`; existing `ignores a queued retired item completion at … without an unreadable projection`; `closed old-turn attachment cannot stop an admitted successor on late notifications` |
+| L2: reopen after late append, reconciliation StopIntended append, uncertain native proof, Stopped append, or fresh Safe observation; reconcile retained Resume destination without another command/turn | Executor: `reopens Safe late tool suffix after … before reconciling retained Resume` uses reopened checksummed native private storage at all five cuts and asserts fresh proof on retry, immutable Started/deadline, one thread/turn |
+| L2: different turn/incarnation/correlation; live, foreign, contradictory or unreadable native proof; released or contradictory independent storage | Executor: `denies Safe late suffix continuation with … custody without signalling`; no additional stop, no Resume, retained Safe and Started evidence |
+| L2: physical stopped-launch/storage proof for post-Safe unknown item and retained same-attempt continuation after controller exit | [Native driver](../../packages/dalph/src/application/codex-tool-continuation-driver.test.ts), exercised by both native recovery tests above: stop `known-current-item`, then append `late-after-safe` through store API after final Safe; Started reopens in the admit controller, unavailable native proof retains StopIntended then fresh proof admits the same attempt; LimitReached observes fresh Safe in the recovery controller |
+| Outer admission and attachment closure/publication | Existing W1/W2 workflow protocol, recovery activation, passive observer and owning native composition mapping above |
+
+No new public event, tracker/Git mutation or allowance is introduced. New
+journal/claim/Git crash cuts are therefore inapplicable; the existing unsettled
+Resume protocol owns its durable intent and reconciliation. Safe suffix recovery
+uses recorded launch history, never generic Unreadable authority or death as
+proof. Failed proof retains custody and denies continuation without signalling.
+
+Root separately pins the published repair, proves original owner writers stopped,
+and reopens the same production #491 Run to settle Resume7. Leaf tests cannot
+claim that production recovery, #503 full native qualification, or #501 combined
+`check:submit` has completed.

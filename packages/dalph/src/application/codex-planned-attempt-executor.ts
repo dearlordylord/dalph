@@ -2362,6 +2362,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       const record = yield* readSuspensionRecord(correlation)
       if (record._tag !== "SafelySuspended") return yield* new CodexTurnBoundaryUnknown({})
+      yield* reconcileSafeToolSuffix(correlation, record)
       yield* proveRetiredToolCustody(correlation, record, true)
       const response = record.resultCycle?.responses.at(lastElementOffset)
       const now = ProviderResultInstantMilliseconds.make(yield* Effect.clockWith((clock) => clock.currentTimeMillis))
@@ -2760,6 +2761,55 @@ const makeCodexPlannedAttemptExecutorContext = (
         return true
       }
     )
+    // Safe retains the owning Suspend authority, but only for its exact stopped
+    // turn. Reconcile a late append with fresh proof; never signal from Safe.
+    const reconcileSafeToolSuffix = Effect.fn("CodexPlannedAttemptExecutor.reconcileSafeToolSuffix")(function* (
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: CodexSafelySuspendedRecord
+    ) {
+      const items = (yield* listToolEffects(correlation)).filter(
+        (item) => item._tag !== "Completed" && !hasStoppedToolCustody(item)
+      )
+      if (items.length === 0) return
+      if (store.readSuspensionLaunches === undefined || app.verifyStoppedLaunch === undefined)
+        return yield* new CodexTurnBoundaryUnknown({})
+      const launches = yield* store.readSuspensionLaunches(
+        correlation.runId,
+        correlation.attemptId,
+        record.threadId,
+        record.worktree
+      )
+      const launch = launches.find((candidate) => candidate.incarnation === record.turnStartIncarnation)
+      if (launch === undefined) return yield* new CodexTurnBoundaryUnknown({})
+      for (const item of items) {
+        if (item._tag !== "Started" || !toolEffectMatchesCurrentTurn(item, record))
+          return yield* new CodexTurnBoundaryUnknown({})
+        if (
+          item.suspensionCustody !== undefined &&
+          (item.suspensionCustody.suspensionTurnId !== record.observedTurnId ||
+            !Schema.toEquivalence(CodexServerLaunchRecord)(item.suspensionCustody.serverLaunch, launch))
+        )
+          return yield* new CodexTurnBoundaryUnknown({})
+      }
+      yield* verifyToolStorageOwnership()
+      for (const item of items) {
+        if (item._tag === "Started" && item.suspensionCustody === undefined)
+          yield* writeToolEffect({
+            ...item,
+            suspensionCustody: { _tag: "StopIntended", suspensionTurnId: record.observedTurnId, serverLaunch: launch }
+          })
+      }
+      yield* app.verifyStoppedLaunch(launch)
+      yield* verifyToolStorageOwnership()
+      for (const item of items) {
+        if (item._tag === "Started")
+          yield* writeToolEffect({
+            ...item,
+            suspensionCustody: { _tag: "Stopped", suspensionTurnId: record.observedTurnId, serverLaunch: launch }
+          })
+      }
+    })
+
     const stopToolEffectContainment = Effect.fn("CodexPlannedAttemptExecutor.stopToolEffectContainment")(function* (
       record: Extract<CodexToolEffectRecord, { readonly _tag: "StopIntended" | "LimitReached" }>
     ) {
@@ -2934,6 +2984,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         attemptId: record.correlationAttemptId
       })
       if (!sameCorrelation(observed, correlation)) return projectionOutcome(foreign(correlation, observed))
+      if (record._tag === "SafelySuspended") yield* reconcileSafeToolSuffix(correlation, record)
       const retainedToolEffects = yield* listToolEffects(correlation)
       if (purpose._tag === "ReconcileCommand" && purpose.command === "Suspend" && isThreadBackedRecord(record)) {
         if (yield* reconcileSuspendedToolCustody(correlation, record))
@@ -4333,6 +4384,21 @@ const makeCodexPlannedAttemptExecutorContext = (
             Effect.gen(function* () {
               if (!toolIdentityMatches(item) || retainedTurnId === undefined || retainedThreadId === undefined)
                 return undefined
+              const current = yield* store.readAttempt(correlation.runId, correlation.attemptId)
+              if (Option.isNone(current) || !recordMatchesCorrelation(current.value, correlation)) return undefined
+              const currentOwned = current.value
+              // An attachment owns one turn, not the lifetime of the attempt.
+              // Its queued events cannot touch a successor or a suspended turn.
+              if (
+                !("observedTurnId" in currentOwned) ||
+                currentOwned.observedTurnId !== retainedTurnId ||
+                currentOwned.turnStartIncarnation !== app.incarnation ||
+                (currentOwned._tag !== "Running" &&
+                  currentOwned._tag !== "TurnObserved" &&
+                  currentOwned._tag !== "SafelySuspended")
+              )
+                return undefined
+              if (currentOwned._tag === "SafelySuspended" && item.phase !== "Started") return undefined
               const itemId = CodexToolItemId.make(item.itemId)
               const found = yield* readToolEffect(correlation, retainedTurnId, itemId)
               const retained = Option.isSome(found) ? found.value : undefined
@@ -4399,6 +4465,10 @@ const makeCodexPlannedAttemptExecutorContext = (
                     deadlineMilliseconds: item.observedAtMilliseconds + limit
                   })
                 )
+                if (currentOwned._tag === "SafelySuspended") {
+                  yield* reconcileSafeToolSuffix(correlation, currentOwned)
+                  return undefined
+                }
                 const monotonicStart = item.observedAtMonotonicNanoseconds
                 if (monotonicStart !== undefined) {
                   yield* Ref.update(toolEffectMonotonicStarts, (current) =>
