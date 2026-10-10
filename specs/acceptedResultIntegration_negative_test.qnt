@@ -798,8 +798,8 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
-  // Forbidden control mutation: Q2 cannot authorize a second Retry for S.
-  action chooseRetryAfterQ2: bool = {
+  // A later conclusive quarantine still cannot start a run without a fresh human direction.
+  action retryAfterQ2WithoutDirection: bool = {
     val result = state.results.get(1)
     all {
       result.phase == Quarantined,
@@ -809,14 +809,11 @@ module acceptedResultIntegrationNegativeTest {
         ...state,
         results: state.results.put(1, {
           ...result,
-          phase: RetrySelected,
-          quarantineDirection: RetryDirection,
-          quarantineDirectionSession: result.integrationSession,
-          quarantineDirectionPosition: result.quarantinePosition,
-          quarantineDirectionCount: result.quarantineDirectionCount + 1,
-          lastDirection: RetryDirection,
-          lastDirectionSession: result.integrationSession,
-          lastDirectionPosition: result.quarantinePosition,
+          phase: RetryInFlight,
+          targetHeld: true,
+          retryRunCount: result.retryRunCount + 1,
+          integratorInvocationCount: result.integratorInvocationCount + 1,
+          integratorRunOrdinal: result.integratorRunOrdinal + 1,
         }),
       },
     }
@@ -915,7 +912,7 @@ module acceptedResultIntegrationNegativeTest {
       .expect(not(retryRequiresOneExplicitChoice))
   }
 
-  run q2CannotAuthorizeASecondRetryTest = {
+  run q2CannotStartAnotherRunWithoutFreshDirectionTest = {
     init
       .then(admitDestination)
       .then(acceptResult(1))
@@ -929,8 +926,8 @@ module acceptedResultIntegrationNegativeTest {
       .then(startRetry(1))
       .then(reportIntegratorNotPrepared(1))
       .then(recordQuarantine(1))
-      .then(chooseRetryAfterQ2)
-      .expect(not(retryDirectionIsBounded))
+      .then(retryAfterQ2WithoutDirection)
+      .expect(not(quarantineDirectionIsExactAndFirst))
   }
 
   run changedHeadQ2CannotAuthorizeRetryTest = {
