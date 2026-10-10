@@ -1,0 +1,18 @@
+{
+  "observedUTC": "2026-10-10T13:37:41.771121+00:00",
+  "candidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "observedLogBytes": 187870,
+  "observedLogSha256": "b4037f6ce996774739311955b4847be8312e12d7fef856a770c4a5ee55289aa5",
+  "runnerExit": "unobserved",
+  "cassetteExit": "unobserved",
+  "observedPriorStages": [
+    "check:artifacts",
+    "test:formal:controls",
+    "check:fast",
+    "lint:code --census"
+  ],
+  "currentExactWorktreeSubmissionProcesses": [],
+  "custodyLimit": "No exact retained historical launch-group identity; current command absence does not replace parent stopped-writer reconciliation.",
+  "diagnosis": "Final cassette test lines passed but no complete summary/exit. Interruption, not demonstrated source/test failure. No rerun performed.",
+  "next": "Parent reconciles stopped writers; next ordinary activation with sufficient explicit budget diagnoses retained cassette boundary before required submission repeat."
+}

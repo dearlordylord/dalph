@@ -1,0 +1,21 @@
+{
+  "observedUTC": "2026-10-10T13:47:27.946012+00:00",
+  "runnerShellExit": 143,
+  "runnerResult": "interrupted by requested SIGTERM; child numeric exit unobserved",
+  "groups": [
+    {
+      "launch": {
+        "pid": 2416648,
+        "ppid": 2416627,
+        "pgid": 2416648,
+        "startTicks": "37742077",
+        "args": [
+          "node",
+          "/usr/local/share/npm-global/bin/pnpm",
+          "check:submit"
+        ]
+      },
+      "processGroup": "Absent"
+    }
+  ]
+}

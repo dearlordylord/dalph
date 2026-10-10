@@ -1,0 +1,15 @@
+{
+  "observedUTC": "2026-10-10T13:46:53.049754+00:00",
+  "runner": {
+    "pid": 2416627,
+    "ppid": 2416625,
+    "pgid": 2416625,
+    "startTicks": "37742068",
+    "args": [
+      "/home/node/.local/share/mise/installs/node/24/bin/node",
+      "/tmp/514-submit-continuation3-runner.mjs"
+    ]
+  },
+  "signal": "SIGTERM",
+  "reason": "parent diagnosed exact native tool command budget mismatch; stop before external 10-minute interruption"
+}

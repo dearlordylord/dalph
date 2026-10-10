@@ -1,0 +1,7 @@
+{
+  "candidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "exit": null,
+  "result": "interrupted",
+  "error": "Error: issue-514-check-submit interrupted by SIGTERM",
+  "observedUTC": "2026-10-10T13:46:54.056Z"
+}

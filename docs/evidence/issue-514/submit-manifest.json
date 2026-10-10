@@ -1,0 +1,18 @@
+{
+  "command": "mise exec -- pnpm check:submit",
+  "candidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "base": "a57cd6ec018ec109978aec386e52b6c7dd91d8df",
+  "startedUTC": "2026-10-10 13:53:08 UTC",
+  "deadlineUTC": "2026-10-10T14:07:30Z",
+  "hostStopUTC": "2026-10-10T14:13:00Z",
+  "nativeLimitMilliseconds": 900000,
+  "expectedMilliseconds": 840000,
+  "session": 76746,
+  "stages": [
+    "check:artifacts",
+    "test:formal:controls",
+    "check:fast",
+    "lint:code --census",
+    "test:cassettes:memory"
+  ]
+}

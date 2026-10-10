@@ -1,0 +1,32 @@
+{
+  "candidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "round": 1,
+  "standards": {
+    "blockingFindings": [],
+    "verifiedSourceHashes": 71,
+    "verifiedThenCurrentArtifactHashes": 46,
+    "pendingConditions": "closed: actual submission exit and final manifest"
+  },
+  "spec": {
+    "blockingFindings": [],
+    "verifiedSourceHashes": 71,
+    "verifiedThenCurrentArtifactHashes": 46,
+    "rawHashAndSize": "verified",
+    "pendingConditions": "closed: actual submission exit and final manifest"
+  },
+  "bothAxes": "R1-R6, native boundary, per-run provenance, actual exit0 and exact stopped groupAbsent; explicit tool-return truncation disclosed without reconstruction",
+  "finalDocs": {
+    "exit": 0,
+    "errors": 0,
+    "receipt": "docs-packet.log.gz"
+  },
+  "sourceUnchangedAfterReview": true,
+  "rawPlacementRepair": {
+    "standardsBlockingFindings": [],
+    "specBlockingFindings": [],
+    "externalRawHashesAndSizes": "both verified, originals unchanged",
+    "sourceUnchanged": true,
+    "scannerExit": 0,
+    "docsExit": 0
+  }
+}

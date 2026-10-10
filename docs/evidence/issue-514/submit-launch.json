@@ -1,0 +1,16 @@
+{
+  "observedUTC": "2026-10-10T13:53:28.889050+00:00",
+  "launches": [
+    {
+      "pid": 2470960,
+      "ppid": 2465940,
+      "pgid": 2470960,
+      "startTicks": "37814095",
+      "args": [
+        "node",
+        "/usr/local/share/npm-global/bin/pnpm",
+        "check:submit"
+      ]
+    }
+  ]
+}

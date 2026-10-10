@@ -1,0 +1,21 @@
+{
+  "sourceCandidate": "e4f76d9ddae2feb31726db596ddb38c006ad05f5",
+  "receipts": [
+    {
+      "receipt": "native.json",
+      "externalPath": "/tmp/514-packet/native.json",
+      "bytes": 13113,
+      "sha256": "e7ef2767a5904b726e19973c43ce12c82b5d15f40407fbe96caf7006d3a1c12b",
+      "preservation": "original receipt retained externally unchanged; exact identities/history were examined by both review axes"
+    },
+    {
+      "receipt": "native-first.json",
+      "externalPath": "/tmp/514-packet/native-first.json",
+      "bytes": 4820,
+      "sha256": "632787e4c04042ca1bd3814b1f5244c9eefe91333172fbe606de28cf8f172d7f",
+      "preservation": "original receipt retained externally unchanged; exact identities/history were examined by both review axes"
+    }
+  ],
+  "reason": "generic-api-key findings on ownership-token fields; preserve raw artifacts externally and retain hashes/size, with no scanner bypass or rewriting",
+  "acceptanceBoundary": "native test assertions and reviewed exact external receipts establish identity/status; this hash inventory alone is not substituted for native full-history/current-census proof"
+}

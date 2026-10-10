@@ -1,0 +1,38 @@
+[
+  {
+    "launch": {
+      "command": [
+        "/workspace/typescript/dalph-worktrees/issue-491-runtime/node_modules/.bin/codex",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "sandbox_mode=\"danger-full-access\"",
+        "app-server"
+      ],
+      "incarnation": "96cc304a-14d8-4ba9-a64f-4d1b131a361b|linux%3A37584450",
+      "phase": "Live",
+      "pid": 2276786
+    },
+    "projection": {
+      "_tag": "Absent"
+    }
+  },
+  {
+    "launch": {
+      "command": [
+        "/workspace/typescript/dalph-worktrees/issue-491-runtime/node_modules/.bin/codex",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "sandbox_mode=\"danger-full-access\"",
+        "app-server"
+      ],
+      "incarnation": "ff5015ab-c34e-4655-9a87-203e049f1346|linux%3A37586616",
+      "phase": "Live",
+      "pid": 2277854
+    },
+    "projection": {
+      "_tag": "Absent"
+    }
+  }
+]
