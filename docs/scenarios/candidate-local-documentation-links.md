@@ -34,7 +34,7 @@ Dalph separately qualifies and promotes; Codex never pushes or publishes.
 ## P2: retain a conclusive boundary failure
 
 If the target is absent or ambiguous, prose/acceptance/evidence content must
-change, a non-documentation check fails, or preservation is uncertain, Codex
+change, an applicable required non-documentation check fails, or preservation is uncertain, Codex
 returns conclusive NotPrepared naming the exact boundary. A manifest-bound
 document is immutable; only its owner may produce an explicitly accepted new
 evidence artifact. No arbitrary repair, bypass, broad rerun, dropped evidence,
