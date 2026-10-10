@@ -1,0 +1,48 @@
+{
+  "observedAtUtc": "2026-10-10T10:00:43Z",
+  "focused": {
+    "exit": 0,
+    "files": 6,
+    "tests": 156
+  },
+  "native": {
+    "exit": 0,
+    "seconds": 64.35,
+    "fixture": "Codex 0.162.1 authenticated model, two native turns",
+    "beforeRetry": {
+      "_tag": "Absent"
+    },
+    "afterRetry": {
+      "_tag": "Absent"
+    },
+    "firstDocs": [
+      2,
+      0
+    ],
+    "firstRuntime": [
+      0
+    ],
+    "retryDocs": [
+      0
+    ],
+    "retryRuntime": [
+      0
+    ],
+    "diagnosticExit": 2,
+    "candidate": "e097d3dc0a2c800f51d08417d5fe262dc90df7aa"
+  },
+  "artifacts": {
+    "exit": 0
+  },
+  "docs": {
+    "exit": 0
+  },
+  "limitations": [
+    "No check:all, broad gate, capacity profiles, original #501 resume, target publication or tracker closure.",
+    "Native fixture disposable repository; original retained #501 pending run remains parent-owned."
+  ],
+  "fast": {
+    "exit": 0,
+    "base": "3b5e51dd3ce201310b457748e8ddd20a406a15da"
+  }
+}

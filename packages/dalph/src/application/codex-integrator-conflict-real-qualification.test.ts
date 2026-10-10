@@ -11,7 +11,7 @@ import { copyFile, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "nod
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import { promisify } from "node:util"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   AcceptedResult,
@@ -46,6 +46,7 @@ import {
 } from "@dalph/orchestrator"
 import {
   CodexAppServer,
+  CodexOwnedActivityCensus,
   codexAppServerNodeLayer,
   makeNodeCodexProcessGroupCensusService,
   nodeCodexOwnedActivityCensusLayer
@@ -54,6 +55,7 @@ import { CodexServerLaunchRecord, memoryCodexAttemptStoreLayer } from "./codex-a
 import { nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
+  CodexIntegratorPrivateRecord,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator
 } from "./codex-integrator-private-store.js"
@@ -70,11 +72,16 @@ const sse = (value: unknown): string => `data: ${JSON.stringify(value)}\n\n`
 
 describe("candidate-local content conflict with the real Codex provider", () => {
   it.skipIf(!qualificationEnabled).each([
+    {
+      name: "retains an exact merge after NotPrepared and qualifies a native contiguous Retry",
+      documentation: true,
+      retainedRetry: true
+    },
     { name: "resolves one physical conflict preserving H and C without promoting the target", documentation: false },
     { name: "repairs one moved historical link after a clean merge with the live model", documentation: true }
   ])(
     "$name",
-    async ({ documentation }) => {
+    async ({ documentation, retainedRetry }) => {
       const root = await realpath(await mkdtemp(nodePath.join("/tmp", "dalph-conflict-provider-")))
       const repository = nodePath.join(root, "repository")
       const candidateRoot = nodePath.join(root, "candidates")
@@ -83,6 +90,11 @@ describe("candidate-local content conflict with the real Codex provider", () => 
       let candidatePath = ""
       let accepted = ""
       let mergeConflictObserved = false
+      let nativeOrdinal = 1
+      const custodyObservations: Array<unknown> = []
+      const retryEvidence: Array<unknown> = []
+      let firstPrivateBytes = ""
+      let retryPrivateBytes = ""
       let launch: CodexServerLaunchRecord | undefined
       let passed = false
       let documentationChecks: Array<number> = []
@@ -201,6 +213,13 @@ describe("candidate-local content conflict with the real Codex provider", () => 
             `Required checks: pnpm check:docs and pnpm check:runtime. Preserve both enabled behaviors. Historical document moved one directory deeper in C; intended target is docs/target.md. Only lexical link destination repair is accepted. raw-evidence.txt, docs/evidence/sealed.md and manifest.json are immutable. Do not edit checks. This mixed runtime/evidence route does not require a whitespace gate. Before committing, run the optional diagnostic git diff --cached --check, retain stdout/stderr in ${nodePath.join(root, "whitespace-diagnostic.log")} and its actual exit in ${nodePath.join(root, "whitespace-exit.txt")}. A diagnostic failure does not waive required checks. Do not repair evidence or claim the diagnostic passed.\n`
           )
         }
+        if (retainedRetry) {
+          await writeFile(
+            nodePath.join(repository, "AGENTS.md"),
+            (await readFile(nodePath.join(repository, "AGENTS.md"), "utf8")) +
+              "\nNative retained-Retry qualification: on exact integration run qualification-session/1, perform the permitted link repair, run required checks successfully, retain the optional failed whitespace diagnostic and commit the exact ordered merge, then intentionally return NotPrepared with detail 'qualification diagnostic retained; explicit Retry required'. On qualification-session/2, preserve that exact merge and all prior evidence; rerun both required checks and verify ordered parents and unchanged target/C before PreparedCandidate. Do not recreate or reset the merge or overwrite earlier diagnostic bytes.\n"
+          )
+        }
         if (documentation) await rm(nodePath.join(repository, "raw-evidence.txt"))
         await git(repository, "add", ".")
         await git(repository, "commit", "-qm", "base")
@@ -293,6 +312,23 @@ describe("candidate-local content conflict with the real Codex provider", () => 
         const request = IntegratorRequest.make({
           correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
         })
+        const observedCensus = Layer.effect(
+          CodexOwnedActivityCensus,
+          Effect.gen(function* () {
+            const census = yield* CodexOwnedActivityCensus
+            return CodexOwnedActivityCensus.of({
+              ...census,
+              observe: (...args) =>
+                census.observe(...args).pipe(
+                  Effect.tap((projection) =>
+                    Effect.sync(() => {
+                      custodyObservations.push({ ordinal: nativeOrdinal, threadId: args[0].id, projection })
+                    })
+                  )
+                )
+            })
+          })
+        ).pipe(Layer.provide(nodeCodexOwnedActivityCensusLayer))
         const providerFor = () => {
           const app = codexAppServerNodeLayer({ executable, environment: { CODEX_HOME: codexHome } }).pipe(
             Layer.provide(memoryCodexAttemptStoreLayer()),
@@ -302,32 +338,117 @@ describe("candidate-local content conflict with the real Codex provider", () => 
             Layer.provide(NodeFileSystem.layer)
           )
           const integrator = nodeCodexIntegratorLayer(config)
-            .pipe(Layer.provide(nodeCodexOwnedActivityCensusLayer))
+            .pipe(Layer.provide(observedCensus))
             .pipe(Layer.provideMerge(app))
             .pipe(Layer.provide(NodeFileSystem.layer))
             .pipe(Layer.provide(nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))))
             .pipe(Layer.provide(ownership))
           return integrator
         }
-        const result = await Effect.runPromise(
-          Effect.scoped(
-            Effect.gen(function* () {
-              const integrator = yield* Integrator
-              const app = yield* CodexAppServer
-              try {
-                return yield* integrator.prepare(request)
-              } finally {
-                if (app.serverPid !== undefined)
-                  launch = CodexServerLaunchRecord.make({
-                    command: [executable, "app-server"],
-                    incarnation: app.incarnation,
-                    pid: app.serverPid,
-                    phase: "Live"
-                  })
-              }
-            }).pipe(Effect.provide(providerFor()))
+        const prepare = async (currentRequest: IntegratorRequest) =>
+          Effect.runPromise(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const integrator = yield* Integrator
+                const app = yield* CodexAppServer
+                try {
+                  return yield* integrator.prepare(currentRequest)
+                } finally {
+                  if (app.serverPid !== undefined)
+                    launch = CodexServerLaunchRecord.make({
+                      command: [executable, "app-server"],
+                      incarnation: app.incarnation,
+                      pid: app.serverPid,
+                      phase: "Live"
+                    })
+                }
+              }).pipe(Effect.provide(providerFor()))
+            )
           )
-        )
+        let result = await prepare(request)
+        if (retainedRetry) {
+          expect(result._tag).toBe("NotPrepared")
+          firstPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
+          await writeFile(nodePath.join(root, "run1-private.json"), firstPrivateBytes)
+          const record = Schema.decodeUnknownSync(Schema.Array(CodexIntegratorPrivateRecord))(
+            JSON.parse(firstPrivateBytes)
+          )[0]
+          if (record?._tag !== "ThreadWithRuns") throw new Error("missing sealed native private record")
+          candidatePath = record.candidatePath
+          const firstDocs = (await readFile(nodePath.join(root, "docs-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => Schema.decodeUnknownSync(Schema.Struct({ exit: Schema.Number }))(JSON.parse(line)).exit)
+          const firstRuntime = (await readFile(nodePath.join(root, "runtime-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map(Number)
+          const firstDiagnostic = await readFile(nodePath.join(root, "whitespace-diagnostic.log"), "utf8")
+          const firstDiagnosticExit = await readFile(nodePath.join(root, "whitespace-exit.txt"), "utf8")
+          expect(firstDocs.at(-1)).toBe(0)
+          expect(firstRuntime.length).toBeGreaterThan(0)
+          expect(firstRuntime.every((exit) => exit === 0)).toBe(true)
+          expect(Number(firstDiagnosticExit)).toBe(2)
+          const retainedMerge = await git(candidatePath, "rev-parse", "HEAD")
+          expect(await git(candidatePath, "rev-list", "--parents", "-n", "1", "HEAD")).toBe(
+            `${retainedMerge} ${head} ${accepted}`
+          )
+          if (record.runs[0]._tag !== "CompletedTurnSealed")
+            throw new Error("first native run was not completed and sealed")
+          expect(record.runs[0].result._tag).toBe("NotPrepared")
+          if (launch === undefined) throw new Error("missing first native launch")
+          const stopped = await Effect.runPromise(makeNodeCodexProcessGroupCensusService().observe(launch))
+          retryEvidence.push({
+            phase: "before Retry",
+            launch,
+            stopped,
+            retainedMerge,
+            record,
+            firstDocs,
+            firstRuntime,
+            firstDiagnostic,
+            firstDiagnosticExit
+          })
+          await writeFile(nodePath.join(root, "retry-evidence.json"), JSON.stringify(retryEvidence, null, 2))
+          expect(stopped._tag).toBe("Absent")
+          nativeOrdinal = 2
+          result = await prepare(
+            IntegratorRequest.make({
+              correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session })
+            })
+          )
+          retryPrivateBytes = await readFile(config.privateStoreLocator, "utf8")
+          await writeFile(nodePath.join(root, "run2-private.json"), retryPrivateBytes)
+          const second = Schema.decodeUnknownSync(Schema.Array(CodexIntegratorPrivateRecord))(
+            JSON.parse(retryPrivateBytes)
+          )[0]
+          if (second?._tag !== "ThreadWithRuns") throw new Error("missing Retry private record")
+          expect(second.candidatePath).toBe(record.candidatePath)
+          expect(second.threadId).toBe(record.threadId)
+          expect(second.threadToken).toBe(record.threadToken)
+          expect(second.correlation).toEqual(record.correlation)
+          expect(second.runs[0]).toEqual(record.runs[0])
+          expect(second.runs).toHaveLength(2)
+          expect(second.runs[1]?.correlation.ordinal).toBe(2)
+          expect(await git(candidatePath, "rev-parse", "HEAD")).toBe(retainedMerge)
+          const retryDocs = (await readFile(nodePath.join(root, "docs-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => Schema.decodeUnknownSync(Schema.Struct({ exit: Schema.Number }))(JSON.parse(line)).exit)
+            .slice(firstDocs.length)
+          const retryRuntime = (await readFile(nodePath.join(root, "runtime-checks.jsonl"), "utf8"))
+            .trim()
+            .split("\n")
+            .map(Number)
+            .slice(firstRuntime.length)
+          expect(retryDocs.length).toBeGreaterThan(0)
+          expect(retryDocs.every((exit) => exit === 0)).toBe(true)
+          expect(retryRuntime.length).toBeGreaterThan(0)
+          expect(retryRuntime.every((exit) => exit === 0)).toBe(true)
+          expect(await readFile(nodePath.join(root, "whitespace-diagnostic.log"), "utf8")).toBe(firstDiagnostic)
+          expect(await readFile(nodePath.join(root, "whitespace-exit.txt"), "utf8")).toBe(firstDiagnosticExit)
+          retryEvidence.push({ phase: "after Retry", retryDocs, retryRuntime, record: second })
+        }
         expect(result._tag).toBe("PreparedCandidate")
         if (result._tag !== "PreparedCandidate") throw new Error(result.detail)
         preparedCandidate = result.candidateText
@@ -368,7 +489,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
             .trim()
             .split("\n")
             .map(Number)
-          expect(runtimeChecks.length).toBeGreaterThan(0)
+          expect(runtimeChecks.length).toBeGreaterThan(retainedRetry ? 1 : 0)
           expect(runtimeChecks.every((exit) => exit === 0)).toBe(true)
         }
         await execFile(nodeProcess.execPath, ["check.cjs"], { cwd: candidatePath })
@@ -412,6 +533,10 @@ describe("candidate-local content conflict with the real Codex provider", () => 
             JSON.stringify(
               {
                 root,
+                retryEvidence,
+                custodyObservations,
+                firstPrivateBytes,
+                retryPrivateBytes,
                 launch,
                 stopped,
                 calls: calls.length,
@@ -433,7 +558,7 @@ describe("candidate-local content conflict with the real Codex provider", () => 
           expect(stopped._tag).toBe("Absent")
         }
         await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
-        if (passed) await rm(root, { recursive: true, force: true })
+        if (passed && !retainedRetry) await rm(root, { recursive: true, force: true })
       }
     },
     240000

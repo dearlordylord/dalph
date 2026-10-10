@@ -69,7 +69,7 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     `Accepted commit C: ${run.session.acceptedResult.commit}`,
     `Candidate worktree: ${candidatePath}`,
     `Exact integration run: ${run.session.sessionId}/${run.ordinal}`,
-    "The candidate worktree starts at unchanged target head H.",
+    "Initial materialization starts at unchanged target head H. On an authorized Retry the exact owned candidate may retain its merge with ordered parents [H, C]; inspect it, preserve history, and rerun applicable required checks before reporting PreparedCandidate.",
     `Prepare the candidate as the exact integration merge of H and accepted commit C (${run.session.acceptedResult.commit}); the candidate commit must have exact ordered direct parents [H, C]. Do not rebase, cherry-pick, change accepted C, recreate the task change, or update/push the target ref.`,
     "Work only inside the exact candidate worktree for this session/run. Do not update or push the target ref, edit the accepted task worktree, or create another leaf attempt or claim.",
     "You own content-conflict resolution inside this candidate. Read H and C, their changes from the planned Base, repository instructions, and accepted task scenarios/source authorities before resolving.",
@@ -481,6 +481,41 @@ const checkConfigAndRecord = Effect.fn("CodexIntegrator.checkConfigAndRecord")(f
   if (Option.isSome(found)) return yield* reconcilePrivateRecord(found.value, run, candidatePath, app, store)
   return yield* createPrivateRecord(run, candidatePath, app, store, crypto)
 })
+/** A retained merge is reusable only after rereading the exact sealed NotPrepared predecessor and stopped writers. */
+const reconcileRetainedMergeRetry = Effect.fn("CodexIntegrator.reconcileRetainedMergeRetry")(function* (
+  record: CodexIntegratorPrivateRecord,
+  run: IntegratorRunCorrelation,
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  store: CodexIntegratorPrivateStoreService
+) {
+  const predecessor = privateRuns(record).find((item) => item.correlation.ordinal === run.ordinal - 1)
+  if (!isRetryProviderRun(run) || !isSealedPrivateRun(predecessor) || predecessor.result._tag !== "NotPrepared") {
+    return yield* Effect.fail(providerFailure("retained merge Retry requires a sealed NotPrepared predecessor"))
+  }
+  const threaded = yield* ensureThread(app, record, store)
+  const fresh = yield* observedThread(app, threaded.thread.id, record.candidatePath)
+  if (fresh.ownedThreadToken !== record.threadToken) {
+    return yield* Effect.fail(providerFailure("retained Retry thread ownership changed"))
+  }
+  const matching = fresh.turns.filter((turn) => turn.ownedTurnToken === predecessor.token)
+  const terminalStatus = predecessor._tag === "FailedTurnSealed" ? "failed" : "completed"
+  if (matching.length !== 1 || matching[0]?.id !== predecessor.turnId || matching[0].status !== terminalStatus) {
+    return yield* Effect.fail(providerFailure("retained Retry predecessor terminal evidence changed"))
+  }
+  for (const turn of fresh.turns) {
+    const known = privateRuns(record).find((item) => item.token === turn.ownedTurnToken)
+    if (
+      known === undefined ||
+      matchingProviderTurnError(known, turn) !== undefined ||
+      (!isSealedPrivateRun(known) && !runCorrelationEquals(known.correlation, run)) ||
+      (isSealedPrivateRun(known) && turn.status !== (known._tag === "FailedTurnSealed" ? "failed" : "completed"))
+    ) {
+      return yield* Effect.fail(providerFailure("retained Retry contains foreign or contradictory provider history"))
+    }
+  }
+  yield* observeQuiescence(app, census, fresh)
+})
 const integratorServiceFor = (
   config: CodexIntegratorConfiguration,
   app: CodexAppServer["Service"],
@@ -506,7 +541,8 @@ const integratorServiceFor = (
                 config,
                 initial,
                 store,
-                ownership
+                ownership,
+                reconcileRetainedMergeRetry(initial, run, app, census, store)
               )
               const existingRun = runFor(materialized, run)
               const existingThreadId =
