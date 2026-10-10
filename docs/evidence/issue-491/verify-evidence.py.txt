@@ -1,0 +1,154 @@
+"""Read-only acceptance binding; run from the repository root with Python 3.
+
+Writes only the derived parent evidence account. Does not call workflow owners.
+"""
+import datetime
+import gzip
+import hashlib
+import json
+import math
+from pathlib import Path
+import subprocess
+
+BASE = "dd2592781c2e8dd6d324eca61ca91f76a3afa2a2"
+COMBINED = "0cde2e89607bb6db59272ac580289cee09176739"
+RECOVERY = "e4f76d9ddae2feb31726db596ddb38c006ad05f5"
+ROOT_EVIDENCE = Path("/workspace/dalph-dogfood/issue-491-20261009/evidence")
+
+
+def git(*args):
+    return subprocess.check_output(["git", *args]).decode().strip()
+
+
+def digest(path):
+    content = Path(path).read_bytes()
+    return {"path": str(path), "bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest()}
+
+
+def checked_entry(entry):
+    actual = digest(entry["path"])
+    assert actual["sha256"] == entry["sha256"], entry["path"]
+    if "bytes" in entry:
+        assert actual["bytes"] == entry["bytes"], entry["path"]
+    return actual
+
+
+def tree(ref):
+    entries = subprocess.check_output(["git", "ls-tree", "-r", "-z", ref]).split(b"\0")
+    return {entry.split(b"\t", 1)[1].decode(): entry.split(b"\t", 1)[0].decode()
+            for entry in entries if entry}
+
+
+current = tree(BASE)
+prior = tree(COMBINED)
+recovery = tree(RECOVERY)
+contained_merges = ["acf60023ca9c953fe22fcf075cc72d5a4185d75d",
+                    "8585828eb127366c980ca63d6a5c5b52ac25f812",
+                    "e805d0f460246a247d6e06aec85ae5262e8b56e5", BASE]
+assert all(git("rev-parse", commit + "^{tree}") == git("rev-parse", BASE + "^{tree}")
+           for commit in contained_merges)
+assert not git("diff", "--name-only", BASE, "--", "packages", "scripts", "specs", "corpora",
+               "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json",
+               "vitest.config.ts", "mise.toml", ".mise.toml"), "Parent changes must remain documentary"
+runtime = lambda path: (path.startswith(("packages/", "scripts/", "specs/", "corpora/"))
+                        or path in ("package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
+                                    "tsconfig.json", "vitest.config.ts", "mise.toml", ".mise.toml"))
+runtime_paths = sorted(path for path in current if runtime(path))
+assert all(current[path] == recovery.get(path) for path in runtime_paths)
+assert {path for path in recovery if runtime(path)} == set(runtime_paths)
+delta = sorted(path for path in set(prior) | set(current)
+               if runtime(path) and prior.get(path) != current.get(path))
+unchanged = [{**digest(path), "gitEntry": current[path]}
+             for path in runtime_paths if path not in delta]
+changed = [{**digest(path), "gitEntry": current[path],
+            "combinedGitEntry": prior.get(path), "recoveryGitEntry": recovery.get(path)}
+           for path in delta]
+
+combined_manifest = json.loads(Path("docs/evidence/issue-501/final/evidence-manifest.json").read_text())
+combined_artifacts = [checked_entry(entry) for entry in combined_manifest]
+recovery_manifest = json.loads(Path("docs/evidence/issue-514/artifact-hashes.json").read_text())
+recovery_artifacts = [checked_entry({**entry, "path": "docs/evidence/issue-514/" + entry["path"]})
+                      for entry in recovery_manifest["artifacts"]]
+recovery_sources = []
+for entry in json.loads(Path("docs/evidence/issue-514/source-hashes.json").read_text())["sources"]:
+    content = subprocess.check_output(["git", "show", BASE + ":" + entry["path"]])
+    assert hashlib.sha256(content).hexdigest() == entry["sha256"], entry["path"]
+    assert len(content) == entry["bytes"], entry["path"]
+    recovery_sources.append({**entry, "verifiedAt": BASE})
+reuse = json.loads(Path("docs/evidence/issue-501/final/509-boundary-reuse.json").read_text())
+page_sources = [checked_entry(entry) for entry in reuse["identicalSourceFiles"]]
+page_artifacts = [checked_entry(entry) for entry in reuse["leafArtifactHashesVerified"]]
+
+profiles = []
+for density in ("sparse", "dense"):
+    path = Path(f"docs/evidence/issue-501/final/profile-{density}.json.gz")
+    raw = json.loads(gzip.decompress(path.read_bytes()))
+    assert raw["candidate"] == COMBINED
+    for profile in raw["profiles"]:
+        samples = profile["samples"]
+        assert len(samples) == 20
+        admissions = sorted(sample["admissionMillis"] for sample in samples)
+        p95 = admissions[math.ceil(.95 * len(admissions)) - 1]
+        tasks = [task for sample in samples for task in sample["synchronousTasks"]]
+        quantum = max(task["wallMillis"] for task in tasks)
+        heap = max(sample["memory"]["heapUsed"] for sample in samples)
+        rss = max(sample["memory"]["peakRssBytes"] for sample in samples)
+        semantic = [event for sample in samples for event in sample["phaseEvents"]
+                    if event["phase"] == "ControlAdmissionDuringSemanticPreparation"]
+        assert len(semantic) == 20
+        assert all(event["eventReads"] > event["prefixReads"] for event in semantic)
+        assert p95 <= 100 and quantum <= 10 and heap <= 1024**3 and rss <= 1536 * 1024**2
+        profiles.append({"density": density, "temperature": profile["temperature"],
+                         "samples": len(samples), "admissionP95Millis": p95,
+                         "maximumSynchronousTaskMillis": quantum, "maximumHeapBytes": heap,
+                         "peakRssBytes": rss, "controlsDuringSemanticPreparation": len(semantic),
+                         "allDeclaredTargetsMet": True, "artifact": digest(path)})
+
+external = []
+for name in ("parent-final-combined-handoff.txt", "501-native-publication-summary.json",
+             "511-native-publication-summary.json", "512-native-publication-summary.json",
+             "513-native-publication-summary.json", "514-native-publication-summary.json"):
+    external.append(digest(ROOT_EVIDENCE / name))
+
+native_publications = []
+for issue in (511, 512):
+    summary = json.loads((ROOT_EVIDENCE / f"{issue}-native-publication-summary.json").read_text())
+    published = summary["publishedCommit"]
+    assert git("show", "-s", "--format=%P", published).split() == summary["orderedParents"]
+    subprocess.check_call(["git", "merge-base", "--is-ancestor", published, BASE])
+    custody = json.loads(Path(summary["nativeCustodyProof"]).read_text())
+    assert custody["complete"] is True
+    native_publications.append({"issue": issue, "publishedCommit": published,
+                                "orderedParents": summary["orderedParents"],
+                                "runTerminatedPosition": summary["runTerminatedPosition"],
+                                "trackerClosedAt": summary["trackerClosedAt"],
+                                "custody": digest(summary["nativeCustodyProof"]),
+                                "custodyReconciliationComplete": True})
+
+subissues = json.loads(Path(".scratch/491-subissues.json").read_text())
+dependencies = json.loads(Path(".scratch/491-dependencies.json").read_text())
+assert len(subissues) == 23 and all(issue["state"] == "closed" for issue in subissues)
+assert all(issue["state"] == "closed" for issue in dependencies)
+
+account = {
+    "version": 1, "observedUTC": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "base": BASE, "integratedRuntimeCandidate": BASE, "tree": git("rev-parse", BASE + "^{tree}"),
+    "combinedQualificationCandidate": COMBINED, "recoveryQualificationCandidate": RECOVERY,
+    "containedNativeMergeTreesEqual": contained_merges,
+    "recoveryRuntimeEqualsIntegrated": True, "runtimePathCount": len(runtime_paths),
+    "unchangedCombinedRuntimeFiles": unchanged, "changedCombinedRuntimeFiles": changed,
+    "combinedArtifacts": combined_artifacts, "recoveryArtifacts": recovery_artifacts,
+    "recoverySources": recovery_sources, "unchangedPageSources": page_sources,
+    "reusedPageArtifacts": page_artifacts, "nativePublications": native_publications,
+    "profiles": profiles, "externalParentObservations": external,
+    "trackerRead": {"subissues": subissues, "blockingDependencies": dependencies,
+                    "authority": "GitHub REST issue sub_issues and dependencies/blocked_by",
+                    "scope": "Observed once during this attempt; not persisted scheduling authority"},
+    "scope": "Derived read-only evidence binding; original test runs remain credited at their exact unchanged boundaries. No broad or native bulk rerun. No parent publication or tracker closure claimed."
+}
+Path("docs/evidence/issue-491/source-and-evidence-binding.json").write_text(json.dumps(account, indent=2) + "\n")
+print(json.dumps({"runtimePaths": len(runtime_paths), "unchangedCombinedPaths": len(unchanged),
+                  "changedCombinedPaths": len(changed), "combinedArtifacts": len(combined_artifacts),
+                  "recoveryArtifacts": len(recovery_artifacts), "recoverySources": len(recovery_sources),
+                  "profiles": profiles, "trackerChildren": len(subissues)}, indent=2))

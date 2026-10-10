@@ -122,8 +122,11 @@ command vocabulary and a Restart followed by an accepted terminal report.
 That vocabulary remains historical documentation and proof terminology only.
 The current journal schema does not accept it, because mapping one ambiguous
 legacy command to Begin or Resume could grant false live authority. Any
-retained provisional journal requires an explicit offline migration outside
-issue #264. Current reconstruction of canonical records treats the accepted
+retained incompatible provisional journal is refused before effects. The
+accepted pre-release scope of issue #491 requires no migration: the Operator
+may separately retire obsolete data after resolving external custody, as
+specified in [development history refusal](unsupported-development-history.md).
+Current reconstruction of supported canonical records treats the accepted
 terminal report as absorbing, rejects replacement or abandonment under the
 earlier choice, and sends the accepted result through ordinary integration
 admission. The current chronology and acceptance tests are governed by
