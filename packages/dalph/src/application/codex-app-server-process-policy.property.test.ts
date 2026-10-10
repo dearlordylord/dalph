@@ -100,6 +100,32 @@ const withNative = <A>(service: CodexProcessNativeService, use: (native: CodexPr
 }
 
 describe("Codex process observation policy", () => {
+  it("refuses a recorded native foreign PID without signalling it", async () => {
+    const signals: Array<number | NodeJS.Signals | undefined> = []
+    const selected: CodexProcessNativeService = {
+      ...nodeCodexProcessNativeService,
+      kill: (pid, signal) => {
+        if (signal !== 0) {
+          signals.push(signal)
+          throw new Error("foreign native process must never be signalled")
+        }
+        return nodeCodexProcessNativeService.kill(pid, signal)
+      }
+    }
+    const launch = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("foreign-native-pid|linux%3Aunrelated"),
+      phase: "Live",
+      pid: selected.pid
+    })
+    const census = makeNodeCodexProcessGroupCensusService(selected)
+    const ownership = makeNodeCodexProcessOwnershipService(census, selected)
+    expect((await Effect.runPromise(ownership.observe(launch)))._tag).toBe("Contradictory")
+    expect(Exit.isFailure(await Effect.runPromiseExit(ownership.stop(launch)))).toBe(true)
+    expect(signals).toEqual([])
+    nodeCodexProcessNativeService.kill(selected.pid, 0)
+  })
+
   it("classifies initialize protocol and host contradictions without process or filesystem effects", () => {
     const forbidden = () => {
       throw new Error("initialize classification must not access the host")
@@ -1087,6 +1113,37 @@ describe("Codex process observation policy", () => {
       members: [expect.objectContaining({ pid: 60 })]
     })
   })
+
+  it.each(["linux", "darwin"] as const)(
+    "discovers only the retained token while independent %s app-servers remain live",
+    async (platform) => {
+      const incarnation = CodexServerIncarnation.make("retained-token")
+      for (const present of [false, true]) {
+        const selected = native({
+          platform,
+          readdir: async () => (present ? ["60", "70"] : ["70"]),
+          readFile: async (path) => {
+            const pid = path.includes("/60/") ? 60 : 70
+            if (path.endsWith("/stat")) return linuxStatText(stat(pid, 1, pid, `linux:${pid}`))
+            if (path.endsWith("/cmdline")) return "codex\u0000app-server\u0000"
+            if (path.endsWith("/environ"))
+              return `DALPH_CODEX_SERVER_INCARNATION=${pid === 60 ? "retained-token" : "independent-token"}\u0000`
+            throw new Error(`unexpected process read: ${path}`)
+          },
+          execFile: async (_command, args) => ({
+            stdout: args.includes("eww")
+              ? `${present ? "60 codex app-server DALPH_CODEX_SERVER_INCARNATION=retained-token\n" : ""}70 codex app-server DALPH_CODEX_SERVER_INCARNATION=independent-token\n`
+              : "started"
+          }),
+          kill: () => {
+            throw new Error("discovery must never signal either owner")
+          }
+        })
+        const observed = await discoverAppServerProcesses(incarnation, selected)
+        expect(observed).toMatchObject(present ? { _tag: "ExactLive", pid: 60 } : { _tag: "Absent" })
+      }
+    }
+  )
 
   it("fails closed on empty, malformed, or duplicate Darwin batch command observations", async () => {
     const incarnation = CodexServerIncarnation.make("batch-token|darwin%3Astarted")
