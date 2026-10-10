@@ -61,3 +61,8 @@ Acceptance: diagnostics tests prove repeated Exit and unresolved drains; reused
 retain draining/stalled/closed transport, NoRun, finalization failure and native
 process/group/lock controls. Native owner-output controls extend that evidence;
 none grants custody release from output abandonment.
+`exit-owner-custody.integration.test.ts` observes the named pending provider,
+the exact descendant start identity, refusal of a competing coordinator lock,
+and successful successor acquisition only after the original close stops the
+descendant and finalizes the original scope. Its controlled release is test
+coordination, never evidence of Run finality or safe suspension.

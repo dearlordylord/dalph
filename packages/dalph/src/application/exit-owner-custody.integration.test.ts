@@ -37,6 +37,9 @@ const groupMembers = (id: number) =>
     .filter(([, group]) => group === id)
     .map(([pid]) => pid)
 
+const processIdentity = (pid: number) =>
+  existsSync(`/proc/${pid}/stat`) ? readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.split(" ")[19] : undefined
+
 it.live(
   "a timed-out native provider owner retains its exact descendant and lock until close proves stopped writers",
   () =>
@@ -49,6 +52,7 @@ it.live(
           detached: true
         })
         const childExit = terminated(child)
+        const parentIdentity = child.pid === undefined ? undefined : processIdentity(child.pid)
         const events: Array<Event> = []
         const waiters = new Map<
           string,
@@ -56,6 +60,7 @@ it.live(
         >()
         let text = ""
         let descendantPid: number | undefined
+        let descendantIdentity: string | undefined
         const failWaiters = () => {
           for (const waiter of waiters.values())
             waiter.reject(new Error("native fixture stopped before its expected observation"))
@@ -64,7 +69,8 @@ it.live(
         child.once("exit", failWaiters)
         const stop = scheduleStop(() => {
           failWaiters()
-          if (child.pid !== undefined) nodeProcess.kill(-child.pid, "SIGKILL")
+          if (child.pid !== undefined && parentIdentity !== undefined && processIdentity(child.pid) === parentIdentity)
+            nodeProcess.kill(-child.pid, "SIGKILL")
         }, 15000)
         child.stdout?.on("data", (bytes: Uint8Array) => {
           text += new TextDecoder().decode(bytes)
@@ -73,7 +79,10 @@ it.live(
           for (const line of lines) {
             const event = Schema.decodeUnknownSync(Schema.fromJsonString(Event))(line)
             events.push(event)
-            if (event.descendantPid !== undefined) descendantPid = event.descendantPid
+            if (event.descendantPid !== undefined) {
+              descendantPid = event.descendantPid
+              descendantIdentity = event.startIdentity
+            }
             waiters.get(event.stage)?.resolve(event)
             waiters.delete(event.stage)
           }
@@ -134,9 +143,14 @@ it.live(
           expect(await terminated(successor)).toBe(0)
         } finally {
           cancelStop(stop)
-          if (descendantPid !== undefined && existsSync(`/proc/${descendantPid}`))
+          if (
+            descendantPid !== undefined &&
+            descendantIdentity !== undefined &&
+            processIdentity(descendantPid) === descendantIdentity
+          )
             nodeProcess.kill(-descendantPid, "SIGKILL")
-          if (child.pid !== undefined && existsSync(`/proc/${child.pid}`)) nodeProcess.kill(-child.pid, "SIGKILL")
+          if (child.pid !== undefined && parentIdentity !== undefined && processIdentity(child.pid) === parentIdentity)
+            nodeProcess.kill(-child.pid, "SIGKILL")
           await childExit
           rmSync(directory, { recursive: true, force: true })
         }

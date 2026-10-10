@@ -519,33 +519,30 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
     const snapshot = yield* lifecycle.admission.snapshot
     const forward = yield* lifecycle.readForwardOwners
     const executor = yield* Ref.get(executorDrains)
-    const failures = yield* Ref.get(settledExecutorDiagnostics)
     const executors = yield* Effect.forEach([...executor.registered], ([id, entry]) =>
-      Deferred.isDone(entry.finished).pipe(
-        Effect.map(
-          (settled): ApplicationExitOwnerDiagnostic => ({
-            ownerId: ApplicationExitOwnerId.make(id),
-            family: "ExecutorDrain",
-            kind: "ExecutorDrain",
-            name: entry.drain.owner?.name ?? "ExecutorWork",
-            subject: entry.drain.owner?.subject ?? { _tag: "NoRun" },
-            evidence: settled
-              ? failures.has(id)
-                ? "DrainFailed"
-                : "DrainSucceeded"
-              : entry.started
-                ? "DrainPending"
-                : "DrainRegistered",
-            boundary: null,
-            missingEvidence: settled && !failures.has(id) ? "None" : "CorrelatedExecutorSettlement",
-            nextAction: settled
-              ? failures.has(id)
-                ? "InspectDrainFailure"
-                : "None"
-              : "AwaitCorrelatedExecutorSettlement"
-          })
-        )
-      )
+      Effect.gen(function* () {
+        // Read completion and its evidence from the same existing receipt.
+        const receipt = yield* Deferred.poll(entry.finished)
+        const settled = Option.isSome(receipt)
+        const failed = Option.isSome(receipt) && (yield* receipt.value).diagnostics.length > 0
+        return {
+          ownerId: ApplicationExitOwnerId.make(id),
+          family: "ExecutorDrain",
+          kind: "ExecutorDrain",
+          name: entry.drain.owner?.name ?? "ExecutorWork",
+          subject: entry.drain.owner?.subject ?? { _tag: "NoRun" },
+          evidence: settled
+            ? failed
+              ? "DrainFailed"
+              : "DrainSucceeded"
+            : entry.started
+              ? "DrainPending"
+              : "DrainRegistered",
+          boundary: null,
+          missingEvidence: settled && !failed ? "None" : "CorrelatedExecutorSettlement",
+          nextAction: settled ? (failed ? "InspectDrainFailure" : "None") : "AwaitCorrelatedExecutorSettlement"
+        } satisfies ApplicationExitOwnerDiagnostic
+      })
     )
     const local = yield* Ref.get(processLocalDrains)
     return {

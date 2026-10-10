@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "d6472a2a71fe41aa58add9bd3eaf2d3644065ad74bd277fd12b124a6f4552a1c",
+  "digest": "b8419a9f237013776c9f4df0f85f9d004763e142d6f6f19bca439726fe82c905",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -104,6 +104,7 @@
     "packages/orchestrator/src/coordination/application-exit/executor-drain.ts",
     "packages/orchestrator/src/coordination/application-exit/lifecycle-decision.ts",
     "packages/orchestrator/src/coordination/application-exit/lifecycle.ts",
+    "packages/orchestrator/src/coordination/application-exit/owner-diagnostics.ts",
     "packages/orchestrator/src/coordination/delivery/cancelled-attempt-claim-delivery.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-action-adapter-common.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-action-adapter-environment.ts",

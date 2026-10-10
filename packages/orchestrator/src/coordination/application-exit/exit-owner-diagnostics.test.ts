@@ -9,6 +9,31 @@ import { ApplicationExitDiagnostic, publicApplicationExitResult } from "./lifecy
 
 const runId = RunId.make("owner-run")
 
+it.effect("reads failed executor settlement from its completion receipt without declaring drain success", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeProductionHostApplicationExitShell()
+      yield* shell.registerExecutorDrain({
+        owner: { name: "ExecutorWork", subject: { _tag: "Run", runId } },
+        suspendExecutingExecutorWork: new ApplicationExitDrainFailure({
+          diagnostics: [ApplicationExitDiagnostic.make("private executor failure")]
+        })
+      })
+      const result = yield* shell.requestBoundary.requestExit
+      expect(result._tag).toBe("Failed")
+      expect((yield* shell.readOwners).owners).toMatchObject([
+        {
+          family: "ExecutorDrain",
+          evidence: "DrainFailed",
+          missingEvidence: "CorrelatedExecutorSettlement",
+          nextAction: "InspectDrainFailure"
+        }
+      ])
+      expect(JSON.stringify(publicApplicationExitResult(result))).not.toContain("private")
+    })
+  )
+)
+
 it.effect("names the exact produced boundary and missing Journal acknowledgement without exposing its result", () =>
   Effect.scoped(
     Effect.gen(function* () {
