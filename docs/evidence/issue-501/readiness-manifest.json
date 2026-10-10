@@ -5,7 +5,6 @@
   "tree": "726e5e290a768d59e8955951f50413f1c4da0d73",
   "status": "",
   "command": "DALPH_DIAGNOSTICS_BASE=5e7bfa81e8567c356708b7bc71830ec5bd6aa290 timeout --signal=TERM --kill-after=15s 900s mise exec -- pnpm check:submit",
-  "startUTC": "2026-10-10T06:57:45Z",
   "stopUTC": "2026-10-10T07:13:00Z",
   "sourceFrozen": true,
   "commandManifest": "pnpm check:artifacts && pnpm test:formal:controls && pnpm check:fast && pnpm lint:code --census && pnpm test:cassettes:memory",
@@ -16,5 +15,9 @@
     "architecture": "aarch64",
     "onlineProcessors": 12
   },
-  "scope": "One requested submission readiness pass; no check:all, hosted CI, p95 or native custody credit."
+  "scope": "One requested submission readiness pass; no check:all, hosted CI, p95 or native custody credit.",
+  "intentRecordedUTC": "2026-10-10T06:57:45Z",
+  "logOpenedUTC": "2026-10-10T06:57:48.113873741Z",
+  "lastLogWriteUTC": "2026-10-10T07:03:28.711911871Z",
+  "timestampBoundary": "Log filesystem birth/last-write timestamps; child completion exit 1 observed by execution handle separately."
 }
