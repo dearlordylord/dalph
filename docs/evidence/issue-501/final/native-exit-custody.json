@@ -1,0 +1,166 @@
+{
+  "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+  "sourceSha256": "047a394bbc7c7f56318006e97d57390329bcd2a1f57a2b4537f265326af99acb",
+  "source": "packages/dalph/src/application/exit-owner-custody.integration.test.ts",
+  "parentPid": 1182297,
+  "parentIdentity": "35929688",
+  "ready": {
+    "stage": "ready",
+    "pid": 1182297,
+    "descendantPid": 1182310,
+    "startIdentity": "35929761",
+    "owners": {
+      "cutoffClosed": false,
+      "owners": [
+        {
+          "ownerId": 0,
+          "family": "LocalDrain",
+          "name": "CodexProvider",
+          "kind": "LocalDrain",
+          "subject": {
+            "_tag": "NoRun"
+          },
+          "evidence": "DrainRegistered",
+          "boundary": null,
+          "missingEvidence": "LocalCloseAcknowledgement",
+          "nextAction": "AwaitLocalClose"
+        }
+      ]
+    }
+  },
+  "result": {
+    "stage": "result",
+    "owners": {
+      "cutoffClosed": true,
+      "owners": [
+        {
+          "ownerId": 0,
+          "family": "LocalDrain",
+          "name": "CodexProvider",
+          "kind": "LocalDrain",
+          "subject": {
+            "_tag": "NoRun"
+          },
+          "evidence": "DrainPending",
+          "boundary": null,
+          "missingEvidence": "LocalCloseAcknowledgement",
+          "nextAction": "AwaitLocalClose"
+        }
+      ]
+    },
+    "result": {
+      "_tag": "TimedOut",
+      "requestedStatus": 1,
+      "owners": {
+        "cutoffClosed": true,
+        "owners": [
+          {
+            "ownerId": 0,
+            "family": "LocalDrain",
+            "name": "CodexProvider",
+            "kind": "LocalDrain",
+            "subject": {
+              "_tag": "NoRun"
+            },
+            "evidence": "DrainPending",
+            "boundary": null,
+            "missingEvidence": "LocalCloseAcknowledgement",
+            "nextAction": "AwaitLocalClose"
+          }
+        ]
+      }
+    }
+  },
+  "events": [
+    {
+      "stage": "ready",
+      "pid": 1182297,
+      "descendantPid": 1182310,
+      "startIdentity": "35929761",
+      "owners": {
+        "cutoffClosed": false,
+        "owners": [
+          {
+            "ownerId": 0,
+            "family": "LocalDrain",
+            "name": "CodexProvider",
+            "kind": "LocalDrain",
+            "subject": {
+              "_tag": "NoRun"
+            },
+            "evidence": "DrainRegistered",
+            "boundary": null,
+            "missingEvidence": "LocalCloseAcknowledgement",
+            "nextAction": "AwaitLocalClose"
+          }
+        ]
+      }
+    },
+    {
+      "stage": "requested"
+    },
+    {
+      "stage": "requested"
+    },
+    {
+      "stage": "result",
+      "owners": {
+        "cutoffClosed": true,
+        "owners": [
+          {
+            "ownerId": 0,
+            "family": "LocalDrain",
+            "name": "CodexProvider",
+            "kind": "LocalDrain",
+            "subject": {
+              "_tag": "NoRun"
+            },
+            "evidence": "DrainPending",
+            "boundary": null,
+            "missingEvidence": "LocalCloseAcknowledgement",
+            "nextAction": "AwaitLocalClose"
+          }
+        ]
+      },
+      "result": {
+        "_tag": "TimedOut",
+        "requestedStatus": 1,
+        "owners": {
+          "cutoffClosed": true,
+          "owners": [
+            {
+              "ownerId": 0,
+              "family": "LocalDrain",
+              "name": "CodexProvider",
+              "kind": "LocalDrain",
+              "subject": {
+                "_tag": "NoRun"
+              },
+              "evidence": "DrainPending",
+              "boundary": null,
+              "missingEvidence": "LocalCloseAcknowledgement",
+              "nextAction": "AwaitLocalClose"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "stage": "descendant-stopped",
+      "pid": 1182310
+    },
+    {
+      "stage": "scope-finalized"
+    }
+  ],
+  "refusedExit": 70,
+  "refusedOutput": "{\"fixtureFailure\":\"CoordinatorLockHeld\"}\n",
+  "originalExit": 1,
+  "successorPid": 1182629,
+  "successorExit": 0,
+  "exactLockNamespace": "/tmp/dalph-exit-owner-custody-U1jyDJ",
+  "parentAbsent": true,
+  "parentGroupAfter": [],
+  "descendantAbsent": true,
+  "descendantGroupAfter": []
+}

@@ -1,0 +1,2727 @@
+{
+  "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+  "source": "packages/dalph/test/scenarios/hermetic-mvp.test.ts",
+  "sourceSha256": "e133f499525a516f25ee1cd16b8bbac16a148257f06c410d967b8f0376c98e6a",
+  "runId": "hermetic-mvp-run-A",
+  "originalPrefix": [
+    {
+      "event": {
+        "_tag": "WorkflowRunBegan",
+        "attemptBasePolicy": {
+          "_tag": "ExplicitFixedBase",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00"
+        },
+        "initialControlPolicy": {
+          "taskExecutionCapacity": 1
+        },
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "remotePublicationTarget": {
+          "branch": "refs/heads/master",
+          "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+        },
+        "target": "hermetic-mvp-target-A",
+        "version": 15
+      },
+      "key": "run:began",
+      "position": 1,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "RemotePublicationAdmissionReadIntended",
+        "admissionId": "remote-publication-admission:hermetic-mvp-run-A:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "runId": "hermetic-mvp-run-A",
+        "target": {
+          "branch": "refs/heads/master",
+          "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+        },
+        "version": 15
+      },
+      "key": "remote-publication-admission:remote-publication-admission:hermetic-mvp-run-A:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master:read:intended",
+      "position": 2,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "RemotePublicationAdmissionObserved",
+        "admissionId": "remote-publication-admission:hermetic-mvp-run-A:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+        "observation": {
+          "_tag": "ExistingBranch",
+          "remoteHead": "d76af04d78ed7dec05bfcb1e708f445572925b00"
+        },
+        "occurrenceClassification": "NonActionOccurrence",
+        "runId": "hermetic-mvp-run-A",
+        "target": {
+          "branch": "refs/heads/master",
+          "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+        },
+        "version": 15
+      },
+      "key": "remote-publication-admission:remote-publication-admission:hermetic-mvp-run-A:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master:observed",
+      "position": 3,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "WorkflowEstablishment"
+          },
+          "operationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "predecessorOperationIds": [],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": []
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-de90-73bf-980c-4967996ea184:intent",
+      "position": 4,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "CompleteTaskTrackerFacts",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentities",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-de90-73bf-980c-4967996ea184"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "taskIds": [
+                "A"
+              ],
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecycles",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-de90-73bf-980c-4967996ea184"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ],
+              "lifecycles": [
+                {
+                  "lifecycle": {
+                    "_tag": "Open"
+                  },
+                  "taskId": "A"
+                }
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisites",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-de90-73bf-980c-4967996ea184"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ],
+              "prerequisites": [
+                {
+                  "prerequisiteTaskIds": [],
+                  "taskId": "A"
+                }
+              ]
+            },
+            {
+              "_tag": "TaskGroupings",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-de90-73bf-980c-4967996ea184"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ],
+              "groupings": [
+                {
+                  "parentTaskId": null,
+                  "taskId": "A"
+                }
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembership",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-de90-73bf-980c-4967996ea184"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "memberTaskIds": [
+                "A"
+              ],
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-de90-73bf-980c-4967996ea184",
+        "version": 15
+      },
+      "key": "operation:01a124f8-de90-73bf-980c-4967996ea184:outcome",
+      "position": 5,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "WorkflowEstablishment"
+          },
+          "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+          "predecessorOperationIds": [],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": [
+              "A"
+            ]
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-debe-797d-b11f-3be8b4f22ef0:intent",
+      "position": 6,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "UnchangedTaskTrackerFactsReconfirmed",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentitiesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecyclesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisitesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskGroupingsReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembershipReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+          "priorFullObservationOperationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+        "version": 15
+      },
+      "key": "operation:01a124f8-debe-797d-b11f-3be8b4f22ef0:outcome",
+      "position": 7,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskClaimAcquisitionIntended",
+        "operation": {
+          "_tag": "AcquireTaskClaim",
+          "acquisition": {
+            "operationId": "01a124f8-ded8-7e13-bf8b-8c4656d3e8b2",
+            "owner": "dalph",
+            "taskId": "A",
+            "custodyNonceSha256": "f6ac80ef36ee32d7a01d22301bfaba58e1386748ba2e98c3947ca3d1878b9a47"
+          },
+          "authority": {
+            "_tag": "TaskSelectionAuthority"
+          },
+          "predecessorOperationIds": [
+            "01a124f8-debe-797d-b11f-3be8b4f22ef0"
+          ]
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-ded8-7e13-bf8b-8c4656d3e8b2:intent",
+      "position": 8,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskClaimAcquired",
+        "claim": {
+          "_tag": "ActiveTaskClaim",
+          "operationId": "01a124f8-ded8-7e13-bf8b-8c4656d3e8b2",
+          "owner": "dalph",
+          "taskId": "A",
+          "custodyNonceSha256": "f6ac80ef36ee32d7a01d22301bfaba58e1386748ba2e98c3947ca3d1878b9a47"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-ded8-7e13-bf8b-8c4656d3e8b2:outcome",
+      "position": 9,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "WorkflowEstablishment"
+          },
+          "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31",
+          "predecessorOperationIds": [
+            "01a124f8-ded8-7e13-bf8b-8c4656d3e8b2"
+          ],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": [
+              "A"
+            ]
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-def2-7076-bb6d-b4fbdf52df31:intent",
+      "position": 10,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "UnchangedTaskTrackerFactsReconfirmed",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentitiesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecyclesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisitesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskGroupingsReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembershipReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [
+                  "A"
+                ],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31",
+          "priorFullObservationOperationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31",
+        "version": 15
+      },
+      "key": "operation:01a124f8-def2-7076-bb6d-b4fbdf52df31:outcome",
+      "position": 11,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTaskWorkSpecification",
+          "operationId": "01a124f8-df08-7937-b193-d770a2bd28c5",
+          "predecessorOperationIds": [
+            "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+          ],
+          "target": "hermetic-mvp-target-A",
+          "taskId": "A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-df08-7937-b193-d770a2bd28c5:intent",
+      "position": 12,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "FocusedTaskWorkSpecificationFacts",
+          "factFamily": {
+            "_tag": "TaskWorkSpecification",
+            "body": "Create RESULT.md.",
+            "completeness": "Complete",
+            "consistency": "PotentiallyMixedTime",
+            "contentIdentity": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+            "coverage": {
+              "_tag": "ExactTaskWorkSpecification",
+              "taskId": "A"
+            },
+            "fingerprint": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+            "freshness": {
+              "_tag": "ObservedDuringLogicalRead",
+              "operationId": "01a124f8-df08-7937-b193-d770a2bd28c5"
+            },
+            "taskId": "A",
+            "title": "Complete A"
+          },
+          "operationId": "01a124f8-df08-7937-b193-d770a2bd28c5",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-df08-7937-b193-d770a2bd28c5",
+        "version": 15
+      },
+      "key": "operation:01a124f8-df08-7937-b193-d770a2bd28c5:outcome",
+      "position": 13,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskAttemptPlanned",
+        "operation": {
+          "_tag": "RecordTaskAttemptPlan",
+          "operationId": "01a124f8-df22-77c5-bd39-47337e02c689",
+          "plannedAttempt": {
+            "attemptId": "hermetic-mvp-attempt-A",
+            "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "branch": "refs/heads/dalph/hermetic-mvp-A",
+            "executor": "executor:hermetic-child",
+            "runId": "hermetic-mvp-run-A",
+            "taskId": "A",
+            "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+            "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+          },
+          "predecessorOperationIds": [
+            "01a124f8-df08-7937-b193-d770a2bd28c5"
+          ]
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:plan",
+      "position": 14,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskWorktreeReconciliationIntended",
+        "operation": {
+          "_tag": "ReconcileTaskWorktree",
+          "operationId": "01a124f8-df39-718e-95cc-b55aea69bbb0",
+          "plannedAttempt": {
+            "attemptId": "hermetic-mvp-attempt-A",
+            "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "branch": "refs/heads/dalph/hermetic-mvp-A",
+            "executor": "executor:hermetic-child",
+            "runId": "hermetic-mvp-run-A",
+            "taskId": "A",
+            "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+            "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+          },
+          "predecessorOperationIds": [
+            "01a124f8-df22-77c5-bd39-47337e02c689"
+          ]
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-df39-718e-95cc-b55aea69bbb0:intent",
+      "position": 15,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskWorktreeReady",
+        "operationId": "01a124f8-df39-718e-95cc-b55aea69bbb0",
+        "proof": {
+          "_tag": "PlannedWorktreeReady",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "headSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-df39-718e-95cc-b55aea69bbb0:outcome",
+      "position": 16,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "PlannedAttemptExecutorWorkResponsibilityBegan",
+        "plannedAttempt": {
+          "attemptId": "hermetic-mvp-attempt-A",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "executor": "executor:hermetic-child",
+          "runId": "hermetic-mvp-run-A",
+          "taskId": "A",
+          "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:executor-work-responsibility-began",
+      "position": 17,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "PlannedAttemptExecutorCommandIntended",
+        "command": "Begin",
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "ordinal": 1,
+        "plannedAttempt": {
+          "attemptId": "hermetic-mvp-attempt-A",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "executor": "executor:hermetic-child",
+          "runId": "hermetic-mvp-run-A",
+          "taskId": "A",
+          "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:executor-command:1:intent",
+      "position": 18,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "PlannedAttemptExecutorCommandResponseObserved",
+        "commandOrdinal": 1,
+        "occurrenceClassification": "NonActionOccurrence",
+        "plannedAttempt": {
+          "attemptId": "hermetic-mvp-attempt-A",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "executor": "executor:hermetic-child",
+          "runId": "hermetic-mvp-run-A",
+          "taskId": "A",
+          "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "report": {
+          "_tag": "ExecutorWorkExecuting",
+          "correlation": {
+            "attemptId": "hermetic-mvp-attempt-A",
+            "runId": "hermetic-mvp-run-A"
+          }
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:executor-command:1:response-observation",
+      "position": 19,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "PlannedAttemptExecutorWorkReported",
+        "ordinal": 1,
+        "report": {
+          "_tag": "ExecutorWorkExecuting",
+          "correlation": {
+            "attemptId": "hermetic-mvp-attempt-A",
+            "runId": "hermetic-mvp-run-A"
+          }
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:executor-work-report:1",
+      "position": 20,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "PostQuiescenceReconfirmation",
+            "quiescentGraphOperationId": "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+          },
+          "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a",
+          "predecessorOperationIds": [
+            "01a124f8-de90-73bf-980c-4967996ea184",
+            "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+            "01a124f8-def2-7076-bb6d-b4fbdf52df31"
+          ],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": []
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-dfa8-7fc2-904b-a28193755a5a:intent",
+      "position": 21,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "UnchangedTaskTrackerFactsReconfirmed",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentitiesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecyclesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisitesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskGroupingsReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembershipReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a",
+          "priorFullObservationOperationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-dfa8-7fc2-904b-a28193755a5a",
+        "version": 15
+      },
+      "key": "operation:01a124f8-dfa8-7fc2-904b-a28193755a5a:outcome",
+      "position": 22,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "WorkflowEstablishment"
+          },
+          "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15",
+          "predecessorOperationIds": [
+            "01a124f8-de90-73bf-980c-4967996ea184",
+            "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+            "01a124f8-def2-7076-bb6d-b4fbdf52df31",
+            "01a124f8-dfa8-7fc2-904b-a28193755a5a"
+          ],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": []
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-dfd0-74d3-83d7-ca8c607f2e15:intent",
+      "position": 23,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "UnchangedTaskTrackerFactsReconfirmed",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentitiesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecyclesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisitesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskGroupingsReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembershipReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15",
+          "priorFullObservationOperationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15",
+        "version": 15
+      },
+      "key": "operation:01a124f8-dfd0-74d3-83d7-ca8c607f2e15:outcome",
+      "position": 24,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "PostQuiescenceReconfirmation",
+            "quiescentGraphOperationId": "01a124f8-dfd0-74d3-83d7-ca8c607f2e15"
+          },
+          "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68",
+          "predecessorOperationIds": [
+            "01a124f8-de90-73bf-980c-4967996ea184",
+            "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+            "01a124f8-def2-7076-bb6d-b4fbdf52df31",
+            "01a124f8-dfa8-7fc2-904b-a28193755a5a",
+            "01a124f8-dfd0-74d3-83d7-ca8c607f2e15"
+          ],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": []
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-dfea-7cb8-94f6-a1d36a518c68:intent",
+      "position": 25,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "UnchangedTaskTrackerFactsReconfirmed",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentitiesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecyclesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisitesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskGroupingsReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembershipReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68",
+          "priorFullObservationOperationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-dfea-7cb8-94f6-a1d36a518c68",
+        "version": 15
+      },
+      "key": "operation:01a124f8-dfea-7cb8-94f6-a1d36a518c68:outcome",
+      "position": 26,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "PlannedAttemptExecutorStateObserved",
+        "observation": {
+          "_tag": "ExactExecutorReport",
+          "report": {
+            "_tag": "ExecutorWorkTerminal",
+            "correlation": {
+              "attemptId": "hermetic-mvp-attempt-A",
+              "runId": "hermetic-mvp-run-A"
+            },
+            "result": {
+              "_tag": "Accepted",
+              "acceptedResult": {
+                "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                "evidenceManifest": {
+                  "byteLength": 193,
+                  "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                }
+              }
+            }
+          }
+        },
+        "occurrenceClassification": "NonActionOccurrence",
+        "ordinal": 1,
+        "plannedAttempt": {
+          "attemptId": "hermetic-mvp-attempt-A",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "executor": "executor:hermetic-child",
+          "runId": "hermetic-mvp-run-A",
+          "taskId": "A",
+          "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:executor-state-observation:1",
+      "position": 27,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "PlannedAttemptExecutorWorkReported",
+        "ordinal": 2,
+        "report": {
+          "_tag": "ExecutorWorkTerminal",
+          "correlation": {
+            "attemptId": "hermetic-mvp-attempt-A",
+            "runId": "hermetic-mvp-run-A"
+          },
+          "result": {
+            "_tag": "Accepted",
+            "acceptedResult": {
+              "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+              "evidenceManifest": {
+                "byteLength": 193,
+                "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+              }
+            }
+          }
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:executor-work-report:2",
+      "position": 28,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTaskClaim",
+          "operationId": "01a124f8-e00d-701b-a78a-45029ad88cdb",
+          "predecessorOperationIds": [
+            "01a124f8-dfea-7cb8-94f6-a1d36a518c68"
+          ],
+          "target": "hermetic-mvp-target-A",
+          "taskId": "A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-e00d-701b-a78a-45029ad88cdb:intent",
+      "position": 29,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "FocusedTaskClaimFacts",
+          "completeness": "Complete",
+          "consistency": "Atomic",
+          "coverage": {
+            "_tag": "ExactTaskClaim",
+            "taskId": "A"
+          },
+          "freshness": {
+            "_tag": "ObservedDuringLogicalRead",
+            "operationId": "01a124f8-e00d-701b-a78a-45029ad88cdb"
+          },
+          "observation": {
+            "_tag": "ActiveTaskClaim",
+            "operationId": "01a124f8-ded8-7e13-bf8b-8c4656d3e8b2",
+            "owner": "dalph",
+            "taskId": "A",
+            "custodyNonceSha256": "f6ac80ef36ee32d7a01d22301bfaba58e1386748ba2e98c3947ca3d1878b9a47"
+          },
+          "operationId": "01a124f8-e00d-701b-a78a-45029ad88cdb",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-e00d-701b-a78a-45029ad88cdb",
+        "version": 15
+      },
+      "key": "operation:01a124f8-e00d-701b-a78a-45029ad88cdb:outcome",
+      "position": 30,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "IntegrationResponsibilityBegan",
+        "acceptedResult": {
+          "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+          "evidenceManifest": {
+            "byteLength": 193,
+            "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+          }
+        },
+        "integrationTarget": {
+          "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+          "ref": "refs/heads/integration-target"
+        },
+        "plannedAttempt": {
+          "attemptId": "hermetic-mvp-attempt-A",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "executor": "executor:hermetic-child",
+          "runId": "hermetic-mvp-run-A",
+          "taskId": "A",
+          "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:integration-responsibility-began",
+      "position": 31,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "IntegrationStarted",
+        "acceptedResult": {
+          "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+          "evidenceManifest": {
+            "byteLength": 193,
+            "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+          }
+        },
+        "integrationTarget": {
+          "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+          "ref": "refs/heads/integration-target"
+        },
+        "plannedAttempt": {
+          "attemptId": "hermetic-mvp-attempt-A",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "executor": "executor:hermetic-child",
+          "runId": "hermetic-mvp-run-A",
+          "taskId": "A",
+          "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "responsibilityBeganAt": 31,
+        "version": 15
+      },
+      "key": "attempt:hermetic-mvp-attempt-A:integration-started",
+      "position": 32,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "RemoteBaselineReadIntended",
+        "correlation": {
+          "_tag": "Initial",
+          "localTarget": {
+            "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+            "ref": "refs/heads/integration-target"
+          },
+          "remoteTarget": {
+            "branch": "refs/heads/master",
+            "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+          },
+          "responsibility": {
+            "acceptedResult": {
+              "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+              "evidenceManifest": {
+                "byteLength": 193,
+                "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+              }
+            },
+            "integrationTarget": {
+              "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+              "ref": "refs/heads/integration-target"
+            },
+            "plannedAttempt": {
+              "attemptId": "hermetic-mvp-attempt-A",
+              "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "branch": "refs/heads/dalph/hermetic-mvp-A",
+              "executor": "executor:hermetic-child",
+              "runId": "hermetic-mvp-run-A",
+              "taskId": "A",
+              "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+              "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+            },
+            "queuedAt": 31,
+            "startedAt": 32
+          },
+          "runId": "hermetic-mvp-run-A",
+          "baselineId": "remote-baseline:hermetic-mvp-run-A:hermetic-mvp-attempt-A:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:/tmp/dalph-hermetic-mvp-rBAyvR/target.git:refs/heads/master:initial"
+        },
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "version": 15
+      },
+      "key": "remote-baseline:remote-baseline:hermetic-mvp-run-A:hermetic-mvp-attempt-A:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:/tmp/dalph-hermetic-mvp-rBAyvR/target.git:refs/heads/master:initial:read-intended",
+      "position": 33,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "RemoteBaselineObserved",
+        "correlation": {
+          "_tag": "Initial",
+          "localTarget": {
+            "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+            "ref": "refs/heads/integration-target"
+          },
+          "remoteTarget": {
+            "branch": "refs/heads/master",
+            "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+          },
+          "responsibility": {
+            "acceptedResult": {
+              "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+              "evidenceManifest": {
+                "byteLength": 193,
+                "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+              }
+            },
+            "integrationTarget": {
+              "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+              "ref": "refs/heads/integration-target"
+            },
+            "plannedAttempt": {
+              "attemptId": "hermetic-mvp-attempt-A",
+              "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "branch": "refs/heads/dalph/hermetic-mvp-A",
+              "executor": "executor:hermetic-child",
+              "runId": "hermetic-mvp-run-A",
+              "taskId": "A",
+              "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+              "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+            },
+            "queuedAt": 31,
+            "startedAt": 32
+          },
+          "runId": "hermetic-mvp-run-A",
+          "baselineId": "remote-baseline:hermetic-mvp-run-A:hermetic-mvp-attempt-A:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:/tmp/dalph-hermetic-mvp-rBAyvR/target.git:refs/heads/master:initial"
+        },
+        "observation": {
+          "_tag": "Aligned",
+          "localHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "remoteHead": "d76af04d78ed7dec05bfcb1e708f445572925b00"
+        },
+        "occurrenceClassification": "NonActionOccurrence",
+        "version": 15
+      },
+      "key": "remote-baseline:remote-baseline:hermetic-mvp-run-A:hermetic-mvp-attempt-A:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:/tmp/dalph-hermetic-mvp-rBAyvR/target.git:refs/heads/master:initial:observed",
+      "position": 34,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "WorkflowEstablishment"
+          },
+          "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0",
+          "predecessorOperationIds": [
+            "01a124f8-de90-73bf-980c-4967996ea184",
+            "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+            "01a124f8-def2-7076-bb6d-b4fbdf52df31",
+            "01a124f8-dfa8-7fc2-904b-a28193755a5a",
+            "01a124f8-dfd0-74d3-83d7-ca8c607f2e15",
+            "01a124f8-dfea-7cb8-94f6-a1d36a518c68"
+          ],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": []
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-e057-703b-9988-f75daff9d6f0:intent",
+      "position": 35,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "UnchangedTaskTrackerFactsReconfirmed",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentitiesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecyclesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisitesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskGroupingsReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembershipReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0",
+          "priorFullObservationOperationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-e057-703b-9988-f75daff9d6f0",
+        "version": 15
+      },
+      "key": "operation:01a124f8-e057-703b-9988-f75daff9d6f0:outcome",
+      "position": 36,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTaskClaim",
+          "operationId": "01a124f8-e068-78a0-a5cc-59355a577a14",
+          "predecessorOperationIds": [
+            "01a124f8-e057-703b-9988-f75daff9d6f0"
+          ],
+          "target": "hermetic-mvp-target-A",
+          "taskId": "A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-e068-78a0-a5cc-59355a577a14:intent",
+      "position": 37,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "FocusedTaskClaimFacts",
+          "completeness": "Complete",
+          "consistency": "Atomic",
+          "coverage": {
+            "_tag": "ExactTaskClaim",
+            "taskId": "A"
+          },
+          "freshness": {
+            "_tag": "ObservedDuringLogicalRead",
+            "operationId": "01a124f8-e068-78a0-a5cc-59355a577a14"
+          },
+          "observation": {
+            "_tag": "ActiveTaskClaim",
+            "operationId": "01a124f8-ded8-7e13-bf8b-8c4656d3e8b2",
+            "owner": "dalph",
+            "taskId": "A",
+            "custodyNonceSha256": "f6ac80ef36ee32d7a01d22301bfaba58e1386748ba2e98c3947ca3d1878b9a47"
+          },
+          "operationId": "01a124f8-e068-78a0-a5cc-59355a577a14",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-e068-78a0-a5cc-59355a577a14",
+        "version": 15
+      },
+      "key": "operation:01a124f8-e068-78a0-a5cc-59355a577a14:outcome",
+      "position": 38,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerReadIntentRecorded",
+        "operation": {
+          "_tag": "ReadTrackerGraph",
+          "cause": {
+            "_tag": "PostQuiescenceReconfirmation",
+            "quiescentGraphOperationId": "01a124f8-e057-703b-9988-f75daff9d6f0"
+          },
+          "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff",
+          "predecessorOperationIds": [
+            "01a124f8-de90-73bf-980c-4967996ea184",
+            "01a124f8-debe-797d-b11f-3be8b4f22ef0",
+            "01a124f8-def2-7076-bb6d-b4fbdf52df31",
+            "01a124f8-dfa8-7fc2-904b-a28193755a5a",
+            "01a124f8-dfd0-74d3-83d7-ca8c607f2e15",
+            "01a124f8-dfea-7cb8-94f6-a1d36a518c68",
+            "01a124f8-e057-703b-9988-f75daff9d6f0"
+          ],
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": []
+          },
+          "target": "hermetic-mvp-target-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-e07e-7148-86d0-9ce8cb7d58ff:intent",
+      "position": 39,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TaskTrackerFactsObserved",
+        "observation": {
+          "_tag": "UnchangedTaskTrackerFactsReconfirmed",
+          "factFamilies": [
+            {
+              "_tag": "TaskIdentitiesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            },
+            {
+              "_tag": "TaskLifecyclesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskPrerequisitesReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskGroupingsReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "subjectTaskIds": [
+                "A"
+              ]
+            },
+            {
+              "_tag": "TaskTargetMembershipReconfirmed",
+              "completeness": "Complete",
+              "consistency": "PotentiallyMixedTime",
+              "contentIdentity": "hermetic-mvp:Open",
+              "freshness": {
+                "_tag": "ObservedDuringLogicalRead",
+                "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff"
+              },
+              "coverage": {
+                "_tag": "CompleteTargetClosure",
+                "explicitlyCoveredTaskIds": [],
+                "target": "hermetic-mvp-target-A"
+              },
+              "target": "hermetic-mvp-target-A"
+            }
+          ],
+          "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff",
+          "priorFullObservationOperationId": "01a124f8-de90-73bf-980c-4967996ea184",
+          "rootTaskId": "A",
+          "target": "hermetic-mvp-target-A"
+        },
+        "operationId": "01a124f8-e07e-7148-86d0-9ce8cb7d58ff",
+        "version": 15
+      },
+      "key": "operation:01a124f8-e07e-7148-86d0-9ce8cb7d58ff:outcome",
+      "position": 40,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "GitReadIntentRecorded",
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "operation": {
+          "_tag": "ReadTargetLineage",
+          "integrationTarget": {
+            "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+            "ref": "refs/heads/integration-target"
+          },
+          "operationId": "01a124f8-e08e-7de3-be4e-93a524b1396e",
+          "plannedAttempt": {
+            "attemptId": "hermetic-mvp-attempt-A",
+            "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "branch": "refs/heads/dalph/hermetic-mvp-A",
+            "executor": "executor:hermetic-child",
+            "runId": "hermetic-mvp-run-A",
+            "taskId": "A",
+            "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+            "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+          },
+          "predecessorOperationIds": []
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-e08e-7de3-be4e-93a524b1396e:intent",
+      "position": 41,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "TargetLineageObserved",
+        "observation": {
+          "plannedBaseIsAncestorOfTargetHead": true,
+          "plannedBaseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "targetHeadSha": "d76af04d78ed7dec05bfcb1e708f445572925b00"
+        },
+        "occurrenceClassification": "NonActionOccurrence",
+        "operationId": "01a124f8-e08e-7de3-be4e-93a524b1396e",
+        "plannedAttempt": {
+          "attemptId": "hermetic-mvp-attempt-A",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "branch": "refs/heads/dalph/hermetic-mvp-A",
+          "executor": "executor:hermetic-child",
+          "runId": "hermetic-mvp-run-A",
+          "taskId": "A",
+          "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+          "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+        },
+        "version": 15
+      },
+      "key": "operation:01a124f8-e08e-7de3-be4e-93a524b1396e:outcome",
+      "position": 42,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "IntegratorSessionFixed",
+        "correlation": {
+          "acceptedResult": {
+            "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+            "evidenceManifest": {
+              "byteLength": 193,
+              "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+            }
+          },
+          "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+          "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+          "integrationTarget": {
+            "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+            "ref": "refs/heads/integration-target"
+          },
+          "plannedAttempt": {
+            "attemptId": "hermetic-mvp-attempt-A",
+            "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "branch": "refs/heads/dalph/hermetic-mvp-A",
+            "executor": "executor:hermetic-child",
+            "runId": "hermetic-mvp-run-A",
+            "taskId": "A",
+            "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+            "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+          },
+          "queuedAt": 31,
+          "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+          "startedAt": 32,
+          "targetLineageObservedAt": 42
+        },
+        "version": 15
+      },
+      "key": "integrator:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:session-fixed",
+      "position": 43,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "IntegratorRunStarted",
+        "run": {
+          "ordinal": 1,
+          "session": {
+            "acceptedResult": {
+              "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+              "evidenceManifest": {
+                "byteLength": 193,
+                "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+              }
+            },
+            "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "integrationTarget": {
+              "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+              "ref": "refs/heads/integration-target"
+            },
+            "plannedAttempt": {
+              "attemptId": "hermetic-mvp-attempt-A",
+              "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "branch": "refs/heads/dalph/hermetic-mvp-A",
+              "executor": "executor:hermetic-child",
+              "runId": "hermetic-mvp-run-A",
+              "taskId": "A",
+              "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+              "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+            },
+            "queuedAt": 31,
+            "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "startedAt": 32,
+            "targetLineageObservedAt": 42
+          }
+        },
+        "version": 15
+      },
+      "key": "integrator:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:session:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:run:1:started",
+      "position": 44,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "IntegratorRunResultRecorded",
+        "result": {
+          "_tag": "PreparedCandidate",
+          "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+          "correlation": {
+            "ordinal": 1,
+            "session": {
+              "acceptedResult": {
+                "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                "evidenceManifest": {
+                  "byteLength": 193,
+                  "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                }
+              },
+              "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+              "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "integrationTarget": {
+                "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                "ref": "refs/heads/integration-target"
+              },
+              "plannedAttempt": {
+                "attemptId": "hermetic-mvp-attempt-A",
+                "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "branch": "refs/heads/dalph/hermetic-mvp-A",
+                "executor": "executor:hermetic-child",
+                "runId": "hermetic-mvp-run-A",
+                "taskId": "A",
+                "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+              },
+              "queuedAt": 31,
+              "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+              "startedAt": 32,
+              "targetLineageObservedAt": 42
+            }
+          }
+        },
+        "run": {
+          "ordinal": 1,
+          "session": {
+            "acceptedResult": {
+              "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+              "evidenceManifest": {
+                "byteLength": 193,
+                "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+              }
+            },
+            "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "integrationTarget": {
+              "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+              "ref": "refs/heads/integration-target"
+            },
+            "plannedAttempt": {
+              "attemptId": "hermetic-mvp-attempt-A",
+              "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "branch": "refs/heads/dalph/hermetic-mvp-A",
+              "executor": "executor:hermetic-child",
+              "runId": "hermetic-mvp-run-A",
+              "taskId": "A",
+              "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+              "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+            },
+            "queuedAt": 31,
+            "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "startedAt": 32,
+            "targetLineageObservedAt": 42
+          }
+        },
+        "version": 15
+      },
+      "key": "integrator:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:session:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:run:1:result",
+      "position": 45,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "IntegratorRunCandidateGitReadIntended",
+        "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+        "run": {
+          "ordinal": 1,
+          "session": {
+            "acceptedResult": {
+              "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+              "evidenceManifest": {
+                "byteLength": 193,
+                "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+              }
+            },
+            "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "integrationTarget": {
+              "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+              "ref": "refs/heads/integration-target"
+            },
+            "plannedAttempt": {
+              "attemptId": "hermetic-mvp-attempt-A",
+              "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "branch": "refs/heads/dalph/hermetic-mvp-A",
+              "executor": "executor:hermetic-child",
+              "runId": "hermetic-mvp-run-A",
+              "taskId": "A",
+              "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+              "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+            },
+            "queuedAt": 31,
+            "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "startedAt": 32,
+            "targetLineageObservedAt": 42
+          }
+        },
+        "version": 15
+      },
+      "key": "integrator:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:session:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:run:1:candidate:\"44cab8708e4c47e167d5f932653f00788bdfac91\":git-read-intent",
+      "position": 46,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "IntegratorRunCandidateGitObserved",
+        "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+        "observation": {
+          "_tag": "Commit",
+          "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+          "commit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+          "directParents": [
+            "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+          ]
+        },
+        "run": {
+          "ordinal": 1,
+          "session": {
+            "acceptedResult": {
+              "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+              "evidenceManifest": {
+                "byteLength": 193,
+                "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+              }
+            },
+            "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+            "integrationTarget": {
+              "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+              "ref": "refs/heads/integration-target"
+            },
+            "plannedAttempt": {
+              "attemptId": "hermetic-mvp-attempt-A",
+              "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "branch": "refs/heads/dalph/hermetic-mvp-A",
+              "executor": "executor:hermetic-child",
+              "runId": "hermetic-mvp-run-A",
+              "taskId": "A",
+              "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+              "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+            },
+            "queuedAt": 31,
+            "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+            "startedAt": 32,
+            "targetLineageObservedAt": 42
+          }
+        },
+        "version": 15
+      },
+      "key": "integrator:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:session:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:run:1:candidate:\"44cab8708e4c47e167d5f932653f00788bdfac91\":git-observation",
+      "position": 47,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "RemotePublicationIntended",
+        "correlation": {
+          "qualifiedCandidate": {
+            "candidateCommit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "directParents": [
+              "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+            ],
+            "qualifiedAt": 47,
+            "run": {
+              "ordinal": 1,
+              "session": {
+                "acceptedResult": {
+                  "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                  "evidenceManifest": {
+                    "byteLength": 193,
+                    "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                  }
+                },
+                "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "integrationTarget": {
+                  "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                  "ref": "refs/heads/integration-target"
+                },
+                "plannedAttempt": {
+                  "attemptId": "hermetic-mvp-attempt-A",
+                  "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                  "branch": "refs/heads/dalph/hermetic-mvp-A",
+                  "executor": "executor:hermetic-child",
+                  "runId": "hermetic-mvp-run-A",
+                  "taskId": "A",
+                  "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                  "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+                },
+                "queuedAt": 31,
+                "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "startedAt": 32,
+                "targetLineageObservedAt": 42
+              }
+            }
+          },
+          "requestId": "direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+          "target": {
+            "branch": "refs/heads/master",
+            "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+          }
+        },
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "version": 15
+      },
+      "key": "remote-publication:direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master:intended",
+      "position": 48,
+      "runId": "hermetic-mvp-run-A"
+    },
+    {
+      "event": {
+        "_tag": "RemotePublicationAttemptIntended",
+        "attemptOrdinal": 1,
+        "correlation": {
+          "qualifiedCandidate": {
+            "candidateCommit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "directParents": [
+              "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+            ],
+            "qualifiedAt": 47,
+            "run": {
+              "ordinal": 1,
+              "session": {
+                "acceptedResult": {
+                  "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                  "evidenceManifest": {
+                    "byteLength": 193,
+                    "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                  }
+                },
+                "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "integrationTarget": {
+                  "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                  "ref": "refs/heads/integration-target"
+                },
+                "plannedAttempt": {
+                  "attemptId": "hermetic-mvp-attempt-A",
+                  "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                  "branch": "refs/heads/dalph/hermetic-mvp-A",
+                  "executor": "executor:hermetic-child",
+                  "runId": "hermetic-mvp-run-A",
+                  "taskId": "A",
+                  "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                  "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+                },
+                "queuedAt": 31,
+                "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "startedAt": 32,
+                "targetLineageObservedAt": 42
+              }
+            }
+          },
+          "requestId": "direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+          "target": {
+            "branch": "refs/heads/master",
+            "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+          }
+        },
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "refspec": "44cab8708e4c47e167d5f932653f00788bdfac91:refs/heads/master",
+        "version": 15
+      },
+      "key": "remote-publication:direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master:attempt:1",
+      "position": 49,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "intents": [
+    {
+      "event": {
+        "_tag": "RemotePublicationIntended",
+        "correlation": {
+          "qualifiedCandidate": {
+            "candidateCommit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "directParents": [
+              "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+            ],
+            "qualifiedAt": 47,
+            "run": {
+              "ordinal": 1,
+              "session": {
+                "acceptedResult": {
+                  "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                  "evidenceManifest": {
+                    "byteLength": 193,
+                    "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                  }
+                },
+                "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "integrationTarget": {
+                  "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                  "ref": "refs/heads/integration-target"
+                },
+                "plannedAttempt": {
+                  "attemptId": "hermetic-mvp-attempt-A",
+                  "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                  "branch": "refs/heads/dalph/hermetic-mvp-A",
+                  "executor": "executor:hermetic-child",
+                  "runId": "hermetic-mvp-run-A",
+                  "taskId": "A",
+                  "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                  "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+                },
+                "queuedAt": 31,
+                "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "startedAt": 32,
+                "targetLineageObservedAt": 42
+              }
+            }
+          },
+          "requestId": "direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+          "target": {
+            "branch": "refs/heads/master",
+            "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+          }
+        },
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "version": 15
+      },
+      "key": "remote-publication:direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master:intended",
+      "position": 48,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "attempts": [
+    {
+      "event": {
+        "_tag": "RemotePublicationAttemptIntended",
+        "attemptOrdinal": 1,
+        "correlation": {
+          "qualifiedCandidate": {
+            "candidateCommit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "directParents": [
+              "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+            ],
+            "qualifiedAt": 47,
+            "run": {
+              "ordinal": 1,
+              "session": {
+                "acceptedResult": {
+                  "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                  "evidenceManifest": {
+                    "byteLength": 193,
+                    "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                  }
+                },
+                "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "integrationTarget": {
+                  "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                  "ref": "refs/heads/integration-target"
+                },
+                "plannedAttempt": {
+                  "attemptId": "hermetic-mvp-attempt-A",
+                  "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                  "branch": "refs/heads/dalph/hermetic-mvp-A",
+                  "executor": "executor:hermetic-child",
+                  "runId": "hermetic-mvp-run-A",
+                  "taskId": "A",
+                  "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                  "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+                },
+                "queuedAt": 31,
+                "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "startedAt": 32,
+                "targetLineageObservedAt": 42
+              }
+            }
+          },
+          "requestId": "direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+          "target": {
+            "branch": "refs/heads/master",
+            "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+          }
+        },
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "refspec": "44cab8708e4c47e167d5f932653f00788bdfac91:refs/heads/master",
+        "version": 15
+      },
+      "key": "remote-publication:direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master:attempt:1",
+      "position": 49,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "proofs": [
+    {
+      "event": {
+        "_tag": "RemotePublicationSucceeded",
+        "correlation": {
+          "qualifiedCandidate": {
+            "candidateCommit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "directParents": [
+              "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+            ],
+            "qualifiedAt": 47,
+            "run": {
+              "ordinal": 1,
+              "session": {
+                "acceptedResult": {
+                  "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                  "evidenceManifest": {
+                    "byteLength": 193,
+                    "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                  }
+                },
+                "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "integrationTarget": {
+                  "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                  "ref": "refs/heads/integration-target"
+                },
+                "plannedAttempt": {
+                  "attemptId": "hermetic-mvp-attempt-A",
+                  "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                  "branch": "refs/heads/dalph/hermetic-mvp-A",
+                  "executor": "executor:hermetic-child",
+                  "runId": "hermetic-mvp-run-A",
+                  "taskId": "A",
+                  "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                  "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+                },
+                "queuedAt": 31,
+                "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "startedAt": 32,
+                "targetLineageObservedAt": 42
+              }
+            }
+          },
+          "requestId": "direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+          "target": {
+            "branch": "refs/heads/master",
+            "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+          }
+        },
+        "occurrenceClassification": "NonActionOccurrence",
+        "proof": {
+          "_tag": "ReconciledCandidateCurrent",
+          "attemptOrdinal": 1,
+          "remoteHead": "44cab8708e4c47e167d5f932653f00788bdfac91"
+        },
+        "version": 15
+      },
+      "key": "remote-publication:direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master:succeeded",
+      "position": 58,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "senderRecords": [
+    {
+      "filename": "2f73c48d05022887226bbc5211cd8f4ddb08c17cc44df09137da9a7a603a93be.json",
+      "record": {
+        "subject": {
+          "requestId": "direct-publication:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:/tmp/dalph-hermetic-mvp-rBAyvR/target.git\u0000refs/heads/master",
+          "attemptOrdinal": 1
+        },
+        "identity": {
+          "pid": 1186634,
+          "startIdentity": "linux:35940499"
+        },
+        "phase": "Stopped",
+        "custodyNonceSha256": "8b7b1776cd295b783b48cd20a56a64a86fa199fa578456feee903521683e07c6"
+      },
+      "pidExistsAfterReconciliation": false
+    }
+  ],
+  "candidatePublicationPushCalls": 1,
+  "publicationRecoveryTrace": [
+    "custody-stopped",
+    "observe-pinned-branch"
+  ],
+  "custodyReconciliations": 1,
+  "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+  "targetHead": "44cab8708e4c47e167d5f932653f00788bdfac91",
+  "plannedAttempt": {
+    "attemptId": "hermetic-mvp-attempt-A",
+    "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+    "branch": "refs/heads/dalph/hermetic-mvp-A",
+    "executor": "executor:hermetic-child",
+    "runId": "hermetic-mvp-run-A",
+    "taskId": "A",
+    "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+    "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+  },
+  "promotionAttemptRecords": [
+    {
+      "event": {
+        "_tag": "TargetPromotionAttemptIntended",
+        "attemptOrdinal": 1,
+        "correlation": {
+          "qualifiedCandidate": {
+            "candidateCommit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "directParents": [
+              "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+            ],
+            "qualifiedAt": 47,
+            "run": {
+              "ordinal": 1,
+              "session": {
+                "acceptedResult": {
+                  "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                  "evidenceManifest": {
+                    "byteLength": 193,
+                    "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                  }
+                },
+                "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "integrationTarget": {
+                  "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                  "ref": "refs/heads/integration-target"
+                },
+                "plannedAttempt": {
+                  "attemptId": "hermetic-mvp-attempt-A",
+                  "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                  "branch": "refs/heads/dalph/hermetic-mvp-A",
+                  "executor": "executor:hermetic-child",
+                  "runId": "hermetic-mvp-run-A",
+                  "taskId": "A",
+                  "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                  "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+                },
+                "queuedAt": 31,
+                "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "startedAt": 32,
+                "targetLineageObservedAt": 42
+              }
+            }
+          },
+          "requestId": "target-promotion:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91"
+        },
+        "reason": {
+          "_tag": "Initial",
+          "observedHeadSha": "d76af04d78ed7dec05bfcb1e708f445572925b00"
+        },
+        "version": 15
+      },
+      "key": "target-promotion:target-promotion:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:attempt:1",
+      "position": 60,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "promotionSuccessRecords": [
+    {
+      "event": {
+        "_tag": "TargetPromotionObservedSuccess",
+        "basis": {
+          "_tag": "AfterAttempt",
+          "attemptOrdinal": 1
+        },
+        "correlation": {
+          "qualifiedCandidate": {
+            "candidateCommit": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "candidateText": "44cab8708e4c47e167d5f932653f00788bdfac91",
+            "directParents": [
+              "d76af04d78ed7dec05bfcb1e708f445572925b00",
+              "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b"
+            ],
+            "qualifiedAt": 47,
+            "run": {
+              "ordinal": 1,
+              "session": {
+                "acceptedResult": {
+                  "commit": "75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b",
+                  "evidenceManifest": {
+                    "byteLength": 193,
+                    "digest": "7f05f8a0fbc487d8b462734332ce646945a07140170a61a3d116cc88f349f7fe"
+                  }
+                },
+                "candidateResource": "integrator-resource:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "expectedTargetHead": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                "integrationTarget": {
+                  "repository": "/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git",
+                  "ref": "refs/heads/integration-target"
+                },
+                "plannedAttempt": {
+                  "attemptId": "hermetic-mvp-attempt-A",
+                  "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00",
+                  "branch": "refs/heads/dalph/hermetic-mvp-A",
+                  "executor": "executor:hermetic-child",
+                  "runId": "hermetic-mvp-run-A",
+                  "taskId": "A",
+                  "taskRevision": "tr1.eyJib2R5IjoiQ3JlYXRlIFJFU1VMVC5tZC4iLCJ0aXRsZSI6IkNvbXBsZXRlIEEifQ",
+                  "worktree": "/tmp/dalph-hermetic-mvp-rBAyvR/task-A"
+                },
+                "queuedAt": 31,
+                "sessionId": "integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target",
+                "startedAt": 32,
+                "targetLineageObservedAt": 42
+              }
+            }
+          },
+          "requestId": "target-promotion:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91"
+        },
+        "observation": {
+          "_tag": "CompareAndSetApplied",
+          "candidateAncestry": "Current",
+          "targetHeadSha": "44cab8708e4c47e167d5f932653f00788bdfac91"
+        },
+        "version": 15
+      },
+      "key": "target-promotion:target-promotion:integrator-session:hermetic-mvp-run-A:hermetic-mvp-attempt-A:32:42:d76af04d78ed7dec05bfcb1e708f445572925b00:75c6fb8d88cf27fc6ca6a9ba7b12187096d7757b:/tmp/dalph-hermetic-mvp-rBAyvR/repository/.git:refs/heads/integration-target:1:44cab8708e4c47e167d5f932653f00788bdfac91:observed-success",
+      "position": 61,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "runBeginningRecords": [
+    {
+      "event": {
+        "_tag": "WorkflowRunBegan",
+        "attemptBasePolicy": {
+          "_tag": "ExplicitFixedBase",
+          "baseSha": "d76af04d78ed7dec05bfcb1e708f445572925b00"
+        },
+        "initialControlPolicy": {
+          "taskExecutionCapacity": 1
+        },
+        "initiatedBy": {
+          "_tag": "DalphCoordinator"
+        },
+        "occurrenceClassification": "InitiatedAction",
+        "remotePublicationTarget": {
+          "branch": "refs/heads/master",
+          "endpoint": "/tmp/dalph-hermetic-mvp-rBAyvR/target.git"
+        },
+        "target": "hermetic-mvp-target-A",
+        "version": 15
+      },
+      "key": "run:began",
+      "position": 1,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "runTerminationRecords": [
+    {
+      "event": {
+        "_tag": "WorkflowRunTerminated",
+        "disposition": "Completed",
+        "evidence": {
+          "complete": true,
+          "coverage": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": [],
+            "target": "hermetic-mvp-target-A"
+          },
+          "contentIdentity": "hermetic-mvp:CompletedSuccessfully",
+          "graphOutcome": "AllTasksSucceeded",
+          "operationId": "01a124f8-e5ad-700d-840b-8983ff986156",
+          "readShape": {
+            "_tag": "CompleteTargetClosure",
+            "explicitlyCoveredTaskIds": []
+          },
+          "requiredFactFamilies": [
+            "TaskIdentities",
+            "TaskLifecycles",
+            "TaskPrerequisites",
+            "TaskGroupings",
+            "TaskTargetMembership"
+          ],
+          "rootTaskId": "A",
+          "runId": "hermetic-mvp-run-A",
+          "blockedTaskIds": [],
+          "target": "hermetic-mvp-target-A",
+          "terminalTaskIds": [],
+          "observedAt": 117
+        },
+        "occurrenceClassification": "NonActionOccurrence",
+        "version": 15
+      },
+      "key": "run:terminated",
+      "position": 118,
+      "runId": "hermetic-mvp-run-A"
+    }
+  ],
+  "eventOrder": [
+    "WorkflowRunBegan",
+    "RemotePublicationAdmissionReadIntended",
+    "RemotePublicationAdmissionObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskClaimAcquisitionIntended",
+    "TaskClaimAcquired",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskAttemptPlanned",
+    "TaskWorktreeReconciliationIntended",
+    "TaskWorktreeReady",
+    "PlannedAttemptExecutorWorkResponsibilityBegan",
+    "PlannedAttemptExecutorCommandIntended",
+    "PlannedAttemptExecutorCommandResponseObserved",
+    "PlannedAttemptExecutorWorkReported",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "PlannedAttemptExecutorStateObserved",
+    "PlannedAttemptExecutorWorkReported",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "IntegrationResponsibilityBegan",
+    "IntegrationStarted",
+    "RemoteBaselineReadIntended",
+    "RemoteBaselineObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "GitReadIntentRecorded",
+    "TargetLineageObserved",
+    "IntegratorSessionFixed",
+    "IntegratorRunStarted",
+    "IntegratorRunResultRecorded",
+    "IntegratorRunCandidateGitReadIntended",
+    "IntegratorRunCandidateGitObserved",
+    "RemotePublicationIntended",
+    "RemotePublicationAttemptIntended",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "GitReadIntentRecorded",
+    "TargetLineageObserved",
+    "RemotePublicationSucceeded",
+    "TargetPromotionIntended",
+    "TargetPromotionAttemptIntended",
+    "TargetPromotionObservedSuccess",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "CompletionClaimReplacementIntended",
+    "CompletionClaimReplacementAttemptIntended",
+    "CompletionClaimReplaced",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "CompletionTaskCandidateAncestryReadIntended",
+    "CompletionTaskCandidateAncestryObserved",
+    "CompletionTaskIntended",
+    "CompletionTaskAttemptIntended",
+    "CompletionTaskAcknowledged",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "CompletionClaimDeletionIntended",
+    "CompletionClaimDeletionReadObserved",
+    "TaskClaimReleaseIntended",
+    "TaskClaimReleased",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionAttemptIntended",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeleted",
+    "IntegrationFinalitySettled",
+    "WorktreeCleanupAuthorized",
+    "IntegratorCandidateCleanupAuthorized",
+    "WorktreeCleanupObservationIntended",
+    "WorktreeCleanupObserved",
+    "WorktreeCleanupMutationIntended",
+    "WorktreeCleanupMutationResultRecorded",
+    "WorktreeCleanupObservationIntended",
+    "WorktreeCleanupObserved",
+    "WorktreeCleanupAbsenceConfirmed",
+    "WorktreeCleanupSettled",
+    "BranchCleanupAuthorized",
+    "BranchCleanupObservationIntended",
+    "BranchCleanupObserved",
+    "BranchCleanupMutationIntended",
+    "BranchCleanupMutationResultRecorded",
+    "BranchCleanupObservationIntended",
+    "BranchCleanupObserved",
+    "BranchCleanupAbsenceConfirmed",
+    "BranchCleanupSettled",
+    "IntegratorCandidateCleanupObservationIntended",
+    "IntegratorCandidateCleanupObserved",
+    "IntegratorCandidateCleanupAbsenceConfirmed",
+    "IntegratorCandidateCleanupSettled",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "WorkflowRunTerminated"
+  ],
+  "serializationNote": "Generated custody nonce is retained as SHA-256; exact original remains in /tmp/issue-501-qualification/final/native-publication-custody.json. No other fields changed."
+}

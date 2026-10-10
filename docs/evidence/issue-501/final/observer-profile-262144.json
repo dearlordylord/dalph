@@ -1,0 +1,22 @@
+{
+  "profile": "paused-loopback-tcp/64-replacements-per-write/max4096-updates/one-observer/zero-workflow-records",
+  "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+  "candidateDiff": 0,
+  "node": "v24.20.0",
+  "platform": "linux",
+  "arch": "arm64",
+  "payloadBytes": 262144,
+  "observerCount": 1,
+  "publishedValues": 705,
+  "optional": {
+    "inFlightCharge": 525906,
+    "pendingCharge": 525906,
+    "admittedWriteBytes": 262339,
+    "nativeWritableBytes": 262349
+  },
+  "sharedCanonicalBytes": 0,
+  "rssBytes": 493772800,
+  "heapUsedBytes": 263761192,
+  "peakRssBytes": 533348352,
+  "safetyCeilingIsHeapCap": false
+}

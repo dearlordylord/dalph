@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "base": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+  "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+  "tree": "aaac40cf7f37f743d4c8ba4e8598be84dff6da51",
+  "status": "",
+  "integratedNativeRepair": "1e2f91afe41304debc9beb94c694d8452f82d6d6",
+  "retainedHandoff": "26d86eba630503508960a9d281f79ae5f48e3102",
+  "startedUTC": "2026-10-10T08:30:55.274434+00:00",
+  "wallStopUTC": "2026-10-10T08:46:00Z",
+  "command": "mise exec -- pnpm check:submit",
+  "boundedCommand": "DALPH_DIAGNOSTICS_BASE=5e7bfa81e8567c356708b7bc71830ec5bd6aa290 timeout --signal=TERM --kill-after=15s 900s mise exec -- pnpm check:submit",
+  "commandManifest": "pnpm check:artifacts && pnpm test:formal:controls && pnpm check:fast && pnpm lint:code --census && pnpm test:cassettes:memory",
+  "manifestSha256": "5a4b2e57be723ad9fb0cde9b640d2f1ac3023ace0fa274650dbde6ced4122982",
+  "lockSha256": "c196b6b9829b6fa31953130b14fc3ad471e62837796af0dd87d60206674f3f28",
+  "node": "v24.20.0",
+  "pnpm": "10.29.3",
+  "machine": {
+    "kernel": "Linux 7.0.14-orbstack-00380-ga7e0a2dc9535",
+    "architecture": "aarch64",
+    "onlineProcessors": 12
+  },
+  "freeze": "No candidate/dependency/shared-tool writes until readiness exit observed. Generated artifacts are command-owned.",
+  "earlierInterruptedArtifactCheck": "No retained completion exit; not credited. No current Node/pnpm/vitest check writer seen in exact worktree before merge."
+}

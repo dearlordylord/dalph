@@ -1,0 +1,26 @@
+--- a/packages/orchestrator/src/presentation/trace-reader.ts
++++ b/packages/orchestrator/src/presentation/trace-reader.ts
+@@ -2313,7 +2313,8 @@
+   records: ReadonlyArray<JournalRecord>
+ ) {
+   yield* validateRecords(runId, records)
+-  const historyIssue = fullHistoryIssue(runId, records)
++  const diagnostic = (globalThis as any).__qualificationSpan
++  const historyIssue = diagnostic ? diagnostic("FullCurrentFormatHistoryValidation", () => fullHistoryIssue(runId, records)) : fullHistoryIssue(runId, records)
+   if (historyIssue !== undefined) {
+     return yield* new TraceProjectionInvalid({ detail: historyIssue, runId })
+   }
+@@ -2322,9 +2323,11 @@
+     Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId }))
+   )
+   /* v8 ignore next -- @preserve a validated history that reaches this fallback has the same projection used by the complete index; its item mapping is schema-total. */
+-  const items = projection.occurrences.map((occurrence) => itemFromOccurrence(runId, occurrence))
++  const mapItems = () => projection.occurrences.map((occurrence) => itemFromOccurrence(runId, occurrence))
++  const items = diagnostic ? diagnostic("OccurrenceItemSchemaMapping", mapItems) : mapItems()
+   const committedThrough = Option.getOrThrow(Option.fromUndefinedOr(records[records.length - 1]?.position))
+-  return TraceHistory.make({ committedThrough, items, runId, version: traceReaderSchemaVersion })
++  const construct = () => TraceHistory.make({ committedThrough, items, runId, version: traceReaderSchemaVersion })
++  return diagnostic ? diagnostic("TraceHistorySchemaConstruction", construct) : construct()
+ })
+ 
+ /**

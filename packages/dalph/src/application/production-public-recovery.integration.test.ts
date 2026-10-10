@@ -4,7 +4,7 @@ import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
   AcceptedJournalReader,
-  ApplicationExitResult,
+  ApplicationExitOwners,
   appendReplacementProvenance,
   freshWorkflowRunId,
   GitCommand,
@@ -41,6 +41,14 @@ import { ProductionCliRecord, type ProductionCliRecord as ProductionCliRecordTyp
 import { CodexAttemptStore, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/test/support/required-planned-attempt-positions.js"
 import { DalphRuntimeDiagnostic } from "./runtime-diagnostic.js"
+
+// Production stderr carries only redacted failed/timeout disposition and named owners.
+const PublicExitDiagnosticResult = Schema.Struct({
+  _tag: Schema.Literals(["Failed", "TimedOut"]),
+  requestedStatus: Schema.Literal(1),
+  owners: Schema.optionalKey(ApplicationExitOwners)
+})
+type PublicExitDiagnosticResult = typeof PublicExitDiagnosticResult.Type
 
 type CurrentStatusRecord = Extract<ProductionCliRecordType, { readonly _tag: "CurrentStatus" }>
 type ClosedStatus = Extract<CurrentStatusRecord["status"], { readonly _tag: "DeliveryStatusClosed" }>
@@ -90,7 +98,7 @@ const CleanupGitObservation = Schema.TaggedStruct("CleanupGitObservationStarted"
 })
 
 interface PublicProcess {
-  readonly exitDiagnostics: Ref.Ref<ReadonlyArray<ApplicationExitResult>>
+  readonly exitDiagnostics: Ref.Ref<ReadonlyArray<PublicExitDiagnosticResult>>
   readonly completionTraces: Ref.Ref<ReadonlyArray<string>>
   readonly outputCount: Ref.Ref<{ readonly lines: number; readonly bytes: number }>
   readonly diagnostics: Ref.Ref<ReadonlyArray<DalphRuntimeDiagnostic>>
@@ -189,7 +197,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
     ),
     Effect.forkScoped
   )
-  const exitDiagnostics = yield* Ref.make<ReadonlyArray<ApplicationExitResult>>([])
+  const exitDiagnostics = yield* Ref.make<ReadonlyArray<PublicExitDiagnosticResult>>([])
   const completionTraces = yield* Ref.make<ReadonlyArray<string>>([])
   const stderrLines = yield* Ref.make<ReadonlyArray<string>>([])
   const stderrFiber = yield* handle.stderr.pipe(
@@ -210,7 +218,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
             Schema.fromJsonString(
               Schema.Union([
                 DalphRuntimeDiagnostic,
-                Schema.TaggedStruct("DalphApplicationExitDiagnostic", { result: ApplicationExitResult }),
+                Schema.TaggedStruct("DalphApplicationExitDiagnostic", { result: PublicExitDiagnosticResult }),
                 Schema.TaggedStruct("CodexExecutorCompletionTrace", { phase: Schema.NonEmptyString })
               ])
             )
@@ -462,12 +470,13 @@ it.live(
         expect(exitCode).toBe(0)
         expect(yield* Ref.get(child.exitDiagnostics)).toEqual([])
         const records = yield* Ref.get(child.recordLog)
-        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toMatchObject([
           {
             _tag: "ApplicationExitDisposition",
             disposition: { _tag: "Succeeded", requestedStatus: 0 },
             runId: selected.runId,
-            version: 1
+            version: 1,
+            owners: { cutoffClosed: true, owners: expect.any(Array) }
           }
         ])
         expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toEqual([])
@@ -534,16 +543,28 @@ it.live(
         expect(diagnostics).toHaveLength(1)
         const diagnostic = diagnostics[0]
         if (diagnostic?._tag !== "Failed") return expect.fail("missing typed failed Exit diagnostic")
-        expect(diagnostic.diagnostics[0]).toContain("Suspend (")
-        expect(diagnostic.diagnostics[0]).toContain(selected.runId)
-        expect(diagnostic.diagnostics[0]).toContain("thread turns page is invalid")
+        expect(diagnostic.owners).toMatchObject({
+          cutoffClosed: true,
+          owners: expect.arrayContaining([
+            expect.objectContaining({
+              family: "ExecutorDrain",
+              name: "ExecutorWork",
+              evidence: "DrainFailed",
+              subject: { _tag: "Run", runId: selected.runId },
+              nextAction: "InspectDrainFailure"
+            })
+          ])
+        })
+        expect(JSON.stringify(diagnostic)).not.toContain("thread turns page is invalid")
+        expect(JSON.stringify(diagnostic)).not.toContain("controlled-codex-credential")
         const records = yield* Ref.get(child.recordLog)
-        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+        expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toMatchObject([
           {
             _tag: "ApplicationExitDisposition",
             disposition: { _tag: "Failed", requestedStatus: 1 },
             runId: selected.runId,
-            version: 1
+            version: 1,
+            owners: diagnostic.owners
           }
         ])
         expect(records.filter(({ _tag }) => _tag === "Failure")).toMatchObject([{ code: "lifecycle.exit_failed" }])
@@ -559,7 +580,9 @@ it.live(
         if (command?.event._tag !== "PlannedAttemptExecutorCommandIntended")
           return expect.fail("missing suspension intent")
         expect(command.event.command).toBe("Suspend")
-        expect(diagnostic.diagnostics[0]).toContain(command.event.plannedAttempt.attemptId)
+        expect(diagnostic.owners?.owners).toEqual(
+          expect.arrayContaining([expect.objectContaining({ subject: { _tag: "Run", runId: selected.runId } })])
+        )
         expect(
           journal.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
         ).toHaveLength(1)
@@ -1163,14 +1186,15 @@ for (const processEacces of [false, true])
           ).toEqual([])
           const records = yield* Ref.get(child.recordLog)
           expect(records.filter(({ _tag }) => _tag === "RunDisposition")).toHaveLength(0)
-          expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+          expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toMatchObject([
             {
               _tag: "ApplicationExitDisposition",
               disposition: processEacces
                 ? { _tag: "Failed", requestedStatus: 1 }
                 : { _tag: "Succeeded", requestedStatus: 0 },
               runId: selected.runId,
-              version: 1
+              version: 1,
+              owners: { cutoffClosed: true, owners: expect.any(Array) }
             }
           ])
           const closed = records.filter(isClosedStatusRecord)

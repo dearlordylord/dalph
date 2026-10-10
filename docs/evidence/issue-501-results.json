@@ -1,0 +1,2978 @@
+{
+  "version": 1,
+  "qualificationStatus": "AcceptedDeclaredScope",
+  "base": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+  "qualifiedRuntimeCandidate": "0cde2e89607bb6db59272ac580289cee09176739",
+  "qualifiedRuntimeTree": "aaac40cf7f37f743d4c8ba4e8598be84dff6da51",
+  "integratedNativeRepair": "1e2f91afe41304debc9beb94c694d8452f82d6d6",
+  "machineAndManifest": "issue-501/final/readiness-manifest.json",
+  "readiness": {
+    "exit": 0,
+    "stages": [
+      {
+        "name": "check:artifacts",
+        "exit": 0
+      },
+      {
+        "name": "test:formal:controls",
+        "exit": 0
+      },
+      {
+        "name": "check:fast",
+        "exit": 0
+      },
+      {
+        "name": "lint:code --census",
+        "exit": 0
+      },
+      {
+        "name": "test:cassettes:memory",
+        "exit": 0
+      }
+    ],
+    "unexecutedSuffix": [],
+    "scope": "One complete check:submit on new exact coherent runtime candidate, after native #509 changes the prior failed boundary; no check:all/hostedCI/additional mandatorygate",
+    "exitArtifact": "issue-501/final/readiness-exit.json",
+    "log": "issue-501/final/check-submit.log"
+  },
+  "checks": {
+    "scenario-results": {
+      "passed": 346,
+      "failed": 0,
+      "notSelectedOrSkipped": 0,
+      "exactAssertions": [
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "the shipped binary and recovery qualification select the same CLI and host composition",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "one-minute production activation keeps stdout bounded while executor work remains active",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "SIGINT suspends active production executor work and preserves the exact unfinished Run evidence",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "SIGINT reports the exact failed suspension boundary and retains unmatched intent without completion",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "current-format SQLite restart reconciles a lost Begin acknowledgement without another turn",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "unfinished SQLite public restart repeats a cut claim read in the same Run without another acquisition",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "the public cancel command stops retained executor work, abandons it, releases its exact claim, and redelivers",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "already-terminal tracker state exits the public command once without active-refresh reactivation",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "already-terminal tracker state exits the public command once without active-refresh reactivation with injected process EACCES",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "application Exit during recovered Git cleanup closes the attached public status without claiming Run completion",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "application Exit during recovered Git cleanup closes the attached public status without claiming Run completion with injected process EACCES",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "public stdout decoder rejects a runtime cause dump instead of filtering it",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-public-recovery.integration.test.ts",
+          "name": "built public recovery rejects a dirty stdout negative control",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "CLI public clients apply whole-Run controls while history remains busy",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "CLI lost pause replies retain the host command without replay",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "CLI lost cancel replies retain the host command without replay",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "MCP public clients apply whole-Run controls while history remains busy",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "MCP lost pause replies retain the host command without replay",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "MCP lost cancel replies retain the host command without replay",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "CLI reports an ambiguous pause reply without retransmission",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "CLI reports an ambiguous cancel reply without retransmission",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "MCP reports an ambiguous pause reply without retransmission",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "MCP reports an ambiguous cancel reply without retransmission",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "attached cancellation retains Unavailable executor responsibility",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "attached cancellation retains Foreign executor responsibility",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "native repeated profiles measure local admission separately from provider settlement",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-run-control.acceptance.test.ts",
+          "name": "attached cancellation settles an executing attempt through exact stop abandonment and claim release",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "escalates a real resistant writer and recovers after its leader exits before close",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "keeps controlled app-server and owned-activity substitutions at their public seams",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "reports exact owned activities only after fresh turn, terminal, and process observations",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "keeps two independent session threads scoped to their own activity",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "keeps app-server token descendants out of Integrator sessions but in planned-attempt scope",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "excludes only a settled provider code-mode host while retaining its task descendant",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "recognizes the settled provider code-mode host from Darwin process facts",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "classifies controlled Linux process census observations at the public activity boundary",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "planned-attempt census excludes foreign-thread helpers",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "planned-attempt census keeps missing-thread helpers unresolved (Live)",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "planned-attempt census keeps missing-thread helpers unresolved (Reused)",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "planned-attempt census keeps missing-thread helpers unresolved (Unreadable)",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "planned-attempt census excludes a missing-thread helper only after fresh process absence",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "planned-attempt census counts exact-thread escaped helpers",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "keeps Integrator activity census scoped to its reported terminal root",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "suspension census for one Codex thread never signals another thread",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "revalidates and signals controlled Linux descendants without touching native processes",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "revalidates exact descendant identities before stopping owned activity",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "keeps unsupported host process census fail-closed",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "reconciles an exact launch-token process before starting a replacement server",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "classifies controlled Unix launch identity observations before replacement",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "reconciles application lease owner identity before spawning",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "classifies controlled launch-token discovery candidates before replacement",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-app-server-public.test.ts",
+          "name": "reconciles controlled detached process-group ownership before close",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "only observed initialization permits a new startup intent in the original namespace",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "private startup intent survives launch cleanup and restart without a replenished deadline",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "retains result-cycle intent and refuses removal or deadline replenishment before a memory write",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "reopens the exact durable response cycle and preserves it after a refused budget reset",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "survives an application restart with the exact private association and server launch",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "survives an application restart with an unresolved suspension stop intent",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "survives an application restart with an unresolved suspension interrupt intent",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "durably records a spawned child before process identity reconciliation",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "admits only one independent filesystem store lease",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "reclaims an exact stale lease but never releases a foreign owner",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fails closed for a live or unreadable persisted lease",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fails closed when the private snapshot is malformed",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "does not upcast a legacy flat attempt record",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "recovers a complete legacy next snapshot after an interrupted write",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fails closed on duplicate private attempt correlations",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fails closed when one Codex thread is aliased to multiple attempts",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "rejects a same-process executor alias before persisting the resulting snapshot",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "rejects relative and traversal state directories before filesystem access",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "treats an empty private snapshot as a fresh store",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "reports a locked lease with no readable owner instead of reclaiming it",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fails closed for unsafe private directories and every sidecar file kind",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "creates and verifies owner-only private directory and snapshot permissions",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fails closed for a symlink or foreign-permission private file",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fails closed when a private snapshot path is swapped to a symlink before descriptor write",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "retains a typed persistence failure after a sidecar becomes non-regular",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "replays the newest complete checksummed snapshot after torn and invalid append records",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "retains a typed load failure for every later operation after no snapshot record is readable",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "reads the configured default state directory through Effect Config",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "keeps the production default under the explicit Dalph state directory",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "reopens an exact tool stop intent and rejects a contradictory item transition",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "keeps memory attempt, launch, and lease facts exact across replacement and release",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "loads initial memory snapshot associations and launch ownership",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "rejects impossible private record and launch combinations before they can be stored",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "persists an immutable purged-unit replacement ledger and reopens it exactly",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "admits only one competing initial result-cycle intent and durably retains its winner",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "opens exactly one explicitly authorized cycle and preserves history across ordinary memory writes",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "persists recovery permission and predecessor before native reopen without resetting the cycle",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "fresh storage custody refuses missing, contradictory and released lease ownership",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "reads exact historical launch without clearing it and rejects contradictory launch history",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/codex-attempt-store.test.ts",
+          "name": "recovers no-item containment obligations from exact Suspend history and rejects foreign queries",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/exit-owner-custody.integration.test.ts",
+          "name": "a timed-out native provider owner retains its exact descendant and lock until close proves stopped writers",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/linux-supervisor-exit.integration.test.ts",
+          "name": "an idle Linux child reports successful Exit and status zero after SIGTERM",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/linux-supervisor-exit.integration.test.ts",
+          "name": "a running controlled executor suspends before its Linux child exits zero",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/linux-supervisor-exit.integration.test.ts",
+          "name": "repeated SIGTERM joins the original stuck Linux child drain and exits nonzero at five seconds",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/linux-supervisor-exit.integration.test.ts",
+          "name": "signal receipt, scope closure, and unexpected death leave only the ordinary journal prefix",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/linux-supervisor-exit.integration.test.ts",
+          "name": "a successor Linux child acquires the coordinator lock after zero success and nonzero failed or timed-out Exit",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "a typed boundary failure emits a safe diagnostic without its private payload",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "reports a private-store configuration failure before Run allocation",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "an already reported command exit adds no duplicate failure diagnostic",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "unsafe private-directory startup reports its boundary without repairing permissions",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "an unexpected defect retains useful structured cause facts without credentials or provider-private payload",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "a failing scoped finalizer writes a structured stderr diagnostic and fails the process",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "an unavailable defect diagnostic does not prevent the original failed host result",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "the shipped Node runner leaves SIGTERM to the host Exit boundary until result and scope finalization",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "the shipped Node runner fails closed when the parent ends release input",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "keeps JSON Run Completed visible when provider close makes process exit nonzero",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "keeps JSON Run Cancelled visible when provider close makes process exit nonzero",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "stalled Exit output ends the Node process after finalization with Succeeded status",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "stalled Exit output ends the Node process after finalization with TimedOut status",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "stalled Exit output ends the Node process after finalization with FinalizationFailed status",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/node-main.integration.test.ts",
+          "name": "accepted stdout below the high-water mark remains inside Exit output grace",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "keeps dry-run explicit and selects production only from --production",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "accepts cancellation only for one production GitHub target and absolute configuration",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "rejects every incomplete or malformed command selection before acquiring a production host",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "brands only normalized absolute production configuration locators at the command boundary",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "the explicit dry mode keeps the controlled dry-run interpreter and never invokes the production host",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "the production output mapper does not reclassify a dry-run TraceOutputError",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps invalid production input to a stable redacted configuration code",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "rejects removed Codex provider and state fields before production host acquisition",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "redacts every configuration read document and required GitHub credential failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "rejects a schema-invalid configuration before invoking the production host",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps a startup ownership conflict to one stable redacted public code",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "a lost startup Failure record surfaces output.write_failed without a recursive write",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps every typed startup boundary failure without retaining private diagnostic fields",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps a typed stdout write failure to one stable redacted public output code",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "fails once when public stdout is lost without recursive Failure output or graceful Exit",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps a typed task-tracker throttle to a selected-Run delivery failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps a cancellation proof blocker without retaining private executor diagnostics",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "delivery throttle closes presentation and host scope without requesting graceful Exit",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "delivery throttle output is redacted and preserves only safe R operation and retry evidence",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "rejects mismatched public failure codes details and subjects",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "preserves original task-tracker throttle after lost Failure output without requesting graceful Exit",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "two CLI invocations report allocated then the same recovered Run without presentation retry",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps every Journal storage failure through one exhaustive redacted public algebra",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "public startup refusal names the supported format and separate retirement without leaking source details",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps every causal trace failure to the selected Run without retaining causal identities",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "maps each passive status projection failure to a stable redacted status code",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "leaves an unknown defect outside the public Failure algebra",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "does not misreport an unknown production-host failure as a public known failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "preserves a non-credential tracker read failure from an explicit GitHub dry run",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "startup Journal and ownership failures each emit one stable redacted Failure record",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "a TraceReader Journal failure emits one stable redacted Failure after selection",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "typed status or TraceAtCursor projection failure fails fast without calling ApplicationExitRequestBoundary.requestExit or mutating a workflow boundary",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "loads ambient Codex CLI production configuration with only the GitHub credential",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "rejects fixture targets and relative configuration paths before acquiring the production host",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "cold public production command reports one allocated Run after its beginning and before status",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "bounded history output keeps the exact cursor without rereading a full snapshot after budget exhaustion",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "an oversized first snapshot publishes its exact cursor without requesting complete projection",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "snapshot admission failure remains visible before cursor-only publication",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "normal Run termination closes an open history attachment after its final snapshot and returns",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "an unfinished Run cannot hide status, history, or output presenter failures",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "production presentation reports the host's exact recovered Run without allocating a replacement",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "attaches current-first without missing a delivery publication racing with CLI attachment",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "renders not-ready and waits without invoking a workflow boundary",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "closed status without a final value cannot report Run completion",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor and current status/disposition remain separate",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "encodes the exact passive not-ready value as a separate current-status record",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "rejects malformed current-status wire variants at the public codec boundary",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "preserves current status subjects evidence classifications and structural order",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "projects and encodes all twelve status variants through the production current-first attachment",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "presents Alice's nonterminal status change before the accepted Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "rate-limits a rapid passive status source before it reaches stdout",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "publishes the first recovered status immediately and the newest silent passive update after one second",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "publishes a passive status immediately when it arrives after an idle window",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "round-trips the ordered identity evidence of every canonical current-status entry",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "production status rendering has no tracker Git executor Integrator Journal mutation admission retry cleanup control or Exit capability",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "reports the selected Run when termination races with current-first status attachment",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "public publication commands report exact control receipts before ordinary Run disposition",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "public publication subject inspection does not start the delivery host",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "successful application Exit without authoritative Closed fails without a synthetic terminal record",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "SIGINT and SIGTERM enter the same configured production Exit request boundary",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "a signal after Run selection interrupts presentation and reports the host Exit result",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "a presentation failure while a signal is selecting the Run becomes the public output failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "a presentation failure during an accepted Exit drain becomes the public output failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "repeated public signals join one cutoff and one five-second drain",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "a Run termination during an accepted Exit request cannot replace its timed-out disposition",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "public conclusive Exit failure renders a stable lifecycle code and exits one",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "public production timeout remains bounded by the first signal and exits one",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "lost timeout output can never become a successful process result",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "invokes one production host only after configuration and reports its acknowledged selection",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "routes cancel through the production host cancellation operation",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "writes one public cancellation failure for a typed startup boundary error",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "does not invent public cancellation output for an unknown host failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "does not recursively write when cancellation failure output is lost",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "production help names only the GitHub credential required by the ordinary path",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "exports only the canonical production CLI seam and omits the unreleased historical alias",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "explains exact unresolved responsibility evidence through passive production status",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "joins only accepted evidence for the exact immutable responsibility and required operation",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "preserves exact cancellation claim evidence when an unrelated later read is accepted",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-cli.test.ts",
+          "name": "keeps task-local Base refusal diagnostics out of an independent task status",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "Exit before the acquisition start permits no boundary call",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "normal acquisition retires its drain without closing host resources",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "acquired resources remain owned through lifecycle reporting",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "the lifecycle timeout remains observable while owned acquisition cleanup is pending",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "Exit cannot replace a conclusive acquisition failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "a cleanup defect after TimedOut remains a host finalization failure",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "normal acquisition retains its fiber children until the host scope closes",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-acquisition.test.ts",
+          "name": "early host Exit joins the existing provider startup cleanup exactly once",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-exit.test.ts",
+          "name": "graceful host Exit reports the lifecycle result, then releases the coordinator lock",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-exit.test.ts",
+          "name": "does not finalize host resources while the reporting callback is blocked",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-exit.test.ts",
+          "name": "host cancellation without an Exit result never reports graceful shutdown",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-exit.test.ts",
+          "name": "Exit timeout or conclusive drain failure remains non-graceful and preserves unfinished Run recovery",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-exit.test.ts",
+          "name": "host Exit timeout preserves recovery and starts a fresh five-second lifecycle",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host-exit.test.ts",
+          "name": "output grace expiry returns through host finalization before process completion",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production passes the explicit provider home to independent executor and integrator children",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production refuses malformed integrator ownership before acquiring any app-server",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production provider refuses retained shared attempts before spawning and preserves their custody",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production isolates executor A, executor B and integrator processes and stops all owners on host Exit",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production executor expiry preserves B and the original gated integration session",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production host adapter surface cannot replace workflow mutation capabilities",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "ordinary Exit shells cannot inhabit the production-host shell boundary",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "an Integrator provider layer acquires eagerly at construction",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production host composition keeps ambient Codex home separate from executor private state",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production host Exit succeeds when qualification observers are absent",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production host graph exposes only explicit non-retryable activation failures",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "rejects a retained non-Codex provider before building a Codex Run",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "uses one canonical fatal classifier for throttles and recoverable failures",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "admits cancellation termination only after every terminal precondition is discharged",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "does not acquire a Codex provider for the built-in Kimi executor profile",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "isolated fresh SQLite dataset starts only after exact Run selection and acknowledged WorkflowRunBegan",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production host exposes TaskTrackerMutationThrottled unchanged and tears down only its ordinary scope",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "listening host retains an activation failure while its client scope stays open",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "next host invocation recovers the same Run and authority-reads before mutation",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "invalid production host configuration opens no scoped production graph",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "Codex policy admission follows safe history discovery and fails before Run allocation or provider work",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production cancellation fails before provider acquisition when no unfinished Run exists",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "allocated and recovered selections identify the exact Run and never append a second beginning",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "cold production host records one beginning before the first GitHub delivery read",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production host connects supplied Exit request and trace observers",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "unfinished SQLite public restart preserves Run identity, process-local status, and reconciliation before requests",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "terminal Run is not reactivated",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "two unfinished Runs fail before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations and name both identities",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "mismatched unfinished history fails before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "malformed history fails before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "unsupported development history refuses before effects and preserves source bytes",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "default production graph keeps one owner per mutation capability while H2 fails before every boundary and fresh H2 recovers",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-host.test.ts",
+          "name": "production reconciles historical Failed custody through a fresh scoped transport after terminal retirement",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "Alice and two public clients observe one Run without starting work and reconnect after delivery",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "CLI and MCP preserve grouping, prerequisites and blocked tasks without executor attempts",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "recovers the exact rejected result with ContinueRetainedAttempt through the public CLI and ordinary production Run",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "recovers the exact rejected result with RestartTaskImplementation through the public CLI and ordinary production Run",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "preserves Run Completed alongside failed provider finalization",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "preserves Run Cancelled alongside failed provider finalization",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "shows tracker throttling and recovery without restarting the owned turn",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "retains integration responsibility and exposes a failed candidate census through CLI and MCP (ResponseDeadline)",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "retains integration responsibility and exposes a failed candidate census through CLI and MCP (Unavailable)",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/production-running-host.test.ts",
+          "name": "an operator retries one refused Base through the production host after repairing the exact integration ref",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-cli-exit.test.ts",
+          "name": "host Exit preserves the shared allowance with stdout output",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-cli-exit.test.ts",
+          "name": "host Exit preserves the shared allowance with stderr output",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-cli-exit.test.ts",
+          "name": "host Exit preserves the shared allowance with draining output",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-cli-exit.test.ts",
+          "name": "host Exit preserves the shared allowance with failed output",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-exit-owners.acceptance.test.ts",
+          "name": "the public owner read names a NoRun acquisition owner during Exit without admitting another action",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-inspection-exit.acceptance.test.ts",
+          "name": "Exit drains an in-flight production inspection read and its bounded watcher",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-inspection-watch.test.ts",
+          "name": "publishes inspection changes through bounded watch and reconnects to current state",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-inspection-watch.test.ts",
+          "name": "An oversized required current inspection is refused whole, releases its slot and reconnects to latest state without workflow calls",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-mcp-watch.test.ts",
+          "name": "MCP pins current, coalesces pending hints, retains Closed after upstream release, repeats reads and expires resources",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-mcp-watch.test.ts",
+          "name": "MCP reserves eight resources before source acquisition and close/unsubscribe release only their own source",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-mcp-watch.test.ts",
+          "name": "An unread initial expires at thirty seconds, releases upstream, and leaves a typed failure until final expiry",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-mcp-watch.test.ts",
+          "name": "MCP preserves established request correlation after an abrupt source disconnect",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-mcp-watch.test.ts",
+          "name": "Subscribed unread pending expires without replacement resetting its timer",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-mcp-watch.test.ts",
+          "name": "Subscribed unread pending expires without replacement resetting its timer; timely consumption starts the next pending interval",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-mcp-watch.test.ts",
+          "name": "Eight retained final resources occupy reservations until their exact expiry; failed allocation rolls back",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-observer-budget.test.ts",
+          "name": "JSON admission counts escaping and UTF-8 exactly before allocating encoded output",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-observer-budget.test.ts",
+          "name": "Preparation admission charges shared occurrences and native collections without copying them",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-observer-profile.test.ts",
+          "name": "Native paused TCP reader times out an admitted write, retains charged latest and releases exactly (262144 bytes)",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-observer-profile.test.ts",
+          "name": "Native paused TCP reader times out an admitted write, retains charged latest and releases exactly (1835008 bytes)",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-occurrences-interruption.acceptance.test.ts",
+          "name": "disconnect interrupts native semantic history preparation without cancelling delivery or caching a partial history",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-occurrences.acceptance.test.ts",
+          "name": "pages the canonical fixed prefix across an append with no read mutations and refuses exact oversized occurrences",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-occurrences.acceptance.test.ts",
+          "name": "reports the SQLite archive owner's historical deletion without mutating authorities or losing compact Run control",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-page-http.test.ts",
+          "name": "allows only exact same-origin observation routes, refuses browser controls and serves only fixed packaged assets",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-projection.test.ts",
+          "name": "keeps source closure distinct from pending and accepted Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-projection.test.ts",
+          "name": "exposes finality rejection without inventing a terminal journal occurrence",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-client.test.ts",
+          "name": "Watch JSON refusal validates exact correlation and closed schema: Exact",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-client.test.ts",
+          "name": "Watch JSON refusal validates exact correlation and closed schema: Request",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-client.test.ts",
+          "name": "Watch JSON refusal validates exact correlation and closed schema: Run",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-client.test.ts",
+          "name": "Watch JSON refusal validates exact correlation and closed schema: ExtraField",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-diagnostics.test.ts",
+          "name": "A Ready watch refuses large diagnostic preparation before materialization despite small current output, then reconnects passively",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-http.test.ts",
+          "name": "HTTP preserves initial while a blocked writer drains and releases before Closed, then reconnects from current Closed",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-http.test.ts",
+          "name": "A blocked HTTP frame recovers before the finite deadline and releases its exact source",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-http.test.ts",
+          "name": "A blocked HTTP frame fails at the finite deadline and releases its exact source",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-http.test.ts",
+          "name": "Host reserves thirty-two independent source leases and rejects the next watch before upstream allocation",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-http.test.ts",
+          "name": "publishes integration failure to an attached watch without reactivation or false finality",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-stage.test.ts",
+          "name": "Distinct complete runtime states at one accepted journal position remain eligible and Closed retains the exact final value",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-stage.test.ts",
+          "name": "Attachment preserves initial while its independent pump drains latest and releases upstream before Closed is read",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-stage.test.ts",
+          "name": "Disconnect stops only its exact pump and pending waiter while another subscription delivers",
+          "status": "passed"
+        },
+        {
+          "file": "dalph/src/application/running-host-watch-stage.test.ts",
+          "name": "Bare upstream EOF becomes transport failure and closed reconnect supplies Closed current",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.property.test.ts",
+          "name": "matches the synchronous cursor oracle for canonical, gapped, duplicated and malformed-key histories",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.test.ts",
+          "name": "yields during complete validation, admits another fiber, and returns exact canonical history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.test.ts",
+          "name": "discards an interrupted validation and rebuilds before publishing a successful cache",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.cooperative.test.ts",
+          "name": "preserves fixed-prefix parity and error precedence across appended malformed envelopes",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.property.test.ts",
+          "name": "lets the maintainer select every prepared cursor with the exact independent cold payload",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.test.ts",
+          "name": "lets the maintainer inspect exact graph, causal evidence and retained cleanup responsibilities at every cursor",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.test.ts",
+          "name": "retains exact ordered invalid-prefix issues and storage-order duplicate cursor availability",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.test.ts",
+          "name": "reads storage once and retains earlier snapshots without rereading or accumulating selected views",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.test.ts",
+          "name": "does not leave an interrupted storage read as a successful or pending prepared snapshot",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.prepared.test.ts",
+          "name": "bounds source inspection at preparation and never replays source records when selecting N or 2N cursors",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "snapshot admission preserves small complete views and proves excess for dense causal histories",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "indexes provider quarantine and successor identities in the public trace",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "projects automatic S2 authorization and predecessor preservation as distinct coordinator facts",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "indexes completion lookup and candidate ancestry roles in the public trace",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "rejects the coordinator's acknowledgement when it names a different completion request",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "rejects a tracker read when its operation ID already identifies the completion lookup",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "maps projection failures consistently through complete and cursor trace reads",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "maps a reachable historical occurrence projection failure through every reader boundary",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "keeps the composed trace reader context read-only",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "moves Alice through journal positions without reordering history and follows exact causal predecessors",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "rejects a causal predecessor absent from the validated Run prefix instead of using the previous record",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "reuses the immutable complete-prefix trace result for repeated reads",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "matches the prefix projection at every early cursor when a later immutable suffix is malformed",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "keeps process-local integration serialization separate from other trace relationships",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "rejects duplicate OperationIds as visible causal contradictions",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "rejects a predecessor recorded after its successor as a visible causal contradiction",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "rejects trace identities and observations outside their committed prefix",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "reports empty, mismatched, gapped, and non-beginning committed prefixes",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "fails closed when a complete tracker observation addresses another target",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "does not reconstruct a graph from a reconfirmation with no earlier full observation",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "combines a fixed historical trace with a newer passive current status without rewriting either",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "keeps the fixed cursor when the passive current status is explicitly unavailable",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "reads actual Cold memory and reopened SQLite history with identical cursors, causality, and evidence",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "replays a committed occurrence at its original Run and JournalPosition after output is lost",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/presentation/trace-reader.test.ts",
+          "name": "reconnects current status while retaining the same historical cursor",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "publishes when the pinned remote head is an ancestor of M",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "reconciles a pending numbered intent without repeating a conclusive push",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "does not observe or push when prior sender custody cannot be proved stopped",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "reserves sender custody before journaling a numbered attempt",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "retains an exact competing head without attempting a push",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "retains exact exhaustion without an ungranted fourth push intent",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "does not retry a durable throttled publication after restart",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "does not retry a durable policy denial after restart",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "retains a redacted ancestry-observation wait without automatic reread",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "retains unproven push custody without a later observe or send",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "reconciles a response deadline only after the adapter proved sender stop",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts",
+          "name": "reconciles an ambiguous stopped transport failure before any repeated send",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/direct-publication/recovery.test.ts",
+          "name": "recovers every initial remote delivery boundary",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "rereads tracker authority after an ambiguously applied acquisition",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "observes an uncertain prior request before repeating it",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "stops when atomic acquisition reports a competing claim",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "returns typed non-convergence after bounded unknown outcomes",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "reads tracker after the third and final ambiguous acquisition request",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "returns a conflict when the final reconciliation observes a foreign claim",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "returns a read failure when the final reconciliation is unreadable",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "returns an already-owned exact claim without another mutation",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "rejects a competing claim discovered by the initial observation",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "preserves non-request acquisition failures",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow/protocols/task-claim-acquisition/protocol.test.ts",
+          "name": "claim acquisition throttling sends one mutation and restart reads before using the same intent",
+          "status": "passed"
+        }
+      ],
+      "artifact": "issue-501/final/scenario-results.json"
+    },
+    "r1-git-public-restart-results": {
+      "passed": 1,
+      "failed": 0,
+      "notSelectedOrSkipped": 8,
+      "exactAssertions": [
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "runs one task through real local production boundaries and tears down only its owned resources",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "restarts after Git promotes A without returning and does not repeat A integration or promotion",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "recovers a competing remote head found before publication discovery through the automatic S2 full suffix",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "recovers a competing remote head advanced between publication discovery and update through the automatic S2 full suffix",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "recovers a competing remote head advanced after a lost publication response through the automatic S2 full suffix",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "retains the exact third competing head without an ungranted fourth automatic session or push",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "fixes a same-commit fourth successor only after the exact third-session exhaustion grant",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "continues one exhausted publication responsibility through exactly one granted batch while an unrelated target progresses",
+          "status": "skipped"
+        },
+        {
+          "file": "dalph/test/scenarios/hermetic-mvp.test.ts",
+          "name": "restarts the same Run after native Git publishes M without acknowledgement and reconciles stopped custody before promotion",
+          "status": "passed"
+        }
+      ],
+      "artifact": "issue-501/final/r1-git-public-restart-results.json"
+    },
+    "storage-results": {
+      "passed": 116,
+      "failed": 0,
+      "notSelectedOrSkipped": 0,
+      "exactAssertions": [
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "name": "shares selected startup scan events with the first append checkpoint",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "name": "retains only the requested startup Run and does not invent a missing Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "name": "loads unchanged Hot history once, reuses the array, and invalidates on append and scans",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "name": "invalidates a cached array after lost append acknowledgement without duplicating the row",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "name": "invalidates on termination and retirement, then loads unchanged Cold history once",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/sqlite-read-cache.test.ts",
+          "name": "discards the ordinary read snapshot after a failed read boundary",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory pins the new Run attempt-base policy and preserves missing-policy history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite pins the new Run attempt-base policy and preserves missing-policy history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "classifies append ambiguity from typed journal failures without inspecting strings",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "keeps native scan preparation failures typed for Hot and Cold",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "opens the configured production journal only with coordinator ownership",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "maps a controlled malformed memory terminal prefix to journal corruption",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "isolates controlled cold corruption from memory startup discovery and reports it to exact reads and audits",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "rejects exact reads and recovery of a nonterminal memory Cold history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "rejects termination of a semantically complete but nonterminal memory Cold history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "rejects memory retirement when no Run history exists",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "fails every memory operation closed when a Run is in both partitions",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract atomically rejects a second beginning for one Run identity",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects every workflow record after Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract atomically retires every valid terminal history and keeps reads transparent",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rereads the exact begun target before recovering a Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects recovery and termination when no Run beginning exists",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract preserves typed invalid-evidence failures at the storage boundary",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects unsettled historical responsibility without appending",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract accepts termination after a historical claim acquisition was rejected",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects termination while an exact acquired claim remains active",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects incomparable tracker graph observations without appending",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects S10 g10 and predecessor-free changed g11 without terminating",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract accepts a graph read that causally supersedes historical facts",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects recovery and another termination after Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects promoting an existing synthetic history to a fresh Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract returns empty workflow-journal history for an unknown run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract assigns canonical positions and returns ordered workflow-journal history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract returns the original record for an identical re-append",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract rejects unequal content under the same record key",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract atomically assigns distinct positions to concurrent appends",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract keeps each run's positions independent",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "memory JournalStore contract discovers all journal runs without an age cutoff",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract atomically rejects a second beginning for one Run identity",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects every workflow record after Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract atomically retires every valid terminal history and keeps reads transparent",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rereads the exact begun target before recovering a Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects recovery and termination when no Run beginning exists",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract preserves typed invalid-evidence failures at the storage boundary",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects unsettled historical responsibility without appending",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract accepts termination after a historical claim acquisition was rejected",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects termination while an exact acquired claim remains active",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects incomparable tracker graph observations without appending",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects S10 g10 and predecessor-free changed g11 without terminating",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract accepts a graph read that causally supersedes historical facts",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects recovery and another termination after Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects promoting an existing synthetic history to a fresh Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract returns empty workflow-journal history for an unknown run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract assigns canonical positions and returns ordered workflow-journal history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract returns the original record for an identical re-append",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract rejects unequal content under the same record key",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract atomically assigns distinct positions to concurrent appends",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract keeps each run's positions independent",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite JournalStore contract discovers all journal runs without an age cutoff",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract atomically rejects a second beginning for one Run identity",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects every workflow record after Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract atomically retires every valid terminal history and keeps reads transparent",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract expires Completed, Blocked, and Cancelled by identical rules and preserves exact receipts",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rereads the exact begun target before recovering a Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects recovery and termination when no Run beginning exists",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract preserves typed invalid-evidence failures at the storage boundary",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects unsettled historical responsibility without appending",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract accepts termination after a historical claim acquisition was rejected",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects termination while an exact acquired claim remains active",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects incomparable tracker graph observations without appending",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects S10 g10 and predecessor-free changed g11 without terminating",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract accepts a graph read that causally supersedes historical facts",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects recovery and another termination after Run termination",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects promoting an existing synthetic history to a fresh Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract returns empty workflow-journal history for an unknown run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract assigns canonical positions and returns ordered workflow-journal history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract returns the original record for an identical re-append",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract rejects unequal content under the same record key",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract atomically assigns distinct positions to concurrent appends",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract keeps each run's positions independent",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite-qualification JournalStore contract discovers all journal runs without an age cutoff",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "does not manufacture accepted history from the raw SQLite test journal",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract migrates the production SQLite journal and enables WAL mode",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract reopens distinct admission keys containing NUL without merging their suffixes",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract upgrades an exact schema-v1 fixture transactionally and preserves hot rows",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract copies SQLite record keys, positions, versions, kinds, and payload bytes exactly",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract keeps an overlapping SQLite TraceReader read on one complete snapshot while retirement commits",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract rolls back a retirement cut after verified copy and preserves Hot history after reopen",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract reopens after a committed retirement response is lost and reports the Run already Cold",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract rejects a verified-copy mismatch and rolls back the SQLite retirement",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract rolls back a failed v1-to-v2 migration without changing the v1 hot journal",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract reopening after a committed v1 migration does not repeat or retire the hot history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract rejects a second SQLite writer while the owner is live",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract reports SQLite open failures as typed storage failures",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract classifies SQLite recovery categories without parsing error prose",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract rejects a journal schema from a newer Dalph version",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract reports malformed persisted event content as a typed read failure",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract keeps malformed Cold history out of startup while full audit reports its partition and exact Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract fails SQLite reads, lifecycle, retirement, and full audit closed on contradictory partition membership",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract rejects exact reads and recovery of a nonterminal SQLite Cold history",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract rejects SQLite retirement for a missing Run",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract discovers every run and accumulates independent row and payload decode issues",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract maps corrupted SQLite query rows to exact Run-local history failures after reopen",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract classifies malformed SQLite bytes as journal data corruption",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract classifies an unrecognized raw append failure as unavailable storage",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/store.test.ts",
+          "name": "sqlite durable JournalStore contract types append and read failures from damaged journal storage",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/adapters/sqlite-event-codec.property.test.ts",
+          "name": "round-trips full semantic finality events through the production SQLite gzip and compact layers",
+          "status": "passed"
+        },
+        {
+          "file": "orchestrator/src/workflow-journal/adapters/sqlite-event-codec.property.test.ts",
+          "name": "attaches the row's kind and semantic version to gzip failures without falling back",
+          "status": "passed"
+        }
+      ],
+      "artifact": "issue-501/final/storage-results.json"
+    },
+    "native-exit-capture-tests": {
+      "passed": 1,
+      "failed": 0,
+      "notSelectedOrSkipped": 0,
+      "exactAssertions": [
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-exit-capture.test.ts",
+          "name": "a timed-out native provider owner retains its exact descendant and lock until close proves stopped writers",
+          "status": "passed"
+        }
+      ],
+      "artifact": "issue-501/final/native-exit-capture-tests.json"
+    },
+    "native-publication-capture-tests": {
+      "passed": 1,
+      "failed": 0,
+      "notSelectedOrSkipped": 8,
+      "exactAssertions": [
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "runs one task through real local production boundaries and tears down only its owned resources",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "restarts after Git promotes A without returning and does not repeat A integration or promotion",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "recovers a competing remote head found before publication discovery through the automatic S2 full suffix",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "recovers a competing remote head advanced between publication discovery and update through the automatic S2 full suffix",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "recovers a competing remote head advanced after a lost publication response through the automatic S2 full suffix",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "retains the exact third competing head without an ungranted fourth automatic session or push",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "fixes a same-commit fourth successor only after the exact third-session exhaustion grant",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "continues one exhausted publication responsibility through exactly one granted batch while an unrelated target progresses",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/native-publication-capture.test.ts",
+          "name": "restarts the same Run after native Git publishes M without acknowledgement and reconciles stopped custody before promotion",
+          "status": "passed"
+        }
+      ],
+      "artifact": "issue-501/final/native-publication-capture-tests.json"
+    },
+    "profile-sparse-tests": {
+      "passed": 1,
+      "failed": 0,
+      "notSelectedOrSkipped": 3,
+      "exactAssertions": [
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "Sparse native cold host reopen and warm public admission profile",
+          "status": "passed"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "Dense native cold host reopen and warm public admission profile",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "DenseOversized8192Utf8Bytes native cold host reopen and warm public admission profile",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "DenseOversizedUncachedSqlite native cold host reopen and warm public admission profile",
+          "status": "skipped"
+        }
+      ],
+      "artifact": "issue-501/final/profile-sparse-tests.json"
+    },
+    "profile-dense-tests": {
+      "passed": 1,
+      "failed": 0,
+      "notSelectedOrSkipped": 3,
+      "exactAssertions": [
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "Sparse native cold host reopen and warm public admission profile",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "Dense native cold host reopen and warm public admission profile",
+          "status": "passed"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "DenseOversized8192Utf8Bytes native cold host reopen and warm public admission profile",
+          "status": "skipped"
+        },
+        {
+          "file": "/workspace/dalph-dogfood/issue-491-20261009/task-worktrees/part-run-398-72312e65794a6d636d567a6147356c63334d694f6949774d5745784d6a4a684e4330354d4751334c546333595449744f5451784e5330334d474d3059/part-3251794f5468694f4749694c434a3059584a6e5a5851694f6e7369583352685a794936496b647064476831596b6c7a6333566c4969776961584e7a6457564f64/part-5731695a5849694f6a51354d537769623364755a5849694f694a6b5a574679624739795a486c7362334a6b49697769636d567762334e70644739796553493649/part-6d52686248426f496e3139-task-122-74312e57794a535832746e52453955597a4266535645694c434a4a5832743352453955597a426653574d345155464251/part-554a585455566a4e4763695851-attempt-0/_leaf/.scratch/combined-profile.test.ts",
+          "name": "DenseOversizedUncachedSqlite native cold host reopen and warm public admission profile",
+          "status": "skipped"
+        }
+      ],
+      "artifact": "issue-501/final/profile-dense-tests.json"
+    }
+  },
+  "declaredProfiles": [
+    {
+      "name": "Sparse",
+      "temperature": "ColdHostReopen",
+      "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+      "samples": 20,
+      "admissionP95Millis": 0.6939220000003843,
+      "maxSynchronousTaskWallMillis": 3.1026490000003832,
+      "worstTaskPhases": [
+        "WorkflowOccurrence.project",
+        "WorkflowOccurrence.projectRecord",
+        "WorkflowOccurrence.FinalProjectionSchema",
+        "TraceReader.historyFromRecords"
+      ],
+      "maxMainThreadCpuMicros": 2389,
+      "maxProcessMeasurementCpuMicros": 141996,
+      "maxHeapUsedBytes": 243447952,
+      "maxSampledRssBytes": 478068736,
+      "processPeakRssBytes": 482091008,
+      "observerCount": 1,
+      "watchSubscriptions": 0,
+      "concurrentControlClients": 1,
+      "allControlEntriesInsideSemanticPreparation": true,
+      "ranges": {
+        "records": [
+          56,
+          75
+        ],
+        "eventPayloadBytes": [
+          50389,
+          57761
+        ],
+        "decodedRecordBytes": [
+          69087,
+          81513
+        ],
+        "wholeSourceRecordsBefore": [
+          56,
+          75
+        ],
+        "wholeSourceRecordsAfter": [
+          57,
+          76
+        ],
+        "wholeSourceEventPayloadBytesBefore": [
+          50389,
+          57761
+        ],
+        "wholeSourceEventPayloadBytesAfter": [
+          50777,
+          58149
+        ],
+        "taskCount": [
+          1,
+          1
+        ],
+        "graphEdges": [
+          0,
+          0
+        ],
+        "causalEdges": [
+          9,
+          9
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryStructuralCharge": [
+          317618,
+          380888
+        ],
+        "optionalHistoryEncodedBytes": [
+          70562,
+          83273
+        ],
+        "pageBytes": [
+          4629,
+          4629
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          582,
+          582
+        ],
+        "startupMillis": [
+          38.30675899999915,
+          84.21532699999989
+        ]
+      },
+      "limitsMet": {
+        "p95_100ms": true,
+        "synchronousTask10ms": true,
+        "heap1GiB": true,
+        "rss1_5GiB": true
+      },
+      "raw": "issue-501/final/profile-sparse.json.gz",
+      "clock": "scheduler synchronous wall task and main-thread CPU, not heartbeat",
+      "processInterval": "Receipt to completed page/control; byte census bookkeeping can extend wall summary beyond CPU interval; provider settlement is separate from local admission."
+    },
+    {
+      "name": "Sparse",
+      "temperature": "WarmHost",
+      "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+      "samples": 20,
+      "admissionP95Millis": 0.6637129999999161,
+      "maxSynchronousTaskWallMillis": 4.713494999999966,
+      "worstTaskPhases": [
+        "TraceReader.cooperativeFullHistoryIssue",
+        "TraceReader.HistoryQueryIndex"
+      ],
+      "maxMainThreadCpuMicros": 3986,
+      "maxProcessMeasurementCpuMicros": 209362,
+      "maxHeapUsedBytes": 277378488,
+      "maxSampledRssBytes": 502853632,
+      "processPeakRssBytes": 504193024,
+      "observerCount": 1,
+      "watchSubscriptions": 0,
+      "concurrentControlClients": 1,
+      "allControlEntriesInsideSemanticPreparation": true,
+      "ranges": {
+        "records": [
+          75,
+          75
+        ],
+        "eventPayloadBytes": [
+          57761,
+          57761
+        ],
+        "decodedRecordBytes": [
+          81513,
+          81513
+        ],
+        "wholeSourceRecordsBefore": [
+          76,
+          95
+        ],
+        "wholeSourceRecordsAfter": [
+          77,
+          96
+        ],
+        "wholeSourceEventPayloadBytesBefore": [
+          58149,
+          65521
+        ],
+        "wholeSourceEventPayloadBytesAfter": [
+          58537,
+          65909
+        ],
+        "taskCount": [
+          1,
+          1
+        ],
+        "graphEdges": [
+          0,
+          0
+        ],
+        "causalEdges": [
+          9,
+          9
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryStructuralCharge": [
+          380888,
+          380888
+        ],
+        "optionalHistoryEncodedBytes": [
+          83273,
+          83273
+        ],
+        "pageBytes": [
+          4629,
+          4629
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          582,
+          582
+        ],
+        "startupMillis": [
+          45.94610999999895,
+          45.94610999999895
+        ]
+      },
+      "limitsMet": {
+        "p95_100ms": true,
+        "synchronousTask10ms": true,
+        "heap1GiB": true,
+        "rss1_5GiB": true
+      },
+      "raw": "issue-501/final/profile-sparse.json.gz",
+      "clock": "scheduler synchronous wall task and main-thread CPU, not heartbeat",
+      "processInterval": "Receipt to completed page/control; byte census bookkeeping can extend wall summary beyond CPU interval; provider settlement is separate from local admission."
+    },
+    {
+      "name": "Dense",
+      "temperature": "ColdHostReopen",
+      "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+      "samples": 20,
+      "admissionP95Millis": 1.0393410000015137,
+      "maxSynchronousTaskWallMillis": 4.355199999999968,
+      "worstTaskPhases": [
+        "WorkflowOccurrence.project",
+        "WorkflowOccurrence.projectRecord",
+        "WorkflowOccurrence.FinalProjectionSchema",
+        "TraceReader.historyFromRecords"
+      ],
+      "maxMainThreadCpuMicros": 3630,
+      "maxProcessMeasurementCpuMicros": 401083,
+      "maxHeapUsedBytes": 345038984,
+      "maxSampledRssBytes": 602087424,
+      "processPeakRssBytes": 699682816,
+      "observerCount": 1,
+      "watchSubscriptions": 0,
+      "concurrentControlClients": 1,
+      "allControlEntriesInsideSemanticPreparation": true,
+      "ranges": {
+        "records": [
+          536,
+          555
+        ],
+        "eventPayloadBytes": [
+          254783,
+          262174
+        ],
+        "decodedRecordBytes": [
+          403058,
+          415541
+        ],
+        "wholeSourceRecordsBefore": [
+          536,
+          555
+        ],
+        "wholeSourceRecordsAfter": [
+          537,
+          556
+        ],
+        "wholeSourceEventPayloadBytesBefore": [
+          254783,
+          262174
+        ],
+        "wholeSourceEventPayloadBytesAfter": [
+          255172,
+          262563
+        ],
+        "taskCount": [
+          4,
+          4
+        ],
+        "graphEdges": [
+          7,
+          7
+        ],
+        "causalEdges": [
+          6,
+          6
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryStructuralCharge": [
+          1929402,
+          1992710
+        ],
+        "optionalHistoryEncodedBytes": [
+          404349,
+          417117
+        ],
+        "pageBytes": [
+          4631,
+          4631
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          584,
+          584
+        ],
+        "startupMillis": [
+          140.9412659999998,
+          214.22698300000047
+        ]
+      },
+      "limitsMet": {
+        "p95_100ms": true,
+        "synchronousTask10ms": true,
+        "heap1GiB": true,
+        "rss1_5GiB": true
+      },
+      "raw": "issue-501/final/profile-dense.json.gz",
+      "clock": "scheduler synchronous wall task and main-thread CPU, not heartbeat",
+      "processInterval": "Receipt to completed page/control; byte census bookkeeping can extend wall summary beyond CPU interval; provider settlement is separate from local admission."
+    },
+    {
+      "name": "Dense",
+      "temperature": "WarmHost",
+      "candidate": "0cde2e89607bb6db59272ac580289cee09176739",
+      "samples": 20,
+      "admissionP95Millis": 0.9002149999978428,
+      "maxSynchronousTaskWallMillis": 9.240777999999409,
+      "worstTaskPhases": [
+        "WorkflowOccurrence.project",
+        "WorkflowOccurrence.projectRecord",
+        "WorkflowOccurrence.FinalProjectionSchema",
+        "TraceReader.historyFromRecords"
+      ],
+      "maxMainThreadCpuMicros": 8364,
+      "maxProcessMeasurementCpuMicros": 535027,
+      "maxHeapUsedBytes": 322716288,
+      "maxSampledRssBytes": 614633472,
+      "processPeakRssBytes": 699682816,
+      "observerCount": 1,
+      "watchSubscriptions": 0,
+      "concurrentControlClients": 1,
+      "allControlEntriesInsideSemanticPreparation": true,
+      "ranges": {
+        "records": [
+          555,
+          555
+        ],
+        "eventPayloadBytes": [
+          262174,
+          262174
+        ],
+        "decodedRecordBytes": [
+          415541,
+          415541
+        ],
+        "wholeSourceRecordsBefore": [
+          556,
+          575
+        ],
+        "wholeSourceRecordsAfter": [
+          557,
+          576
+        ],
+        "wholeSourceEventPayloadBytesBefore": [
+          262563,
+          269954
+        ],
+        "wholeSourceEventPayloadBytesAfter": [
+          262952,
+          270343
+        ],
+        "taskCount": [
+          4,
+          4
+        ],
+        "graphEdges": [
+          7,
+          7
+        ],
+        "causalEdges": [
+          6,
+          6
+        ],
+        "unfinishedObligations": [
+          4,
+          4
+        ],
+        "optionalHistoryStructuralCharge": [
+          1992710,
+          1992710
+        ],
+        "optionalHistoryEncodedBytes": [
+          417117,
+          417117
+        ],
+        "pageBytes": [
+          4631,
+          4631
+        ],
+        "statusBytes": [
+          536,
+          536
+        ],
+        "controlBytes": [
+          584,
+          584
+        ],
+        "startupMillis": [
+          169.80269000000044,
+          169.80269000000044
+        ]
+      },
+      "limitsMet": {
+        "p95_100ms": true,
+        "synchronousTask10ms": true,
+        "heap1GiB": true,
+        "rss1_5GiB": true
+      },
+      "raw": "issue-501/final/profile-dense.json.gz",
+      "clock": "scheduler synchronous wall task and main-thread CPU, not heartbeat",
+      "processInterval": "Receipt to completed page/control; byte census bookkeeping can extend wall summary beyond CPU interval; provider settlement is separate from local admission."
+    }
+  ],
+  "reused509Boundary": "issue-501/final/509-boundary-reuse.json",
+  "nativeCustody": [
+    "issue-501/final/native-exit-custody.json",
+    "issue-501/final/native-publication-custody.json"
+  ],
+  "historicalFailures": [
+    "issue-501/historical-account.md",
+    "issue-501/historical-results.json",
+    "issue-501/combined-profiles-sync-diagnostic.json",
+    "issue-509/evidence-manifest.json"
+  ],
+  "unresolvedLimits": [
+    "No universal SLA, cold Node binary, live-provider latency or whole actual retained 10000-record Run capacity is claimed.",
+    "ReadOccurrencePage profiles do not qualify legacy fullTrace, Ready expansion or combined multi-observer whole-host capacity.",
+    "Optional selected history structural charge/encoding and exact watch pending charges are measured; complete trace-index retention and actual V8 retained object bytes are not individually measured. Whole process heap/RSS are measured.",
+    "The historic 5e dense quantum miss was repaired by native #509; old RSS/read-timeout evidence for larger retained data remains a limit, never a pass.",
+    "Parent #491 and unrelated trackers remain unchanged; their native closure is separate."
+  ],
+  "sourceIdentity": "Final documentary commits do not alter the frozen qualified runtime, selected tests or measurement fixture bytes. Git and artifact SHA256 bind actual evidence boundaries.",
+  "reviewClosure": {
+    "reviewedEvidenceCandidate": "e2d71e6c2a8e13bef1e9f98d9f485f123bbb861f",
+    "runtimeCandidate": "0cde2e89607bb6db59272ac580289cee09176739",
+    "freshReviewRounds": 1,
+    "freshReviewerResult": "NoBlockers",
+    "parentSpec": "NoBlockers",
+    "parentStandards": "NoBlockers",
+    "record": "issue-501-final-review.md",
+    "closureDelta": "Evidence-only status, review record, final-review link and historical artifact path correction; source/test/fixture bytes unchanged. Final closure commit is bound by Git HEAD without a self-referential embedded hash."
+  }
+}

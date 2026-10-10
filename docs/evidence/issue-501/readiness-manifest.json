@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "candidate": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+  "base": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
+  "tree": "726e5e290a768d59e8955951f50413f1c4da0d73",
+  "status": "",
+  "command": "DALPH_DIAGNOSTICS_BASE=5e7bfa81e8567c356708b7bc71830ec5bd6aa290 timeout --signal=TERM --kill-after=15s 900s mise exec -- pnpm check:submit",
+  "stopUTC": "2026-10-10T07:13:00Z",
+  "sourceFrozen": true,
+  "commandManifest": "pnpm check:artifacts && pnpm test:formal:controls && pnpm check:fast && pnpm lint:code --census && pnpm test:cassettes:memory",
+  "manifestSha256": "5a4b2e57be723ad9fb0cde9b640d2f1ac3023ace0fa274650dbde6ced4122982",
+  "lockfileSha256": "c196b6b9829b6fa31953130b14fc3ad471e62837796af0dd87d60206674f3f28",
+  "machine": {
+    "kernel": "Linux-7.0.14-orbstack-00380-ga7e0a2dc9535-aarch64-with-glibc2.36",
+    "architecture": "aarch64",
+    "onlineProcessors": 12
+  },
+  "scope": "One requested submission readiness pass; no check:all, hosted CI, p95 or native custody credit.",
+  "intentRecordedUTC": "2026-10-10T06:57:45Z",
+  "logOpenedUTC": "2026-10-10T06:57:48.113873741Z",
+  "lastLogWriteUTC": "2026-10-10T07:03:28.711911871Z",
+  "timestampBoundary": "Log filesystem birth/last-write timestamps; child completion exit 1 observed by execution handle separately."
+}
