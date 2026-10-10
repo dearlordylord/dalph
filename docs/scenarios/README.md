@@ -86,6 +86,7 @@ Git history.
 - [Preserve an occupied integration worktree during local promotion](occupied-integration-ref.md)
 - [Remove the legacy split integration pipeline](remove-legacy-split-integration.md)
 - [Codex resolves candidate-local content conflicts](candidate-local-content-conflicts.md)
+- [Codex repairs relocated candidate-local documentation links](candidate-local-documentation-links.md)
 - [Production Codex Integrator recovery and cleanup](production-codex-integrator.md)
 - [Release a rewritten target without an ownership loop](non-descendant-started-integration.md)
 - [Queue accepted results and cross the integration cutoff](queue-accepted-integration.md)

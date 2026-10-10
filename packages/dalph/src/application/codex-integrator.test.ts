@@ -903,6 +903,28 @@ describe("Codex Integrator", () => {
     expect(prompt).toContain("Do not rebase, cherry-pick, change accepted C")
     expect(prompt).toContain("return conclusive NotPrepared with the concrete unresolved requirement")
     expect(prompt).toContain("Never fabricate success")
+    for (const boundary of [
+      "After a clean merge",
+      "exact diagnostic",
+      "lexical path/fragment destinations",
+      "intended existing target is unambiguous",
+      "Preserve link labels",
+      "manifest-bound document is immutable",
+      "Do not edit hashed evidence",
+      "focused check:docs",
+      "obtain exit0",
+      "accepted C is unchanged",
+      "ambiguous or absent",
+      "prose/acceptance/evidence-content changes",
+      "a non-documentation check fails",
+      "preservation is uncertain",
+      "other required-check failures still require NotPrepared",
+      "retain the exact candidate and native custody",
+      "explicit fresh Operator authorization",
+      "reconcile uncertain outcomes and stopped writers",
+      "never infer Prepared from a process exit"
+    ])
+      expect(prompt).toContain(boundary)
   })
 
   it("subscribes before an Integrator turn start and seals after its exact completion hint", async () => {
@@ -1561,7 +1583,12 @@ describe("Codex Integrator", () => {
     expect(result._tag).toBe("NotPrepared")
   })
 
-  it("replays a sealed NotPrepared result without starting another turn", async () => {
+  it.each([
+    "ambiguous or absent intended local target",
+    "repair requires prose/acceptance/evidence-content changes",
+    "non-documentation check failed",
+    "manifest-bound document is immutable; preservation uncertain"
+  ])("replays a sealed NotPrepared boundary (%s) without starting another turn", async (detail) => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
       commonDirectory,
@@ -1580,7 +1607,7 @@ describe("Codex Integrator", () => {
       }).pipe(
         Effect.provide(
           providerLayer(config, {
-            envelopes: ['{"version":1,"outcome":"NotPrepared","detail":"checks failed safely"}'],
+            envelopes: [JSON.stringify({ version: 1, outcome: "NotPrepared", detail })],
             turnStarts
           })
         )
@@ -1589,7 +1616,7 @@ describe("Codex Integrator", () => {
     expect(result.first._tag).toBe("NotPrepared")
     expect(result.replay._tag).toBe("NotPrepared")
     expect(result.replay.correlation.ordinal).toBe(1)
-    expect(result.replay._tag === "NotPrepared" ? result.replay.detail : "").toBe("checks failed safely")
+    expect(result.replay._tag === "NotPrepared" ? result.replay.detail : "").toBe(detail)
     expect(turnStarts.value).toBe(1)
   })
 
