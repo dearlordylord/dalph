@@ -240,6 +240,7 @@ type FixtureOptions = {
   readonly precedingItems?: ReadonlyArray<unknown>
   readonly gitCalls?: Array<ReadonlyArray<string>>
   readonly threadStarts?: { value: number }
+  readonly prompts?: Array<string>
   readonly turnTokens?: Array<CodexOwnedTurnToken>
   readonly turnStarts?: { value: number }
   readonly worktreeAdds?: { value: number }
@@ -560,6 +561,7 @@ const fixtureLayer = (
           }),
         startTurn: (threadId, _cwd, _prompt, token) =>
           Effect.gen(function* () {
+            options.prompts?.push(_prompt)
             options.boundaryEvents?.push("codex:turn-start")
             if (token === undefined) return yield* Effect.die("missing provider token")
             if (options.turnStarts !== undefined) options.turnStarts.value += 1
@@ -869,6 +871,38 @@ describe("Codex Integrator", () => {
     expect(result._tag).toBe("PreparedCandidate")
     expect(result.correlation.ordinal).toBe(1)
     expect(result._tag === "PreparedCandidate" ? result.candidateText : "").toBe("M")
+  })
+
+  it("instructs the exact provider turn to resolve conflicts and fail concretely inside its candidate", async () => {
+    const prompts: Array<string> = []
+    const turnStarts = { value: 0 }
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/store.json"),
+      repository
+    })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* integrator.prepare(requestFor(1))
+      }).pipe(Effect.provide(providerLayer(config, { prompts, turnStarts })))
+    )
+    expect(turnStarts.value).toBe(1)
+    expect(prompts).toHaveLength(1)
+    const prompt = prompts[0]
+    expect(prompt).toContain("You own content-conflict resolution inside this candidate")
+    expect(prompt).toContain("accepted task scenarios/source authorities")
+    expect(prompt).toContain(`Planned Base: ${requestFor(1).correlation.session.plannedAttempt.baseSha}`)
+    expect(prompt).toContain("preserving both accepted task behavior and existing target behavior")
+    expect(prompt).toContain("Do not blindly select one whole side")
+    expect(prompt).toContain("Run focused checks")
+    expect(prompt).toContain("exact ordered direct parents [H, C]")
+    expect(prompt).toContain("target ref still names H")
+    expect(prompt).toContain("Do not update or push the target ref")
+    expect(prompt).toContain("Do not rebase, cherry-pick, change accepted C")
+    expect(prompt).toContain("return conclusive NotPrepared with the concrete unresolved requirement")
+    expect(prompt).toContain("Never fabricate success")
   })
 
   it("subscribes before an Integrator turn start and seals after its exact completion hint", async () => {

@@ -71,8 +71,13 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     `Candidate worktree: ${candidatePath}`,
     `Exact integration run: ${run.session.sessionId}/${run.ordinal}`,
     "The candidate worktree starts at unchanged target head H.",
-    `Prepare the candidate as the exact integration merge of H and accepted commit C (${run.session.acceptedResult.commit}); the candidate commit must have H and C as its direct parents. Do not cherry-pick C, recreate the task change, or update the target ref.`,
-    "Work only inside the candidate worktree. Do not update the target ref.",
+    `Prepare the candidate as the exact integration merge of H and accepted commit C (${run.session.acceptedResult.commit}); the candidate commit must have exact ordered direct parents [H, C]. Do not rebase, cherry-pick, change accepted C, recreate the task change, or update/push the target ref.`,
+    "Work only inside the exact candidate worktree for this session/run. Do not update or push the target ref, edit the accepted task worktree, or create another leaf attempt or claim.",
+    "You own content-conflict resolution inside this candidate. Read H and C, their changes from the planned Base, repository instructions, and accepted task scenarios/source authorities before resolving.",
+    `Planned Base: ${run.session.plannedAttempt.baseSha}`,
+    "Attempt the merge and resolve content conflicts in this candidate while preserving both accepted task behavior and existing target behavior. A content conflict alone is not a reason to return NotPrepared. Do not blindly select one whole side.",
+    "Run focused checks for the affected behavior after resolution. Verify the reported merge commit has exact ordered direct parents [H, C] and the target ref still names H before returning PreparedCandidate.",
+    "If requirements cannot both be preserved, resolution is unsafe, a required scoped check fails, or authorities contradict, return conclusive NotPrepared with the concrete unresolved requirement, failed check, or authority contradiction. Never fabricate success.",
     'Return exactly one terminal JSON object: {"version":1,"outcome":"PreparedCandidate","candidate":"<git commit text>"} or {"version":1,"outcome":"NotPrepared","detail":"<safe non-empty detail>"}.'
   ].join("\n")
 const activityIsAbsent = (
@@ -168,6 +173,7 @@ const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
     token: yield* newToken(crypto)
   })
   const next = recordRunIntent(record, created, app.incarnation)
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- recordRunIntent explicitly returns undefined for invalid private phases/history; retain this fail-closed guard.
   if (next === undefined)
     return yield* Effect.fail(providerFailure("provider run requires an established owned thread"))
   yield* boundary(store.write(next))
