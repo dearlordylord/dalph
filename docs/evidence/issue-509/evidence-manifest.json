@@ -1,0 +1,257 @@
+[
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/profile.log",
+    "sha256": "f76c51f620289ab9fff7be7facb8ea0555f11115e23e10aca16348bb3c36c24c",
+    "bytes": 2184
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/initial-profiles.json.gz",
+    "sha256": "5a71294e4af2ad70774a459fd2be1700befdd977d7a27d8ead9dba629c1ba8d2",
+    "bytes": 4174352
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/initial-profile.log",
+    "sha256": "f76c51f620289ab9fff7be7facb8ea0555f11115e23e10aca16348bb3c36c24c",
+    "bytes": 2184
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/final-profile.log",
+    "sha256": "abefac59e1407b7a2beee4730542567338075a8fb1bf259a10723e6b5175f9a6",
+    "bytes": 4426
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/failed-12ms-profiles.json.gz",
+    "sha256": "f8212605c50d874c187e9936032a0678a26468da99baac46752d197ceac5ed05",
+    "bytes": 8654121
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/failed-12ms-tests.json",
+    "sha256": "2981117d82973529b9aed159b0c2e629d81eaa315d7c8c62dd90b0f910cdcb03",
+    "bytes": 3359
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/phase-candidate.patch",
+    "sha256": "ecf9ce7a6eefeb7e55a1a663b73f212e40aa04022c23c3db23b33fff45f00da0",
+    "bytes": 16970
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/phase-diagnostic.log",
+    "sha256": "8737ff55015085e757017a6c950525cd2c7856a5ee0652cb9823aa23eef24e34",
+    "bytes": 2228
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/phase-diagnostic-profiles.json.gz",
+    "sha256": "8f2a8a8b4262f004fda9ad7faae48f82457b5dd6fa5fe93dc264c3778b1b6733",
+    "bytes": 7782242
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/phase-diagnostic-tests.json",
+    "sha256": "d4a9cf450c9f136eb11c9f3fb73a627506dbde12e9c90ef96f60b56ee37889ac",
+    "bytes": 1575
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/native-decode-diagnostic.log",
+    "sha256": "c9f28bcee90d49d97f5181869fc499daf4c4be421556269d2783e2c9eb9a1f47",
+    "bytes": 3175
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/native-decode-candidate.patch",
+    "sha256": "cbfe1b105c704795054b3229b824ba5a1123fd464ec9f3b359e9f862d34ed518",
+    "bytes": 26799
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/failed-query-index-profiles.json.gz",
+    "sha256": "5d86dab53e1a57ffe0435ab453383fb113cc0d21eb123850913001d1c11e2d8d",
+    "bytes": 7681072
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/failed-query-index-tests.json",
+    "sha256": "f7e500c19e91f42292add310c77d66c83eda81276d318e4d03532920b91c35cf",
+    "bytes": 3120
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/native-decode-repair.log",
+    "sha256": "54ed8d38b688017f799de2d56eb1a8f70dcbe3f5e47b31f2130a395b02758cd0",
+    "bytes": 2246
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/native-decode-repair-profiles.json.gz",
+    "sha256": "01c26a90a174b2a01f771118142781918bd003533c3ae9ee35d7ea5cc55467e5",
+    "bytes": 10098997
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/native-decode-repair-tests.json",
+    "sha256": "14e678eec4c0e076a2bd24ae4d35b2316ea877731d8a3ff0ea461c2f53812cf7",
+    "bytes": 1591
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/dense-final.log",
+    "sha256": "e6c74463b57a7291e7fc4c822d68edc6cfec467d21a40e1d41341158ce30a95f",
+    "bytes": 2451
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/dense-final-profiles.json.gz",
+    "sha256": "412ce2719ddcd098dc6f15e0fbf78360d19cb41f2c9ed900e7270b72ed4f0253",
+    "bytes": 9696221
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/dense-final-tests.json",
+    "sha256": "4753437afaaaabfa288c8c2040c9391738528c852d04e1c188d0c2c67a50d69e",
+    "bytes": 2088
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/oversized-final.log",
+    "sha256": "94ef63fb200fdad10eb67e6135b3aa164c308e7aa97348d85415e865dfd290d0",
+    "bytes": 2473
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/oversized-final-profiles.json.gz",
+    "sha256": "c0ba1ee01f722947c2103378fe3991afd9043044ef859e013701cd6184a568c7",
+    "bytes": 9941952
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/oversized-final-tests.json",
+    "sha256": "aad802c7e2631321fd366c381352e6619c326836d5d2179d91517f7da7512db4",
+    "bytes": 2088
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/uncached-final.log",
+    "sha256": "aa172cf237f46c572e9f35275d9eb1b9baef5d0ca250f6e973e708df0a2f41e7",
+    "bytes": 2474
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/uncached-final-profiles.json.gz",
+    "sha256": "1d107aa3d3a2cb28bb67525c30c04b48026213007bb24665158e0e83e70d9495",
+    "bytes": 10101629
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/uncached-final-tests.json",
+    "sha256": "19f4fbfc622edfaad06de85ce2f619febddd606df5aea5cdb498263b4ece3884",
+    "bytes": 2088
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-trace-tests.log",
+    "sha256": "8c0931c754c86e4f441bfd264b9208ba40a61a2e0b7113698bfe15f823d1c02c",
+    "bytes": 829
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-typecheck.log",
+    "sha256": "c7172c24e323251e7a22cef41b3fdb8b47baae4ea3d43d102a5680ca45f48301",
+    "bytes": 97575
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-build.log",
+    "sha256": "f803f4989971eaebf4e77007dc4073168a9272b04de20adeddaf39c7d2d71892",
+    "bytes": 53832
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-lint.log",
+    "sha256": "6c0607f91d953d69ce1743fc6a8adca5e78c24cfb867ec811db7c55f043a33fa",
+    "bytes": 29575
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-cooperative.log",
+    "sha256": "e41367d431fd94504e10119fa25f7f931343c3f003fc7428a325e61588ee8a82",
+    "bytes": 826
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-focused.log",
+    "sha256": "e78fe73b76097f71cf799f3525c7581da86a1911739922beba37cc7fc07f4102",
+    "bytes": 50481
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-fast.log",
+    "sha256": "72f42038855c326badc1cf1d65b425ba73ddcc6da3838480003abeffe6d95bab",
+    "bytes": 100356
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-lint-repair.log",
+    "sha256": "b964053ae48e7d3a747c2db2e096fec44d7d7a45b57ceed0f6f6b0d979edae5e",
+    "bytes": 1629
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-commit.log",
+    "sha256": "437f77af14d68ccd7d86acd530b7935b9dce5be812e79929d29c9104a871f29b",
+    "bytes": 1513
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-typecheck-2.log",
+    "sha256": "d1895026f7a291334e29c04f312b086d381e8c58621f257dbfb5ad6b090c0111",
+    "bytes": 97769
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-trace-repair.log",
+    "sha256": "1612e96f55352fe3b771c972268555a65b02d9e3b514e102cb1c77e7833cbc9e",
+    "bytes": 829
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-index-repair.log",
+    "sha256": "a84c1be4a83d28c40441cd831dd042ad6e8908fc631119dec33dfe5e607a2c35",
+    "bytes": 829
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-parity-property.log",
+    "sha256": "ab7d2edcc61a042d401efb510cc0372226794beaff0192c18804de4f71d923ea",
+    "bytes": 827
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-commit-2.log",
+    "sha256": "ae770df25824158748fbc49ece86975738bf5f168e8b40655c505a8af195ab42",
+    "bytes": 1380
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-bounded-index-repair.log",
+    "sha256": "e9bfe7983e3b84111b9f6f9e4b737cde0a984579038968a3c4e5f5de342c8651",
+    "bytes": 829
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-operation-index-repair.log",
+    "sha256": "41f084c84245f95ba7dc1579c24daa9c2153d777c39950570b891df190461d30",
+    "bytes": 829
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-native-interruption.log",
+    "sha256": "c064ea034fc57e1c15b0151266e280a646c7b46f7c02c3921afb3bdb8d6fee59",
+    "bytes": 827
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-commit-3.log",
+    "sha256": "6a32d2990361b40b680cb07593916bfbaba9f48154687f004f840e249b65e571",
+    "bytes": 1372
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-artifacts.log",
+    "sha256": "395078dd0ba240a50a4d4633f5a9c176be2d91a8d738ca745b9de27a048d52dc",
+    "bytes": 720
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-fast-final.log",
+    "sha256": "8d72e9414fb9a25cd7a88af1d963b4994237ed62b06a7767b1c25d9f5731fa99",
+    "bytes": 101551
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-focused-final.log",
+    "sha256": "e2b001bd50515a11e838ca01e5a83651dd4dc19ede8a519f4bad779e868d02f7",
+    "bytes": 52206
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-docs.log",
+    "sha256": "ccefb12b745d89dacaa672ff9cd7745e42b134eab0826257ea6c55f2942fef38",
+    "bytes": 794
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-commit-4.log",
+    "sha256": "7bed354ab1f3579ca4db5b15b37952b49aeb03849a61480bab91350603d7baee",
+    "bytes": 886
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-focused-results.json",
+    "sha256": "a62aaa89b6ccc1889b8e91aca27b4e7656fe2b352d0b31f5d0feabb09471c238",
+    "bytes": 84166
+  },
+  {
+    "path": "/workspace/dalph-dogfood/issue-509-20261010/evidence/cooperative-history/issue-509-focused-final-results.json",
+    "sha256": "e08a4d768cf737d07861a356e166051de54f9a2e7fa2c987206e1097c8c2d795",
+    "bytes": 86507
+  }
+]
