@@ -1,6 +1,6 @@
 # Maintainer combined qualification account
 
-The Maintainer qualifies the declared observation, control, diagnostic and restart boundaries on coherent runtime candidate `0cde2e89607bb6db59272ac580289cee09176739`, obtained through normal Git integration of native #509 publication `1e2f91afe41304debc9beb94c694d8452f82d6d6` while preserving the original Base and test-only repairs. All eight mapped scenarios and four declared page profiles pass. Fresh scoped review is recorded separately before final acceptance. This evidence-only report cannot change runtime behavior; #491 and unrelated trackers remain untouched.
+The Maintainer qualifies the declared observation, control, diagnostic and restart boundaries on coherent runtime candidate `0cde2e89607bb6db59272ac580289cee09176739`, obtained through normal Git integration of native #509 publication `1e2f91afe41304debc9beb94c694d8452f82d6d6` while preserving the original Base and test-only repairs. All eight mapped scenarios and four declared page profiles pass. Fresh scoped review and parent Spec/Standards review both closed with NoBlockers. This evidence-only report cannot change runtime behavior; #491 and unrelated trackers remain untouched.
 
 ## Candidate and submission readiness
 
@@ -53,4 +53,4 @@ The [native Exit capture](issue-501/final/native-exit-custody.json) retains actu
 
 The original failed readiness, three cassette defects, public recovery oracle failures, focused repair passes and dense quantum miss remain in the [historical account](issue-501/historical-account.md), [historical results](issue-501/historical-results.json), original logs and [repair handoff](issue-501-repair-handoff.md). They are not retrospectively passed. Native #509 repaired the validation boundary before the new coherent qualification. The capture's initial import-resolution guard failure launched no tests or native children; the corrected declared-package alias passed, with both logs retained. Prior root RSS/read-timeout limits and native reconciliation evidence remain in [external records](issue-501/external-root-evidence.json) at their original candidate boundary. They cannot substitute for current acceptance.
 
-Fresh scoped review closure is recorded in `issue-501-final-review.md`. Parent tracker closure and final combined owner action remain separate from this slice.
+[Fresh scoped review closure](issue-501-final-review.md) records one round with NoBlockers and the parent acceptance of the declared scope. Parent tracker closure and final combined owner action remain separate from this slice.

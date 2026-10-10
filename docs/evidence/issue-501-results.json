@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "qualificationStatus": "ChecksPassedPendingFreshReview",
+  "qualificationStatus": "AcceptedDeclaredScope",
   "base": "5e7bfa81e8567c356708b7bc71830ec5bd6aa290",
   "qualifiedRuntimeCandidate": "0cde2e89607bb6db59272ac580289cee09176739",
   "qualifiedRuntimeTree": "aaac40cf7f37f743d4c8ba4e8598be84dff6da51",
@@ -2955,7 +2955,7 @@
     "issue-501/historical-account.md",
     "issue-501/historical-results.json",
     "issue-501/combined-profiles-sync-diagnostic.json",
-    "../issue-509/evidence-manifest.json"
+    "issue-509/evidence-manifest.json"
   ],
   "unresolvedLimits": [
     "No universal SLA, cold Node binary, live-provider latency or whole actual retained 10000-record Run capacity is claimed.",
@@ -2964,5 +2964,15 @@
     "The historic 5e dense quantum miss was repaired by native #509; old RSS/read-timeout evidence for larger retained data remains a limit, never a pass.",
     "Parent #491 and unrelated trackers remain unchanged; their native closure is separate."
   ],
-  "sourceIdentity": "Final documentary commits do not alter the frozen qualified runtime, selected tests or measurement fixture bytes. Git and artifact SHA256 bind actual evidence boundaries."
+  "sourceIdentity": "Final documentary commits do not alter the frozen qualified runtime, selected tests or measurement fixture bytes. Git and artifact SHA256 bind actual evidence boundaries.",
+  "reviewClosure": {
+    "reviewedEvidenceCandidate": "e2d71e6c2a8e13bef1e9f98d9f485f123bbb861f",
+    "runtimeCandidate": "0cde2e89607bb6db59272ac580289cee09176739",
+    "freshReviewRounds": 1,
+    "freshReviewerResult": "NoBlockers",
+    "parentSpec": "NoBlockers",
+    "parentStandards": "NoBlockers",
+    "record": "issue-501-final-review.md",
+    "closureDelta": "Evidence-only status, review record, final-review link and historical artifact path correction; source/test/fixture bytes unchanged. Final closure commit is bound by Git HEAD without a self-referential embedded hash."
+  }
 }
