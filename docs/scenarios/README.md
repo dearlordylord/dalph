@@ -86,6 +86,7 @@ Git history.
 - [Preserve an occupied integration worktree during local promotion](occupied-integration-ref.md)
 - [Remove the legacy split integration pipeline](remove-legacy-split-integration.md)
 - [Codex resolves candidate-local content conflicts](candidate-local-content-conflicts.md)
+- [The Operator refines original conflicts after explicit Retry](original-conflict-refinement-retry.md)
 - [Codex repairs relocated candidate-local documentation links](candidate-local-documentation-links.md)
 - [Production Codex Integrator recovery and cleanup](production-codex-integrator.md)
 - [Resume an exact retained integration merge during authorized Retry](retained-integrator-merge-retry.md)
