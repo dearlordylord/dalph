@@ -93,10 +93,10 @@ before applicable qualification, preserving H/C and ordered parents [H,C].
 C2 refuses admission for live/unreadable activity, changed ownership/token,
 contradictory or nonterminal history, interrupted custody without exact stopped
 proof, or a foreign candidate. No new provider turn receives the guarantee.
-C3 bounds the guarantee to admission-time prior owned activity. The current turn,
-later uncertain effects, live/background activity, interrupted processes and
-foreign writers still require native reconciliation before further effects,
-reuse or sealing. Crashes retain the same session/run/resource and fixed H/C;
+C3 bounds the guarantee to admission-time prior owned activity. The current turn may perform its authorized scoped work; admission does not
+prove its completion or stopped custody. Later uncertain effects, live/background
+activity, interrupted processes and foreign writers still require native
+reconciliation before further effects, reuse or sealing. Crashes retain the same session/run/resource and fixed H/C;
 redelivery remains idempotent, and a later Retry needs fresh native admission.
 C4 preserves P2/P4, the lexical-link exception and all original repair exclusions.
 No native guard, algebra, authority, cleanup, publication or Retry limit changes.

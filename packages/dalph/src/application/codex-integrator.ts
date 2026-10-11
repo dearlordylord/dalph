@@ -73,7 +73,7 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     ...(isRetryProviderRun(run)
       ? [
           "Native Retry admission for this exact session/run and candidate resource has already reconciled prior provider-owned activity: the native owner reread the owned thread/history and obtained an Absent activity census before admitting this Retry. You may rely on that completed native-owner proof for admission-time prior owned activity; no separate custody tool/report or second manual process census is required for it.",
-          "This guarantee does not cover the current authorized turn, subsequent uncertain effects, live/background activity, interrupted processes or foreign writers. Those still require their own native reconciliation before further effects, reuse or sealing. Exact Retry redelivery remains idempotent; a later Retry requires fresh native admission."
+          "This guarantee does not cover the current authorized turn; it may perform the scoped work authorized here, but admission is not proof of its completion or stopped custody. Subsequent uncertain effects, live/background activity, interrupted processes or foreign writers still require their own native reconciliation before further effects, reuse or sealing. Exact Retry redelivery remains idempotent; a later Retry requires fresh native admission."
         ]
       : []),
     "Initial materialization starts at unchanged target head H. On an authorized Retry the exact owned candidate may retain its merge with ordered parents [H, C]; inspect it, preserve history, and rerun applicable required checks before reporting PreparedCandidate.",
