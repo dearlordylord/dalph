@@ -187,3 +187,57 @@ owners; their scenarios are unchanged.
 | T2 | P2 sealed NotPrepared replay and envelope negatives prove conclusive refusal. P2/C2 worktree and provider negatives refuse foreign candidates/custody before turns. Source policy review checks exclusions; preservation of all existing bytes and semantic scope require actual pack diff/review. |
 | T3 | P3/C3 provider lost-response, contiguous-run, live-writer and sealing controls; protocol exact direction/redelivery, successor and reconstruction tests above prove unchanged recovery identities and no S3. Qualification for the candidate including new files remains actual provider-owned proof. |
 | T4 | Scoped source standards/spec review and focused owner/consumer checks qualify this policy change only. Parent must review new pack files and existing-byte preservation, observe focused and unchanged 99% qualification passing, then verify Git identity and publication controls. Controlled tests do not substitute. |
+
+## Reduce proven runner capacity after explicit Retry (R1–R4)
+
+The Operator may authorize one capacity-only extension to the preceding T1–T4
+policy. This preserves P1–P4 and C1–C4, lexical link repair, additive regression
+files, and all governing model laws and invariants above. Only provider instructions
+change; native admission, custody, workflow algebra and runtime guards do not.
+
+R1 starts after required complete qualification conclusively fails in the retained
+original-conflict candidate and returns sealed NotPrepared. The provider reads the
+retained failed-boundary evidence and controlled unchanged-source diagnostic:
+reducing existing `maxWorkers: 2` to `1` passes all tests and coverage within the
+unchanged stage deadline. This does not prove concurrency is the only cause.
+The Operator issues a fresh exact native Retry; the native owner reconciles prior
+writers before admission. The provider may change only that existing capacity
+value in the actual candidate, documenting the boundary and diagnostic. Before
+another complete run it obtains a passing focused reproducer there and closes
+scoped standards/spec reviews. This exception requires no conflict in the runner
+configuration itself and authorizes no general configuration repair.
+
+R2 preserves every existing test, fixture, assertion, discovery setting, timeout,
+coverage inclusion/exclusion/ignore setting and threshold, gate command manifest
+and order, acceptance narrative, raw/hash-bound evidence and runtime guard.
+Capacity increases, timeout increases, gate omissions, CLI substitutes for required
+qualification and unrelated configuration edits are forbidden. Unsupported failures
+return NotPrepared for separate owner repair.
+
+R3 retains the exact pack Run/session/resource and S2, fixed H
+`a285a0dbc33c4ba283f55e53bcb1161f7e0def27` and immutable C
+`d58eb957b271e7046c17b0f65e217b62864032e0`. Crashes or response loss between
+admission, edit, checks and sealing retain candidate and identities. Request
+redelivery is idempotent; native reconciliation owns subsequent uncertain writers.
+No new leaf, S3, duplicate claim or additional FullRerun is authorized. Complete
+unchanged required qualification must pass on the final coherent candidate with
+ordered direct parents [H,C]. A further failure retains evidence and conclusive
+NotPrepared without automatic repeated full gates or semantic retries.
+
+R4 requires source scoped standards/spec reviews of the narrow permission and
+preserved guards. Parent owns actual provider acceptance after original-Dalph
+publication: upgrade from the published source preserving the pack Run and ledgers,
+then issue one exact native Retry of the latest quarantine. Observe the capacity-only
+diff, focused success, closed reviews, and actual unchanged complete
+`pnpm check-all` (all 11 stages, 99% coverage), exact parents and custody. The
+retained 173-test one-worker diagnostic (504.10 seconds), isolated covered S9 pass
+(225.96 seconds), and two-worker S9 timeouts (270 seconds) supply diagnosis only;
+they do not qualify the retained or edited candidate. This leaf cannot edit the pack
+or active frozen host and claims no post-publication acceptance.
+
+| Scenario | Source verification and limits |
+| --- | --- |
+| R1 | P1/C1 admitted retained Retry provider tests and Git/worktree parent controls above prove admission and candidate identity. Actual capacity selection, documented diagnosis and focused-before-complete behavior require parent-owned provider acceptance; no new prompt-string mirrors are added. |
+| R2 | P2 sealed NotPrepared replay, envelope negatives and C2 custody/foreign-candidate negatives preserve refusal boundaries. Scoped source review checks permission/exclusions; actual pack diff and review prove preserved configuration and bytes. |
+| R3 | P3/C3 lost-response, contiguous-run, live-writer and sealing controls plus protocol, successor and reconstruction tests prove recovery/redelivery and unchanged session limits. Actual final complete qualification remains parent-owned. |
+| R4 | Focused provider/consumer checks, `check:fast`, `check:docs`, `check:submit` and fresh scoped review qualify source only. Parent performs the exact upgrade/Retry and all 11 pack stages; no original-source `check:all` is authorized. |
