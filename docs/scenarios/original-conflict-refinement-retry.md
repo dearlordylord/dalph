@@ -40,7 +40,7 @@ failure retains NotPrepared and waits for another explicit human direction.
 ## P2: Surface clean-merge defects to their owner
 
 At that same boundary, a failure in a non-conflict path, new feature, unrelated
-production behavior, tests/fixtures/assertions, narrative acceptance, raw or
+production behavior, existing tests/fixtures/assertions, narrative acceptance, raw or
 hashed/manifest-bound evidence requires separate owner repair, even within an
 originally conflicted path. Return NotPrepared without changing those bytes,
 exempting checks or choosing one whole side. The existing lexical documentation
@@ -131,3 +131,59 @@ private-ledger/Journal rewriting; parent owns combined acceptance and publicatio
 Leaf qualification selects the mapped focused files, `check:fast`, scoped
 standards/spec review, `check:docs` and `check:submit`. No local `check:all` or
 pack application gate is authorized in this source-repair worktree.
+
+## Permanent additive regression files after explicit Retry (T1–T4)
+
+This refines P1/P2 and preserves C1–C4 native admission. The provider may add
+permanent regression files for its original conflict resolution; no workflow,
+event, authorization, custody, model or runtime algebra changes. Codex interprets
+the policy; no byte classifier or test-only production export is introduced.
+
+T1 starts with original content conflicts resolved in the exact retained candidate,
+a conclusive required-check failure due to missing verification of that resolution,
+and sealed NotPrepared diagnostics and custody. The Operator submits a fresh exact
+explicit native Retry. Before edits, the provider uses the scoped admission proof,
+reconciles subsequent uncertain effects, reads original H/C Git conflicts and
+retained failed evidence, and establishes that the missing cases belong to its
+resolution. It may add only new permanent regression-test files, using unchanged
+existing helpers/fixtures or local controlled fixtures in those files. Tests prove
+accepted positive and negative boundary behavior, including refusal before unsafe
+effects, rather than implementation/string mirrors or numeric coverage tricks.
+Production refinement remains independently bounded to the original resolution
+paths. Run the failed boundary's focused tests/check first; only a pass permits
+all applicable required qualification. Commit added files in the final exact
+ordered [H,C] merge, preserving fixed H, immutable C and both accepted behaviors.
+
+T2 at that same boundary forbids modifying, renaming, deleting or replacing existing
+tests/fixtures/assertions, acceptance narratives, raw evidence, hashed/manifest-bound
+bytes, gate command manifests, coverage inclusion/exclusion/ignore settings or
+thresholds. Do not weaken guards, change production behavior for metrics, create
+test-only production exports or inject ephemeral/discarded tests. Unrelated missing
+verification, clean-merge defects, new features and unrelated production paths
+require separate owner repair and NotPrepared. New files cannot hide assertion
+changes or broaden production permission.
+
+T3 covers crashes or response loss between admission, file creation, qualification
+and sealing. Preserve exact session/run/resource, H/C and candidate including new
+files. Request redelivery is idempotent; subsequent uncertain/live/foreign activity
+requires native reconciliation and later Retry requires fresh admission. Changed
+test or production bytes invalidate prior qualification. Obtain applicable complete
+qualification for the exact coherent candidate; credit no missing/failed stage.
+Another failure retains conclusive NotPrepared diagnostics without automatic semantic
+retry, duplicate claim, new leaf, another FullRerun or S3.
+
+T4 requires scoped standards/spec review of added files and preservation of existing
+bytes before handoff. Parent owns actual provider/composed acceptance after native
+source publication and host upgrade: the pack Retry must retain existing tests,
+fixtures and evidence, cover meaningful rejection guards, pass focused checks then
+the unchanged required 99% gate, and preserve ordered parents and target/publication
+controls. This source repair does not claim that proof passed. Tracker mutations,
+publication and cleanup are outside this policy boundary and keep their existing
+owners; their scenarios are unchanged.
+
+| Scenario | Verification and limits |
+| --- | --- |
+| T1 | P1/C1 provider admitted Retry controls and Git candidate/worktree ordered-parent controls above prove native admission and identity. Original-conflict provenance, meaningful new positive/negative tests and focused-before-complete qualification require actual parent-owned pack Retry; prompt-string tests would not prove them. |
+| T2 | P2 sealed NotPrepared replay and envelope negatives prove conclusive refusal. P2/C2 worktree and provider negatives refuse foreign candidates/custody before turns. Source policy review checks exclusions; preservation of all existing bytes and semantic scope require actual pack diff/review. |
+| T3 | P3/C3 provider lost-response, contiguous-run, live-writer and sealing controls; protocol exact direction/redelivery, successor and reconstruction tests above prove unchanged recovery identities and no S3. Qualification for the candidate including new files remains actual provider-owned proof. |
+| T4 | Scoped source standards/spec review and focused owner/consumer checks qualify this policy change only. Parent must review new pack files and existing-byte preservation, observe focused and unchanged 99% qualification passing, then verify Git identity and publication controls. Controlled tests do not substitute. |
