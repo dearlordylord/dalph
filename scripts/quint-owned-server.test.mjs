@@ -252,15 +252,33 @@ void test("uses and terminates only the identified owned server with a foreign s
   }
 })
 
+const ownershipRefusal =
+  /another process|stopped before planned shutdown|EACCES: permission denied, (?:scandir '\/proc\/\d+\/fd'|readlink '\/proc\/\d+\/fd\/\d+')/u
+
+void test("ownership refusal oracle recognizes only scoped proc permission errors", () => {
+  for (const message of [
+    "EACCES: permission denied, scandir '/proc/1000504/fd'",
+    "EACCES: permission denied, readlink '/proc/1000504/fd/0'"
+  ])
+    assert.match(message, ownershipRefusal)
+  for (const message of [
+    "EACCES: permission denied, scandir '/tmp/fd'",
+    "EACCES: permission denied, readlink '/tmp/fd/0'",
+    "EACCES: permission denied, readlink '/proc/1000504/fd'",
+    "EACCES: permission denied, scandir '/proc/1000504/fd/0'",
+    "EACCES: permission denied, readlink '/proc/1000504/fd/0/other'",
+    "EACCES: permission denied, readlink '/proc/1000504/fd/not-a-descriptor'",
+    "ENOENT: no such file or directory, readlink '/proc/1000504/fd/0'"
+  ])
+    assert.doesNotMatch(message, ownershipRefusal)
+})
+
 void test("refuses another process endpoint without checking or stopping the ambient listener", async () => {
   const f = await fixture("ownership-failure")
   try {
     // The colliding child can exit while ownership is being observed. Losing
     // access to that exact process also refuses checking and preserves ambient.
-    assert.match(
-      f.result.error,
-      /another process|stopped before planned shutdown|EACCES: permission denied, scandir '\/proc\/\d+\/fd'/u
-    )
+    assert.match(f.result.error, ownershipRefusal)
     assert.equal(f.result.checks, 0)
     assert.equal(f.result.ambientReply, "ambient")
   } finally {
