@@ -77,6 +77,45 @@ matching prompt strings are added. Existing executable boundaries remain selecte
 | P3 | Provider `restarts an unfinished retained-merge run two with its same durable token`, live/unreadable custody and foreign-history negatives; [worktree tests](../../packages/dalph/src/application/codex-integrator-worktree.test.ts) refuse changed H/C, foreign registration and invalid parents; [protocol tests](../../packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts), [successor tests](../../packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts) and [reconstruction tests](../../packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts) prove exact authorization/redelivery and same S2 recovery. |
 | P4 | Git candidate and worktree negative controls enforce identities/parents; sealed NotPrepared replay keeps failed required checks blocking. Semantic preservation and evidence exclusion remain provider-interpreted. |
 
+## Native Retry handoff clarification (C1–C4)
+
+C1 starts with fixed H/C, the exact retained merge and a conclusive sealed
+NotPrepared predecessor. On a fresh explicit human Retry, the native owner
+rereads the owned thread, predecessor token/terminal history and current activity
+before allocating the new run token and starting the provider turn. The Retry
+prompt identifies the completed native-owner reconciliation for admission-time
+prior provider-owned activity in this exact session/run/resource. The provider
+may rely on it without inventing a separate custody report or repeating a manual
+process census. It still reads Git conflict history and retained failed diagnostics,
+refines only the original resolution, and passes the failed focused boundary
+before applicable qualification, preserving H/C and ordered parents [H,C].
+
+C2 refuses admission for live/unreadable activity, changed ownership/token,
+contradictory or nonterminal history, interrupted custody without exact stopped
+proof, or a foreign candidate. No new provider turn receives the guarantee.
+C3 bounds the guarantee to admission-time prior owned activity. The current turn,
+later uncertain effects, live/background activity, interrupted processes and
+foreign writers still require native reconciliation before further effects,
+reuse or sealing. Crashes retain the same session/run/resource and fixed H/C;
+redelivery remains idempotent, and a later Retry needs fresh native admission.
+C4 preserves P2/P4, the lexical-link exception and all original repair exclusions.
+No native guard, algebra, authority, cleanup, publication or Retry limit changes.
+
+| Scenario | Verification and limits |
+| --- | --- |
+| C1 | Provider `reconciles retained Retry $name before any new provider turn` exercises a sealed NotPrepared followed by admitted retained Retry and captures its actual `startTurn` prompt, exact run and limited guarantee. Git candidate/worktree tests above preserve H/C and parents. Semantic interpretation remains parent-owned. |
+| C2 | The same provider matrix asserts live/unreadable custody, foreign predecessor, wrong parents and Prepared predecessor start no new turn and receive no new prompt; existing foreign-token/history and interrupted-custody negatives remain required. Worktree tests reject foreign candidates. |
+| C3 | Provider `starts and replays eight contiguous provider runs on one exact retained resource`, `refuses a third run while an old writer is still live and preserves both sealed runs`, interrupted recovery tests and sealing census tests exercise fresh admission, idempotence and later custody. The admitted prompt explicitly excludes current/later/foreign activity. |
+| C4 | Existing P1–P4 mapping remains binding. Envelope, worktree and Git candidate negatives preserve refusal and identities; provider policy interpretation of repair exclusions remains unproven until the actual retained pack Retry. |
+
+Source evidence is the existing `reconcileRetainedMergeRetry`, `prepare` and
+`sealObservedRun` in the [native provider](../../packages/dalph/src/application/codex-integrator.ts).
+The [physical conflict fixture](../../packages/dalph/src/application/codex-integrator-conflict-real-qualification.test.ts)
+records real native census observations; the
+[interrupted fixture](../../packages/dalph/src/application/codex-integrator-interrupted-real-qualification.test.ts)
+requires exact prior incarnation process-group absence. These are retained guard
+evidence, not claims of a fresh live-provider run for this clarification.
+
 Parent acceptance must use the actual retained pack integration as the one minimal
 physical/provider proof after native publication and frozen-host upgrade. This
 leaf does not claim that proof passed. Pack accepted C is

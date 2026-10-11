@@ -1952,6 +1952,7 @@ describe("Codex Integrator", () => {
         privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/retained-retry.json"),
         repository
       })
+      const prompts: Array<string> = []
       const retainedHead = { value: false }
       const turnStarts = { value: 0 },
         worktreeAdds = { value: 0 },
@@ -1968,6 +1969,7 @@ describe("Codex Integrator", () => {
         }).pipe(
           Effect.provide(
             providerLayer(config, {
+              prompts,
               retainedHead,
               ...(parents === undefined ? {} : { retainedParents: parents }),
               turnStarts,
@@ -1989,6 +1991,14 @@ describe("Codex Integrator", () => {
       )
       expect(Exit.isFailure(result.second)).toBe(failure)
       expect(turnStarts.value).toBe(failure ? 1 : 2)
+      expect(prompts).toHaveLength(failure ? 1 : 2)
+      expect(prompts[0]).not.toContain("Native Retry admission for this exact session/run")
+      if (!failure) {
+        expect(prompts[1]).toContain(`Exact integration run: ${session.sessionId}/2`)
+        expect(prompts[1]).toContain("obtained an Absent activity census before admitting this Retry")
+        expect(prompts[1]).toContain("does not cover the current authorized turn")
+        expect(prompts[1]).toContain("a later Retry requires fresh native admission")
+      }
       expect(worktreeAdds.value).toBe(1)
       expect(threadStarts.value).toBe(1)
       if (Option.isSome(result.before) && Option.isSome(result.after)) {
