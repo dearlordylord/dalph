@@ -945,7 +945,8 @@ status and starts no work. Schema/identity mismatches fail before mutation.
 
 The Operator uses the shipped `publication-subjects`, `publication-resume` and
 `publication-grant` commands to select an exact retained responsibility and
-submit its versioned idempotent request. #389's
+submit its versioned idempotent request. The [operator guide](../../README.md#recover-a-retained-remote-publication)
+records command spelling, request fields and receipt interpretation. #389's
 public-entry matrix and qualification evidence below own this boundary;
 #386 and #387 retain their independent core-control assertion owners.
 
